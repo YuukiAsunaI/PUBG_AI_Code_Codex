@@ -21,7 +21,8 @@ post-match replay or near-live playback after match data appears.
   - `Authorization: Bearer <PUBG_API_KEY>`
   - `Accept: application/vnd.api+json`
   - `Accept-Encoding: gzip` for larger responses
-- Player search supports up to 10 names or account IDs per request.
+- Player collection lookup currently supports up to 10 names or account IDs per request. A 100-player polling cycle
+  must therefore be chunked into multiple player requests unless the API limit changes.
 - Data retention is short: match data older than 14 days is not available through the API.
 
 ## Rate Limit Strategy
@@ -35,12 +36,14 @@ Practical strategy:
 - Cache nickname to `accountId` permanently, with alias tracking for nickname changes.
 - Poll only active registered users.
 - Batch player lookup where possible, up to the documented limit.
+- Target 1-5 minute polling intervals, configurable in the local management app.
+- Support up to 100 active registered players per collection cycle by chunking requests and respecting rate limits.
 - Use `matches` and telemetry freely after match IDs are known, but still queue them to avoid local overload.
 - Store raw API responses so parsing bugs can be fixed without re-requesting data within the 14-day window.
 
 ## Collection Flow
 
-1. User registers nickname and shard, for example `steam` or `kakao`.
+1. Authorized Discord user or local admin registers nickname and shard, for example `steam` or `kakao`.
 2. Collector calls `/players?filter[playerNames]={nickname}`.
 3. Store returned `accountId`, canonical name, shard, registration state, and lookup timestamp.
 4. Poll `/players/{accountId}` or batch IDs to collect recent match IDs.
@@ -106,6 +109,7 @@ Per match:
   chicken/non-chicken
 - Total movement distance, vehicle distance, swim distance where available
 - Map, mode, team size, perspective, party/teammates
+- Match type/mode metadata for later filtering instead of dropping non-standard modes during ingestion
 - Main drop location and first parachute landing point
 - Flight path approximation if available from aircraft/player position traces
 - Care package spawn/landing points

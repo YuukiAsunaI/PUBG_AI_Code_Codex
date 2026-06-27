@@ -8,6 +8,7 @@ MySQL data model direction, 2D replay/live-view feasibility, and reference proje
 
 - [PUBG Open API Research](docs/PUBG_OPEN_API_RESEARCH.md)
 - [Local Architecture and MySQL Model](docs/LOCAL_ARCHITECTURE_AND_MYSQL_MODEL.md)
+- [Implementation Decisions](docs/IMPLEMENTATION_DECISIONS.md)
 - [Configuration](docs/CONFIGURATION.md)
 - [Reference Project Survey](docs/REFERENCE_PROJECT_SURVEY.md)
 - [Sources](docs/SOURCES.md)
@@ -15,7 +16,10 @@ MySQL data model direction, 2D replay/live-view feasibility, and reference proje
 ## Key Decisions From Research
 
 - Registered users are the only primary collection target.
-- Nickname lookup is used once to resolve `accountId`; later polling and matching should use `accountId`.
+- Nickname registration requires a platform shard, then resolves `accountId`; later polling and matching use
+  `accountId`.
+- All discovered match types are collected, with mode/type metadata preserved for later filtering.
+- MySQL-facing timestamps are stored in KST because the expected audience is primarily Korean users.
 - Match and telemetry data should be stored as immutable raw JSON first, then normalized into analysis tables.
 - Large raw match and telemetry files should be saved under a configurable external storage path such as
   `PUBG_RAW_DATA_DIR=E:\PUBG_AI_Data\raw`; MySQL stores metadata and relative paths.
@@ -29,7 +33,7 @@ MySQL data model direction, 2D replay/live-view feasibility, and reference proje
 
 ## Proposed First Build Slice
 
-1. Register player nickname and shard.
+1. Register player nickname and platform shard with an authorized Discord command.
 2. Resolve and store PUBG `accountId`.
 3. Poll registered players for recent match IDs.
 4. Fetch unseen matches and telemetry.

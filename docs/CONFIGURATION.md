@@ -39,7 +39,7 @@ Recommended JSON shape:
     "raw_data_dir": "E:\\PUBG_AI_Data\\raw",
     "replay_data_dir": "E:\\PUBG_AI_Data\\replays",
     "raw_compression": "gzip",
-    "updated_at": "2026-06-27T12:00:00+00:00"
+    "updated_at": "2026-06-27T21:00:00+09:00"
   }
 }
 ```

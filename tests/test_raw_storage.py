@@ -84,6 +84,7 @@ class RawPayloadStoreTests(unittest.TestCase):
                 stored.relative_path,
                 "matches/steam/2026/06/27/match-123.json.gz",
             )
+            self.assertTrue(stored.stored_at.endswith("+09:00"))
             self.assertTrue(store.verify(stored))
 
             stored_path = Path(temp_dir) / stored.relative_path
@@ -167,6 +168,7 @@ class ReplayArtifactStoreTests(unittest.TestCase):
                 "timeline/steam/2026/06/27/match-123/timeline.json",
             )
             self.assertEqual(stored.storage_root, "PUBG_REPLAY_DATA_DIR")
+            self.assertTrue(stored.stored_at.endswith("+09:00"))
             self.assertTrue(store.verify(stored))
 
     def test_write_replay_thumbnail_to_configured_root(self) -> None:

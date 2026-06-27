@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 import hashlib
 import json
 import os
 import tempfile
+
+from pubg_ai.time_utils import isoformat_kst, now_kst, to_kst
 
 
 ReplayArtifactType = Literal[
@@ -83,7 +85,7 @@ class ReplayArtifactStore:
         if artifact_type not in {"timeline", "snapshot", "thumbnail", "video", "gif", "cache"}:
             raise ValueError("artifact_type is not supported.")
 
-        created_at = match_created_at or datetime.now(UTC)
+        created_at = to_kst(match_created_at) if match_created_at is not None else now_kst()
         relative_path = self._relative_path(
             artifact_type,
             shard,
@@ -107,7 +109,7 @@ class ReplayArtifactStore:
             content_type=content_type,
             size_bytes=len(data),
             sha256=digest,
-            stored_at=datetime.now(UTC).isoformat(),
+            stored_at=isoformat_kst(),
         )
 
     def resolve_path(self, relative_path: str) -> Path:

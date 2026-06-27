@@ -69,9 +69,10 @@ Use a two-layer storage model:
 
 | Table | Purpose |
 | --- | --- |
-| `registered_players` | Local users to track: `account_id`, `current_name`, `shard`, `active`, Discord mapping |
+| `registered_players` | Local users to track: `account_id`, `current_name`, required `shard`, `active`, Discord mapping |
 | `player_aliases` | Nickname history and lookup evidence |
 | `discord_users` | Discord user/server links and permissions |
+| `discord_permission_grants` | Per-user command group permissions |
 | `player_groups` | Optional friend/group labels for squad analysis |
 
 ### Raw API Storage
@@ -89,11 +90,12 @@ Use a two-layer storage model:
 
 | Table | Purpose |
 | --- | --- |
-| `matches` | `match_id`, shard, map, mode, created time, duration, telemetry URL |
+| `matches` | `match_id`, shard, map, mode, match type, created KST time, duration, telemetry URL |
 | `match_rosters` | Teams/rosters, rank, win flag |
 | `match_participants` | Player match stats from match object |
 | `player_match_summaries` | One row per tracked player per match with final stats and derived flags |
 | `match_teammates` | Teammate pairs/trios/squad membership for chemistry analysis |
+| `player_collection_states` | Polling cursor/status by registered player |
 
 ### Telemetry Event Facts
 
@@ -154,7 +156,8 @@ Use a two-layer storage model:
   - `dbno_events(attacker_account_id, victim_account_id, match_id)`
   - `fight_outcomes(account_id, match_id, outcome_type)`
   - `kill_events(killer_account_id, victim_account_id, match_id)`
-- Store all timestamps in UTC. Convert for Korean local display in UI/Discord.
+- Store normalized DB timestamps in KST and use KST calendar boundaries for daily/monthly aggregates.
+- Preserve source API timestamps separately when useful for debugging.
 
 ## 2D Replay / Near-Live Viewer
 
@@ -181,7 +184,7 @@ For Discord, do not stream the whole replay. Send a summary image/GIF or a local
 
 | Command | Result |
 | --- | --- |
-| `/pubg-register nickname shard` | Register nickname and resolve `accountId` |
+| `/pubg-register nickname shard` | Register nickname and required platform shard; permission-gated |
 | `/pubg-profile nickname` | KDA, recent matches, favorite weapons/maps |
 | `/pubg-recent nickname` | Recent match summaries |
 | `/pubg-match match_id` | Match summary with chicken/non-chicken and team stats |
@@ -190,6 +193,9 @@ For Discord, do not stream the whole replay. Send a summary image/GIF or a local
 | `/pubg-team nickname` | Best teammate combinations |
 | `/pubg-map nickname` | Map performance and drop tendency |
 | `/pubg-replay match_id` | Local 2D replay link or rendered summary |
+| `/pubg-ranking scope` | Server-wide rankings |
+| `/pubg-permission user group allow` | Grant or revoke command group permissions; admin-only |
+| `/pubg-unregister nickname shard` | Stop future collection and retain existing data by default; admin/delegated-only |
 
 ## First MVP Milestone
 

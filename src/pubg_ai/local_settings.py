@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 import json
 import os
 import shutil
 import tempfile
+
+from pubg_ai.time_utils import isoformat_kst
 
 
 class LocalSettingsError(RuntimeError):
@@ -114,7 +115,7 @@ class LocalSettingsStore:
             raw_data_dir=raw_path,
             replay_data_dir=replay_path,
             raw_compression=raw_compression,
-            updated_at=datetime.now(UTC).isoformat(),
+            updated_at=isoformat_kst(),
         )
         self._write_settings({"storage": settings.to_record()})
         return settings

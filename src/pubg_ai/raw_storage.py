@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 import gzip
@@ -9,6 +9,8 @@ import hashlib
 import json
 import os
 import tempfile
+
+from pubg_ai.time_utils import isoformat_kst, now_kst, to_kst
 
 
 PayloadType = Literal["match", "telemetry"]
@@ -60,7 +62,7 @@ class RawPayloadStore:
         if payload_type not in {"match", "telemetry"}:
             raise ValueError("payload_type must be either 'match' or 'telemetry'.")
 
-        created_at = match_created_at or datetime.now(UTC)
+        created_at = to_kst(match_created_at) if match_created_at is not None else now_kst()
         relative_path = self._relative_path(payload_type, shard, match_id, created_at)
         target_path = self.root / Path(relative_path)
         target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -81,7 +83,7 @@ class RawPayloadStore:
             compression=self.compression,
             size_bytes=len(stored_bytes),
             sha256=digest,
-            stored_at=datetime.now(UTC).isoformat(),
+            stored_at=isoformat_kst(),
         )
 
     def resolve_path(self, relative_path: str) -> Path:
@@ -146,4 +148,3 @@ class RawPayloadStore:
             os.replace(temp_path, target_path)
         except OSError as exc:
             raise RawStorageError(f"failed to write raw payload: {exc}") from exc
-

@@ -10,6 +10,7 @@ Research date: 2026-06-27
 - Rate limits: https://github.com/pubg/api-documentation-content/blob/master/rst/rate-limits.rst
 - Telemetry guide: https://github.com/pubg/api-documentation-content/blob/master/rst/telemetry.rst
 - Telemetry events: https://github.com/pubg/api-documentation-content/blob/master/rst/telemetry-events.rst
+- Player lookup filter parameters: https://github.com/pubg/api-documentation-content/blob/master/swagger/en/parameters/filterPlayerIds.yml
 - Official assets and dictionaries: https://github.com/pubg/api-assets
 - Game mode dictionary: https://raw.githubusercontent.com/pubg/api-assets/master/dictionaries/gameMode.json
 - Map dictionary: https://raw.githubusercontent.com/pubg/api-assets/master/dictionaries/telemetry/mapName.json
@@ -36,4 +37,3 @@ Research date: 2026-06-27
 - `SeatloN/pubg-api` could not be resolved through GitHub on 2026-06-27.
 - Metadata such as language, stars, forks, default branch, and latest push timestamp was checked with GitHub CLI.
 - The research docs intentionally separate official facts from implementation recommendations.
-
