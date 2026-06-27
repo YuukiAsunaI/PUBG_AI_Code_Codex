@@ -53,6 +53,24 @@ Override JSON shape:
 The local management program can later expose a small dictionary editor, but the parser must never fail because a
 code is missing.
 
+## Legacy Python Dictionary Import
+
+Existing local dictionary files such as `PUBG_Data.py` can be used as an override source without executing the file.
+The loader parses simple dictionary assignments with `ast.literal_eval` and ignores non-string tables such as map
+size or map number dictionaries.
+
+Supported legacy names include:
+
+| Legacy name | Normalized category |
+| --- | --- |
+| `deat_type` | `death_type` |
+| `game_mode` | `game_mode` |
+| `map_name` | `map` |
+| `item_id_list` | `item` |
+| `all_item_id_list` | `item` |
+| `weapon_id_list` | `damage_causer` |
+| `weapon_id_list_2` | `damage_causer` |
+
 ## Sources
 
 - Existing local `PUBG_Data.py` was used as a structural reference for the code categories.

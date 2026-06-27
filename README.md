@@ -12,6 +12,7 @@ MySQL data model direction, 2D replay/live-view feasibility, and reference proje
 - [Implementation Decisions](docs/IMPLEMENTATION_DECISIONS.md)
 - [Data Lifecycle and Operations](docs/DATA_LIFECYCLE_AND_OPERATIONS.md)
 - [Code Translation](docs/CODE_TRANSLATION.md)
+- [Sample Match Analysis](docs/SAMPLE_MATCH_ANALYSIS.md)
 - [Configuration](docs/CONFIGURATION.md)
 - [Reference Project Survey](docs/REFERENCE_PROJECT_SURVEY.md)
 - [Sources](docs/SOURCES.md)

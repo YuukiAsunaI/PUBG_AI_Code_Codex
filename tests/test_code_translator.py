@@ -102,6 +102,8 @@ class CodeTranslatorTests(unittest.TestCase):
                 "damageCauserName": "WeapBerylM762_C",
                 "mapName": "Erangel_Main",
                 "item": {"itemId": "Item_Weapon_BerylM762_C"},
+                "parentItem": {"itemId": "Item_Weapon_BerylM762_C"},
+                "childItem": {"itemId": "Item_Attach_Weapon_Lower_Foregrip_C"},
             }
         )
 
@@ -110,6 +112,8 @@ class CodeTranslatorTests(unittest.TestCase):
         self.assertTrue(translated["damageCauserNameKnown"])
         self.assertEqual(translated["mapNameKo"], "에란겔")
         self.assertEqual(translated["item"]["itemNameKo"], "베릴 M762")
+        self.assertEqual(translated["parentItem"]["itemNameKo"], "베릴 M762")
+        self.assertEqual(translated["childItem"]["itemNameKo"], "수직 손잡이")
 
     def test_can_load_translation_tables_from_json_file(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -124,6 +128,35 @@ class CodeTranslatorTests(unittest.TestCase):
             self.assertEqual(
                 translator.translate("Item_Custom_C", "item").label,
                 "커스텀 아이템",
+            )
+            self.assertEqual(
+                translator.translate("Item_Weapon_BerylM762_C", "item").label,
+                "베릴 M762",
+            )
+
+    def test_can_load_legacy_python_dictionary_file_safely(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "PUBG_Data.py"
+            path.write_text(
+                "\n".join(
+                    [
+                        "item_id_list = {'Item_Legacy_C': '레거시 아이템'}",
+                        "weapon_id_list = {'WeapLegacy_C': '레거시 무기'}",
+                        "map_name_number = {'Legacy_Main': 12}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            translator = CodeTranslator.from_python_file(path)
+
+            self.assertEqual(
+                translator.translate("Item_Legacy_C", "item").label,
+                "레거시 아이템",
+            )
+            self.assertEqual(
+                translator.translate("WeapLegacy_C", "damage_causer").label,
+                "레거시 무기",
             )
             self.assertEqual(
                 translator.translate("Item_Weapon_BerylM762_C", "item").label,

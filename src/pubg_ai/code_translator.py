@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
+import ast
 import json
 
 
@@ -45,6 +46,21 @@ class CodeTranslator:
 
     def with_json_overrides(self, path: str | Path) -> "CodeTranslator":
         return self.with_overrides(_load_translation_json(path))
+
+    @classmethod
+    def from_python_file(
+        cls,
+        path: str | Path,
+        *,
+        include_defaults: bool = True,
+    ) -> "CodeTranslator":
+        payload = _load_python_translation_file(path)
+        if include_defaults:
+            return cls().with_overrides(payload)
+        return cls(_validate_tables(payload))
+
+    def with_python_overrides(self, path: str | Path) -> "CodeTranslator":
+        return self.with_overrides(_load_python_translation_file(path))
 
     def with_overrides(
         self,
@@ -109,9 +125,10 @@ class CodeTranslator:
                 record[f"{field}Ko"] = translated.label
                 record[f"{field}Known"] = translated.known
 
-        item = record.get("item")
-        if isinstance(item, Mapping):
-            record["item"] = self.translate_item_object(item)
+        for field in ITEM_OBJECT_FIELDS:
+            item = record.get(field)
+            if isinstance(item, Mapping):
+                record[field] = self.translate_item_object(item)
 
         return record
 
@@ -159,6 +176,37 @@ def _load_translation_json(path: str | Path) -> Mapping[str, Any]:
     return payload
 
 
+def _load_python_translation_file(path: str | Path) -> Mapping[str, Mapping[str, str]]:
+    source = Path(path).read_text(encoding="utf-8")
+    module = ast.parse(source)
+    tables: dict[str, dict[str, str]] = {}
+
+    for node in module.body:
+        if (
+            not isinstance(node, ast.Assign)
+            or len(node.targets) != 1
+            or not isinstance(node.targets[0], ast.Name)
+        ):
+            continue
+
+        try:
+            value = ast.literal_eval(node.value)
+        except (SyntaxError, ValueError):
+            continue
+
+        if not isinstance(value, dict):
+            continue
+        if not all(
+            isinstance(code, str) and isinstance(label, str)
+            for code, label in value.items()
+        ):
+            continue
+
+        tables[node.targets[0].id] = dict(value)
+
+    return tables
+
+
 def _validate_tables(payload: Mapping[str, Any]) -> dict[str, dict[str, str]]:
     tables: dict[str, dict[str, str]] = {}
     for category, values in payload.items():
@@ -198,6 +246,8 @@ EVENT_CODE_FIELDS = {
     "vehicleId": "vehicle",
     "vehicleType": "vehicle",
 }
+
+ITEM_OBJECT_FIELDS = ["item", "parentItem", "childItem", "weapon", "victimWeapon"]
 
 
 DEATH_TYPE_KO = {
