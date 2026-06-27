@@ -26,3 +26,5 @@ data/tmp/
 *.dump
 
 secrets/
+config/local_settings.json
+config/*.local.json

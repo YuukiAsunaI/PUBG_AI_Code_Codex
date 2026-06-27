@@ -19,7 +19,48 @@ For local development without a separate drive, the default can be:
 PUBG_RAW_DATA_DIR=./data/raw
 ```
 
-When the real storage drive is ready, change only `.env`; no code or database migration should be required.
+When the real storage drive is ready, the local management program should save the selected path to
+`config/local_settings.json`; no code or database migration should be required.
+
+## Local Program Storage Settings
+
+The local management program must be able to change both storage roots from a settings screen. The app should write
+those choices to this JSON file:
+
+```env
+PUBG_LOCAL_SETTINGS_FILE=./config/local_settings.json
+```
+
+Recommended JSON shape:
+
+```json
+{
+  "storage": {
+    "raw_data_dir": "E:\\PUBG_AI_Data\\raw",
+    "replay_data_dir": "E:\\PUBG_AI_Data\\replays",
+    "raw_compression": "gzip",
+    "updated_at": "2026-06-27T12:00:00+00:00"
+  }
+}
+```
+
+Runtime priority:
+
+1. Built-in defaults: `./data/raw`, `./data/replays`
+2. `.env` values: `PUBG_RAW_DATA_DIR`, `PUBG_REPLAY_DATA_DIR`
+3. Local program values in `PUBG_LOCAL_SETTINGS_FILE`
+
+This means `.env` is still useful for first boot, but the local program can override the paths after the user changes
+them in the UI.
+
+The settings screen should provide:
+
+- match/telemetry raw-data path picker
+- 2D replay artifact path picker
+- write-test button for each path
+- free disk space display for each path
+- save button that creates missing folders only after user confirmation
+- warning when a configured drive is disconnected
 
 ## Recommended File Layout
 
@@ -83,18 +124,10 @@ relative paths.
 - If the drive is missing, mark fetch jobs as `storage_unavailable` and retry later.
 - Keep `.env` out of git; commit only `.env.example`.
 
-## Future UI Setting
+## UI Setting Behavior
 
-The local management program should expose a storage settings page:
-
-- current `PUBG_RAW_DATA_DIR`
-- write permission status
-- free and used disk space
-- recent raw-data growth rate
-- button to test write access
-- warning if the path is on the OS/project drive
-
-The UI can edit a local config file later, but the environment variable should remain the first supported method.
+The local management program should call the settings service to validate and save paths. It should never write raw
+files to a fallback folder without making that visible to the user.
 
 ## 2D Replay Storage
 

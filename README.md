@@ -21,6 +21,8 @@ MySQL data model direction, 2D replay/live-view feasibility, and reference proje
   `PUBG_RAW_DATA_DIR=E:\PUBG_AI_Data\raw`; MySQL stores metadata and relative paths.
 - Generated 2D replay files should use a separate configurable path such as
   `PUBG_REPLAY_DATA_DIR=E:\PUBG_AI_Data\replays`.
+- The local management app should save user-changed storage paths to `config/local_settings.json`, so paths can be
+  changed from the program without editing `.env`.
 - True in-match live data is not exposed by the public PUBG Open API. A 2D viewer should therefore start as
   telemetry replay and near-live post-match playback.
 - The local stack should be MySQL + local API/worker + Discord bot + local web management UI.

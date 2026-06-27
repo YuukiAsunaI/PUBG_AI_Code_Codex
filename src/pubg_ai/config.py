@@ -52,6 +52,37 @@ class AppConfig:
             ),
         )
 
+    @classmethod
+    def from_sources(
+        cls,
+        env: Mapping[str, str] | None = None,
+        base_dir: Path | None = None,
+    ) -> "AppConfig":
+        values = env or os.environ
+        base = base_dir or Path.cwd()
+        config = cls.from_env(values, base)
+        settings_file = _config_path(
+            values.get("PUBG_LOCAL_SETTINGS_FILE", "./config/local_settings.json"),
+            base,
+        )
+
+        if not settings_file.exists():
+            return config
+
+        from pubg_ai.local_settings import LocalSettingsStore
+
+        settings = LocalSettingsStore(settings_file, base_dir=base).load_storage_settings()
+        if settings is None:
+            return config
+
+        return cls(
+            raw_data_dir=settings.raw_data_dir,
+            replay_data_dir=settings.replay_data_dir,
+            raw_compression=settings.raw_compression,
+            allow_storage_fallback=config.allow_storage_fallback,
+            allow_replay_storage_fallback=config.allow_replay_storage_fallback,
+        )
+
 
 def _config_path(value: str, base_dir: Path) -> Path:
     path = Path(value).expanduser()

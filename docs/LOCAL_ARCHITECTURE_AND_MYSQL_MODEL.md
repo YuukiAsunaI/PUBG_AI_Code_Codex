@@ -13,6 +13,7 @@ The system should run entirely on the local computer:
 - A local web management app for player registration, job status, dashboards, and 2D replay playback
 - A configurable raw-data storage directory for large match and telemetry files, preferably on a separate drive
 - A configurable replay artifact directory for generated 2D timelines, thumbnails, GIFs, videos, and caches
+- A local settings file managed by the UI so storage paths can be changed without editing `.env`
 
 ## Recommended Runtime
 
@@ -45,6 +46,8 @@ flowchart LR
     Replay --> MySQL
     Replay --> RawFiles
     Replay --> ReplayFiles["Configurable replay artifact storage"]
+    UI --> Settings["Local settings file"]
+    Settings --> API
 ```
 
 ## Data Storage Principle
@@ -137,6 +140,7 @@ Use a two-layer storage model:
 - Keep file paths relative to `PUBG_RAW_DATA_DIR` or `PUBG_REPLAY_DATA_DIR` so drives can be moved without rewriting
   every row.
 - Do not silently fall back to the project directory if a configured external drive is missing.
+- Load storage paths from `config/local_settings.json` when the local program has saved user-selected paths.
 - Use `match_id` and `account_id` as natural keys where possible.
 - Use bigint surrogate IDs for high-volume event tables.
 - Add indexes on:

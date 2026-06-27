@@ -8,6 +8,7 @@ import json
 import unittest
 
 from pubg_ai.config import AppConfig
+from pubg_ai.local_settings import LocalSettingsStore, check_storage_path
 from pubg_ai.raw_storage import RawPayloadStore, RawStorageError
 from pubg_ai.replay_storage import ReplayArtifactStore, ReplayStorageError
 
@@ -40,6 +41,29 @@ class AppConfigTests(unittest.TestCase):
         )
 
         self.assertEqual(str(config.replay_data_dir), "F:\\PUBG_AI_Replays")
+
+    def test_local_program_settings_override_env_paths(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            settings_file = base_dir / "config" / "local_settings.json"
+            raw_dir = base_dir / "selected-raw"
+            replay_dir = base_dir / "selected-replays"
+            LocalSettingsStore(settings_file, base_dir=base_dir).save_storage_settings(
+                raw_data_dir=raw_dir,
+                replay_data_dir=replay_dir,
+            )
+
+            config = AppConfig.from_sources(
+                {
+                    "PUBG_RAW_DATA_DIR": "env-raw",
+                    "PUBG_REPLAY_DATA_DIR": "env-replays",
+                    "PUBG_LOCAL_SETTINGS_FILE": str(settings_file),
+                },
+                base_dir=base_dir,
+            )
+
+            self.assertEqual(config.raw_data_dir, raw_dir)
+            self.assertEqual(config.replay_data_dir, replay_dir)
 
 
 class RawPayloadStoreTests(unittest.TestCase):
@@ -91,6 +115,36 @@ class RawPayloadStoreTests(unittest.TestCase):
 
             with self.assertRaises(RawStorageError):
                 store.resolve_path("../outside.json")
+
+
+class LocalSettingsStoreTests(unittest.TestCase):
+    def test_save_storage_settings_creates_dirs_and_loads_them(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            settings_file = base_dir / "config" / "local_settings.json"
+            raw_dir = base_dir / "raw-drive" / "raw"
+            replay_dir = base_dir / "replay-drive" / "replays"
+
+            store = LocalSettingsStore(settings_file, base_dir=base_dir)
+            saved = store.save_storage_settings(raw_dir, replay_dir)
+            loaded = store.load_storage_settings()
+
+            self.assertEqual(saved.raw_data_dir, raw_dir)
+            self.assertEqual(saved.replay_data_dir, replay_dir)
+            self.assertTrue(raw_dir.is_dir())
+            self.assertTrue(replay_dir.is_dir())
+            self.assertIsNotNone(loaded)
+            self.assertEqual(loaded.raw_data_dir, raw_dir)
+            self.assertEqual(loaded.replay_data_dir, replay_dir)
+
+    def test_storage_status_reports_writable_paths(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            status = check_storage_path(Path(temp_dir))
+
+            self.assertTrue(status.exists)
+            self.assertTrue(status.is_dir)
+            self.assertTrue(status.writable)
+            self.assertIsNotNone(status.free_bytes)
 
 
 class ReplayArtifactStoreTests(unittest.TestCase):
