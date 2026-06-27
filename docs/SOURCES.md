@@ -8,6 +8,9 @@ Research date: 2026-06-27
 - Official documentation content repository: https://github.com/pubg/api-documentation-content
 - Making requests: https://github.com/pubg/api-documentation-content/blob/master/rst/making-requests.rst
 - Rate limits: https://github.com/pubg/api-documentation-content/blob/master/rst/rate-limits.rst
+- Players endpoint: https://github.com/pubg/api-documentation-content/blob/master/swagger/en/paths/players.yml
+- Player endpoint: https://github.com/pubg/api-documentation-content/blob/master/swagger/en/paths/player.yml
+- Match endpoint: https://github.com/pubg/api-documentation-content/blob/master/swagger/en/paths/match.yml
 - Telemetry guide: https://github.com/pubg/api-documentation-content/blob/master/rst/telemetry.rst
 - Telemetry events: https://github.com/pubg/api-documentation-content/blob/master/rst/telemetry-events.rst
 - Player lookup filter parameters: https://github.com/pubg/api-documentation-content/blob/master/swagger/en/parameters/filterPlayerIds.yml

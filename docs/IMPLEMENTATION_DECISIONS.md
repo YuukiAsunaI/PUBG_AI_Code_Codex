@@ -27,6 +27,7 @@ changes them.
   - team size and perspective derived from mode
 - Match details and telemetry are post-match data. They are only available after the PUBG match has finished.
 - 2D replay is post-match only because it is generated from finished-match logs and telemetry.
+- Raw match and telemetry files are deduplicated by `match_id`.
 
 ## Time Zone
 
@@ -103,3 +104,10 @@ Suggested command groups:
 - Match and telemetry fetches are queued after match IDs are discovered.
 - The exact high-volume scheduling policy remains open until live API behavior is tested.
 - Polling interval, cycle player limit, and player lookup chunk size must be editable in the local management program.
+
+## Raw Data Lifecycle
+
+- Raw match and telemetry files are retained indefinitely.
+- If capacity is insufficient, raise local-program and Discord error notifications.
+- Do not automatically delete official raw match or telemetry files.
+- Parser runs are versioned; parser-version changes can trigger reparse from retained raw files.
