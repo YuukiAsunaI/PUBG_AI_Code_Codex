@@ -108,6 +108,16 @@ Suggested command groups:
 - Phase 2: map clusters to named regions such as city or landmark names.
 - Map coordinate-to-region dictionaries should be versioned separately from raw telemetry.
 
+## Rendered Map Snapshots
+
+- Generate static map snapshot images for important match/player summaries.
+- Store generated JPEG or PNG files under the configurable replay artifact directory, not the raw-data directory.
+- Snapshot layers should include plane route, parachute/drop route, player movement route, kill/DBNO positions,
+  final death position, care package landing positions, and optional phase circles.
+- Snapshots are rebuildable from raw telemetry and map assets, so they can be regenerated after renderer changes.
+- Discord commands should prefer a compact image attachment for quick viewing, with a local 2D replay link for full
+  playback.
+
 ## Code Translation
 
 - Convert known PUBG internal codes to Korean labels before display.

@@ -15,6 +15,7 @@ from pubg_ai.time_utils import isoformat_kst, now_kst, to_kst
 ReplayArtifactType = Literal[
     "timeline",
     "snapshot",
+    "map_snapshot",
     "thumbnail",
     "video",
     "gif",
@@ -82,7 +83,15 @@ class ReplayArtifactStore:
         content_type: str,
         match_created_at: datetime | None = None,
     ) -> StoredReplayArtifact:
-        if artifact_type not in {"timeline", "snapshot", "thumbnail", "video", "gif", "cache"}:
+        if artifact_type not in {
+            "timeline",
+            "snapshot",
+            "map_snapshot",
+            "thumbnail",
+            "video",
+            "gif",
+            "cache",
+        }:
             raise ValueError("artifact_type is not supported.")
 
         created_at = to_kst(match_created_at) if match_created_at is not None else now_kst()

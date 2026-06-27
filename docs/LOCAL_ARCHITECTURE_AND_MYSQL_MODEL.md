@@ -12,7 +12,8 @@ The system should run entirely on the local computer:
 - A Discord bot as the main user-facing interface
 - A local web management app for player registration, job status, dashboards, and 2D replay playback
 - A configurable raw-data storage directory for large match and telemetry files, preferably on a separate drive
-- A configurable replay artifact directory for generated 2D timelines, thumbnails, GIFs, videos, and caches
+- A configurable replay artifact directory for generated 2D timelines, map snapshots, thumbnails, GIFs, videos, and
+  caches
 - A local settings file managed by the UI so storage paths can be changed without editing `.env`
 
 ## Recommended Runtime
@@ -86,7 +87,7 @@ Use a two-layer storage model:
 | `raw_player_snapshots` | Raw player endpoint responses; small enough for MySQL JSON storage |
 | `raw_match_payloads` | Raw match JSON file metadata by `match_id` |
 | `raw_telemetry_payloads` | Raw telemetry JSON file metadata by `match_id` |
-| `replay_artifacts` | Generated 2D replay timeline, snapshot, thumbnail, GIF, video, and cache metadata |
+| `replay_artifacts` | Generated 2D replay timeline, map snapshot, thumbnail, GIF, video, and cache metadata |
 | `parse_runs` | Parser version, status, error, and row counts |
 
 ### Match Facts
@@ -146,7 +147,7 @@ unchanged so newly added PUBG content remains visible.
 - Use `utf8mb4` for all text.
 - Store small player snapshots in MySQL `JSON` columns.
 - Store large match and telemetry JSON payloads as compressed files under `PUBG_RAW_DATA_DIR`.
-- Store generated 2D replay artifacts under `PUBG_REPLAY_DATA_DIR`.
+- Store generated 2D replay artifacts and static map images under `PUBG_REPLAY_DATA_DIR`.
 - Store only metadata for large raw files in MySQL: root key, relative path, compression, file size, `sha256`,
   source URL, fetched timestamp, and parser version.
 - Store replay artifact metadata in MySQL: artifact type, content type, relative path, size, `sha256`, generated
@@ -194,6 +195,35 @@ tracking.
    - blue zone phase rings if coordinates are available
 6. Add player/team filters for registered users and squad members.
 7. Add playback controls: speed, seek, follow player, show weapons, show damage, show deaths.
+
+## Static Map Snapshot Rendering
+
+Generate JPEG or PNG map snapshots after telemetry parsing so Discord can show a fast visual summary without opening
+the full replay UI. Use artifact type `map_snapshot` in `replay_artifacts`.
+
+Recommended snapshot layers:
+
+| Layer | Source |
+| --- | --- |
+| Plane route | Flight/aircraft path reconstructed from early position and phase events when available |
+| Parachute route | `LogPlayerPosition` samples before first grounded/landing event |
+| Movement route | `LogPlayerPosition` samples after landing, optionally simplified for readability |
+| Landing point | `LogParachuteLanding` or first grounded player position |
+| Kill and DBNO points | `LogPlayerKillV2` and `LogPlayerMakeGroggy` locations |
+| Death point | victim location from `LogPlayerKillV2` or final participant location fallback |
+| Care packages | `LogCarePackageSpawn` and `LogCarePackageLand` |
+| Phase circles | `LogGameStatePeriodic` safe-zone/blue-zone data where coordinates are present |
+
+Suggested outputs:
+
+| File | Purpose |
+| --- | --- |
+| `match-route-summary.jpg` | Whole-match overview for Discord match summary |
+| `player-{account_id}-route.jpg` | One tracked player's plane/drop/movement/fight/death view |
+| `team-{team_id}-route.jpg` | Registered squad/team route and fight summary |
+
+Renderer output should include a small legend and KST match timestamp, but raw secret values and Discord IDs must not
+appear on the image.
 
 For Discord, do not stream the whole replay. Send a summary image/GIF or a local UI link when the local app is open.
 

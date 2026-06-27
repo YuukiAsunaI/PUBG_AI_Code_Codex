@@ -299,6 +299,28 @@ class ReplayArtifactStoreTests(unittest.TestCase):
             )
             self.assertTrue(store.verify(stored))
 
+    def test_write_replay_map_snapshot_jpeg_to_configured_root(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store = ReplayArtifactStore(Path(temp_dir))
+            created_at = datetime(2026, 6, 27, tzinfo=UTC)
+
+            stored = store.write_bytes(
+                artifact_type="map_snapshot",
+                shard="steam",
+                match_id="match-789",
+                data=b"fake-jpeg",
+                filename="route-summary.jpg",
+                content_type="image/jpeg",
+                match_created_at=created_at,
+            )
+
+            self.assertEqual(
+                stored.relative_path,
+                "map_snapshot/steam/2026/06/27/match-789/route-summary.jpg",
+            )
+            self.assertEqual(stored.content_type, "image/jpeg")
+            self.assertTrue(store.verify(stored))
+
     def test_replay_resolve_path_rejects_escape_attempts(self) -> None:
         with TemporaryDirectory() as temp_dir:
             store = ReplayArtifactStore(Path(temp_dir))

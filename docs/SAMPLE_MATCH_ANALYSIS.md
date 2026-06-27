@@ -168,3 +168,6 @@ WeapPanProjectile_C
 - Build item-event extraction around a reusable item-object parser for `item`, `parentItem`, `childItem`, `weapon`,
   and `victimWeapon`.
 - Build DBNO episodes keyed by `match_id + dBNOId`, then join revive/final-kill outcomes onto the episode.
+- Generate static map snapshot artifacts from the same parsed timeline: whole-match route summary, tracked-player
+  route image, and team route image. These should mark plane route, parachute/drop route, movement route, kill/DBNO
+  points, death position, and care package positions.

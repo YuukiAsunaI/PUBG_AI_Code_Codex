@@ -34,7 +34,8 @@ Rules:
 - Capacity errors must also be sent to Discord for users/admins who have alert permission.
 
 Replay artifacts are generated data. They can be rebuilt from raw telemetry, so they may receive separate retention
-rules later. Raw official match and telemetry files are the priority.
+rules later. This includes timeline JSON, static map snapshot JPEG/PNG files, thumbnails, GIFs, videos, and renderer
+caches. Raw official match and telemetry files are the priority.
 
 ## Storage Capacity Alerts
 
@@ -82,12 +83,24 @@ Admins can:
 - stop collection for a player while retaining existing data
 - choose destructive deletion only when needed
 - trigger reparse for a match, player, date range, or parser version
-- regenerate replay artifacts
+- regenerate replay artifacts, including map snapshot images
 - change storage paths
 - change polling settings
 - change Discord permission grants
 - change guild ranking scopes
 - manage global admins
+
+## Generated Map Snapshots
+
+Static map snapshots are generated after telemetry parsing and stored under `PUBG_REPLAY_DATA_DIR`.
+
+Rules:
+
+- Do not store generated JPEG/PNG images in MySQL; store only artifact metadata and relative paths.
+- Store `artifact_type = map_snapshot`, content type, file size, checksum, renderer version, and generated timestamp.
+- Regenerate snapshots when the renderer version, map asset version, or route simplification policy changes.
+- If replay storage is missing or full, notify the local program and Discord just like other replay artifact writes.
+- Deleting or regenerating snapshots must not delete raw match or telemetry files.
 
 ## Secret Handling
 
