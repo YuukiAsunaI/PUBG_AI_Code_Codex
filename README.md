@@ -8,6 +8,7 @@ MySQL data model direction, 2D replay/live-view feasibility, and reference proje
 
 - [PUBG Open API Research](docs/PUBG_OPEN_API_RESEARCH.md)
 - [Local Architecture and MySQL Model](docs/LOCAL_ARCHITECTURE_AND_MYSQL_MODEL.md)
+- [Configuration](docs/CONFIGURATION.md)
 - [Reference Project Survey](docs/REFERENCE_PROJECT_SURVEY.md)
 - [Sources](docs/SOURCES.md)
 
@@ -16,6 +17,8 @@ MySQL data model direction, 2D replay/live-view feasibility, and reference proje
 - Registered users are the only primary collection target.
 - Nickname lookup is used once to resolve `accountId`; later polling and matching should use `accountId`.
 - Match and telemetry data should be stored as immutable raw JSON first, then normalized into analysis tables.
+- Large raw match and telemetry files should be saved under a configurable external storage path such as
+  `PUBG_RAW_DATA_DIR=E:\PUBG_AI_Data\raw`; MySQL stores metadata and relative paths.
 - True in-match live data is not exposed by the public PUBG Open API. A 2D viewer should therefore start as
   telemetry replay and near-live post-match playback.
 - The local stack should be MySQL + local API/worker + Discord bot + local web management UI.
@@ -29,4 +32,3 @@ MySQL data model direction, 2D replay/live-view feasibility, and reference proje
 5. Persist raw JSON and normalized event rows.
 6. Expose Discord commands for match summary, KDA, weapon usage, map usage, and recent chicken/non-chicken split.
 7. Add a local 2D replay page that plays telemetry positions and fight events on a map canvas.
-

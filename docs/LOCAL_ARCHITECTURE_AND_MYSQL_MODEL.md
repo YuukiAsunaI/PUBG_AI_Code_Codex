@@ -11,6 +11,7 @@ The system should run entirely on the local computer:
 - A worker/queue process for PUBG API polling, match download, telemetry parsing, and aggregation
 - A Discord bot as the main user-facing interface
 - A local web management app for player registration, job status, dashboards, and 2D replay playback
+- A configurable raw-data storage directory for large match and telemetry files, preferably on a separate drive
 
 ## Recommended Runtime
 
@@ -37,9 +38,11 @@ flowchart LR
     API --> MySQL[("MySQL")]
     Worker["Collector worker"] --> PUBG["PUBG Open API"]
     Worker --> CDN["Telemetry CDN"]
+    Worker --> RawFiles["Configurable raw file storage"]
     Worker --> MySQL
     API --> Replay["2D replay viewer"]
     Replay --> MySQL
+    Replay --> RawFiles
 ```
 
 ## Data Storage Principle
@@ -47,8 +50,8 @@ flowchart LR
 Use a two-layer storage model:
 
 1. Raw immutable layer
-   - Store raw player, match, and telemetry JSON.
-   - Keep request metadata, source URL, fetched timestamp, parse version, and checksum.
+   - Store large raw match and telemetry JSON files under `PUBG_RAW_DATA_DIR`.
+   - Keep request metadata, relative file path, source URL, fetched timestamp, parse version, and checksum in MySQL.
    - This protects the project from API retention limits and parser mistakes.
 
 2. Normalized analysis layer
@@ -71,9 +74,9 @@ Use a two-layer storage model:
 | Table | Purpose |
 | --- | --- |
 | `api_fetch_jobs` | Queue and retry state for player/match/telemetry fetches |
-| `raw_player_snapshots` | Raw player endpoint responses |
-| `raw_match_payloads` | Raw match JSON by `match_id` |
-| `raw_telemetry_payloads` | Raw telemetry JSON metadata and optional compressed blob/path |
+| `raw_player_snapshots` | Raw player endpoint responses; small enough for MySQL JSON storage |
+| `raw_match_payloads` | Raw match JSON file metadata by `match_id` |
+| `raw_telemetry_payloads` | Raw telemetry JSON file metadata by `match_id` |
 | `parse_runs` | Parser version, status, error, and row counts |
 
 ### Match Facts
@@ -121,8 +124,12 @@ Use a two-layer storage model:
 ## MySQL Implementation Notes
 
 - Use `utf8mb4` for all text.
-- Store PUBG JSON payloads in `JSON` columns or compressed files with metadata in MySQL. For local-only MVP,
-  MySQL `JSON` columns are simplest.
+- Store small player snapshots in MySQL `JSON` columns.
+- Store large match and telemetry JSON payloads as compressed files under `PUBG_RAW_DATA_DIR`.
+- Store only metadata for large raw files in MySQL: root key, relative path, compression, file size, `sha256`,
+  source URL, fetched timestamp, and parser version.
+- Keep file paths relative to `PUBG_RAW_DATA_DIR` so the raw-data drive can be moved without rewriting every row.
+- Do not silently fall back to the project directory if the configured external drive is missing.
 - Use `match_id` and `account_id` as natural keys where possible.
 - Use bigint surrogate IDs for high-volume event tables.
 - Add indexes on:
@@ -181,4 +188,3 @@ The first useful milestone should avoid heavy AI and focus on trustworthy data:
 6. Match summary and weapon summary aggregates.
 7. Discord commands for register, recent, profile, weapon.
 8. Local management page for registered players, job status, and raw match drill-down.
-

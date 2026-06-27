@@ -1,0 +1,6 @@
+[project]
+name = "pubg-ai-code-codex"
+version = "0.1.0"
+description = "Local-first PUBG Open API analytics tooling"
+requires-python = ">=3.11"
+
