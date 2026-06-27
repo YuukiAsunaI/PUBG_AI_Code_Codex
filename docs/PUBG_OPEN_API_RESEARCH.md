@@ -70,7 +70,7 @@ Practical strategy:
 | Equipment and attachments | `LogItemEquip`, `LogItemUnequip`, `LogItemAttach`, `LogItemDetach` |
 | Weapon usage | `LogPlayerAttack`, `LogPlayerUseThrowable`, `LogPlayerUseFlareGun`, `LogWeaponFireCount` |
 | Damage and armor | `LogPlayerTakeDamage`, `LogArmorDestroy`, `LogVehicleDamage`, `LogWheelDestroy` |
-| DBNO, kill, assist, death | `LogPlayerMakeGroggy`, `LogPlayerKillV2`, legacy `LogPlayerKill` for tournament matches |
+| DBNO, fight win/loss, kill, assist, death | `LogPlayerMakeGroggy`, `LogPlayerKillV2`, legacy `LogPlayerKill` for tournament matches |
 | Revival and redeploy | `LogPlayerRevive`, `LogPlayerRedeploy`, `LogPlayerRedeployBRStart`, `LogCharacterCarry` |
 | Position and movement | `LogPlayerPosition`, `LogVehicleRide`, `LogVehicleLeave`, `LogSwimStart`, `LogSwimEnd`, `LogVaultStart` |
 | Map and match state | `LogMatchStart`, `LogMatchEnd`, `LogGameStatePeriodic`, `LogPhaseChange` |
@@ -84,12 +84,17 @@ groggy event as a death.
 Suggested model:
 
 - `DBNO`: `LogPlayerMakeGroggy` creates a knockdown episode with `dBNOId`.
+- `DBNO caused`: in duo/squad modes, if a tracked player is the attacker in `LogPlayerMakeGroggy`, record an
+  immediate fight win (`dbno_win`) for that player. This counts even when the victim is later revived.
+- `DBNO suffered`: in duo/squad modes, if a tracked player is the victim in `LogPlayerMakeGroggy`, record an
+  immediate fight loss (`dbno_loss`) for that player. This is separate from final death.
 - `Revived`: `LogPlayerRevive` closes the knockdown episode as recovered.
 - `Carried`: `LogCharacterCarry` records carry state, but does not imply death.
 - `Redeployed`: `LogPlayerRedeploy` and `LogPlayerRedeployBRStart` mark return-to-play contexts.
 - `Kill/death`: `LogPlayerKillV2` is the main final-out event; use `victimGameResult` and finisher/killer fields.
 - `Win`: use match roster rank and/or `LogMatchEnd.gameResultOnFinished`, not only the player's final event.
 - Weapon win/loss for a fight should be attached to the attack/DBNO/finish chain, not the whole match only.
+- Avoid double-counting by storing DBNO fight outcome and final kill/death as separate outcome types.
 
 ## Metrics Requested By User
 
@@ -97,7 +102,8 @@ Per match:
 
 - Picked items, dropped items, used items
 - Equipped weapons, used weapons, attached/detached parts
-- Survival time, kills, damage, assists, DBNOs, deaths, rank, chicken/non-chicken
+- Survival time, kills, damage, assists, caused DBNOs, suffered DBNOs, DBNO fight wins/losses, deaths, rank,
+  chicken/non-chicken
 - Total movement distance, vehicle distance, swim distance where available
 - Map, mode, team size, perspective, party/teammates
 - Main drop location and first parachute landing point
@@ -107,7 +113,7 @@ Per match:
 Aggregates:
 
 - KDA, win rate, top-N rate, chicken rate
-- Weapon by kill/damage/assist/death/DBNO/win/loss
+- Weapon by kill/damage/assist/death/caused DBNO/suffered DBNO/DBNO fight win/DBNO fight loss/final win/final loss
 - Weapon by distance bucket
 - Attachment combinations by weapon outcome
 - Teammate combinations by win rate and performance
@@ -141,4 +147,3 @@ attachment_score =
 
 Store both global and per-player scores because "recommended for everyone" and "recommended for this player" will
 often differ.
-

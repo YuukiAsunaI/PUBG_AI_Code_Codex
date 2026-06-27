@@ -104,7 +104,8 @@ Use a two-layer storage model:
 | `loadout_snapshots` | Reconstructed weapon + attachment state over time |
 | `weapon_fire_events` | Attack, throwable, flare, fire-count events |
 | `damage_events` | Damage dealt/taken with causer, reason, distance, armor notes |
-| `dbno_events` | Knockdown episodes keyed by `dBNOId` |
+| `dbno_events` | Knockdown episodes keyed by `dBNOId`, including attacker, victim, weapon, distance, and revive/final state |
+| `fight_outcomes` | Per-player fight outcomes such as `dbno_win`, `dbno_loss`, `final_kill`, and `final_death` |
 | `kill_events` | Final kill/death/finish/assist/teamkill/suicide records |
 | `revive_events` | Revive and redeploy events |
 | `position_samples` | Player position samples for movement, drop, route, and replay |
@@ -119,7 +120,7 @@ Use a two-layer storage model:
 | --- | --- |
 | `agg_player_daily` | Daily KDA, damage, wins, maps, modes, play volume |
 | `agg_player_monthly` | Monthly trend rollups |
-| `agg_player_weapon` | Weapon usage, kills, deaths, damage, assists, fight wins/losses |
+| `agg_player_weapon` | Weapon usage, kills, deaths, damage, assists, caused DBNOs, suffered DBNOs, fight wins/losses |
 | `agg_weapon_distance_bucket` | Weapon outcomes by distance bucket |
 | `agg_weapon_attachment` | Weapon + attachment combination outcomes |
 | `agg_player_map` | Map-specific performance and drop preference |
@@ -150,6 +151,8 @@ Use a two-layer storage model:
   - `telemetry_events(match_id, event_type, event_ts)`
   - `position_samples(match_id, account_id, elapsed_time)`
   - `damage_events(attacker_account_id, victim_account_id, match_id)`
+  - `dbno_events(attacker_account_id, victim_account_id, match_id)`
+  - `fight_outcomes(account_id, match_id, outcome_type)`
   - `kill_events(killer_account_id, victim_account_id, match_id)`
 - Store all timestamps in UTC. Convert for Korean local display in UI/Discord.
 
@@ -164,6 +167,7 @@ Because the official API exposes telemetry after match discovery, implement this
 5. Overlay fight events:
    - damage lines
    - DBNO marker
+   - DBNO fight win/loss marker for tracked players in duo/squad modes
    - kill marker
    - revive marker
    - care package marker
