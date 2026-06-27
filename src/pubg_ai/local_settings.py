@@ -64,12 +64,30 @@ class CollectorSettings:
 class DiscordPermissionSettings:
     command_groups: dict[str, list[str]]
     user_grants: dict[str, list[str]]
+    guild_user_grants: dict[str, dict[str, list[str]]]
+    global_admin_user_ids: list[str]
     updated_at: str | None = None
 
     def to_record(self) -> dict[str, Any]:
         return {
             "command_groups": self.command_groups,
             "user_grants": self.user_grants,
+            "guild_user_grants": self.guild_user_grants,
+            "global_admin_user_ids": self.global_admin_user_ids,
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass(frozen=True)
+class DiscordScopeSettings:
+    guild_ranking_scopes: dict[str, str]
+    public_profile_default: bool = True
+    updated_at: str | None = None
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "guild_ranking_scopes": self.guild_ranking_scopes,
+            "public_profile_default": self.public_profile_default,
             "updated_at": self.updated_at,
         }
 
@@ -81,6 +99,16 @@ DEFAULT_COMMAND_GROUPS: dict[str, list[str]] = {
     "replay_read": ["pubg-replay"],
     "settings_write": ["pubg-settings"],
     "admin": ["pubg-permission", "pubg-unregister", "pubg-delete-data"],
+}
+
+FORBIDDEN_LOCAL_SETTING_KEYS = {
+    "PUBG_API_KEY",
+    "DISCORD_BOT_TOKEN",
+    "pubg_api_key",
+    "discord_bot_token",
+    "api_key",
+    "bot_token",
+    "token",
 }
 
 
@@ -133,9 +161,19 @@ class LocalSettingsStore:
             return DiscordPermissionSettings(
                 command_groups=_copy_groups(DEFAULT_COMMAND_GROUPS),
                 user_grants={},
+                guild_user_grants={},
+                global_admin_user_ids=[],
             )
 
         return _discord_permissions_from_record(discord_permissions)
+
+    def load_discord_scope_settings(self) -> DiscordScopeSettings:
+        payload = self._read_settings() or {}
+        discord_scopes = payload.get("discord_scopes")
+        if not isinstance(discord_scopes, dict):
+            return DiscordScopeSettings(guild_ranking_scopes={})
+
+        return _discord_scopes_from_record(discord_scopes)
 
     def save_storage_settings(
         self,
@@ -198,15 +236,34 @@ class LocalSettingsStore:
         self,
         command_groups: dict[str, list[str]],
         user_grants: dict[str, list[str]],
+        guild_user_grants: dict[str, dict[str, list[str]]] | None = None,
+        global_admin_user_ids: list[str] | None = None,
     ) -> DiscordPermissionSettings:
         settings = DiscordPermissionSettings(
             command_groups=_normalize_groups(command_groups),
             user_grants=_normalize_groups(user_grants),
+            guild_user_grants=_normalize_guild_grants(guild_user_grants or {}),
+            global_admin_user_ids=_normalize_id_list(global_admin_user_ids or []),
             updated_at=isoformat_kst(),
         )
         _validate_discord_permission_settings(settings)
         payload = self._read_settings() or {}
         payload["discord_permissions"] = settings.to_record()
+        self._write_settings(payload)
+        return settings
+
+    def save_discord_scope_settings(
+        self,
+        guild_ranking_scopes: dict[str, str],
+        public_profile_default: bool = True,
+    ) -> DiscordScopeSettings:
+        settings = DiscordScopeSettings(
+            guild_ranking_scopes=_normalize_scope_map(guild_ranking_scopes),
+            public_profile_default=public_profile_default,
+            updated_at=isoformat_kst(),
+        )
+        payload = self._read_settings() or {}
+        payload["discord_scopes"] = settings.to_record()
         self._write_settings(payload)
         return settings
 
@@ -221,6 +278,7 @@ class LocalSettingsStore:
         }
 
     def _write_settings(self, payload: dict[str, Any]) -> None:
+        _reject_forbidden_secret_keys(payload)
         self.settings_file.parent.mkdir(parents=True, exist_ok=True)
         body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
 
@@ -375,6 +433,12 @@ def _discord_permissions_from_record(record: dict[str, Any]) -> DiscordPermissio
     settings = DiscordPermissionSettings(
         command_groups=_normalize_groups(command_groups if isinstance(command_groups, dict) else DEFAULT_COMMAND_GROUPS),
         user_grants=_normalize_groups(user_grants if isinstance(user_grants, dict) else {}),
+        guild_user_grants=_normalize_guild_grants(
+            record.get("guild_user_grants") if isinstance(record.get("guild_user_grants"), dict) else {}
+        ),
+        global_admin_user_ids=_normalize_id_list(
+            record.get("global_admin_user_ids") if isinstance(record.get("global_admin_user_ids"), list) else []
+        ),
         updated_at=_optional_str(record.get("updated_at")),
     )
     _validate_discord_permission_settings(settings)
@@ -392,6 +456,18 @@ def _validate_discord_permission_settings(settings: DiscordPermissionSettings) -
         unknown = sorted(set(groups) - known_groups)
         if unknown:
             raise LocalSettingsError(f"user {user_id} has unknown permission groups: {', '.join(unknown)}.")
+
+    for guild_id, guild_grants in settings.guild_user_grants.items():
+        if not guild_grants:
+            raise LocalSettingsError(f"guild {guild_id} must have at least one user grant.")
+        for user_id, groups in guild_grants.items():
+            if not groups:
+                raise LocalSettingsError(f"user {user_id} in guild {guild_id} must have at least one group.")
+            unknown = sorted(set(groups) - known_groups)
+            if unknown:
+                raise LocalSettingsError(
+                    f"user {user_id} in guild {guild_id} has unknown permission groups: {', '.join(unknown)}."
+                )
 
 
 def _normalize_groups(value: dict[str, Any]) -> dict[str, list[str]]:
@@ -414,6 +490,63 @@ def _normalize_groups(value: dict[str, Any]) -> dict[str, list[str]]:
 
 def _copy_groups(groups: dict[str, list[str]]) -> dict[str, list[str]]:
     return {key: list(values) for key, values in groups.items()}
+
+
+def _normalize_guild_grants(value: dict[str, Any]) -> dict[str, dict[str, list[str]]]:
+    normalized: dict[str, dict[str, list[str]]] = {}
+    for guild_id, raw_grants in value.items():
+        if not isinstance(guild_id, str) or not guild_id:
+            raise LocalSettingsError("guild ids must be non-empty strings.")
+        if not isinstance(raw_grants, dict):
+            raise LocalSettingsError(f"guild {guild_id} grants must be an object.")
+        normalized[guild_id] = _normalize_groups(raw_grants)
+    return normalized
+
+
+def _normalize_id_list(values: list[Any]) -> list[str]:
+    normalized: list[str] = []
+    for value in values:
+        if not isinstance(value, str) or not value:
+            raise LocalSettingsError("ids must be non-empty strings.")
+        normalized.append(value)
+    return sorted(set(normalized))
+
+
+def _normalize_scope_map(value: dict[str, Any]) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for guild_id, scope in value.items():
+        if not isinstance(guild_id, str) or not guild_id:
+            raise LocalSettingsError("guild ids must be non-empty strings.")
+        if not isinstance(scope, str) or scope not in {"guild", "global"}:
+            raise LocalSettingsError("guild ranking scope must be either 'guild' or 'global'.")
+        normalized[guild_id] = scope
+    return normalized
+
+
+def _discord_scopes_from_record(record: dict[str, Any]) -> DiscordScopeSettings:
+    guild_ranking_scopes = record.get("guild_ranking_scopes")
+    public_profile_default = record.get("public_profile_default", True)
+    if not isinstance(public_profile_default, bool):
+        public_profile_default = True
+
+    return DiscordScopeSettings(
+        guild_ranking_scopes=_normalize_scope_map(
+            guild_ranking_scopes if isinstance(guild_ranking_scopes, dict) else {}
+        ),
+        public_profile_default=public_profile_default,
+        updated_at=_optional_str(record.get("updated_at")),
+    )
+
+
+def _reject_forbidden_secret_keys(value: Any) -> None:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if isinstance(key, str) and key in FORBIDDEN_LOCAL_SETTING_KEYS:
+                raise LocalSettingsError(f"{key} must stay in .env and cannot be saved in local settings.")
+            _reject_forbidden_secret_keys(nested)
+    elif isinstance(value, list):
+        for item in value:
+            _reject_forbidden_secret_keys(item)
 
 
 def _int_value(value: Any, default: int) -> int:

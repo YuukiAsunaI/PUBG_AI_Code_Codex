@@ -18,8 +18,10 @@ MySQL data model direction, 2D replay/live-view feasibility, and reference proje
 ## Key Decisions From Research
 
 - Registered users are the only primary collection target.
+- Registered PUBG players are treated as admin-managed tracking targets, not ownership claims by Discord users.
 - Nickname registration requires a platform shard, then resolves `accountId`; later polling and matching use
   `accountId`.
+- PUBG API key and Discord bot token stay only in `.env`; local program settings must not store or display them.
 - All discovered match types are collected and immediately classified by `game_mode`, `match_type`, map, shard,
   team mode, perspective, ranked/custom flags, and completion-only availability.
 - MySQL-facing timestamps are stored in KST because the expected audience is primarily Korean users.
@@ -32,6 +34,7 @@ MySQL data model direction, 2D replay/live-view feasibility, and reference proje
   `PUBG_REPLAY_DATA_DIR=E:\PUBG_AI_Data\replays`.
 - The local management app should save user-changed storage paths to `config/local_settings.json`, so paths can be
   changed from the program without editing `.env`.
+- Discord permissions and rankings are scoped by `guild_id`; global admins can view and manage all guilds.
 - PUBG match detail and telemetry are available after the match finishes. A 2D viewer is therefore post-match replay,
   not in-match live tracking.
 - The local stack should be MySQL + local API/worker + Discord bot + local web management UI.

@@ -86,4 +86,14 @@ Admins can:
 - change storage paths
 - change polling settings
 - change Discord permission grants
+- change guild ranking scopes
+- manage global admins
 
+## Secret Handling
+
+Secrets are outside the local settings lifecycle.
+
+- `PUBG_API_KEY` is stored only in `.env`.
+- `DISCORD_BOT_TOKEN` is stored only in `.env`.
+- Local program settings must reject secret fields.
+- Logs and UI should show masked status only, such as configured or missing.

@@ -201,10 +201,14 @@ class LocalSettingsStoreTests(unittest.TestCase):
             saved = store.save_discord_permission_settings(
                 command_groups=DEFAULT_COMMAND_GROUPS,
                 user_grants={"discord-user-1": ["profile_read", "ranking_read"]},
+                guild_user_grants={"guild-1": {"discord-user-2": ["register"]}},
+                global_admin_user_ids=["global-admin-1"],
             )
             loaded = store.load_discord_permission_settings()
 
             self.assertEqual(saved.user_grants["discord-user-1"], ["profile_read", "ranking_read"])
+            self.assertEqual(saved.guild_user_grants["guild-1"]["discord-user-2"], ["register"])
+            self.assertEqual(saved.global_admin_user_ids, ["global-admin-1"])
             self.assertEqual(loaded.user_grants["discord-user-1"], ["profile_read", "ranking_read"])
             self.assertIn("pubg-register", loaded.command_groups["register"])
 
@@ -217,6 +221,29 @@ class LocalSettingsStoreTests(unittest.TestCase):
                     command_groups=DEFAULT_COMMAND_GROUPS,
                     user_grants={"discord-user-1": ["unknown"]},
                 )
+
+    def test_discord_scope_settings_can_be_saved_by_program(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store = LocalSettingsStore(Path(temp_dir) / "config" / "local_settings.json")
+            saved = store.save_discord_scope_settings(
+                guild_ranking_scopes={"guild-1": "guild", "guild-2": "global"},
+                public_profile_default=True,
+            )
+            loaded = store.load_discord_scope_settings()
+
+            self.assertEqual(saved.guild_ranking_scopes["guild-1"], "guild")
+            self.assertEqual(saved.guild_ranking_scopes["guild-2"], "global")
+            self.assertTrue(loaded.public_profile_default)
+
+    def test_local_settings_reject_secret_keys(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store = LocalSettingsStore(Path(temp_dir) / "config" / "local_settings.json")
+
+            with self.assertRaises(LocalSettingsError):
+                store._write_settings({"PUBG_API_KEY": "secret"})
+
+            with self.assertRaises(LocalSettingsError):
+                store._write_settings({"nested": {"DISCORD_BOT_TOKEN": "secret"}})
 
     def test_storage_status_reports_writable_paths(self) -> None:
         with TemporaryDirectory() as temp_dir:

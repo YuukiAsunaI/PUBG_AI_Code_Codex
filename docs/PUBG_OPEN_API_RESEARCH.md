@@ -111,6 +111,7 @@ Per match:
 - Total movement distance, vehicle distance, swim distance where available
 - Map, mode, team size, perspective, party/teammates
 - Immediate match classification: map, shard, `game_mode`, `match_type`, team mode, perspective, ranked/custom flags
+- Team membership from PUBG roster/team data, with registered teammates emphasized separately
 - Main drop location and first parachute landing point
 - Flight path approximation if available from aircraft/player position traces
 - Care package spawn/landing points
@@ -125,6 +126,7 @@ Aggregates:
 - Time of day, date, week, and month trends
 - Solo/duo/squad and TPP/FPP splits
 - Favorite maps, drop zones, weapons, parts, consumables
+- Drop and landing coordinate clusters first, named region mapping second
 - Recommendation scores for weapons and weapon-part combinations
 
 ## Recommendation Direction

@@ -69,10 +69,12 @@ Use a two-layer storage model:
 
 | Table | Purpose |
 | --- | --- |
-| `registered_players` | Local users to track: `account_id`, `current_name`, required `shard`, `active`, Discord mapping |
+| `registered_players` | Admin-managed tracking targets: `account_id`, `current_name`, required `shard`, `active`, `public_profile` |
 | `player_aliases` | Nickname history and lookup evidence |
-| `discord_users` | Discord user/server links and permissions |
-| `discord_permission_grants` | Per-user command group permissions |
+| `discord_users` | Discord user records; not assumed to own PUBG accounts |
+| `discord_guilds` | Guild-specific settings, ranking scope, and visibility defaults |
+| `discord_permission_grants` | Global and guild-scoped per-user command group permissions |
+| `global_admins` | Discord users allowed to manage and view all guilds |
 | `player_groups` | Optional friend/group labels for squad analysis |
 
 ### Raw API Storage
@@ -94,10 +96,10 @@ Use a two-layer storage model:
 | `match_rosters` | Teams/rosters, rank, win flag |
 | `match_participants` | Player match stats from match object |
 | `player_match_summaries` | One row per tracked player per match with final stats and derived flags |
-| `match_teammates` | Teammate pairs/trios/squad membership for chemistry analysis |
+| `match_teammates` | Teammate pairs/trios/squad membership from PUBG roster/team data |
 | `player_collection_states` | Polling cursor/status by registered player |
 | `collector_settings` | Program-editable polling interval, cycle player limit, and lookup chunk size |
-| `discord_permission_settings` | Program-editable command groups and per-user grants |
+| `discord_permission_settings` | Program-editable command groups, guild-scoped grants, and global admins |
 
 ### Telemetry Event Facts
 
@@ -129,7 +131,8 @@ Use a two-layer storage model:
 | `agg_weapon_attachment` | Weapon + attachment combination outcomes |
 | `agg_player_map` | Map-specific performance and drop preference |
 | `agg_player_teammate` | Performance with each teammate or party set |
-| `agg_player_drop_zone` | Common landing/drop clusters and outcomes |
+| `agg_player_drop_zone` | Common landing/drop coordinate clusters and outcomes |
+| `map_region_labels` | Phase-2 mapping from coordinate clusters to named regions |
 | `recommendation_scores` | Rebuildable player/global recommendation outputs |
 
 ## MySQL Implementation Notes
@@ -146,6 +149,9 @@ Use a two-layer storage model:
   every row.
 - Do not silently fall back to the project directory if a configured external drive is missing.
 - Load storage paths from `config/local_settings.json` when the local program has saved user-selected paths.
+- Keep `PUBG_API_KEY` and `DISCORD_BOT_TOKEN` only in `.env`; local settings must not store raw secrets.
+- Scope Discord permissions/rankings by `guild_id`, with global admins allowed to view/manage all guilds.
+- Treat registered PUBG players as tracking targets, not Discord ownership claims.
 - Use `match_id` and `account_id` as natural keys where possible.
 - Use bigint surrogate IDs for high-volume event tables.
 - Add indexes on:
@@ -203,6 +209,9 @@ For Discord, do not stream the whole replay. Send a summary image/GIF or a local
 | `/pubg-unregister nickname shard` | Stop future collection and retain existing data by default; admin/delegated-only |
 
 The same permission groups and per-user grants must be editable in the local management program.
+
+Team membership should come from PUBG roster/team data. Registered teammates should be visually emphasized in local
+UI and Discord responses.
 
 ## First MVP Milestone
 

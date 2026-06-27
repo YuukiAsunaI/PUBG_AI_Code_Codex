@@ -59,6 +59,19 @@ Recommended JSON shape:
     "user_grants": {
       "discord-user-id": ["profile_read", "ranking_read"]
     },
+    "guild_user_grants": {
+      "guild-id": {
+        "discord-user-id": ["register", "profile_read"]
+      }
+    },
+    "global_admin_user_ids": ["discord-admin-user-id"],
+    "updated_at": "2026-06-27T21:00:00+09:00"
+  },
+  "discord_scopes": {
+    "guild_ranking_scopes": {
+      "guild-id": "guild"
+    },
+    "public_profile_default": true,
     "updated_at": "2026-06-27T21:00:00+09:00"
   }
 }
@@ -82,6 +95,8 @@ The settings screen should provide:
 - player lookup chunk size selector up to the official player lookup limit
 - Discord command group editor
 - Discord per-user permission grant editor
+- Discord guild-specific permission/ranking scope editor
+- global admin editor
 - write-test button for each path
 - free disk space display for each path
 - save button that creates missing folders only after user confirmation
@@ -153,6 +168,13 @@ relative paths.
 
 The local management program should call the settings service to validate and save paths. It should never write raw
 files to a fallback folder without making that visible to the user.
+
+Secrets are different from local settings:
+
+- `PUBG_API_KEY` remains only in `.env`.
+- `DISCORD_BOT_TOKEN` remains only in `.env`.
+- The local management program should show only masked configured/missing status.
+- `config/local_settings.json` must never contain raw tokens or API keys.
 
 ## 2D Replay Storage
 

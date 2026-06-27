@@ -12,6 +12,8 @@ changes them.
 - The same nickname on different shards is treated as a different player.
 - Only Discord users with registration permission can register players.
 - Registration resolves nickname to PUBG `accountId`; future collection uses `accountId`.
+- Registered PUBG players are admin-managed tracking targets, not ownership claims by Discord users.
+- Player records should include `public_profile` so profile/ranking visibility can be controlled.
 
 ## Match Collection Scope
 
@@ -69,9 +71,12 @@ DMR and SR use 100m buckets to 1km:
 - Registration is permission-gated.
 - Commands are permission-gated by command group.
 - Admins can grant or revoke per-user command permissions.
-- Server-wide ranking commands should be supported.
+- Permissions and ranking visibility are scoped by `guild_id`.
+- Server-wide ranking commands should be supported within each guild scope.
+- Global admins can view and manage all guilds.
 - Personal data deletion/destructive commands require administrator permission.
-- The local management program must be able to edit command groups and per-user grants.
+- The local management program must be able to edit command groups, per-guild grants, global admins, and ranking
+  scope.
 
 Suggested command groups:
 
@@ -83,6 +88,25 @@ Suggested command groups:
 | `replay_read` | replay link, replay summary |
 | `settings_write` | storage paths, polling interval, API settings |
 | `admin` | grant permissions, unregister players, delete data |
+
+## Secret Handling
+
+- `PUBG_API_KEY` stays only in `.env`.
+- `DISCORD_BOT_TOKEN` stays only in `.env`.
+- The local program can show configured/missing/masked status, but must not store or display raw secret values.
+- `config/local_settings.json` must reject token/API-key fields.
+
+## Team and Visibility
+
+- Team membership comes from PUBG match roster/team data.
+- Registered users on the same team should be highlighted separately from unregistered teammates.
+- `public_profile` controls whether a player appears in public profile and ranking views.
+
+## Location Analysis
+
+- Phase 1: use coordinate clustering for drop/landing/hotspot analysis.
+- Phase 2: map clusters to named regions such as city or landmark names.
+- Map coordinate-to-region dictionaries should be versioned separately from raw telemetry.
 
 ## Unregister Policy
 
