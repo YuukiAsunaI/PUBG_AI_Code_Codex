@@ -17,6 +17,9 @@ Research date: 2026-06-27
 - Official assets and dictionaries: https://github.com/pubg/api-assets
 - Game mode dictionary: https://raw.githubusercontent.com/pubg/api-assets/master/dictionaries/gameMode.json
 - Map dictionary: https://raw.githubusercontent.com/pubg/api-assets/master/dictionaries/telemetry/mapName.json
+- Item ID dictionary: https://raw.githubusercontent.com/pubg/api-assets/master/dictionaries/telemetry/item/itemId.json
+- Damage causer dictionary: https://raw.githubusercontent.com/pubg/api-assets/master/dictionaries/telemetry/damageCauserName.json
+- Vehicle ID dictionary: https://raw.githubusercontent.com/pubg/api-assets/master/dictionaries/telemetry/vehicle/vehicleId.json
 
 ## Reference Projects
 

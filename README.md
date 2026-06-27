@@ -11,6 +11,7 @@ MySQL data model direction, 2D replay/live-view feasibility, and reference proje
 - [Local Architecture and MySQL Model](docs/LOCAL_ARCHITECTURE_AND_MYSQL_MODEL.md)
 - [Implementation Decisions](docs/IMPLEMENTATION_DECISIONS.md)
 - [Data Lifecycle and Operations](docs/DATA_LIFECYCLE_AND_OPERATIONS.md)
+- [Code Translation](docs/CODE_TRANSLATION.md)
 - [Configuration](docs/CONFIGURATION.md)
 - [Reference Project Survey](docs/REFERENCE_PROJECT_SURVEY.md)
 - [Sources](docs/SOURCES.md)
@@ -24,6 +25,7 @@ MySQL data model direction, 2D replay/live-view feasibility, and reference proje
 - PUBG API key and Discord bot token stay only in `.env`; local program settings must not store or display them.
 - All discovered match types are collected and immediately classified by `game_mode`, `match_type`, map, shard,
   team mode, perspective, ranked/custom flags, and completion-only availability.
+- Known PUBG item/weapon/map/vehicle codes are translated to Korean display labels; unknown codes are shown as-is.
 - MySQL-facing timestamps are stored in KST because the expected audience is primarily Korean users.
 - Match and telemetry data should be stored as immutable raw JSON first, then normalized into analysis tables.
 - Raw match and telemetry files are retained indefinitely; low disk space raises local-program and Discord errors

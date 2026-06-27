@@ -76,6 +76,7 @@ Use a two-layer storage model:
 | `discord_permission_grants` | Global and guild-scoped per-user command group permissions |
 | `global_admins` | Discord users allowed to manage and view all guilds |
 | `player_groups` | Optional friend/group labels for squad analysis |
+| `code_translation_overrides` | Admin-maintained Korean labels for new or corrected PUBG codes |
 
 ### Raw API Storage
 
@@ -134,6 +135,11 @@ Use a two-layer storage model:
 | `agg_player_drop_zone` | Common landing/drop coordinate clusters and outcomes |
 | `map_region_labels` | Phase-2 mapping from coordinate clusters to named regions |
 | `recommendation_scores` | Rebuildable player/global recommendation outputs |
+
+### Code Translation
+
+Known PUBG internal codes should be translated before UI/Discord display. Unknown codes are stored and displayed
+unchanged so newly added PUBG content remains visible.
 
 ## MySQL Implementation Notes
 

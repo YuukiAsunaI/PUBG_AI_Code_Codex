@@ -108,6 +108,13 @@ Suggested command groups:
 - Phase 2: map clusters to named regions such as city or landmark names.
 - Map coordinate-to-region dictionaries should be versioned separately from raw telemetry.
 
+## Code Translation
+
+- Convert known PUBG internal codes to Korean labels before display.
+- This applies to item IDs, damage causer names, map names, vehicle IDs, game modes, and local death types.
+- If a code is not in the parser dictionary, show the original code unchanged.
+- Updated or newly added PUBG codes should be added through dictionary overrides without breaking parsing.
+
 ## Unregister Policy
 
 - Unregistering a player stops future collection.
