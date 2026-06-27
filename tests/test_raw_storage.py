@@ -8,7 +8,12 @@ import json
 import unittest
 
 from pubg_ai.config import AppConfig
-from pubg_ai.local_settings import LocalSettingsStore, check_storage_path
+from pubg_ai.local_settings import (
+    DEFAULT_COMMAND_GROUPS,
+    LocalSettingsError,
+    LocalSettingsStore,
+    check_storage_path,
+)
 from pubg_ai.raw_storage import RawPayloadStore, RawStorageError
 from pubg_ai.replay_storage import ReplayArtifactStore, ReplayStorageError
 
@@ -64,6 +69,31 @@ class AppConfigTests(unittest.TestCase):
 
             self.assertEqual(config.raw_data_dir, raw_dir)
             self.assertEqual(config.replay_data_dir, replay_dir)
+
+    def test_local_program_collector_settings_override_env_values(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            settings_file = base_dir / "config" / "local_settings.json"
+            store = LocalSettingsStore(settings_file, base_dir=base_dir)
+            store.save_collector_settings(
+                poll_interval_seconds=60,
+                cycle_player_limit=75,
+                player_lookup_chunk_size=5,
+            )
+
+            config = AppConfig.from_sources(
+                {
+                    "PUBG_COLLECTOR_POLL_INTERVAL_SECONDS": "300",
+                    "PUBG_COLLECTOR_CYCLE_PLAYER_LIMIT": "100",
+                    "PUBG_PLAYER_LOOKUP_CHUNK_SIZE": "10",
+                    "PUBG_LOCAL_SETTINGS_FILE": str(settings_file),
+                },
+                base_dir=base_dir,
+            )
+
+            self.assertEqual(config.collector_poll_interval_seconds, 60)
+            self.assertEqual(config.collector_cycle_player_limit, 75)
+            self.assertEqual(config.player_lookup_chunk_size, 5)
 
 
 class RawPayloadStoreTests(unittest.TestCase):
@@ -137,6 +167,56 @@ class LocalSettingsStoreTests(unittest.TestCase):
             self.assertIsNotNone(loaded)
             self.assertEqual(loaded.raw_data_dir, raw_dir)
             self.assertEqual(loaded.replay_data_dir, replay_dir)
+
+    def test_storage_settings_do_not_overwrite_collector_settings(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            settings_file = base_dir / "config" / "local_settings.json"
+            store = LocalSettingsStore(settings_file, base_dir=base_dir)
+            store.save_collector_settings(60, 80, 10)
+            store.save_storage_settings(base_dir / "raw", base_dir / "replays")
+
+            collector = store.load_collector_settings()
+
+            self.assertEqual(collector.poll_interval_seconds, 60)
+            self.assertEqual(collector.cycle_player_limit, 80)
+            self.assertEqual(collector.player_lookup_chunk_size, 10)
+
+    def test_collector_settings_validate_program_adjustable_limits(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store = LocalSettingsStore(Path(temp_dir) / "config" / "local_settings.json")
+
+            with self.assertRaises(LocalSettingsError):
+                store.save_collector_settings(30, 100, 10)
+
+            with self.assertRaises(LocalSettingsError):
+                store.save_collector_settings(60, 101, 10)
+
+            with self.assertRaises(LocalSettingsError):
+                store.save_collector_settings(60, 100, 11)
+
+    def test_discord_permission_settings_can_be_saved_by_program(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store = LocalSettingsStore(Path(temp_dir) / "config" / "local_settings.json")
+            saved = store.save_discord_permission_settings(
+                command_groups=DEFAULT_COMMAND_GROUPS,
+                user_grants={"discord-user-1": ["profile_read", "ranking_read"]},
+            )
+            loaded = store.load_discord_permission_settings()
+
+            self.assertEqual(saved.user_grants["discord-user-1"], ["profile_read", "ranking_read"])
+            self.assertEqual(loaded.user_grants["discord-user-1"], ["profile_read", "ranking_read"])
+            self.assertIn("pubg-register", loaded.command_groups["register"])
+
+    def test_discord_permission_settings_reject_unknown_groups(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store = LocalSettingsStore(Path(temp_dir) / "config" / "local_settings.json")
+
+            with self.assertRaises(LocalSettingsError):
+                store.save_discord_permission_settings(
+                    command_groups=DEFAULT_COMMAND_GROUPS,
+                    user_grants={"discord-user-1": ["unknown"]},
+                )
 
     def test_storage_status_reports_writable_paths(self) -> None:
         with TemporaryDirectory() as temp_dir:

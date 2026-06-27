@@ -19,6 +19,9 @@ class AppConfig:
     raw_compression: str = "gzip"
     allow_storage_fallback: bool = False
     allow_replay_storage_fallback: bool = False
+    collector_poll_interval_seconds: int = 180
+    collector_cycle_player_limit: int = 100
+    player_lookup_chunk_size: int = 10
 
     @classmethod
     def from_env(
@@ -50,6 +53,18 @@ class AppConfig:
                 values.get("PUBG_ALLOW_REPLAY_STORAGE_FALLBACK"),
                 default=False,
             ),
+            collector_poll_interval_seconds=_env_int(
+                values.get("PUBG_COLLECTOR_POLL_INTERVAL_SECONDS"),
+                default=180,
+            ),
+            collector_cycle_player_limit=_env_int(
+                values.get("PUBG_COLLECTOR_CYCLE_PLAYER_LIMIT"),
+                default=100,
+            ),
+            player_lookup_chunk_size=_env_int(
+                values.get("PUBG_PLAYER_LOOKUP_CHUNK_SIZE"),
+                default=10,
+            ),
         )
 
     @classmethod
@@ -69,18 +84,27 @@ class AppConfig:
         if not settings_file.exists():
             return config
 
-        from pubg_ai.local_settings import LocalSettingsStore
+        from pubg_ai.local_settings import CollectorSettings, LocalSettingsStore
 
-        settings = LocalSettingsStore(settings_file, base_dir=base).load_storage_settings()
-        if settings is None:
-            return config
+        settings_store = LocalSettingsStore(settings_file, base_dir=base)
+        storage_settings = settings_store.load_storage_settings()
+        collector_settings = settings_store.load_collector_settings(
+            default=CollectorSettings(
+                poll_interval_seconds=config.collector_poll_interval_seconds,
+                cycle_player_limit=config.collector_cycle_player_limit,
+                player_lookup_chunk_size=config.player_lookup_chunk_size,
+            )
+        )
 
         return cls(
-            raw_data_dir=settings.raw_data_dir,
-            replay_data_dir=settings.replay_data_dir,
-            raw_compression=settings.raw_compression,
+            raw_data_dir=storage_settings.raw_data_dir if storage_settings else config.raw_data_dir,
+            replay_data_dir=storage_settings.replay_data_dir if storage_settings else config.replay_data_dir,
+            raw_compression=storage_settings.raw_compression if storage_settings else config.raw_compression,
             allow_storage_fallback=config.allow_storage_fallback,
             allow_replay_storage_fallback=config.allow_replay_storage_fallback,
+            collector_poll_interval_seconds=collector_settings.poll_interval_seconds,
+            collector_cycle_player_limit=collector_settings.cycle_player_limit,
+            player_lookup_chunk_size=collector_settings.player_lookup_chunk_size,
         )
 
 
@@ -89,3 +113,12 @@ def _config_path(value: str, base_dir: Path) -> Path:
     if not path.is_absolute():
         path = base_dir / path
     return path
+
+
+def _env_int(value: str | None, default: int) -> int:
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default

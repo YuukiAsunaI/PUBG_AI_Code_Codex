@@ -3,7 +3,7 @@
 Decision date: 2026-06-27
 
 This file records product and data rules that should be treated as fixed unless an administrator intentionally
-changes them later.
+changes them.
 
 ## Player Registration
 
@@ -15,9 +15,9 @@ changes them later.
 
 ## Match Collection Scope
 
-- Collect every discovered match type for registered players.
+- Collect every completed/discovered match type for registered players.
 - Do not discard custom, casual, ranked, event, arcade, TPP, or FPP matches at ingestion time.
-- Store enough metadata to filter later:
+- Classify each match immediately when match details are fetched:
   - `game_mode`
   - `match_type`
   - `map_name`
@@ -25,7 +25,8 @@ changes them later.
   - `is_custom_match`
   - `season_state` when available
   - team size and perspective derived from mode
-- 2D replay is post-match only because match logs and telemetry are available after the match finishes.
+- Match details and telemetry are post-match data. They are only available after the PUBG match has finished.
+- 2D replay is post-match only because it is generated from finished-match logs and telemetry.
 
 ## Time Zone
 
@@ -69,6 +70,7 @@ DMR and SR use 100m buckets to 1km:
 - Admins can grant or revoke per-user command permissions.
 - Server-wide ranking commands should be supported.
 - Personal data deletion/destructive commands require administrator permission.
+- The local management program must be able to edit command groups and per-user grants.
 
 Suggested command groups:
 
@@ -100,4 +102,4 @@ Suggested command groups:
   100-player cycle should be chunked into 10-player requests.
 - Match and telemetry fetches are queued after match IDs are discovered.
 - The exact high-volume scheduling policy remains open until live API behavior is tested.
-
+- Polling interval, cycle player limit, and player lookup chunk size must be editable in the local management program.

@@ -18,7 +18,8 @@ MySQL data model direction, 2D replay/live-view feasibility, and reference proje
 - Registered users are the only primary collection target.
 - Nickname registration requires a platform shard, then resolves `accountId`; later polling and matching use
   `accountId`.
-- All discovered match types are collected, with mode/type metadata preserved for later filtering.
+- All discovered match types are collected and immediately classified by `game_mode`, `match_type`, map, shard,
+  team mode, perspective, ranked/custom flags, and completion-only availability.
 - MySQL-facing timestamps are stored in KST because the expected audience is primarily Korean users.
 - Match and telemetry data should be stored as immutable raw JSON first, then normalized into analysis tables.
 - Large raw match and telemetry files should be saved under a configurable external storage path such as
@@ -27,8 +28,8 @@ MySQL data model direction, 2D replay/live-view feasibility, and reference proje
   `PUBG_REPLAY_DATA_DIR=E:\PUBG_AI_Data\replays`.
 - The local management app should save user-changed storage paths to `config/local_settings.json`, so paths can be
   changed from the program without editing `.env`.
-- True in-match live data is not exposed by the public PUBG Open API. A 2D viewer should therefore start as
-  telemetry replay and near-live post-match playback.
+- PUBG match detail and telemetry are available after the match finishes. A 2D viewer is therefore post-match replay,
+  not in-match live tracking.
 - The local stack should be MySQL + local API/worker + Discord bot + local web management UI.
 
 ## Proposed First Build Slice

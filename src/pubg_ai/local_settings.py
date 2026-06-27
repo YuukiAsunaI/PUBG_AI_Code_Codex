@@ -44,20 +44,55 @@ class StorageSettings:
         }
 
 
+@dataclass(frozen=True)
+class CollectorSettings:
+    poll_interval_seconds: int = 180
+    cycle_player_limit: int = 100
+    player_lookup_chunk_size: int = 10
+    updated_at: str | None = None
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "poll_interval_seconds": self.poll_interval_seconds,
+            "cycle_player_limit": self.cycle_player_limit,
+            "player_lookup_chunk_size": self.player_lookup_chunk_size,
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass(frozen=True)
+class DiscordPermissionSettings:
+    command_groups: dict[str, list[str]]
+    user_grants: dict[str, list[str]]
+    updated_at: str | None = None
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "command_groups": self.command_groups,
+            "user_grants": self.user_grants,
+            "updated_at": self.updated_at,
+        }
+
+
+DEFAULT_COMMAND_GROUPS: dict[str, list[str]] = {
+    "register": ["pubg-register"],
+    "profile_read": ["pubg-profile", "pubg-recent", "pubg-match", "pubg-weapon"],
+    "ranking_read": ["pubg-ranking"],
+    "replay_read": ["pubg-replay"],
+    "settings_write": ["pubg-settings"],
+    "admin": ["pubg-permission", "pubg-unregister", "pubg-delete-data"],
+}
+
+
 class LocalSettingsStore:
     def __init__(self, settings_file: Path, base_dir: Path | None = None) -> None:
         self.base_dir = base_dir or Path.cwd()
         self.settings_file = _resolve_config_path(settings_file, self.base_dir)
 
     def load_storage_settings(self) -> StorageSettings | None:
-        if not self.settings_file.exists():
+        payload = self._read_settings()
+        if payload is None:
             return None
-
-        try:
-            with self.settings_file.open("r", encoding="utf-8") as file:
-                payload = json.load(file)
-        except (OSError, json.JSONDecodeError) as exc:
-            raise LocalSettingsError(f"failed to load local settings: {exc}") from exc
 
         storage = payload.get("storage")
         if not isinstance(storage, dict):
@@ -82,6 +117,25 @@ class LocalSettingsStore:
             raw_compression=compression,
             updated_at=updated_at,
         )
+
+    def load_collector_settings(self, default: CollectorSettings | None = None) -> CollectorSettings:
+        payload = self._read_settings() or {}
+        collector = payload.get("collector")
+        if not isinstance(collector, dict):
+            return default or CollectorSettings()
+
+        return _collector_settings_from_record(collector)
+
+    def load_discord_permission_settings(self) -> DiscordPermissionSettings:
+        payload = self._read_settings() or {}
+        discord_permissions = payload.get("discord_permissions")
+        if not isinstance(discord_permissions, dict):
+            return DiscordPermissionSettings(
+                command_groups=_copy_groups(DEFAULT_COMMAND_GROUPS),
+                user_grants={},
+            )
+
+        return _discord_permissions_from_record(discord_permissions)
 
     def save_storage_settings(
         self,
@@ -117,7 +171,43 @@ class LocalSettingsStore:
             raw_compression=raw_compression,
             updated_at=isoformat_kst(),
         )
-        self._write_settings({"storage": settings.to_record()})
+        payload = self._read_settings() or {}
+        payload["storage"] = settings.to_record()
+        self._write_settings(payload)
+        return settings
+
+    def save_collector_settings(
+        self,
+        poll_interval_seconds: int,
+        cycle_player_limit: int,
+        player_lookup_chunk_size: int,
+    ) -> CollectorSettings:
+        settings = CollectorSettings(
+            poll_interval_seconds=poll_interval_seconds,
+            cycle_player_limit=cycle_player_limit,
+            player_lookup_chunk_size=player_lookup_chunk_size,
+            updated_at=isoformat_kst(),
+        )
+        _validate_collector_settings(settings)
+        payload = self._read_settings() or {}
+        payload["collector"] = settings.to_record()
+        self._write_settings(payload)
+        return settings
+
+    def save_discord_permission_settings(
+        self,
+        command_groups: dict[str, list[str]],
+        user_grants: dict[str, list[str]],
+    ) -> DiscordPermissionSettings:
+        settings = DiscordPermissionSettings(
+            command_groups=_normalize_groups(command_groups),
+            user_grants=_normalize_groups(user_grants),
+            updated_at=isoformat_kst(),
+        )
+        _validate_discord_permission_settings(settings)
+        payload = self._read_settings() or {}
+        payload["discord_permissions"] = settings.to_record()
+        self._write_settings(payload)
         return settings
 
     def get_storage_status(self) -> dict[str, StoragePathStatus]:
@@ -150,6 +240,20 @@ class LocalSettingsStore:
             os.replace(temp_path, self.settings_file)
         except OSError as exc:
             raise LocalSettingsError(f"failed to save local settings: {exc}") from exc
+
+    def _read_settings(self) -> dict[str, Any] | None:
+        if not self.settings_file.exists():
+            return None
+
+        try:
+            with self.settings_file.open("r", encoding="utf-8") as file:
+                payload = json.load(file)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise LocalSettingsError(f"failed to load local settings: {exc}") from exc
+
+        if not isinstance(payload, dict):
+            raise LocalSettingsError("local settings root must be a JSON object.")
+        return payload
 
 
 def check_storage_path(path: str | Path, create: bool = False) -> StoragePathStatus:
@@ -243,3 +347,80 @@ def _resolve_config_path(value: str | Path, base_dir: Path) -> Path:
     if not path.is_absolute():
         path = base_dir / path
     return path
+
+
+def _collector_settings_from_record(record: dict[str, Any]) -> CollectorSettings:
+    settings = CollectorSettings(
+        poll_interval_seconds=_int_value(record.get("poll_interval_seconds"), 180),
+        cycle_player_limit=_int_value(record.get("cycle_player_limit"), 100),
+        player_lookup_chunk_size=_int_value(record.get("player_lookup_chunk_size"), 10),
+        updated_at=_optional_str(record.get("updated_at")),
+    )
+    _validate_collector_settings(settings)
+    return settings
+
+
+def _validate_collector_settings(settings: CollectorSettings) -> None:
+    if not 60 <= settings.poll_interval_seconds <= 300:
+        raise LocalSettingsError("poll_interval_seconds must be between 60 and 300.")
+    if not 1 <= settings.cycle_player_limit <= 100:
+        raise LocalSettingsError("cycle_player_limit must be between 1 and 100.")
+    if not 1 <= settings.player_lookup_chunk_size <= 10:
+        raise LocalSettingsError("player_lookup_chunk_size must be between 1 and 10.")
+
+
+def _discord_permissions_from_record(record: dict[str, Any]) -> DiscordPermissionSettings:
+    command_groups = record.get("command_groups")
+    user_grants = record.get("user_grants")
+    settings = DiscordPermissionSettings(
+        command_groups=_normalize_groups(command_groups if isinstance(command_groups, dict) else DEFAULT_COMMAND_GROUPS),
+        user_grants=_normalize_groups(user_grants if isinstance(user_grants, dict) else {}),
+        updated_at=_optional_str(record.get("updated_at")),
+    )
+    _validate_discord_permission_settings(settings)
+    return settings
+
+
+def _validate_discord_permission_settings(settings: DiscordPermissionSettings) -> None:
+    known_groups = set(settings.command_groups)
+    if not known_groups:
+        raise LocalSettingsError("at least one Discord command group is required.")
+
+    for user_id, groups in settings.user_grants.items():
+        if not groups:
+            raise LocalSettingsError(f"user {user_id} must have at least one group.")
+        unknown = sorted(set(groups) - known_groups)
+        if unknown:
+            raise LocalSettingsError(f"user {user_id} has unknown permission groups: {', '.join(unknown)}.")
+
+
+def _normalize_groups(value: dict[str, Any]) -> dict[str, list[str]]:
+    normalized: dict[str, list[str]] = {}
+    for key, raw_values in value.items():
+        if not isinstance(key, str) or not key:
+            raise LocalSettingsError("permission group keys must be non-empty strings.")
+        if not isinstance(raw_values, list):
+            raise LocalSettingsError(f"{key} must be a list.")
+
+        normalized_values: list[str] = []
+        for raw_value in raw_values:
+            if not isinstance(raw_value, str) or not raw_value:
+                raise LocalSettingsError(f"{key} contains an invalid value.")
+            normalized_values.append(raw_value)
+
+        normalized[key] = sorted(set(normalized_values))
+    return normalized
+
+
+def _copy_groups(groups: dict[str, list[str]]) -> dict[str, list[str]]:
+    return {key: list(values) for key, values in groups.items()}
+
+
+def _int_value(value: Any, default: int) -> int:
+    if isinstance(value, int):
+        return value
+    return default
+
+
+def _optional_str(value: Any) -> str | None:
+    return value if isinstance(value, str) else None

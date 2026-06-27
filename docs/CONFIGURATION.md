@@ -40,6 +40,26 @@ Recommended JSON shape:
     "replay_data_dir": "E:\\PUBG_AI_Data\\replays",
     "raw_compression": "gzip",
     "updated_at": "2026-06-27T21:00:00+09:00"
+  },
+  "collector": {
+    "poll_interval_seconds": 180,
+    "cycle_player_limit": 100,
+    "player_lookup_chunk_size": 10,
+    "updated_at": "2026-06-27T21:00:00+09:00"
+  },
+  "discord_permissions": {
+    "command_groups": {
+      "register": ["pubg-register"],
+      "profile_read": ["pubg-profile", "pubg-recent", "pubg-match", "pubg-weapon"],
+      "ranking_read": ["pubg-ranking"],
+      "replay_read": ["pubg-replay"],
+      "settings_write": ["pubg-settings"],
+      "admin": ["pubg-permission", "pubg-unregister", "pubg-delete-data"]
+    },
+    "user_grants": {
+      "discord-user-id": ["profile_read", "ranking_read"]
+    },
+    "updated_at": "2026-06-27T21:00:00+09:00"
   }
 }
 ```
@@ -57,6 +77,11 @@ The settings screen should provide:
 
 - match/telemetry raw-data path picker
 - 2D replay artifact path picker
+- polling interval selector from 1 to 5 minutes
+- collection cycle player limit selector up to 100
+- player lookup chunk size selector up to the official player lookup limit
+- Discord command group editor
+- Discord per-user permission grant editor
 - write-test button for each path
 - free disk space display for each path
 - save button that creates missing folders only after user confirmation

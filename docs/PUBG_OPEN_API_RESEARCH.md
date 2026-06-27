@@ -9,9 +9,9 @@ player lookup, recent match discovery, match details, season/lifetime stats, mas
 The most valuable source for this project is telemetry because it contains item, weapon, damage, kill, revive,
 position, vehicle, zone, parachute, care package, and match start/end events.
 
-The important limitation is that the public API does not provide true in-match live state. Telemetry is discovered
-through a match object and downloaded from the telemetry CDN, so a 2D "live" feature should be designed first as
-post-match replay or near-live playback after match data appears.
+The important limitation is that the public API does not provide true in-match live state. Match details and
+telemetry are available after the PUBG match finishes. A 2D "live" feature should therefore be designed as post-match
+replay from completed-match data.
 
 ## Request Basics
 
@@ -51,7 +51,8 @@ Practical strategy:
 6. Read the match `relationships.assets` reference and find the included telemetry asset URL.
 7. Download telemetry JSON from the CDN. The telemetry file does not require an API key.
 8. Store raw match JSON and raw telemetry JSON.
-9. Normalize events and update derived analysis tables.
+9. Immediately classify the match by shard, map, `game_mode`, `match_type`, team mode, perspective, ranked/custom
+   flags, then normalize events and update derived analysis tables.
 
 ## Endpoint Priority
 
@@ -109,7 +110,7 @@ Per match:
   chicken/non-chicken
 - Total movement distance, vehicle distance, swim distance where available
 - Map, mode, team size, perspective, party/teammates
-- Match type/mode metadata for later filtering instead of dropping non-standard modes during ingestion
+- Immediate match classification: map, shard, `game_mode`, `match_type`, team mode, perspective, ranked/custom flags
 - Main drop location and first parachute landing point
 - Flight path approximation if available from aircraft/player position traces
 - Care package spawn/landing points

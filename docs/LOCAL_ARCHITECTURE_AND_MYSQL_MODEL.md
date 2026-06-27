@@ -90,12 +90,14 @@ Use a two-layer storage model:
 
 | Table | Purpose |
 | --- | --- |
-| `matches` | `match_id`, shard, map, mode, match type, created KST time, duration, telemetry URL |
+| `matches` | `match_id`, shard, map, mode, match type, team mode, perspective, ranked/custom flags, created KST time, duration, telemetry URL |
 | `match_rosters` | Teams/rosters, rank, win flag |
 | `match_participants` | Player match stats from match object |
 | `player_match_summaries` | One row per tracked player per match with final stats and derived flags |
 | `match_teammates` | Teammate pairs/trios/squad membership for chemistry analysis |
 | `player_collection_states` | Polling cursor/status by registered player |
+| `collector_settings` | Program-editable polling interval, cycle player limit, and lookup chunk size |
+| `discord_permission_settings` | Program-editable command groups and per-user grants |
 
 ### Telemetry Event Facts
 
@@ -163,6 +165,9 @@ Use a two-layer storage model:
 
 Because the official API exposes telemetry after match discovery, implement this as a replay-first feature:
 
+Match details and telemetry are only available after the PUBG match finishes, so 2D replay is not in-match live
+tracking.
+
 1. Parse `LogMatchStart` to identify map and team size.
 2. Load the map image or coordinate metadata from official assets or project-maintained map assets.
 3. Use `LogPlayerPosition` as the primary track source.
@@ -196,6 +201,8 @@ For Discord, do not stream the whole replay. Send a summary image/GIF or a local
 | `/pubg-ranking scope` | Server-wide rankings |
 | `/pubg-permission user group allow` | Grant or revoke command group permissions; admin-only |
 | `/pubg-unregister nickname shard` | Stop future collection and retain existing data by default; admin/delegated-only |
+
+The same permission groups and per-user grants must be editable in the local management program.
 
 ## First MVP Milestone
 
