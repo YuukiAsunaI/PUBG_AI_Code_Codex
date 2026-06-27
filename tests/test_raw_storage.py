@@ -9,6 +9,7 @@ import unittest
 
 from pubg_ai.config import AppConfig
 from pubg_ai.raw_storage import RawPayloadStore, RawStorageError
+from pubg_ai.replay_storage import ReplayArtifactStore, ReplayStorageError
 
 
 class AppConfigTests(unittest.TestCase):
@@ -22,6 +23,7 @@ class AppConfigTests(unittest.TestCase):
         )
 
         self.assertEqual(str(config.raw_data_dir), "E:\\PUBG_AI_Data\\raw")
+        self.assertEqual(config.replay_data_dir, Path("C:/workspace") / "data" / "replays")
         self.assertEqual(config.raw_compression, "gzip")
         self.assertFalse(config.allow_storage_fallback)
 
@@ -29,6 +31,15 @@ class AppConfigTests(unittest.TestCase):
         config = AppConfig.from_env({}, base_dir=Path("C:/workspace"))
 
         self.assertEqual(config.raw_data_dir, Path("C:/workspace") / "data" / "raw")
+        self.assertEqual(config.replay_data_dir, Path("C:/workspace") / "data" / "replays")
+
+    def test_replay_data_dir_can_be_configured_from_env(self) -> None:
+        config = AppConfig.from_env(
+            {"PUBG_REPLAY_DATA_DIR": "F:\\PUBG_AI_Replays"},
+            base_dir=Path("C:/workspace"),
+        )
+
+        self.assertEqual(str(config.replay_data_dir), "F:\\PUBG_AI_Replays")
 
 
 class RawPayloadStoreTests(unittest.TestCase):
@@ -82,6 +93,56 @@ class RawPayloadStoreTests(unittest.TestCase):
                 store.resolve_path("../outside.json")
 
 
+class ReplayArtifactStoreTests(unittest.TestCase):
+    def test_write_replay_timeline_to_configured_root(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store = ReplayArtifactStore(Path(temp_dir))
+            created_at = datetime(2026, 6, 27, tzinfo=UTC)
+
+            stored = store.write_json(
+                artifact_type="timeline",
+                shard="steam",
+                match_id="match-123",
+                payload={"events": [{"t": 10, "x": 1200, "y": 2200}]},
+                filename="timeline.json",
+                match_created_at=created_at,
+            )
+
+            self.assertEqual(
+                stored.relative_path,
+                "timeline/steam/2026/06/27/match-123/timeline.json",
+            )
+            self.assertEqual(stored.storage_root, "PUBG_REPLAY_DATA_DIR")
+            self.assertTrue(store.verify(stored))
+
+    def test_write_replay_thumbnail_to_configured_root(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store = ReplayArtifactStore(Path(temp_dir))
+            created_at = datetime(2026, 6, 27, tzinfo=UTC)
+
+            stored = store.write_bytes(
+                artifact_type="thumbnail",
+                shard="kakao",
+                match_id="match-456",
+                data=b"fake-png",
+                filename="summary.png",
+                content_type="image/png",
+                match_created_at=created_at,
+            )
+
+            self.assertEqual(
+                stored.relative_path,
+                "thumbnail/kakao/2026/06/27/match-456/summary.png",
+            )
+            self.assertTrue(store.verify(stored))
+
+    def test_replay_resolve_path_rejects_escape_attempts(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store = ReplayArtifactStore(Path(temp_dir))
+
+            with self.assertRaises(ReplayStorageError):
+                store.resolve_path("../outside.mp4")
+
+
 if __name__ == "__main__":
     unittest.main()
-

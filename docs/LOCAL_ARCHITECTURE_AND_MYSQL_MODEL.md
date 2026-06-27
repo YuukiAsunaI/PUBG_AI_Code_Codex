@@ -12,6 +12,7 @@ The system should run entirely on the local computer:
 - A Discord bot as the main user-facing interface
 - A local web management app for player registration, job status, dashboards, and 2D replay playback
 - A configurable raw-data storage directory for large match and telemetry files, preferably on a separate drive
+- A configurable replay artifact directory for generated 2D timelines, thumbnails, GIFs, videos, and caches
 
 ## Recommended Runtime
 
@@ -43,6 +44,7 @@ flowchart LR
     API --> Replay["2D replay viewer"]
     Replay --> MySQL
     Replay --> RawFiles
+    Replay --> ReplayFiles["Configurable replay artifact storage"]
 ```
 
 ## Data Storage Principle
@@ -77,6 +79,7 @@ Use a two-layer storage model:
 | `raw_player_snapshots` | Raw player endpoint responses; small enough for MySQL JSON storage |
 | `raw_match_payloads` | Raw match JSON file metadata by `match_id` |
 | `raw_telemetry_payloads` | Raw telemetry JSON file metadata by `match_id` |
+| `replay_artifacts` | Generated 2D replay timeline, snapshot, thumbnail, GIF, video, and cache metadata |
 | `parse_runs` | Parser version, status, error, and row counts |
 
 ### Match Facts
@@ -126,10 +129,14 @@ Use a two-layer storage model:
 - Use `utf8mb4` for all text.
 - Store small player snapshots in MySQL `JSON` columns.
 - Store large match and telemetry JSON payloads as compressed files under `PUBG_RAW_DATA_DIR`.
+- Store generated 2D replay artifacts under `PUBG_REPLAY_DATA_DIR`.
 - Store only metadata for large raw files in MySQL: root key, relative path, compression, file size, `sha256`,
   source URL, fetched timestamp, and parser version.
-- Keep file paths relative to `PUBG_RAW_DATA_DIR` so the raw-data drive can be moved without rewriting every row.
-- Do not silently fall back to the project directory if the configured external drive is missing.
+- Store replay artifact metadata in MySQL: artifact type, content type, relative path, size, `sha256`, generated
+  timestamp, and renderer version.
+- Keep file paths relative to `PUBG_RAW_DATA_DIR` or `PUBG_REPLAY_DATA_DIR` so drives can be moved without rewriting
+  every row.
+- Do not silently fall back to the project directory if a configured external drive is missing.
 - Use `match_id` and `account_id` as natural keys where possible.
 - Use bigint surrogate IDs for high-volume event tables.
 - Add indexes on:

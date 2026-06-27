@@ -96,3 +96,61 @@ The local management program should expose a storage settings page:
 
 The UI can edit a local config file later, but the environment variable should remain the first supported method.
 
+## 2D Replay Storage
+
+2D replay files should also use a configurable root. They are generated artifacts, not official raw data, so keep
+them separate from `PUBG_RAW_DATA_DIR`.
+
+Use:
+
+```env
+PUBG_REPLAY_DATA_DIR=E:\PUBG_AI_Data\replays
+```
+
+Local development default:
+
+```env
+PUBG_REPLAY_DATA_DIR=./data/replays
+```
+
+Recommended layout:
+
+```text
+{PUBG_REPLAY_DATA_DIR}/
+  timeline/
+    {shard}/{yyyy}/{mm}/{dd}/{match_id}/timeline.json
+  snapshot/
+    {shard}/{yyyy}/{mm}/{dd}/{match_id}/frame-000120.json
+  thumbnail/
+    {shard}/{yyyy}/{mm}/{dd}/{match_id}/summary.png
+  gif/
+    {shard}/{yyyy}/{mm}/{dd}/{match_id}/highlight.gif
+  video/
+    {shard}/{yyyy}/{mm}/{dd}/{match_id}/replay.mp4
+  cache/
+    {shard}/{yyyy}/{mm}/{dd}/{match_id}/...
+```
+
+MySQL should store replay artifact metadata:
+
+| Column | Purpose |
+| --- | --- |
+| `match_id` | PUBG match ID |
+| `shard` | Platform shard |
+| `artifact_type` | `timeline`, `snapshot`, `thumbnail`, `gif`, `video`, or `cache` |
+| `storage_backend` | `local_file` for the first implementation |
+| `storage_root` | `PUBG_REPLAY_DATA_DIR` |
+| `relative_path` | Path below `PUBG_REPLAY_DATA_DIR` |
+| `content_type` | MIME type such as `application/json`, `image/png`, or `video/mp4` |
+| `size_bytes` | Stored file size |
+| `sha256` | Integrity checksum |
+| `generated_at` | Render timestamp |
+| `renderer_version` | Version of the replay renderer |
+
+Safety rules:
+
+- Do not mix replay files into the raw telemetry directory.
+- If the replay drive is disconnected, mark replay generation as `storage_unavailable`.
+- Store relative paths so the replay drive can be moved later.
+- Keep generated replay artifacts out of git.
+- The management UI should show both raw-data storage and replay storage health.

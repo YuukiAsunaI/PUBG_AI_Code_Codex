@@ -17,6 +17,7 @@ logs/
 *.log
 
 data/raw/
+data/replays/
 data/cache/
 data/tmp/
 *.sqlite
@@ -25,4 +26,3 @@ data/tmp/
 *.dump
 
 secrets/
-
