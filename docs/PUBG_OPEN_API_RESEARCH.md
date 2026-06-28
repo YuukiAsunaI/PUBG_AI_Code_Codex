@@ -2,6 +2,16 @@
 
 Research date: 2026-06-27
 
+Official documentation recheck: 2026-06-28
+
+Official sources checked:
+
+- https://documentation.pubg.com/en/introduction.html
+- https://documentation.pubg.com/en/usage.html
+- https://documentation.pubg.com/en/telemetry.html
+- https://documentation.pubg.com/en/telemetry-events.html
+- https://documentation.pubg.com/en/telemetry-objects.html
+
 ## Goal Fit
 
 The PUBG Open API is suitable for a local analytics system that tracks only registered players. The API supports
@@ -24,12 +34,22 @@ replay from completed-match data.
 - Player collection lookup currently supports up to 10 names or account IDs per request. A 100-player polling cycle
   must therefore be chunked into multiple player requests unless the API limit changes.
 - Data retention is short: match data older than 14 days is not available through the API.
+- Official docs describe the API as JSON:API formatted, so response parsing should preserve `data`,
+  `relationships`, `included`, and `attributes` boundaries instead of flattening too early.
+- The official docs point to GitHub for data dictionaries and enums, so local code translation should be treated as a
+  versioned dictionary layer that can be refreshed independently from parser logic.
 
 ## Rate Limit Strategy
 
 The default development key limit is 10 requests per minute. Official guidance says `/matches` and telemetry
 requests are not rate limited, so the local collector should spend rate-limited requests only on registered-player
 lookup, player refresh, and optional season/lifetime stats.
+
+Official rate-limit headers to store on fetch metadata when present:
+
+- `X-RateLimit-Limit`
+- `X-RateLimit-Remaining`
+- `X-RateLimit-Reset`
 
 Practical strategy:
 
@@ -40,6 +60,8 @@ Practical strategy:
 - Support up to 100 active registered players per collection cycle by chunking requests and respecting rate limits.
 - Use `matches` and telemetry freely after match IDs are known, but still queue them to avoid local overload.
 - Store raw API responses so parsing bugs can be fixed without re-requesting data within the 14-day window.
+- Cache player lookups because the official usage guide recommends avoiding duplicate API requests and the players
+  endpoint is the main rate-limited pressure point.
 
 ## Collection Flow
 
@@ -50,7 +72,9 @@ Practical strategy:
 5. For unseen match IDs, call `/matches/{matchId}`.
 6. Read the match `relationships.assets` reference and find the included telemetry asset URL.
 7. Download telemetry JSON from the CDN. The telemetry file does not require an API key.
-8. Store raw match JSON and raw telemetry JSON.
+8. Store raw match JSON and raw telemetry JSON. Telemetry assets are gzip-compressed arrays of event objects and may
+   not include the match ID inside each event, so parser jobs must carry `match_id`, shard, and asset URL from the
+   match fetch metadata.
 9. Immediately classify the match by shard, map, `game_mode`, `match_type`, team mode, perspective, ranked/custom
    flags, then normalize events and update derived analysis tables.
 
@@ -79,6 +103,19 @@ Practical strategy:
 | Position and movement | `LogPlayerPosition`, `LogVehicleRide`, `LogVehicleLeave`, `LogSwimStart`, `LogSwimEnd`, `LogVaultStart` |
 | Map and match state | `LogMatchStart`, `LogMatchEnd`, `LogGameStatePeriodic`, `LogPhaseChange` |
 | Drop and landmarks | `LogParachuteLanding`, `LogCarePackageSpawn`, `LogCarePackageLand`, `LogObjectInteraction` |
+
+Official telemetry schema notes to carry into parsers:
+
+- Every telemetry event has `_D`, `_T`, and `common`.
+- `common.isGame` describes match phase: `0` before lift off, `0.1` on airplane, `0.5` before zone start, then
+  zone phase values such as `1.0`, `1.5`, `2.0`, and so on.
+- `LogMatchDefinition` can expose `MatchId`, but real telemetry files may still lack a usable embedded match ID; the
+  fetch job remains authoritative.
+- `LogMatchStart.characters` and `LogMatchEnd.characters` are arrays of character wrappers.
+- `LogPlayerTakeDamage.damage` is net health damage after armor.
+- `LogWeaponFireCount.fireCount` is reported in increments of 10. Store the official `fireCount` aggregate and avoid
+  describing it as a per-shot event stream.
+- Location values are measured in centimeters, with `(0, 0)` at the top-left of the map.
 
 ## Death, DBNO, Revive, and Win/Loss Semantics
 

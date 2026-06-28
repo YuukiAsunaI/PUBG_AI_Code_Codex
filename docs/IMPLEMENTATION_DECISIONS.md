@@ -32,6 +32,7 @@ changes them.
 - Raw match and telemetry files are deduplicated by `match_id`.
 - Telemetry asset JSON can be a top-level event array without an embedded `match_id`; always carry `match_id`, shard,
   asset URL, and raw file metadata from the Match endpoint fetch job into the telemetry parser.
+- Telemetry assets are stored as the downloaded gzip/JSON event stream plus checksum metadata when available.
 - Every match record must store `total_players`, `human_players`, and `bot_players`.
 - Player population counts should be computed from match participants when available and cross-checked with
   telemetry `LogMatchStart.characters`/`LogMatchEnd.characters`.
@@ -69,7 +70,8 @@ changes them.
 - Assists come from `LogPlayerKillV2.assists_AccountId` for the total player summary.
 - Weapon-level assists should be attributed from the assistant's prior gun damage history against the victim when a
   weapon can be linked. Do not guess weapon-level assists from the final killer's weapon.
-- Fired bullet count comes from `LogWeaponFireCount.fireCount`.
+- Fired count comes from `LogWeaponFireCount.fireCount`; official telemetry describes it as reported in increments of
+  10, so store it as the PUBG-reported fire count aggregate rather than a per-shot event stream.
 - Hit bullet count comes from `LogPlayerTakeDamage` where `damageTypeCategory = Damage_Gun`.
 - Body-part hit counts come from `damageReason`, grouped at least as head, torso, pelvis, arm, leg, non-specific,
   none, and unknown/new raw reason.

@@ -83,7 +83,7 @@ Use a two-layer storage model:
 
 | Table | Purpose |
 | --- | --- |
-| `api_fetch_jobs` | Queue and retry state for player/match/telemetry fetches |
+| `api_fetch_jobs` | Queue, retry state, and official rate-limit headers for player/match/telemetry fetches |
 | `raw_player_snapshots` | Raw player endpoint responses; small enough for MySQL JSON storage |
 | `raw_match_payloads` | Raw match JSON file metadata by `match_id` |
 | `raw_telemetry_payloads` | Raw telemetry JSON file metadata by `match_id`, asset URL, and local file path |
@@ -160,6 +160,8 @@ unchanged so newly added PUBG content remains visible.
   source URL, fetched timestamp, and parser version.
 - Do not rely on telemetry JSON to contain `match_id`. The telemetry parser receives `match_id`, shard, and asset URL
   from the Match endpoint/raw fetch job because telemetry assets can be top-level event arrays.
+- Store PUBG rate-limit response headers such as `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and
+  `X-RateLimit-Reset` on fetch jobs when present.
 - Store replay artifact metadata in MySQL: artifact type, content type, relative path, size, `sha256`, generated
   timestamp, and renderer version.
 - Keep file paths relative to `PUBG_RAW_DATA_DIR` or `PUBG_REPLAY_DATA_DIR` so drives can be moved without rewriting
@@ -180,6 +182,8 @@ unchanged so newly added PUBG content remains visible.
   summary and weapon aggregate tables.
 - Count total assists from `LogPlayerKillV2.assists_AccountId`; attribute weapon-level assists only from the
   assistant's prior gun damage history against the victim.
+- Treat `LogWeaponFireCount.fireCount` as the official reported fire-count aggregate. The official telemetry schema
+  describes it as reported in increments of 10, so keep it separate from per-shot attack/throwable event counts.
 - Normalize weapon codes for weapon aggregates so `Item_Weapon_BerylM762_C`, `WeapBerylM762_C`, and weapon instance
   strings such as `WeapBerylM762_C_1` group under one weapon code.
 - Store raw `damageReason` alongside normalized body part so new PUBG hit locations do not disappear.
