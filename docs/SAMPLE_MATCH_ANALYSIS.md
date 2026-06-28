@@ -67,6 +67,47 @@ because telemetry files are large and contain player names/account IDs.
 | `LogCarePackageSpawn` | 13 |
 | `LogItemPickupFromCarepackage` | 11 |
 
+## Weapon Accuracy / Hit-Part Sample
+
+Using `LogWeaponFireCount`, gun-type `LogPlayerTakeDamage`, `LogPlayerMakeGroggy`, and `LogPlayerKillV2`, the parser
+can derive the following match-wide weapon facts:
+
+| Metric | Value |
+| --- | ---: |
+| Player/weapon stat rows | 277 |
+| Fired count from `LogWeaponFireCount` | 14,630 |
+| Gun hit events from `LogPlayerTakeDamage` | 905 |
+| Head hit events | 122 |
+| Final kills | 79 |
+| Headshot final kills | 19 |
+| DBNOs | 77 |
+| Headshot DBNOs | 15 |
+| Finishes | 55 |
+| Headshot finishes | 16 |
+
+Body-part hit distribution:
+
+| Body part | Hits |
+| --- | ---: |
+| Torso | 365 |
+| Arm | 237 |
+| Head | 122 |
+| Pelvis | 97 |
+| Leg | 84 |
+
+Top weapons by gun hit events:
+
+| Weapon | Fired | Hit events | Kills | Headshot kills | DBNOs |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `WeapMP5K_C` | 7,520 | 172 | 17 | 2 | 15 |
+| `WeapSaiga12_C` | 10 | 110 | 6 | 1 | 7 |
+| `WeapWinchester_C` | 10 | 90 | 4 | 1 | 4 |
+| `WeapVector_C` | 1,060 | 86 | 7 | 3 | 6 |
+| `WeapBerylM762_C` | 2,300 | 76 | 12 | 6 | 5 |
+
+Important caveat: shotgun/pellet weapons can produce more hit events than fired shell count. Store fired count and hit
+event count separately, and interpret accuracy by weapon class instead of clamping it to 100%.
+
 ## Parser Findings
 
 - Event array order is not fully chronological. The first array item is `LogMatchDefinition` at

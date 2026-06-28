@@ -112,6 +112,7 @@ Use a two-layer storage model:
 | `loadout_snapshots` | Reconstructed weapon + attachment state over time |
 | `weapon_fire_events` | Attack, throwable, flare, fire-count events |
 | `damage_events` | Damage dealt/taken with causer, reason, distance, armor notes |
+| `body_part_hit_events` | One row per gun hit with attacker, victim, weapon, damage reason/body part, damage, and headshot flag |
 | `dbno_events` | Knockdown episodes keyed by `dBNOId`, including attacker, victim, weapon, distance, and revive/final state |
 | `fight_outcomes` | Per-player fight outcomes such as `dbno_win`, `dbno_loss`, `final_kill`, and `final_death` |
 | `kill_events` | Final kill/death/finish/assist/teamkill/suicide records |
@@ -130,7 +131,9 @@ Use a two-layer storage model:
 | --- | --- |
 | `agg_player_daily` | Daily KDA, damage, wins, maps, modes, play volume |
 | `agg_player_monthly` | Monthly trend rollups |
+| `player_weapon_match_stats` | Per-match, per-player, per-weapon fired shots, hit shots, accuracy, body-part hits/taken, headshots, kills, deaths, DBNOs, and finishes |
 | `agg_player_weapon` | Weapon usage, kills, deaths, damage, assists, caused DBNOs, suffered DBNOs, fight wins/losses |
+| `agg_player_weapon_body_part` | Weapon/body-part hit and hit-received rollups for accuracy and weakness analysis |
 | `agg_weapon_distance_bucket` | Weapon outcomes by distance bucket |
 | `agg_weapon_attachment` | Weapon + attachment combination outcomes |
 | `agg_player_map` | Map-specific performance and drop preference |
@@ -168,6 +171,9 @@ unchanged so newly added PUBG content remains visible.
 - Store participant-level `is_ai_or_bot` and `ai_detection_source` so match population counts are auditable.
 - Prefer match API participant records for population counts, then cross-check telemetry `LogMatchStart.characters`
   and `LogMatchEnd.characters` during parsing.
+- Normalize weapon codes for weapon aggregates so `Item_Weapon_BerylM762_C`, `WeapBerylM762_C`, and weapon instance
+  strings such as `WeapBerylM762_C_1` group under one weapon code.
+- Store raw `damageReason` alongside normalized body part so new PUBG hit locations do not disappear.
 - Use bigint surrogate IDs for high-volume event tables.
 - Add indexes on:
   - `registered_players(account_id, shard)`
@@ -176,9 +182,11 @@ unchanged so newly added PUBG content remains visible.
   - `telemetry_events(match_id, event_type, event_ts)`
   - `position_samples(match_id, account_id, elapsed_time)`
   - `damage_events(attacker_account_id, victim_account_id, match_id)`
+  - `body_part_hit_events(match_id, attacker_account_id, weapon_code, body_part)`
   - `dbno_events(attacker_account_id, victim_account_id, match_id)`
   - `fight_outcomes(account_id, match_id, outcome_type)`
   - `kill_events(killer_account_id, victim_account_id, match_id)`
+  - `player_weapon_match_stats(account_id, match_id, weapon_code)`
 - Store normalized DB timestamps in KST and use KST calendar boundaries for daily/monthly aggregates.
 - Preserve source API timestamps separately when useful for debugging.
 

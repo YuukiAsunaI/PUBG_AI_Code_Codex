@@ -54,6 +54,22 @@ changes them.
 - Teamkill, suicide, fall damage, bluezone, vehicle accidents, and environment deaths must be classified separately
   from ordinary weapon fight outcomes.
 
+## Weapon Accuracy And Hit Parts
+
+- Store per-match, per-player, per-weapon combat stats.
+- Fired bullet count comes from `LogWeaponFireCount.fireCount`.
+- Hit bullet count comes from `LogPlayerTakeDamage` where `damageTypeCategory = Damage_Gun`.
+- Body-part hit counts come from `damageReason`, grouped at least as head, torso, pelvis, arm, leg, non-specific,
+  none, and unknown/new raw reason.
+- Store both directions:
+  - hits caused by player by weapon and body part
+  - hits received by player by enemy weapon and body part
+- Record headshot-specific counts separately for hits, DBNOs, final kills/deaths, and finishes.
+- Normalize weapon codes before aggregating because fire events can use `Item_Weapon_*` while damage/kill events use
+  `Weap*` or projectile-style damage causer names.
+- Lobby/pre-match events such as apple throws should be excluded from normal weapon accuracy unless an admin
+  intentionally runs a raw-event/debug report.
+
 ## Weapon Distance Buckets
 
 AR uses detailed close-range buckets and then 100m buckets to 1km:
