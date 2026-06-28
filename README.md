@@ -15,6 +15,7 @@ MySQL data model direction, 2D replay/live-view feasibility, and reference proje
 - [Sample Match Analysis](docs/SAMPLE_MATCH_ANALYSIS.md)
 - [Configuration](docs/CONFIGURATION.md)
 - [Reference Project Survey](docs/REFERENCE_PROJECT_SURVEY.md)
+- [Additional Reference Research](docs/ADDITIONAL_REFERENCE_RESEARCH.md)
 - [Sources](docs/SOURCES.md)
 
 ## Key Decisions From Research

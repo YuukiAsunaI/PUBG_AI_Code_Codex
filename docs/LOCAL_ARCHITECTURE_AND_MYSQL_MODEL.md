@@ -96,8 +96,8 @@ Use a two-layer storage model:
 | --- | --- |
 | `matches` | `match_id`, shard, map, mode, match type, team mode, perspective, ranked/custom flags, created KST time, duration, telemetry URL |
 | `match_rosters` | Teams/rosters, rank, win flag |
-| `match_participants` | Player match stats from match object |
-| `player_match_summaries` | One row per tracked player per match with final stats and derived flags |
+| `match_participants` | Player match stats from match object, including AI/bot detection flags when available |
+| `player_match_summaries` | One row per tracked player per match with final stats, phase facts, and derived flags |
 | `match_teammates` | Teammate pairs/trios/squad membership from PUBG roster/team data |
 | `player_collection_states` | Polling cursor/status by registered player |
 | `collector_settings` | Program-editable polling interval, cycle player limit, and lookup chunk size |
@@ -119,6 +119,8 @@ Use a two-layer storage model:
 | `position_samples` | Player position samples for movement, drop, route, and replay |
 | `vehicle_events` | Ride/leave/damage/destroy/wheel events |
 | `zone_events` | Game state, phase, bluezone/redzone/blackzone signals |
+| `plane_routes` | Reconstructed plane line/path and route metadata by match |
+| `movement_summaries` | Per-player route facts such as landing point, drop distance from plane, first vehicle ride, and movement distance |
 | `care_package_events` | Care package spawn and landing points |
 | `landing_events` | Parachute landing and first-grounded position |
 
@@ -134,6 +136,8 @@ Use a two-layer storage model:
 | `agg_player_map` | Map-specific performance and drop preference |
 | `agg_player_teammate` | Performance with each teammate or party set |
 | `agg_player_drop_zone` | Common landing/drop coordinate clusters and outcomes |
+| `agg_player_phase` | Performance by phase at landing, kill, DBNO, death, and survival endpoint |
+| `agg_player_movement` | Movement style rollups such as first vehicle timing, distance from plane route, and zone-distance tendency |
 | `map_region_labels` | Phase-2 mapping from coordinate clusters to named regions |
 | `recommendation_scores` | Rebuildable player/global recommendation outputs |
 

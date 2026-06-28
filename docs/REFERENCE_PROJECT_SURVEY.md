@@ -31,7 +31,7 @@ metadata was checked with GitHub on 2026-06-27.
 | Project | Language | Last push | Relevance |
 | --- | --- | --- | --- |
 | `heversonbenatti/pubg-insight` | JavaScript | 2026-06-07 | Recent player-stat web app. Useful for UI flow and profile/stat presentation ideas. |
-| `smw0807/pubg_your.stat` | Vue | 2026-05-03 | Korean PUBG stat search site. Useful for Korean UX labels, profile pages, and deployment/UI patterns. |
+| `smw0807/pubg_your.stat` | Vue | 2026-05-03 | Korean PUBG stat search/team-finding site. Useful for Korean UX labels, cache-first stat lookup, platform/nickname UX, team-room flow, and 404/429 feedback patterns. Not a telemetry parser. |
 | `smw0807/pubg-api` | TypeScript | 2026-05-17 | Recent API-facing TypeScript project. Useful to compare endpoint implementation and caching approach. |
 | `amn057828-beep/pubg-ai-api` | Python | 2026-05-23 | Recent Python project with no GitHub description. Inspect before borrowing; may be directly related to AI/API experimentation. |
 
@@ -48,6 +48,8 @@ metadata was checked with GitHub on 2026-06-27.
 - For TypeScript/NestJS, `smw0807/pubg-kit` is the strongest current reference because it already includes rate limiting, cache TTLs, telemetry fetch helpers, and NestJS module patterns.
 - For 2D replay, study `chicken-dinner` first. It already demonstrates telemetry-to-playback conversion and common replay controls such as labels, winners, interpolation, damage display, and team colors.
 - For normalized analytics API design, study `pubgsh/api`. It is old but directly relevant because it turns PUBG API data into a cached normalized schema.
+- For Korean UX and team-finding flows, study `smw0807/pubg_your.stat`. Keep its cache-first/search-history ideas,
+  but avoid client-side secret exposure and do not treat season stats as a substitute for telemetry-derived deaths.
 - Avoid copying GPL code unless this repository is intentionally licensed compatibly. MIT/ISC references are safer to reuse directly.
 
 ## Suggested Adoption Path
@@ -57,4 +59,3 @@ metadata was checked with GitHub on 2026-06-27.
 3. Borrow replay concepts from `chicken-dinner`.
 4. Borrow normalized data/API concepts from `pubgsh/api`.
 5. Keep official dictionaries synced from `pubg/api-assets`.
-

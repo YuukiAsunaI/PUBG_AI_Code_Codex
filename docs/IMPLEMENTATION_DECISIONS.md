@@ -107,6 +107,12 @@ Suggested command groups:
 - Phase 1: use coordinate clustering for drop/landing/hotspot analysis.
 - Phase 2: map clusters to named regions such as city or landmark names.
 - Map coordinate-to-region dictionaries should be versioned separately from raw telemetry.
+- Record phase-aware location facts such as phase at landing, phase at DBNO, phase at kill, and phase at death when
+  telemetry phase data is available.
+- Record movement facts such as reconstructed plane route, distance from plane route to landing point, first vehicle
+  ride time/location, and distance to safe-zone/blue-zone boundaries.
+- Record AI/bot detection evidence separately from human player records when source IDs or telemetry names indicate
+  AI players.
 
 ## Rendered Map Snapshots
 

@@ -38,6 +38,17 @@ Research date: 2026-06-27
 - https://github.com/smw0807/pubg-kit
 - https://github.com/SeatloN/pubg-api
 
+## Additional Korean Reference Articles
+
+- `smw0807/pubg_your.stat`: https://github.com/smw0807/pubg_your.stat
+- `smw0807/pubg_your.stat` README: https://github.com/smw0807/pubg_your.stat/blob/main/README.md
+- PUBG data analysis series by songmin9813:
+  - https://songmin9813.tistory.com/43
+  - https://songmin9813.tistory.com/44
+  - https://songmin9813.tistory.com/49
+  - https://songmin9813.tistory.com/50
+- PUBG pro match movement analysis by right1203: https://right1203.tistory.com/2
+
 ## Notes
 
 - `SeatloN/pubg-api` could not be resolved through GitHub on 2026-06-27.
