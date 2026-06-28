@@ -2,9 +2,10 @@
 
 from pubg_ai.code_translator import CodeTranslation, CodeTranslator, translate_code
 from pubg_ai.config import AppConfig, DatabaseConfig, RuntimeConfig, SecretConfig
+from pubg_ai.match_collection import MatchCollectionResult, RegisteredPlayerMatchCollector
 from pubg_ai.match_population import MatchPopulationSummary, summarize_match_population
 from pubg_ai.player_registry import PlayerRegistry, RegisteredPlayer
-from pubg_ai.pubg_client import PubgApiClient, PubgPlayer
+from pubg_ai.pubg_client import PubgApiClient, PubgPlayer, PubgPlayerSnapshot
 from pubg_ai.weapon_stats import (
     PlayerMatchCombatSummary,
     WeaponCombatStats,
@@ -17,11 +18,14 @@ __all__ = [
     "CodeTranslator",
     "AppConfig",
     "DatabaseConfig",
+    "MatchCollectionResult",
     "MatchPopulationSummary",
     "PlayerRegistry",
     "PlayerMatchCombatSummary",
     "PubgApiClient",
     "PubgPlayer",
+    "PubgPlayerSnapshot",
+    "RegisteredPlayerMatchCollector",
     "RegisteredPlayer",
     "RuntimeConfig",
     "SecretConfig",

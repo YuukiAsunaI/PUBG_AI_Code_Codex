@@ -94,6 +94,18 @@ Resolve and register a PUBG nickname:
 python -m pubg_ai.cli register-player Yuuki_Asuna--- --shard steam
 ```
 
+Refresh active registered players and queue unseen match IDs:
+
+```powershell
+python -m pubg_ai.cli collect-matches --shard steam --limit 10
+```
+
+List queued match fetch jobs:
+
+```powershell
+python -m pubg_ai.cli match-jobs --limit 20
+```
+
 Run the local management app:
 
 ```powershell

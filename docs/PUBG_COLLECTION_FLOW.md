@@ -84,6 +84,21 @@ The current local runtime can already perform the first registration step:
 
 Live test completed with the Steam nickname `Yuuki_Asuna---`; lookup and registration succeeded.
 
+## Implemented Match Discovery Slice
+
+The current local runtime can also refresh active registered players and queue unseen match IDs:
+
+- `PubgApiClient.refresh_players_by_ids(shard, account_ids)` calls the official players endpoint with
+  `filter[playerIds]`.
+- `RegisteredPlayerMatchCollector.collect_active_players(...)` parses `relationships.matches.data`, stores a raw
+  player snapshot, updates `player_collection_states`, and inserts unseen match IDs into `api_fetch_jobs` with
+  `job_type = 'match'`.
+- `python -m pubg_ai.cli collect-matches --shard steam --limit 10` runs one manual collection pass.
+- `python -m pubg_ai.cli match-jobs --limit 20` lists queued match detail jobs.
+- The local web UI has a `최근 매치 수집` button and a `Match 수집 큐` table.
+
+Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 match IDs were discovered and queued.
+
 ## Match Job States
 
 Use explicit job states so the local management UI can show where a match is stuck:

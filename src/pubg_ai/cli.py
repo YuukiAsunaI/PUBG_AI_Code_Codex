@@ -7,6 +7,7 @@ from typing import Any
 
 from pubg_ai.config import RuntimeConfig
 from pubg_ai.database import connect_mysql, count_tables, initialize_database
+from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.player_registry import PlayerRegistry
 from pubg_ai.pubg_client import PubgApiClient
 
@@ -29,6 +30,13 @@ def main(argv: list[str] | None = None) -> int:
     register_parser.add_argument("nickname")
     register_parser.add_argument("--shard", default="steam")
     register_parser.add_argument("--private", action="store_true", help="Register with public_profile disabled.")
+
+    collect_parser = subparsers.add_parser("collect-matches", help="Refresh registered players and queue match jobs.")
+    collect_parser.add_argument("--shard", default=None)
+    collect_parser.add_argument("--limit", default=None, type=int)
+
+    jobs_parser = subparsers.add_parser("match-jobs", help="List queued match fetch jobs.")
+    jobs_parser.add_argument("--limit", default=50, type=int)
 
     web_parser = subparsers.add_parser("run-web", help="Run the local management web app.")
     web_parser.add_argument("--host", default="127.0.0.1", help="Bind host. Defaults to localhost only.")
@@ -86,6 +94,32 @@ def main(argv: list[str] | None = None) -> int:
             connection.close()
         return 0
 
+    if args.command == "collect-matches":
+        client = _pubg_client_from_config(config)
+        connection = connect_mysql(config.database)
+        try:
+            result = RegisteredPlayerMatchCollector(
+                connection,
+                client,
+                lookup_chunk_size=config.app.player_lookup_chunk_size,
+            ).collect_active_players(
+                shard=args.shard,
+                limit=args.limit or config.app.collector_cycle_player_limit,
+            )
+            _print_json(result.to_record())
+        finally:
+            connection.close()
+        return 0
+
+    if args.command == "match-jobs":
+        connection = connect_mysql(config.database)
+        try:
+            jobs = RegisteredPlayerMatchCollector(connection).list_match_jobs(limit=args.limit)
+            _print_json({"jobs": _json_ready(jobs)})
+        finally:
+            connection.close()
+        return 0
+
     if args.command == "run-web":
         _run_web_app(host=args.host, port=args.port, base_dir=base_dir, env_file=args.env_file)
         return 0
@@ -114,6 +148,16 @@ def _safe_config_status(config: RuntimeConfig) -> dict[str, Any]:
 
 def _print_json(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _json_ready(value: Any) -> Any:
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {key: _json_ready(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_ready(item) for item in value]
+    return value
 
 
 def _pubg_client_from_config(config: RuntimeConfig) -> PubgApiClient:

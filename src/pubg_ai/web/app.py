@@ -3,20 +3,39 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field
+
 from pubg_ai.config import RuntimeConfig
 from pubg_ai.database import connect_mysql, count_tables
+from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry
 from pubg_ai.pubg_client import PubgApiClient, PubgApiError
 
 
-def create_app() -> Any:
-    try:
-        from fastapi import FastAPI, HTTPException
-        from fastapi.responses import HTMLResponse
-        from pydantic import BaseModel, Field
-    except ImportError as exc:
-        raise RuntimeError("fastapi and pydantic are required to run the local management app.") from exc
+class RegisterPlayerRequest(BaseModel):
+    account_id: str | None = None
+    shard: str = Field(default="steam", min_length=1)
+    current_name: str = Field(min_length=1)
+    public_profile: bool = True
+    discord_user_id: str | None = None
+    guild_id: str | None = None
+    channel_id: str | None = None
 
+
+class UnregisterPlayerRequest(BaseModel):
+    shard: str = Field(default="steam", min_length=1)
+    account_id: str | None = None
+    name: str | None = None
+
+
+class CollectMatchesRequest(BaseModel):
+    shard: str | None = None
+    limit: int | None = None
+
+
+def create_app() -> Any:
     config = RuntimeConfig.from_sources(base_dir=Path.cwd())
     app = FastAPI(
         title="PUBG AI Local Manager",
@@ -24,20 +43,6 @@ def create_app() -> Any:
         docs_url="/docs",
         redoc_url=None,
     )
-
-    class RegisterPlayerRequest(BaseModel):
-        account_id: str | None = None
-        shard: str = Field(default="steam", min_length=1)
-        current_name: str = Field(min_length=1)
-        public_profile: bool = True
-        discord_user_id: str | None = None
-        guild_id: str | None = None
-        channel_id: str | None = None
-
-    class UnregisterPlayerRequest(BaseModel):
-        shard: str = Field(default="steam", min_length=1)
-        account_id: str | None = None
-        name: str | None = None
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
@@ -151,7 +156,48 @@ def create_app() -> Any:
         finally:
             connection.close()
 
+    @app.post("/collection/refresh")
+    def refresh_collection(request: CollectMatchesRequest) -> dict[str, Any]:
+        if not config.secrets.pubg_api_key:
+            raise HTTPException(status_code=500, detail="PUBG_API_KEY is not configured.")
+
+        connection = connect_mysql(config.database)
+        try:
+            try:
+                result = RegisteredPlayerMatchCollector(
+                    connection,
+                    PubgApiClient(config.secrets.pubg_api_key),
+                    lookup_chunk_size=config.app.player_lookup_chunk_size,
+                ).collect_active_players(
+                    shard=request.shard,
+                    limit=request.limit or config.app.collector_cycle_player_limit,
+                )
+            except PubgApiError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            return {"result": result.to_record()}
+        finally:
+            connection.close()
+
+    @app.get("/jobs/matches")
+    def match_jobs(limit: int = 100) -> dict[str, Any]:
+        connection = connect_mysql(config.database)
+        try:
+            jobs = RegisteredPlayerMatchCollector(connection).list_match_jobs(limit=limit)
+            return {"jobs": [_json_ready(job) for job in jobs]}
+        finally:
+            connection.close()
+
     return app
+
+
+def _json_ready(value: Any) -> Any:
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {key: _json_ready(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_ready(item) for item in value]
+    return value
 
 
 _INDEX_HTML = """<!doctype html>
@@ -269,6 +315,7 @@ _INDEX_HTML = """<!doctype html>
     <section>
       <h2>등록 유저</h2>
       <div class="actions" style="margin-bottom: 10px;">
+        <button type="button" onclick="refreshCollection()">최근 매치 수집</button>
         <button class="secondary" type="button" onclick="loadPlayers()">새로고침</button>
       </div>
       <table>
@@ -284,10 +331,29 @@ _INDEX_HTML = """<!doctype html>
         <tbody id="playersBody"></tbody>
       </table>
     </section>
+    <section>
+      <h2>Match 수집 큐</h2>
+      <div class="actions" style="margin-bottom: 10px;">
+        <button class="secondary" type="button" onclick="loadJobs()">새로고침</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>플랫폼</th>
+            <th>Match ID</th>
+            <th>상태</th>
+            <th>시도</th>
+            <th>생성</th>
+          </tr>
+        </thead>
+        <tbody id="jobsBody"></tbody>
+      </table>
+    </section>
   </main>
   <script>
     const statusGrid = document.querySelector("#statusGrid");
     const playersBody = document.querySelector("#playersBody");
+    const jobsBody = document.querySelector("#jobsBody");
     const banner = document.querySelector("#banner");
 
     function cell(label, value) {
@@ -330,6 +396,35 @@ _INDEX_HTML = """<!doctype html>
       `).join("");
     }
 
+    async function loadJobs() {
+      const payload = await fetch("/jobs/matches?limit=50").then((r) => r.json());
+      jobsBody.innerHTML = payload.jobs.map((job) => `
+        <tr>
+          <td>${job.shard || ""}</td>
+          <td>${job.target_id || ""}</td>
+          <td>${job.status || ""}</td>
+          <td>${job.attempts || 0}</td>
+          <td>${job.created_at_kst || ""}</td>
+        </tr>
+      `).join("");
+    }
+
+    async function refreshCollection() {
+      banner.textContent = "최근 매치 수집 중";
+      const response = await fetch("/collection/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const payload = await response.json();
+      banner.textContent = `수집 완료: 신규 ${payload.result.queued_match_jobs}개, 기존 ${payload.result.existing_match_jobs}개`;
+      await Promise.all([loadPlayers(), loadJobs()]);
+    }
+
     async function unregisterPlayer(shard, accountId) {
       await fetch("/players/unregister", {
         method: "POST",
@@ -356,7 +451,7 @@ _INDEX_HTML = """<!doctype html>
       await loadPlayers();
     });
 
-    Promise.all([loadStatus(), loadPlayers()])
+    Promise.all([loadStatus(), loadPlayers(), loadJobs()])
       .then(() => { banner.textContent = "localhost 전용 관리 화면"; })
       .catch((error) => { banner.textContent = `오류: ${error.message}`; });
   </script>

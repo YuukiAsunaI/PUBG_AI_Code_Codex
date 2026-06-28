@@ -3,12 +3,15 @@ from __future__ import annotations
 import unittest
 
 from pubg_ai.pubg_client import (
+    MAX_PLAYER_LOOKUP_IDS,
     MAX_PLAYER_LOOKUP_NAMES,
     PubgApiError,
     PubgPlayer,
+    PubgPlayerSnapshot,
     PubgPlayerLookupResult,
     PubgRateLimit,
     parse_player_lookup_payload,
+    parse_player_snapshot_payload,
 )
 
 
@@ -52,6 +55,56 @@ class PubgClientParsingTests(unittest.TestCase):
 
     def test_max_player_lookup_names_matches_official_limit(self) -> None:
         self.assertEqual(MAX_PLAYER_LOOKUP_NAMES, 10)
+        self.assertEqual(MAX_PLAYER_LOOKUP_IDS, 10)
+
+    def test_parse_player_snapshot_payload_extracts_match_ids(self) -> None:
+        snapshots = parse_player_snapshot_payload(
+            {
+                "data": [
+                    {
+                        "type": "player",
+                        "id": "account.test",
+                        "attributes": {"name": "Yuuki_Asuna---"},
+                        "relationships": {
+                            "matches": {
+                                "data": [
+                                    {"type": "match", "id": "match-1"},
+                                    {"type": "match", "id": "match-2"},
+                                    {"type": "match", "id": "match-1"},
+                                ]
+                            }
+                        },
+                    }
+                ]
+            },
+            shard="steam",
+        )
+
+        self.assertEqual(
+            snapshots,
+            [
+                PubgPlayerSnapshot(
+                    account_id="account.test",
+                    name="Yuuki_Asuna---",
+                    shard="steam",
+                    match_ids=["match-1", "match-2"],
+                    raw_payload={
+                        "type": "player",
+                        "id": "account.test",
+                        "attributes": {"name": "Yuuki_Asuna---"},
+                        "relationships": {
+                            "matches": {
+                                "data": [
+                                    {"type": "match", "id": "match-1"},
+                                    {"type": "match", "id": "match-2"},
+                                    {"type": "match", "id": "match-1"},
+                                ]
+                            }
+                        },
+                    },
+                )
+            ],
+        )
 
 
 if __name__ == "__main__":
