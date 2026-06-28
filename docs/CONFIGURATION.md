@@ -102,6 +102,17 @@ The settings screen should provide:
 - save button that creates missing folders only after user confirmation
 - warning when a configured drive is disconnected
 
+Discord permission settings can also be changed from the CLI:
+
+```powershell
+python -m pubg_ai.cli add-discord-global-admin <discord_user_id>
+python -m pubg_ai.cli grant-discord-permission <discord_user_id> register --guild-id <guild_id>
+python -m pubg_ai.cli revoke-discord-permission <discord_user_id> register --guild-id <guild_id>
+python -m pubg_ai.cli discord-permissions
+```
+
+These commands update `config/local_settings.json` only. API keys and bot tokens still remain in `.env`.
+
 ## Recommended File Layout
 
 Store files under deterministic relative paths:

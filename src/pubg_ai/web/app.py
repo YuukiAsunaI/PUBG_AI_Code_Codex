@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -7,8 +8,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
-from pubg_ai.config import RuntimeConfig
+from pubg_ai.config import RuntimeConfig, load_dotenv_values
 from pubg_ai.database import connect_mysql, count_tables
+from pubg_ai.discord_permission_manager import DiscordPermissionManager
+from pubg_ai.local_settings import LocalSettingsError, LocalSettingsStore
 from pubg_ai.map_snapshot_renderer import MapSnapshotProcessor
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.match_job_processor import MatchJobProcessor
@@ -72,8 +75,19 @@ class GenerateMapSnapshotsRequest(BaseModel):
     force: bool = False
 
 
+class DiscordPermissionGrantRequest(BaseModel):
+    user_id: str = Field(min_length=1)
+    group: str = Field(min_length=1)
+    guild_id: str | None = None
+
+
+class DiscordGlobalAdminRequest(BaseModel):
+    user_id: str = Field(min_length=1)
+
+
 def create_app() -> Any:
     config = RuntimeConfig.from_sources(base_dir=Path.cwd())
+    permission_manager = DiscordPermissionManager(_local_settings_store(Path.cwd()))
     app = FastAPI(
         title="PUBG AI Local Manager",
         version="0.1.0",
@@ -110,6 +124,49 @@ def create_app() -> Any:
                 for key, status in config.secrets.status().items()
             },
         }
+
+    @app.get("/discord/permissions")
+    def discord_permissions() -> dict[str, Any]:
+        try:
+            return {"discord_permissions": permission_manager.load().to_record()}
+        except LocalSettingsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/discord/permissions/grant")
+    def grant_discord_permission(request: DiscordPermissionGrantRequest) -> dict[str, Any]:
+        try:
+            return permission_manager.grant(
+                user_id=request.user_id,
+                group=request.group,
+                guild_id=request.guild_id,
+            ).to_record()
+        except LocalSettingsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/discord/permissions/revoke")
+    def revoke_discord_permission(request: DiscordPermissionGrantRequest) -> dict[str, Any]:
+        try:
+            return permission_manager.revoke(
+                user_id=request.user_id,
+                group=request.group,
+                guild_id=request.guild_id,
+            ).to_record()
+        except LocalSettingsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/discord/global-admins/add")
+    def add_discord_global_admin(request: DiscordGlobalAdminRequest) -> dict[str, Any]:
+        try:
+            return permission_manager.add_global_admin(request.user_id).to_record()
+        except LocalSettingsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/discord/global-admins/remove")
+    def remove_discord_global_admin(request: DiscordGlobalAdminRequest) -> dict[str, Any]:
+        try:
+            return permission_manager.remove_global_admin(request.user_id).to_record()
+        except LocalSettingsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/database/status")
     def database_status() -> dict[str, Any]:
@@ -388,6 +445,14 @@ def _json_ready(value: Any) -> Any:
     return value
 
 
+def _local_settings_store(base_dir: Path) -> LocalSettingsStore:
+    values = load_dotenv_values(base_dir / ".env")
+    merged = dict(values)
+    merged.update(os.environ)
+    settings_file = merged.get("PUBG_LOCAL_SETTINGS_FILE", "./config/local_settings.json")
+    return LocalSettingsStore(Path(settings_file), base_dir=base_dir)
+
+
 _INDEX_HTML = """<!doctype html>
 <html lang="ko">
 <head>
@@ -475,6 +540,38 @@ _INDEX_HTML = """<!doctype html>
     <section>
       <h2>상태</h2>
       <div class="grid" id="statusGrid"></div>
+    </section>
+    <section>
+      <h2>Discord 권한</h2>
+      <form id="discordGrantForm">
+        <label>User ID
+          <input name="user_id" autocomplete="off" required>
+        </label>
+        <label>권한 그룹
+          <select name="group" id="discordPermissionGroup" required></select>
+        </label>
+        <label>Guild ID
+          <input name="guild_id" autocomplete="off" placeholder="비우면 전체 권한">
+        </label>
+        <button type="submit">권한 추가</button>
+      </form>
+      <form id="discordAdminForm" style="margin-top: 10px;">
+        <label>Global Admin User ID
+          <input name="user_id" autocomplete="off" required>
+        </label>
+        <button type="submit">전역 관리자 추가</button>
+      </form>
+      <table style="margin-top: 12px;">
+        <thead>
+          <tr>
+            <th>범위</th>
+            <th>User ID</th>
+            <th>권한</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="discordPermissionsBody"></tbody>
+      </table>
     </section>
     <section>
       <h2>유저 등록</h2>
@@ -619,10 +716,25 @@ _INDEX_HTML = """<!doctype html>
     const movementStatus = document.querySelector("#movementStatus");
     const mapSnapshotStatus = document.querySelector("#mapSnapshotStatus");
     const replayArtifactsBody = document.querySelector("#replayArtifactsBody");
+    const discordPermissionsBody = document.querySelector("#discordPermissionsBody");
+    const discordPermissionGroup = document.querySelector("#discordPermissionGroup");
     const banner = document.querySelector("#banner");
 
     function cell(label, value) {
       return `<div class="kv"><span>${label}</span><strong>${value}</strong></div>`;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function attr(value) {
+      return escapeHtml(value);
     }
 
     async function loadStatus() {
@@ -640,6 +752,70 @@ _INDEX_HTML = """<!doctype html>
         cell("주기당 대상", `${settings.collector.cycle_player_limit}명`),
         cell("조회 chunk", `${settings.collector.player_lookup_chunk_size}명`),
       ].join("");
+    }
+
+    async function loadDiscordPermissions() {
+      const payload = await fetch("/discord/permissions").then((r) => r.json());
+      const settings = payload.discord_permissions;
+      const groupNames = Object.keys(settings.command_groups || {}).sort();
+      discordPermissionGroup.innerHTML = groupNames.map((group) => (
+        `<option value="${attr(group)}">${escapeHtml(group)}</option>`
+      )).join("");
+
+      const rows = [];
+      for (const userId of settings.global_admin_user_ids || []) {
+        rows.push({
+          scope: "global_admin",
+          userId,
+          group: "all",
+          action: "remove-global-admin",
+          guildId: "",
+        });
+      }
+      for (const [userId, groups] of Object.entries(settings.user_grants || {})) {
+        for (const group of groups) {
+          rows.push({
+            scope: "global",
+            userId,
+            group,
+            action: "revoke-permission",
+            guildId: "",
+          });
+        }
+      }
+      for (const [guildId, grants] of Object.entries(settings.guild_user_grants || {})) {
+        for (const [userId, groups] of Object.entries(grants)) {
+          for (const group of groups) {
+            rows.push({
+              scope: `guild:${guildId}`,
+              userId,
+              group,
+              action: "revoke-permission",
+              guildId,
+            });
+          }
+        }
+      }
+
+      discordPermissionsBody.innerHTML = rows.map((row) => `
+        <tr>
+          <td>${escapeHtml(row.scope)}</td>
+          <td>${escapeHtml(row.userId)}</td>
+          <td>${escapeHtml(row.group)}</td>
+          <td>
+            <div class="actions">
+              <button
+                class="danger"
+                type="button"
+                data-discord-action="${attr(row.action)}"
+                data-user-id="${attr(row.userId)}"
+                data-group="${attr(row.group)}"
+                data-guild-id="${attr(row.guildId)}"
+              >해제</button>
+            </div>
+          </td>
+        </tr>
+      `).join("") || `<tr><td colspan="4">등록된 권한이 없습니다.</td></tr>`;
     }
 
     async function loadPlayers() {
@@ -840,6 +1016,33 @@ _INDEX_HTML = """<!doctype html>
       await loadPlayers();
     }
 
+    async function postJson(url, payload) {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      return response.json();
+    }
+
+    async function revokeDiscordPermission(userId, group, guildId) {
+      await postJson("/discord/permissions/revoke", {
+        user_id: userId,
+        group,
+        guild_id: guildId || null,
+      });
+      await loadDiscordPermissions();
+    }
+
+    async function removeDiscordGlobalAdmin(userId) {
+      await postJson("/discord/global-admins/remove", { user_id: userId });
+      await loadDiscordPermissions();
+    }
+
     document.querySelector("#registerForm").addEventListener("submit", async (event) => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
@@ -857,7 +1060,59 @@ _INDEX_HTML = """<!doctype html>
       await loadPlayers();
     });
 
-    Promise.all([loadStatus(), loadPlayers(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
+    document.querySelector("#discordGrantForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      try {
+        await postJson("/discord/permissions/grant", {
+          user_id: form.get("user_id"),
+          group: form.get("group"),
+          guild_id: form.get("guild_id") || null,
+        });
+        event.currentTarget.reset();
+        await loadDiscordPermissions();
+        banner.textContent = "Discord 권한이 추가되었습니다.";
+      } catch (error) {
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    document.querySelector("#discordAdminForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      try {
+        await postJson("/discord/global-admins/add", { user_id: form.get("user_id") });
+        event.currentTarget.reset();
+        await loadDiscordPermissions();
+        banner.textContent = "Discord 전역 관리자가 추가되었습니다.";
+      } catch (error) {
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    discordPermissionsBody.addEventListener("click", async (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("button[data-discord-action]")
+        : null;
+      if (!button) return;
+
+      try {
+        if (button.dataset.discordAction === "remove-global-admin") {
+          await removeDiscordGlobalAdmin(button.dataset.userId);
+        } else {
+          await revokeDiscordPermission(
+            button.dataset.userId,
+            button.dataset.group,
+            button.dataset.guildId || null,
+          );
+        }
+        banner.textContent = "Discord 권한이 해제되었습니다.";
+      } catch (error) {
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    Promise.all([loadStatus(), loadDiscordPermissions(), loadPlayers(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
       .then(() => { banner.textContent = "localhost 전용 관리 화면"; })
       .catch((error) => { banner.textContent = `오류: ${error.message}`; });
   </script>

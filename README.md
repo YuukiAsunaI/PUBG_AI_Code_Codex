@@ -204,6 +204,18 @@ Discord's message content intent to be enabled for the bot application. Initial 
 
 Command access is checked through local Discord permission settings in `config/local_settings.json`.
 
+Manage Discord command permissions from the local program or CLI. For first boot, add yourself as a global admin or
+grant a command group to a Discord user ID:
+
+```powershell
+python -m pubg_ai.cli add-discord-global-admin 123456789012345678
+python -m pubg_ai.cli grant-discord-permission 123456789012345678 register --guild-id 987654321098765432
+python -m pubg_ai.cli discord-permissions
+```
+
+Permission groups currently include `register`, `profile_read`, `ranking_read`, `replay_read`, `settings_write`, and
+`admin`.
+
 Run the local management app:
 
 ```powershell

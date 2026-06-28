@@ -4,13 +4,14 @@ import argparse
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from pubg_ai.config import RuntimeConfig, load_dotenv_values
 from pubg_ai.database import connect_mysql, count_tables, initialize_database
 from pubg_ai.discord_bot import DEFAULT_DISCORD_PREFIX, run_discord_bot
+from pubg_ai.discord_permission_manager import DiscordPermissionManager
 from pubg_ai.discord_permissions import DiscordPermissionChecker
-from pubg_ai.local_settings import LocalSettingsStore
+from pubg_ai.local_settings import LocalSettingsError, LocalSettingsStore
 from pubg_ai.map_snapshot_renderer import MapSnapshotProcessor
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.match_job_processor import MatchJobProcessor
@@ -99,6 +100,27 @@ def main(argv: list[str] | None = None) -> int:
 
     discord_parser = subparsers.add_parser("run-discord-bot", help="Run the Discord bot.")
     discord_parser.add_argument("--prefix", default=DEFAULT_DISCORD_PREFIX, help="Text command prefix.")
+
+    subparsers.add_parser("discord-permissions", help="Print Discord permission settings.")
+
+    grant_parser = subparsers.add_parser("grant-discord-permission", help="Grant a Discord command group.")
+    grant_parser.add_argument("user_id")
+    grant_parser.add_argument("group")
+    grant_parser.add_argument("--guild-id", default=None)
+
+    revoke_parser = subparsers.add_parser("revoke-discord-permission", help="Revoke a Discord command group.")
+    revoke_parser.add_argument("user_id")
+    revoke_parser.add_argument("group")
+    revoke_parser.add_argument("--guild-id", default=None)
+
+    add_admin_parser = subparsers.add_parser("add-discord-global-admin", help="Add a global Discord admin user.")
+    add_admin_parser.add_argument("user_id")
+
+    remove_admin_parser = subparsers.add_parser(
+        "remove-discord-global-admin",
+        help="Remove a global Discord admin user.",
+    )
+    remove_admin_parser.add_argument("user_id")
 
     args = parser.parse_args(argv)
     base_dir = Path(args.base_dir).resolve()
@@ -300,6 +322,43 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    if args.command == "discord-permissions":
+        settings_store = _local_settings_store(base_dir=base_dir, env_file=args.env_file)
+        try:
+            settings = settings_store.load_discord_permission_settings()
+        except LocalSettingsError as exc:
+            raise SystemExit(str(exc)) from exc
+        _print_json({"discord_permissions": settings.to_record()})
+        return 0
+
+    if args.command == "grant-discord-permission":
+        manager = DiscordPermissionManager(_local_settings_store(base_dir=base_dir, env_file=args.env_file))
+        _print_json(
+            _permission_change_record(
+                lambda: manager.grant(user_id=args.user_id, group=args.group, guild_id=args.guild_id)
+            )
+        )
+        return 0
+
+    if args.command == "revoke-discord-permission":
+        manager = DiscordPermissionManager(_local_settings_store(base_dir=base_dir, env_file=args.env_file))
+        _print_json(
+            _permission_change_record(
+                lambda: manager.revoke(user_id=args.user_id, group=args.group, guild_id=args.guild_id)
+            )
+        )
+        return 0
+
+    if args.command == "add-discord-global-admin":
+        manager = DiscordPermissionManager(_local_settings_store(base_dir=base_dir, env_file=args.env_file))
+        _print_json(_permission_change_record(lambda: manager.add_global_admin(args.user_id)))
+        return 0
+
+    if args.command == "remove-discord-global-admin":
+        manager = DiscordPermissionManager(_local_settings_store(base_dir=base_dir, env_file=args.env_file))
+        _print_json(_permission_change_record(lambda: manager.remove_global_admin(args.user_id)))
+        return 0
+
     parser.error(f"unknown command: {args.command}")
     return 2
 
@@ -334,6 +393,13 @@ def _json_ready(value: Any) -> Any:
     if isinstance(value, list):
         return [_json_ready(item) for item in value]
     return value
+
+
+def _permission_change_record(change_factory: Callable[[], Any]) -> dict[str, Any]:
+    try:
+        return change_factory().to_record()
+    except LocalSettingsError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def _pubg_client_from_config(config: RuntimeConfig) -> PubgApiClient:

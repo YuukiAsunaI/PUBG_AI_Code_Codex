@@ -247,6 +247,8 @@ The current Discord bot slice is intentionally small and reuses the same local M
   requested match ID.
 - Command access is checked through local Discord permission settings. Global admins can manage every guild, while
   guild-specific grants stay scoped by `guild_id`.
+- The local web UI and CLI can now add/revoke user command-group grants and add/remove global Discord admins without
+  storing any bot token or PUBG API key outside `.env`.
 - The bot does not fetch live in-match data. It only reads completed-match data and already generated replay
   artifacts.
 
