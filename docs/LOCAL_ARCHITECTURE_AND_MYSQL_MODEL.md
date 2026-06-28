@@ -94,7 +94,7 @@ Use a two-layer storage model:
 
 | Table | Purpose |
 | --- | --- |
-| `matches` | `match_id`, shard, map, mode, match type, team mode, perspective, ranked/custom flags, created KST time, duration, telemetry URL |
+| `matches` | `match_id`, shard, map, mode, match type, team mode, perspective, ranked/custom flags, created KST time, duration, telemetry URL, total players, human players, bot players |
 | `match_rosters` | Teams/rosters, rank, win flag |
 | `match_participants` | Player match stats from match object, including AI/bot detection flags when available |
 | `player_match_summaries` | One row per tracked player per match with final stats, phase facts, and derived flags |
@@ -164,6 +164,10 @@ unchanged so newly added PUBG content remains visible.
 - Scope Discord permissions/rankings by `guild_id`, with global admins allowed to view/manage all guilds.
 - Treat registered PUBG players as tracking targets, not Discord ownership claims.
 - Use `match_id` and `account_id` as natural keys where possible.
+- Store `matches.total_players`, `matches.human_players`, and `matches.bot_players` for every match.
+- Store participant-level `is_ai_or_bot` and `ai_detection_source` so match population counts are auditable.
+- Prefer match API participant records for population counts, then cross-check telemetry `LogMatchStart.characters`
+  and `LogMatchEnd.characters` during parsing.
 - Use bigint surrogate IDs for high-volume event tables.
 - Add indexes on:
   - `registered_players(account_id, shard)`

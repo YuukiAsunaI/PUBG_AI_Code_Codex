@@ -30,6 +30,11 @@ changes them.
 - Match details and telemetry are post-match data. They are only available after the PUBG match has finished.
 - 2D replay is post-match only because it is generated from finished-match logs and telemetry.
 - Raw match and telemetry files are deduplicated by `match_id`.
+- Every match record must store `total_players`, `human_players`, and `bot_players`.
+- Player population counts should be computed from match participants when available and cross-checked with
+  telemetry `LogMatchStart.characters`/`LogMatchEnd.characters`.
+- Bot detection evidence must be stored per participant, with rules such as `ai.` player/account ID prefixes kept as
+  detection sources.
 
 ## Time Zone
 

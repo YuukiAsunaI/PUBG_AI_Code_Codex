@@ -33,6 +33,8 @@ because telemetry files are large and contain player names/account IDs.
 | Start-to-end duration | 1,311 seconds |
 | Start-to-last-event duration | 1,376 seconds |
 | Players | 97 |
+| Human players | 95 |
+| Bot players | 2 |
 | Teams | 31 |
 | Team size distribution | 17 full squads, 7 three-person teams, 1 duo, 6 solo/partial teams |
 
@@ -80,6 +82,9 @@ because telemetry files are large and contain player names/account IDs.
   bluezone/redzone flags, and team membership.
 - Team membership is available through `character.teamId`; this confirms that teammate grouping should come from
   telemetry/match roster data, not nickname matching.
+- This sample's `LogMatchStart.characters` population has 97 total players. Two records have `ai.` account/player ID
+  evidence, so it should be recorded as 95 human players and 2 bot players unless match API participant data later
+  proves otherwise.
 - DBNO linkage is available through `dBNOId` across `LogPlayerMakeGroggy`, `LogPlayerKillV2`, and
   `LogPlayerRevive`. Some final kills can have `dBNOId = -1`, so final kill/death logic must not assume every kill
   has a previous DBNO.
