@@ -7,6 +7,8 @@ from typing import Any
 
 from pubg_ai.config import RuntimeConfig
 from pubg_ai.database import connect_mysql, count_tables, initialize_database
+from pubg_ai.player_registry import PlayerRegistry
+from pubg_ai.pubg_client import PubgApiClient
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -18,6 +20,15 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("config-status", help="Print safe runtime configuration status.")
     subparsers.add_parser("init-db", help="Create the MySQL database and MVP schema tables.")
     subparsers.add_parser("db-status", help="Check MySQL connection and table count.")
+
+    lookup_parser = subparsers.add_parser("lookup-player", help="Resolve PUBG nickname to accountId.")
+    lookup_parser.add_argument("nickname")
+    lookup_parser.add_argument("--shard", default="steam")
+
+    register_parser = subparsers.add_parser("register-player", help="Resolve and register a PUBG player.")
+    register_parser.add_argument("nickname")
+    register_parser.add_argument("--shard", default="steam")
+    register_parser.add_argument("--private", action="store_true", help="Register with public_profile disabled.")
 
     web_parser = subparsers.add_parser("run-web", help="Run the local management web app.")
     web_parser.add_argument("--host", default="127.0.0.1", help="Bind host. Defaults to localhost only.")
@@ -54,6 +65,27 @@ def main(argv: list[str] | None = None) -> int:
             connection.close()
         return 0
 
+    if args.command == "lookup-player":
+        client = _pubg_client_from_config(config)
+        player = client.lookup_player_by_name(args.shard, args.nickname)
+        _print_json(player.to_record())
+        return 0
+
+    if args.command == "register-player":
+        client = _pubg_client_from_config(config)
+        connection = connect_mysql(config.database)
+        try:
+            player = PlayerRegistry(connection).register_player_by_name(
+                pubg_client=client,
+                shard=args.shard,
+                player_name=args.nickname,
+                public_profile=not args.private,
+            )
+            _print_json({"player": player.to_record()})
+        finally:
+            connection.close()
+        return 0
+
     if args.command == "run-web":
         _run_web_app(host=args.host, port=args.port, base_dir=base_dir, env_file=args.env_file)
         return 0
@@ -82,6 +114,12 @@ def _safe_config_status(config: RuntimeConfig) -> dict[str, Any]:
 
 def _print_json(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _pubg_client_from_config(config: RuntimeConfig) -> PubgApiClient:
+    if not config.secrets.pubg_api_key:
+        raise SystemExit("PUBG_API_KEY is not configured in .env.")
+    return PubgApiClient(config.secrets.pubg_api_key)
 
 
 def _run_web_app(*, host: str, port: int, base_dir: Path, env_file: str) -> None:

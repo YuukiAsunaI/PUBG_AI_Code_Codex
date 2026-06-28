@@ -6,6 +6,7 @@ from typing import Any
 from pubg_ai.config import RuntimeConfig
 from pubg_ai.database import connect_mysql, count_tables
 from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry
+from pubg_ai.pubg_client import PubgApiClient, PubgApiError
 
 
 def create_app() -> Any:
@@ -25,7 +26,7 @@ def create_app() -> Any:
     )
 
     class RegisterPlayerRequest(BaseModel):
-        account_id: str = Field(min_length=1)
+        account_id: str | None = None
         shard: str = Field(default="steam", min_length=1)
         current_name: str = Field(min_length=1)
         public_profile: bool = True
@@ -101,17 +102,33 @@ def create_app() -> Any:
     def register_player(request: RegisterPlayerRequest) -> dict[str, Any]:
         connection = connect_mysql(config.database)
         try:
-            player = PlayerRegistry(connection).register_player(
-                account_id=request.account_id,
-                shard=request.shard,
-                current_name=request.current_name,
-                public_profile=request.public_profile,
-                context=DiscordCommandContext(
-                    user_id=request.discord_user_id,
-                    guild_id=request.guild_id,
-                    channel_id=request.channel_id,
-                ),
+            context = DiscordCommandContext(
+                user_id=request.discord_user_id,
+                guild_id=request.guild_id,
+                channel_id=request.channel_id,
             )
+            registry = PlayerRegistry(connection)
+            if request.account_id:
+                player = registry.register_player(
+                    account_id=request.account_id,
+                    shard=request.shard,
+                    current_name=request.current_name,
+                    public_profile=request.public_profile,
+                    context=context,
+                )
+            else:
+                if not config.secrets.pubg_api_key:
+                    raise HTTPException(status_code=500, detail="PUBG_API_KEY is not configured.")
+                try:
+                    player = registry.register_player_by_name(
+                        pubg_client=PubgApiClient(config.secrets.pubg_api_key),
+                        shard=request.shard,
+                        player_name=request.current_name,
+                        public_profile=request.public_profile,
+                        context=context,
+                    )
+                except PubgApiError as exc:
+                    raise HTTPException(status_code=502, detail=str(exc)) from exc
             return {"player": player.to_record()}
         finally:
             connection.close()
@@ -227,7 +244,7 @@ _INDEX_HTML = """<!doctype html>
     </section>
     <section>
       <h2>유저 등록</h2>
-      <form id="registerForm">
+    <form id="registerForm">
         <label>플랫폼
           <select name="shard">
             <option value="steam">steam</option>
@@ -238,7 +255,7 @@ _INDEX_HTML = """<!doctype html>
           <input name="current_name" autocomplete="off" required>
         </label>
         <label>Account ID
-          <input name="account_id" autocomplete="off" required>
+          <input name="account_id" autocomplete="off" placeholder="자동 조회">
         </label>
         <label>공개 프로필
           <select name="public_profile">
@@ -331,7 +348,7 @@ _INDEX_HTML = """<!doctype html>
         body: JSON.stringify({
           shard: form.get("shard"),
           current_name: form.get("current_name"),
-          account_id: form.get("account_id"),
+          account_id: form.get("account_id") || null,
           public_profile: form.get("public_profile") === "true",
         }),
       });

@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any
 
+from pubg_ai.pubg_client import PubgApiClient, PubgPlayer
 from pubg_ai.time_utils import now_kst
 
 
@@ -123,6 +124,37 @@ class PlayerRegistry:
             )
 
         return player
+
+    def register_player_by_name(
+        self,
+        *,
+        pubg_client: PubgApiClient,
+        shard: str,
+        player_name: str,
+        public_profile: bool = True,
+        context: DiscordCommandContext | None = None,
+    ) -> RegisteredPlayer:
+        pubg_player = pubg_client.lookup_player_by_name(shard, player_name)
+        return self.register_resolved_player(
+            pubg_player=pubg_player,
+            public_profile=public_profile,
+            context=context,
+        )
+
+    def register_resolved_player(
+        self,
+        *,
+        pubg_player: PubgPlayer,
+        public_profile: bool = True,
+        context: DiscordCommandContext | None = None,
+    ) -> RegisteredPlayer:
+        return self.register_player(
+            account_id=pubg_player.account_id,
+            shard=pubg_player.shard,
+            current_name=pubg_player.name,
+            public_profile=public_profile,
+            context=context,
+        )
 
     def get_player(
         self,

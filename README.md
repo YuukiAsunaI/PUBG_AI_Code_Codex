@@ -59,6 +59,7 @@ The first executable slice is now available:
 
 - safe `.env` loader with masked secret status
 - MySQL schema initializer for the `pubg_ai` database
+- PUBG Players API lookup for nickname + shard to `accountId`
 - player registration/list/unregister service layer
 - localhost-only FastAPI management app
 - browser UI for status, user registration, user lookup, and collection stop/delete action
@@ -79,6 +80,18 @@ Check safe configuration status:
 
 ```powershell
 python -m pubg_ai.cli config-status
+```
+
+Resolve a PUBG nickname:
+
+```powershell
+python -m pubg_ai.cli lookup-player Yuuki_Asuna--- --shard steam
+```
+
+Resolve and register a PUBG nickname:
+
+```powershell
+python -m pubg_ai.cli register-player Yuuki_Asuna--- --shard steam
 ```
 
 Run the local management app:

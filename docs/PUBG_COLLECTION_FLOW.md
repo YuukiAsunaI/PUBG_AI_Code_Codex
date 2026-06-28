@@ -71,6 +71,19 @@ The local management program should expose:
 - player limit per collection cycle, 1 to 100
 - player lookup chunk size, 1 to 10
 
+## Implemented Registration Slice
+
+The current local runtime can already perform the first registration step:
+
+- `PubgApiClient.lookup_player_by_name(shard, nickname)` calls the official players endpoint.
+- `PlayerRegistry.register_player_by_name(...)` resolves the nickname, stores the PUBG `accountId`, and records an
+  alias.
+- `python -m pubg_ai.cli lookup-player <nickname> --shard <shard>` checks a nickname without registering it.
+- `python -m pubg_ai.cli register-player <nickname> --shard <shard>` resolves and registers the player.
+- The local web UI uses the same lookup path when Account ID is left blank.
+
+Live test completed with the Steam nickname `Yuuki_Asuna---`; lookup and registration succeeded.
+
 ## Match Job States
 
 Use explicit job states so the local management UI can show where a match is stuck:
@@ -91,4 +104,3 @@ Use explicit job states so the local management UI can show where a match is stu
 | `replay_ready` | Optional 2D replay artifacts are generated |
 | `failed_retryable` | Job failed but should retry |
 | `failed_terminal` | Job failed and needs operator attention |
-
