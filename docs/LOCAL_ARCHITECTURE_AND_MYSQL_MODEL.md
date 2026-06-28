@@ -86,7 +86,7 @@ Use a two-layer storage model:
 | `api_fetch_jobs` | Queue and retry state for player/match/telemetry fetches |
 | `raw_player_snapshots` | Raw player endpoint responses; small enough for MySQL JSON storage |
 | `raw_match_payloads` | Raw match JSON file metadata by `match_id` |
-| `raw_telemetry_payloads` | Raw telemetry JSON file metadata by `match_id` |
+| `raw_telemetry_payloads` | Raw telemetry JSON file metadata by `match_id`, asset URL, and local file path |
 | `replay_artifacts` | Generated 2D replay timeline, map snapshot, thumbnail, GIF, video, and cache metadata |
 | `parse_runs` | Parser version, status, error, and row counts |
 
@@ -158,6 +158,8 @@ unchanged so newly added PUBG content remains visible.
 - Store generated 2D replay artifacts and static map images under `PUBG_REPLAY_DATA_DIR`.
 - Store only metadata for large raw files in MySQL: root key, relative path, compression, file size, `sha256`,
   source URL, fetched timestamp, and parser version.
+- Do not rely on telemetry JSON to contain `match_id`. The telemetry parser receives `match_id`, shard, and asset URL
+  from the Match endpoint/raw fetch job because telemetry assets can be top-level event arrays.
 - Store replay artifact metadata in MySQL: artifact type, content type, relative path, size, `sha256`, generated
   timestamp, and renderer version.
 - Keep file paths relative to `PUBG_RAW_DATA_DIR` or `PUBG_REPLAY_DATA_DIR` so drives can be moved without rewriting

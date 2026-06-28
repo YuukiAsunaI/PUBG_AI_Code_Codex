@@ -2,10 +2,10 @@
 
 Analysis date: 2026-06-28
 
-This document records findings from one local PUBG telemetry file. The raw file is not committed to the repository
+This document records findings from local PUBG telemetry files. The raw files are not committed to the repository
 because telemetry files are large and contain player names/account IDs.
 
-## Sample Identity
+## Sample 1 Identity
 
 | Field | Value |
 | --- | --- |
@@ -228,3 +228,146 @@ WeapPanProjectile_C
 - Generate static map snapshot artifacts from the same parsed timeline: whole-match route summary, tracked-player
   route image, and team route image. These should mark plane route, parachute/drop route, movement route, kill/DBNO
   points, death position, and care package positions.
+
+## Sample 2 Identity
+
+This file was provided as the latest match data from a direct API fetch. Its JSON shape is a top-level telemetry event
+array, not the Match endpoint `{data, included}` object. Treat it as a raw telemetry asset response and associate it
+with the match through collection metadata.
+
+| Field | Value |
+| --- | --- |
+| File name | `751d1def-d222-4d3e-8b9d-1fc3721bb5c1.txt` |
+| Raw storage copy | `PUBG_RAW_DATA_DIR\matches\steam\751d1def-d222-4d3e-8b9d-1fc3721bb5c1.json` |
+| SHA-256 | `3629b1ec02eac4b29c54c7c4f82c61d3e6092ae6a7516e9b8db21a208eb71c01` |
+| Size | 59,632,311 bytes |
+| JSON shape | Top-level array of telemetry events |
+| Event count | 51,168 |
+| Match ID in telemetry | Not present; carry this from the Match endpoint/raw fetch job |
+
+## Sample 2 Match Summary
+
+| Field | Value |
+| --- | --- |
+| Map | `Tiger_Main` |
+| `teamSize` | 4 |
+| Camera | `FpsAndTps` |
+| Custom game | `false` |
+| Event mode | `false` |
+| Weather | `Clear` |
+| `LogMatchStart` | `2026-06-28T00:13:17.928Z` |
+| `LogMatchEnd` | `2026-06-28T00:41:53.927Z` |
+| Last event timestamp | `2026-06-28T00:43:02.522Z` |
+| Start-to-end duration | 1,715 seconds |
+| Start-to-last-event duration | 1,784 seconds |
+| Players | 98 |
+| Human players | 98 |
+| Bot players | 0 |
+| Teams | 29 |
+| Team size distribution | 21 full squads, 3 three-person teams, 5 solo/partial teams |
+
+## Sample 2 Event Counts
+
+| Event type | Count |
+| --- | ---: |
+| `LogPlayerTakeDamage` | 11,148 |
+| `LogHeal` | 8,781 |
+| `LogPlayerPosition` | 7,208 |
+| `LogPlayerAttack` | 6,323 |
+| `LogItemPickup` | 4,935 |
+| `LogItemEquip` | 1,840 |
+| `LogItemUnequip` | 1,523 |
+| `LogItemUse` | 1,347 |
+| `LogItemDrop` | 1,291 |
+| `LogItemAttach` | 1,111 |
+| `LogItemDetach` | 1,102 |
+| `LogWeaponFireCount` | 539 |
+| `LogVehicleDamage` | 462 |
+| `LogItemPickupFromLootBox` | 438 |
+| `LogObjectInteraction` | 402 |
+| `LogVaultStart` | 366 |
+| `LogVehicleRide` | 327 |
+| `LogVehicleLeave` | 327 |
+| `LogSpecialZoneInCharacters` | 231 |
+| `LogObjectDestroy` | 228 |
+| `LogGameStatePeriodic` | 171 |
+| `LogPlayerUseThrowable` | 166 |
+| `LogParachuteLanding` | 118 |
+| `LogPlayerMakeGroggy` | 102 |
+| `LogPlayerKillV2` | 102 |
+| `LogArmorDestroy` | 57 |
+| `LogCarePackageLand` | 54 |
+| `LogCarePackageSpawn` | 43 |
+| `LogPlayerRevive` | 29 |
+
+Damage categories from `LogPlayerTakeDamage`:
+
+| Category | Count |
+| --- | ---: |
+| `Damage_BlueZone` | 8,077 |
+| `Damage_DBNO` | 1,934 |
+| `Damage_Gun` | 1,041 |
+| `Damage_Molotov` | 27 |
+| `Damage_Explosion_Grenade` | 25 |
+| `Damage_Instant_Fall` | 19 |
+| `Damage_VehicleCrashHit` | 12 |
+| `Damage_BlueZoneGrenade` | 10 |
+| `Damage_VehicleHit` | 2 |
+| `Damage_Explosion_PanzerFaustWarhead` | 1 |
+
+## Sample 2 Weapon Accuracy / Hit-Part Sample
+
+| Metric | Value |
+| --- | ---: |
+| Player/weapon stat rows | 344 |
+| Fired count from `LogWeaponFireCount` | 25,520 |
+| Gun hit events from `LogPlayerTakeDamage` | 1,041 |
+| Head hit events | 136 |
+| Final kills | 90 |
+| Headshot final kills | 22 |
+| Assists attributed to prior gun damage | 24 |
+| DBNOs | 91 |
+| Headshot DBNOs | 28 |
+| Finishes | 64 |
+| Headshot finishes | 15 |
+
+Body-part hit distribution:
+
+| Body part | Hits |
+| --- | ---: |
+| Torso | 416 |
+| Arm | 238 |
+| Leg | 154 |
+| Head | 136 |
+| Pelvis | 97 |
+
+Top weapons by gun hit events:
+
+| Weapon | Fired | Hit events | Kills | Headshot kills | DBNOs | Assists |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `WeapSaiga12_C` | 30 | 133 | 8 | 2 | 6 | 1 |
+| `WeapACE32_C` | 6,270 | 106 | 10 | 1 | 12 | 5 |
+| `WeapMP5K_C` | 1,840 | 100 | 11 | 1 | 7 | 0 |
+| `WeapAUG_C` | 2,980 | 99 | 9 | 2 | 11 | 1 |
+| `WeapHK416_C` | 3,360 | 96 | 5 | 1 | 4 | 3 |
+| `WeapWinchester_C` | 0 | 57 | 3 | 2 | 4 | 0 |
+| `WeapAK47_C` | 610 | 52 | 6 | 3 | 6 | 0 |
+| `WeapVector_C` | 240 | 49 | 4 | 0 | 3 | 0 |
+| `WeapSCAR-L_C` | 690 | 46 | 5 | 2 | 5 | 2 |
+| `WeapMini14_C` | 420 | 38 | 1 | 0 | 2 | 4 |
+
+## Sample 2 Parser Findings
+
+- The telemetry array does not expose `common.matchId`; match identity must come from the Match endpoint response or
+  fetch job metadata.
+- This sample has 8 adjacent timestamp reversals. Timeline builders should sort by parsed `_D` while preserving source
+  order for debugging.
+- `LogCarePackageLand` appears 54 times while `LogCarePackageSpawn` appears 43 times, so care-package parsing should
+  not require a strict one-to-one spawn/land relationship.
+- `Damage_BlueZone` dominates raw damage events. Combat analytics must continue filtering weapon stats to
+  `Damage_Gun` and storing non-gun damage separately.
+- `LogPlayerKillV2` has 23 events with assists and 24 assist slots. Weapon-level assist attribution from prior gun
+  damage produced 24 attributed assists in this sample.
+- New or less common event types observed here include `LogObjectInteraction`, `LogVaultStart`,
+  `LogSpecialZoneInCharacters`, `LogObjectDestroy`, `LogArmorDestroy`, `LogCharacterCarry`,
+  `LogItemPutToVehicleTrunk`, and vehicle trunk pickup events.

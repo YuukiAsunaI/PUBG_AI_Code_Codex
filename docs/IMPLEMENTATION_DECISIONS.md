@@ -30,6 +30,8 @@ changes them.
 - Match details and telemetry are post-match data. They are only available after the PUBG match has finished.
 - 2D replay is post-match only because it is generated from finished-match logs and telemetry.
 - Raw match and telemetry files are deduplicated by `match_id`.
+- Telemetry asset JSON can be a top-level event array without an embedded `match_id`; always carry `match_id`, shard,
+  asset URL, and raw file metadata from the Match endpoint fetch job into the telemetry parser.
 - Every match record must store `total_players`, `human_players`, and `bot_players`.
 - Player population counts should be computed from match participants when available and cross-checked with
   telemetry `LogMatchStart.characters`/`LogMatchEnd.characters`.
