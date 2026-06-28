@@ -15,6 +15,7 @@ Research date: 2026-06-27
 - Telemetry events: https://github.com/pubg/api-documentation-content/blob/master/rst/telemetry-events.rst
 - Player lookup filter parameters: https://github.com/pubg/api-documentation-content/blob/master/swagger/en/parameters/filterPlayerIds.yml
 - Official assets and dictionaries: https://github.com/pubg/api-assets
+- Official map image assets: https://github.com/pubg/api-assets/tree/master/Assets/Maps
 - Game mode dictionary: https://raw.githubusercontent.com/pubg/api-assets/master/dictionaries/gameMode.json
 - Map dictionary: https://raw.githubusercontent.com/pubg/api-assets/master/dictionaries/telemetry/mapName.json
 - Item ID dictionary: https://raw.githubusercontent.com/pubg/api-assets/master/dictionaries/telemetry/item/itemId.json

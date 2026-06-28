@@ -166,6 +166,18 @@ Reparse existing movement/location rows after parser changes:
 python -m pubg_ai.cli parse-telemetry-movement --limit 200 --force
 ```
 
+Generate registered-player 2D route JPEG snapshots under `PUBG_REPLAY_DATA_DIR`:
+
+```powershell
+python -m pubg_ai.cli generate-map-snapshots --limit 10
+```
+
+Regenerate existing route snapshots after renderer changes:
+
+```powershell
+python -m pubg_ai.cli generate-map-snapshots --limit 200 --force
+```
+
 Run the local management app:
 
 ```powershell

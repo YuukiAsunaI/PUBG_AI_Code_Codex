@@ -7,6 +7,7 @@ dependencies = [
     "discord.py>=2.4",
     "fastapi>=0.115",
     "httpx>=0.27",
+    "Pillow>=10.0",
     "pymysql>=1.1",
     "python-dotenv>=1.0",
     "uvicorn[standard]>=0.30",

@@ -8,7 +8,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class DatabaseError(RuntimeError):
@@ -76,7 +76,7 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 VALUES (%s, %s, NOW(6))
                 ON DUPLICATE KEY UPDATE description = VALUES(description)
                 """,
-                (SCHEMA_VERSION, "movement and location telemetry schema"),
+                (SCHEMA_VERSION, "map snapshot replay artifact schema"),
             )
             applied += 1
     finally:
@@ -571,6 +571,31 @@ def schema_statements() -> list[str]:
             updated_at_kst DATETIME(6) NOT NULL,
             UNIQUE KEY uq_match_plane_routes (match_id),
             CONSTRAINT fk_match_plane_routes_match
+                FOREIGN KEY (match_id) REFERENCES matches(match_id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS replay_artifacts (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            match_id VARCHAR(191) NOT NULL,
+            shard VARCHAR(32) NOT NULL,
+            artifact_type VARCHAR(32) NOT NULL,
+            artifact_name VARCHAR(191) NOT NULL,
+            account_id VARCHAR(128) NOT NULL DEFAULT '',
+            storage_backend VARCHAR(32) NOT NULL,
+            storage_root VARCHAR(64) NOT NULL,
+            relative_path VARCHAR(512) NOT NULL,
+            content_type VARCHAR(64) NOT NULL,
+            size_bytes BIGINT UNSIGNED NOT NULL,
+            sha256 CHAR(64) NOT NULL,
+            renderer_version VARCHAR(64) NOT NULL,
+            source_tables JSON NULL,
+            generated_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_replay_artifacts (match_id, artifact_type, artifact_name, account_id),
+            KEY idx_replay_artifacts_account_type (account_id, artifact_type, generated_at_kst),
+            KEY idx_replay_artifacts_match_type (match_id, artifact_type),
+            CONSTRAINT fk_replay_artifacts_match
                 FOREIGN KEY (match_id) REFERENCES matches(match_id)
                 ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci

@@ -205,6 +205,28 @@ Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 telem
 position samples, 178 landing events, 146 movement summaries, 872 combat-location events, 4,734 care-package events,
 and 119 plane-route approximations with 0 failed payloads.
 
+## Implemented Map Snapshot Artifact Slice
+
+The current local runtime can generate post-match 2D route summary JPEG files for registered players:
+
+- `MapSnapshotProcessor.generate_player_snapshots(...)` reads normalized movement/location rows from MySQL.
+- Map backgrounds are downloaded from official `pubg/api-assets` map PNG files and cached under
+  `PUBG_REPLAY_DATA_DIR/cache/map_assets`.
+- If a map asset is unavailable, the renderer falls back to a coordinate grid so the snapshot job still completes.
+- `ReplayArtifactStore` writes JPEG files under the configured `PUBG_REPLAY_DATA_DIR`, separate from raw match and
+  telemetry files.
+- `replay_artifacts` stores artifact metadata only: match, shard, account, artifact name, relative path, content
+  type, file size, checksum, renderer version, source tables, and generated KST timestamp.
+- Player route snapshots include plane route, parachute/drop route, movement route, landing markers, DBNO/kill/death
+  markers, care-package markers, match metadata, and a legend.
+- `python -m pubg_ai.cli generate-map-snapshots --limit 10` generates only missing snapshots.
+- `python -m pubg_ai.cli generate-map-snapshots --limit 200 --force` regenerates existing JPEG artifacts.
+- The local web UI has JPEG generate/regenerate buttons.
+
+Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 route snapshot JPEG files were generated
+under `D:\BackUP\replay`, recorded in `replay_artifacts`, and verified as readable JPEG images. Total generated
+snapshot size was 54,922,370 bytes.
+
 ## Match Job States
 
 Use explicit job states so the local management UI can show where a match is stuck:

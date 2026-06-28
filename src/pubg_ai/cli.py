@@ -7,11 +7,13 @@ from typing import Any
 
 from pubg_ai.config import RuntimeConfig
 from pubg_ai.database import connect_mysql, count_tables, initialize_database
+from pubg_ai.map_snapshot_renderer import MapSnapshotProcessor
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.match_job_processor import MatchJobProcessor
 from pubg_ai.player_registry import PlayerRegistry
 from pubg_ai.pubg_client import PubgApiClient
 from pubg_ai.raw_storage import RawPayloadStore
+from pubg_ai.replay_storage import ReplayArtifactStore
 from pubg_ai.telemetry_combat_processor import TelemetryCombatProcessor
 from pubg_ai.telemetry_item_processor import TelemetryItemProcessor
 from pubg_ai.telemetry_job_processor import TelemetryJobProcessor
@@ -79,6 +81,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parse_movement_parser.add_argument("--limit", default=10, type=int)
     parse_movement_parser.add_argument("--force", action="store_true", help="Reparse already summarized movement rows.")
+
+    map_snapshots_parser = subparsers.add_parser(
+        "generate-map-snapshots",
+        help="Generate registered-player 2D route JPEG snapshots under PUBG_REPLAY_DATA_DIR.",
+    )
+    map_snapshots_parser.add_argument("--limit", default=10, type=int)
+    map_snapshots_parser.add_argument("--force", action="store_true", help="Regenerate existing map snapshot artifacts.")
 
     web_parser = subparsers.add_parser("run-web", help="Run the local management web app.")
     web_parser.add_argument("--host", default="127.0.0.1", help="Bind host. Defaults to localhost only.")
@@ -249,6 +258,18 @@ def main(argv: list[str] | None = None) -> int:
                     compression=config.app.raw_compression,  # type: ignore[arg-type]
                 ),
             ).process_raw_telemetry(limit=args.limit, force=args.force)
+            _print_json(result.to_record())
+        finally:
+            connection.close()
+        return 0
+
+    if args.command == "generate-map-snapshots":
+        connection = connect_mysql(config.database)
+        try:
+            result = MapSnapshotProcessor(
+                connection,
+                ReplayArtifactStore(config.app.replay_data_dir),
+            ).generate_player_snapshots(limit=args.limit, force=args.force)
             _print_json(result.to_record())
         finally:
             connection.close()
