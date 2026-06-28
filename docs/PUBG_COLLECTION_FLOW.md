@@ -155,6 +155,27 @@ The current local runtime can parse raw telemetry into registered-player combat 
 Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 telemetry files were parsed with 0 failed
 payloads, reading 5,137,481 telemetry events and producing 146 match combat summaries plus 504 weapon-stat rows.
 
+## Implemented Item Event Parser Slice
+
+The current local runtime can parse raw telemetry into registered-player item event and item summary tables:
+
+- `TelemetryItemProcessor.process_raw_telemetry(...)` reads stored telemetry files from `PUBG_RAW_DATA_DIR`.
+- Only registered tracking targets that participated in the match are written to item tables.
+- `player_item_events` stores pickup, loot-box pickup, care-package pickup, drop, use, equip, unequip, attach, and
+  detach events with event index, KST event time, item code/name, parent weapon, child attachment, stack count,
+  location, and raw event JSON.
+- `player_item_match_stats` stores item-level per-match totals such as picked-up quantity, dropped quantity, uses,
+  equips, unequips, attachment count, and detach count.
+- Known item and weapon codes are translated to Korean labels. Unknown or newly added codes remain visible as their
+  original PUBG code.
+- `python -m pubg_ai.cli parse-telemetry-items --limit 10` runs one item parse pass.
+- `python -m pubg_ai.cli parse-telemetry-items --limit 200 --force` reparses already summarized item rows after
+  parser or translation changes.
+- The local web UI has item parse/reparse buttons.
+
+Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 telemetry files produced 19,814 item event
+rows and 4,133 item-stat rows with 0 failed payloads.
+
 ## Match Job States
 
 Use explicit job states so the local management UI can show where a match is stuck:

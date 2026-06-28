@@ -15,6 +15,7 @@ from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry
 from pubg_ai.pubg_client import PubgApiClient, PubgApiError
 from pubg_ai.raw_storage import RawPayloadStore
 from pubg_ai.telemetry_combat_processor import TelemetryCombatProcessor
+from pubg_ai.telemetry_item_processor import TelemetryItemProcessor
 from pubg_ai.telemetry_job_processor import TelemetryJobProcessor
 
 
@@ -48,6 +49,11 @@ class ProcessTelemetryJobsRequest(BaseModel):
 
 
 class ParseTelemetryCombatRequest(BaseModel):
+    limit: int = Field(default=10, ge=1, le=200)
+    force: bool = False
+
+
+class ParseTelemetryItemsRequest(BaseModel):
     limit: int = Field(default=10, ge=1, le=200)
     force: bool = False
 
@@ -268,6 +274,21 @@ def create_app() -> Any:
         finally:
             connection.close()
 
+    @app.post("/telemetry/items/process")
+    def process_telemetry_items(request: ParseTelemetryItemsRequest) -> dict[str, Any]:
+        connection = connect_mysql(config.database)
+        try:
+            result = TelemetryItemProcessor(
+                connection,
+                RawPayloadStore(
+                    config.app.raw_data_dir,
+                    compression=config.app.raw_compression,  # type: ignore[arg-type]
+                ),
+            ).process_raw_telemetry(limit=request.limit, force=request.force)
+            return {"result": result.to_record()}
+        finally:
+            connection.close()
+
     return app
 
 
@@ -458,6 +479,14 @@ _INDEX_HTML = """<!doctype html>
       </div>
       <div class="status" id="combatStatus">대기 중</div>
     </section>
+    <section>
+      <h2>Item 파싱</h2>
+      <div class="actions" style="margin-bottom: 10px;">
+        <button type="button" onclick="parseTelemetryItems(false)">아이템 파싱</button>
+        <button class="secondary" type="button" onclick="parseTelemetryItems(true)">재파싱</button>
+      </div>
+      <div class="status" id="itemStatus">대기 중</div>
+    </section>
   </main>
   <script>
     const statusGrid = document.querySelector("#statusGrid");
@@ -465,6 +494,7 @@ _INDEX_HTML = """<!doctype html>
     const jobsBody = document.querySelector("#jobsBody");
     const telemetryJobsBody = document.querySelector("#telemetryJobsBody");
     const combatStatus = document.querySelector("#combatStatus");
+    const itemStatus = document.querySelector("#itemStatus");
     const banner = document.querySelector("#banner");
 
     function cell(label, value) {
@@ -596,6 +626,22 @@ _INDEX_HTML = """<!doctype html>
       const payload = await response.json();
       combatStatus.textContent = `파싱 ${payload.result.parsed_payloads}개, 요약 ${payload.result.combat_summaries}개, 무기 ${payload.result.weapon_stats}개, 실패 ${payload.result.failed_payloads}개`;
       banner.textContent = "전투 파싱 완료";
+    }
+
+    async function parseTelemetryItems(force) {
+      banner.textContent = force ? "아이템 재파싱 중" : "아이템 파싱 중";
+      const response = await fetch("/telemetry/items/process", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 10, force }),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const payload = await response.json();
+      itemStatus.textContent = `파싱 ${payload.result.parsed_payloads}개, 이벤트 ${payload.result.item_events}개, 아이템 ${payload.result.item_stats}개, 실패 ${payload.result.failed_payloads}개`;
+      banner.textContent = "아이템 파싱 완료";
     }
 
     async function unregisterPlayer(shard, accountId) {

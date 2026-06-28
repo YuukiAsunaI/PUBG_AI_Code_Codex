@@ -13,6 +13,7 @@ from pubg_ai.player_registry import PlayerRegistry
 from pubg_ai.pubg_client import PubgApiClient
 from pubg_ai.raw_storage import RawPayloadStore
 from pubg_ai.telemetry_combat_processor import TelemetryCombatProcessor
+from pubg_ai.telemetry_item_processor import TelemetryItemProcessor
 from pubg_ai.telemetry_job_processor import TelemetryJobProcessor
 
 
@@ -63,6 +64,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parse_combat_parser.add_argument("--limit", default=10, type=int)
     parse_combat_parser.add_argument("--force", action="store_true", help="Reparse already summarized matches.")
+
+    parse_items_parser = subparsers.add_parser(
+        "parse-telemetry-items",
+        help="Parse raw telemetry files into registered-player item event and summary tables.",
+    )
+    parse_items_parser.add_argument("--limit", default=10, type=int)
+    parse_items_parser.add_argument("--force", action="store_true", help="Reparse already summarized item events.")
 
     web_parser = subparsers.add_parser("run-web", help="Run the local management web app.")
     web_parser.add_argument("--host", default="127.0.0.1", help="Bind host. Defaults to localhost only.")
@@ -197,6 +205,21 @@ def main(argv: list[str] | None = None) -> int:
         connection = connect_mysql(config.database)
         try:
             result = TelemetryCombatProcessor(
+                connection,
+                RawPayloadStore(
+                    config.app.raw_data_dir,
+                    compression=config.app.raw_compression,  # type: ignore[arg-type]
+                ),
+            ).process_raw_telemetry(limit=args.limit, force=args.force)
+            _print_json(result.to_record())
+        finally:
+            connection.close()
+        return 0
+
+    if args.command == "parse-telemetry-items":
+        connection = connect_mysql(config.database)
+        try:
+            result = TelemetryItemProcessor(
                 connection,
                 RawPayloadStore(
                     config.app.raw_data_dir,

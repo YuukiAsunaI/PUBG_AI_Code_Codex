@@ -8,7 +8,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class DatabaseError(RuntimeError):
@@ -353,6 +353,67 @@ def schema_statements() -> list[str]:
             updated_at_kst DATETIME(6) NOT NULL,
             UNIQUE KEY uq_player_weapon_match_stats (match_id, account_id, weapon_code),
             KEY idx_player_weapon_stats_account_weapon (account_id, weapon_code, match_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS player_item_events (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            match_id VARCHAR(191) NOT NULL,
+            account_id VARCHAR(128) NOT NULL,
+            event_index INT NOT NULL,
+            event_type VARCHAR(64) NOT NULL,
+            action VARCHAR(32) NOT NULL,
+            event_at_kst DATETIME(6) NULL,
+            common_is_game FLOAT NULL,
+            item_code VARCHAR(191) NULL,
+            item_name_ko VARCHAR(191) NULL,
+            item_category VARCHAR(64) NULL,
+            item_sub_category VARCHAR(64) NULL,
+            stack_count INT NULL,
+            parent_item_code VARCHAR(191) NULL,
+            parent_item_name_ko VARCHAR(191) NULL,
+            child_item_code VARCHAR(191) NULL,
+            child_item_name_ko VARCHAR(191) NULL,
+            location_x FLOAT NULL,
+            location_y FLOAT NULL,
+            location_z FLOAT NULL,
+            raw_event JSON NULL,
+            updated_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_player_item_events (match_id, account_id, event_index),
+            KEY idx_player_item_events_account_action (account_id, action, match_id),
+            KEY idx_player_item_events_item (item_code, action, match_id),
+            CONSTRAINT fk_player_item_events_match
+                FOREIGN KEY (match_id) REFERENCES matches(match_id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS player_item_match_stats (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            match_id VARCHAR(191) NOT NULL,
+            account_id VARCHAR(128) NOT NULL,
+            item_code VARCHAR(191) NOT NULL,
+            item_name_ko VARCHAR(191) NULL,
+            item_category VARCHAR(64) NULL,
+            item_sub_category VARCHAR(64) NULL,
+            picked_up_events INT NOT NULL DEFAULT 0,
+            picked_up_quantity INT NOT NULL DEFAULT 0,
+            loot_box_pickup_events INT NOT NULL DEFAULT 0,
+            carepackage_pickup_events INT NOT NULL DEFAULT 0,
+            dropped_events INT NOT NULL DEFAULT 0,
+            dropped_quantity INT NOT NULL DEFAULT 0,
+            used_events INT NOT NULL DEFAULT 0,
+            used_quantity INT NOT NULL DEFAULT 0,
+            equipped_events INT NOT NULL DEFAULT 0,
+            unequipped_events INT NOT NULL DEFAULT 0,
+            attached_events INT NOT NULL DEFAULT 0,
+            detached_events INT NOT NULL DEFAULT 0,
+            updated_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_player_item_match_stats (match_id, account_id, item_code),
+            KEY idx_player_item_stats_account_item (account_id, item_code, match_id),
+            CONSTRAINT fk_player_item_match_stats_match
+                FOREIGN KEY (match_id) REFERENCES matches(match_id)
+                ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """,
     ]

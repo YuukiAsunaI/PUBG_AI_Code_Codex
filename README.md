@@ -65,9 +65,10 @@ The first executable slice is now available:
 - queued match detail downloader that stores raw match JSON files and queues telemetry jobs
 - queued telemetry downloader that stores large telemetry JSON files under the configured raw storage path
 - raw telemetry combat parser for registered-player match summaries and weapon-level stats
+- raw telemetry item parser for pickups, drops, uses, equips, attachment changes, and item summary stats
 - localhost-only FastAPI management app
 - browser UI for status, user registration, user lookup, collection stop/delete action, match job processing, and
-  telemetry job/combat processing
+  telemetry job/combat/item processing
 
 Install dependencies:
 
@@ -139,6 +140,18 @@ Reparse existing combat summaries after parser changes:
 
 ```powershell
 python -m pubg_ai.cli parse-telemetry-combat --limit 200 --force
+```
+
+Parse raw telemetry into registered-player item events and item summary stats:
+
+```powershell
+python -m pubg_ai.cli parse-telemetry-items --limit 10
+```
+
+Reparse existing item events after parser or translation changes:
+
+```powershell
+python -m pubg_ai.cli parse-telemetry-items --limit 200 --force
 ```
 
 Run the local management app:
