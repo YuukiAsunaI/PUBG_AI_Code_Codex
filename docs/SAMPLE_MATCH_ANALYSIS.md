@@ -108,6 +108,17 @@ Top weapons by gun hit events:
 Important caveat: shotgun/pellet weapons can produce more hit events than fired shell count. Store fired count and hit
 event count separately, and interpret accuracy by weapon class instead of clamping it to 100%.
 
+The same parser output should be stored in two query-friendly shapes:
+
+- `player_match_combat_summaries`: one row per player/match with total damage dealt, damage taken, kills, assists,
+  deaths, DBNOs caused, DBNOs taken, finishes, headshots, fired shots, hit shots, and received hits.
+- `player_weapon_match_stats`: one row per player/match/weapon with weapon-attributable damage dealt/taken, kills,
+  assists, deaths, DBNOs caused/taken, finishes, fired shots, hit shots, and body-part hit counts.
+
+Assists are available directly from `LogPlayerKillV2.assists_AccountId` for the total player summary. Weapon-level
+assist attribution should use the assistant's prior gun damage history against the victim when a weapon can be linked;
+it should not be guessed from the final killer's weapon.
+
 ## Parser Findings
 
 - Event array order is not fully chronological. The first array item is `LogMatchDefinition` at

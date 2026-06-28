@@ -56,7 +56,17 @@ changes them.
 
 ## Weapon Accuracy And Hit Parts
 
+- Store per-match, per-player combat totals separately from per-weapon details.
 - Store per-match, per-player, per-weapon combat stats.
+- Whole-match player combat totals should include damage dealt, damage taken, kills, assists, deaths,
+  DBNOs caused, DBNOs taken, finishes, headshot counts, fired shots, hit shots, and received hit counts.
+- Per-weapon combat stats should include the same weapon-attributable metrics where the source event identifies a
+  weapon or a prior assist damage event can be linked to a weapon.
+- DBNOs caused by the tracked player and DBNOs suffered by the tracked player must stay in separate fields.
+- Damage dealt and damage taken must stay in separate fields at both total and per-weapon levels.
+- Assists come from `LogPlayerKillV2.assists_AccountId` for the total player summary.
+- Weapon-level assists should be attributed from the assistant's prior gun damage history against the victim when a
+  weapon can be linked. Do not guess weapon-level assists from the final killer's weapon.
 - Fired bullet count comes from `LogWeaponFireCount.fireCount`.
 - Hit bullet count comes from `LogPlayerTakeDamage` where `damageTypeCategory = Damage_Gun`.
 - Body-part hit counts come from `damageReason`, grouped at least as head, torso, pelvis, arm, leg, non-specific,

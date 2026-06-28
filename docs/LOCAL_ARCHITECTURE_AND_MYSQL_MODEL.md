@@ -97,7 +97,7 @@ Use a two-layer storage model:
 | `matches` | `match_id`, shard, map, mode, match type, team mode, perspective, ranked/custom flags, created KST time, duration, telemetry URL, total players, human players, bot players |
 | `match_rosters` | Teams/rosters, rank, win flag |
 | `match_participants` | Player match stats from match object, including AI/bot detection flags when available |
-| `player_match_summaries` | One row per tracked player per match with final stats, phase facts, and derived flags |
+| `player_match_summaries` | One row per tracked player per match with final placement, survival, phase facts, and derived flags |
 | `match_teammates` | Teammate pairs/trios/squad membership from PUBG roster/team data |
 | `player_collection_states` | Polling cursor/status by registered player |
 | `collector_settings` | Program-editable polling interval, cycle player limit, and lookup chunk size |
@@ -131,7 +131,8 @@ Use a two-layer storage model:
 | --- | --- |
 | `agg_player_daily` | Daily KDA, damage, wins, maps, modes, play volume |
 | `agg_player_monthly` | Monthly trend rollups |
-| `player_weapon_match_stats` | Per-match, per-player, per-weapon fired shots, hit shots, accuracy, body-part hits/taken, headshots, kills, deaths, DBNOs, and finishes |
+| `player_match_combat_summaries` | Per-match, per-player whole-match combat totals: damage dealt/taken, kills, assists, deaths, DBNOs caused/taken, finishes, headshots, shots fired/hit, and received hits |
+| `player_weapon_match_stats` | Per-match, per-player, per-weapon fired shots, hit shots, accuracy, body-part hits/taken, headshots, kills, assists, deaths, DBNOs, and finishes |
 | `agg_player_weapon` | Weapon usage, kills, deaths, damage, assists, caused DBNOs, suffered DBNOs, fight wins/losses |
 | `agg_player_weapon_body_part` | Weapon/body-part hit and hit-received rollups for accuracy and weakness analysis |
 | `agg_weapon_distance_bucket` | Weapon outcomes by distance bucket |
@@ -171,6 +172,12 @@ unchanged so newly added PUBG content remains visible.
 - Store participant-level `is_ai_or_bot` and `ai_detection_source` so match population counts are auditable.
 - Prefer match API participant records for population counts, then cross-check telemetry `LogMatchStart.characters`
   and `LogMatchEnd.characters` during parsing.
+- Store whole-match combat totals and weapon-specific combat totals separately so profile views can answer both
+  "this match total" and "which weapon caused it" queries without re-aggregating raw events.
+- Keep `damage_dealt` separate from `damage_taken`, and keep `dbnos_caused` separate from `dbnos_taken` in both
+  summary and weapon aggregate tables.
+- Count total assists from `LogPlayerKillV2.assists_AccountId`; attribute weapon-level assists only from the
+  assistant's prior gun damage history against the victim.
 - Normalize weapon codes for weapon aggregates so `Item_Weapon_BerylM762_C`, `WeapBerylM762_C`, and weapon instance
   strings such as `WeapBerylM762_C_1` group under one weapon code.
 - Store raw `damageReason` alongside normalized body part so new PUBG hit locations do not disappear.
@@ -186,6 +193,7 @@ unchanged so newly added PUBG content remains visible.
   - `dbno_events(attacker_account_id, victim_account_id, match_id)`
   - `fight_outcomes(account_id, match_id, outcome_type)`
   - `kill_events(killer_account_id, victim_account_id, match_id)`
+  - `player_match_combat_summaries(account_id, match_id)`
   - `player_weapon_match_stats(account_id, match_id, weapon_code)`
 - Store normalized DB timestamps in KST and use KST calendar boundaries for daily/monthly aggregates.
 - Preserve source API timestamps separately when useful for debugging.
