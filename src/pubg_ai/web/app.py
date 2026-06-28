@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
 from pubg_ai.config import RuntimeConfig
@@ -15,7 +15,8 @@ from pubg_ai.match_job_processor import MatchJobProcessor
 from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry
 from pubg_ai.pubg_client import PubgApiClient, PubgApiError
 from pubg_ai.raw_storage import RawPayloadStore
-from pubg_ai.replay_storage import ReplayArtifactStore
+from pubg_ai.replay_artifact_catalog import get_replay_artifact, list_replay_artifacts
+from pubg_ai.replay_storage import ReplayArtifactStore, ReplayStorageError
 from pubg_ai.telemetry_combat_processor import TelemetryCombatProcessor
 from pubg_ai.telemetry_item_processor import TelemetryItemProcessor
 from pubg_ai.telemetry_job_processor import TelemetryJobProcessor
@@ -329,6 +330,51 @@ def create_app() -> Any:
         finally:
             connection.close()
 
+    @app.get("/replay/artifacts")
+    def replay_artifacts(
+        limit: int = 50,
+        artifact_type: str | None = "map_snapshot",
+        match_id: str | None = None,
+        account_id: str | None = None,
+    ) -> dict[str, Any]:
+        connection = connect_mysql(config.database)
+        try:
+            artifacts = list_replay_artifacts(
+                connection,
+                limit=limit,
+                artifact_type=artifact_type,
+                match_id=match_id,
+                account_id=account_id,
+            )
+            return {"artifacts": [artifact.to_record() for artifact in artifacts]}
+        finally:
+            connection.close()
+
+    @app.get("/replay/artifacts/{artifact_id}/file")
+    def replay_artifact_file(artifact_id: int) -> FileResponse:
+        connection = connect_mysql(config.database)
+        try:
+            artifact = get_replay_artifact(connection, artifact_id)
+        finally:
+            connection.close()
+
+        if artifact is None:
+            raise HTTPException(status_code=404, detail="replay artifact not found.")
+
+        store = ReplayArtifactStore(config.app.replay_data_dir)
+        try:
+            path = store.resolve_path(artifact.relative_path)
+        except ReplayStorageError as exc:
+            raise HTTPException(status_code=404, detail="replay artifact path is invalid.") from exc
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="replay artifact file not found.")
+
+        return FileResponse(
+            path,
+            media_type=artifact.content_type,
+            filename=path.name,
+        )
+
     return app
 
 
@@ -543,6 +589,25 @@ _INDEX_HTML = """<!doctype html>
       </div>
       <div class="status" id="mapSnapshotStatus">대기 중</div>
     </section>
+    <section>
+      <h2>Map Snapshot 목록</h2>
+      <div class="actions" style="margin-bottom: 10px;">
+        <button class="secondary" type="button" onclick="loadReplayArtifacts()">새로고침</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>생성</th>
+            <th>맵</th>
+            <th>모드</th>
+            <th>Match ID</th>
+            <th>크기</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="replayArtifactsBody"></tbody>
+      </table>
+    </section>
   </main>
   <script>
     const statusGrid = document.querySelector("#statusGrid");
@@ -553,6 +618,7 @@ _INDEX_HTML = """<!doctype html>
     const itemStatus = document.querySelector("#itemStatus");
     const movementStatus = document.querySelector("#movementStatus");
     const mapSnapshotStatus = document.querySelector("#mapSnapshotStatus");
+    const replayArtifactsBody = document.querySelector("#replayArtifactsBody");
     const banner = document.querySelector("#banner");
 
     function cell(label, value) {
@@ -619,6 +685,36 @@ _INDEX_HTML = """<!doctype html>
           <td>${job.created_at_kst || ""}</td>
         </tr>
       `).join("");
+    }
+
+    async function loadReplayArtifacts() {
+      const payload = await fetch("/replay/artifacts?artifact_type=map_snapshot&limit=50").then((r) => r.json());
+      replayArtifactsBody.innerHTML = payload.artifacts.map((artifact) => `
+        <tr>
+          <td>${artifact.generated_at_kst || ""}</td>
+          <td>${artifact.map_name || ""}</td>
+          <td>${artifact.game_mode || ""}</td>
+          <td>${artifact.match_id || ""}</td>
+          <td>${formatBytes(artifact.size_bytes || 0)}</td>
+          <td>
+            <div class="actions">
+              <a href="${artifact.view_url}" target="_blank" rel="noreferrer">열기</a>
+            </div>
+          </td>
+        </tr>
+      `).join("");
+    }
+
+    function formatBytes(value) {
+      if (!Number.isFinite(value) || value <= 0) return "0 B";
+      const units = ["B", "KB", "MB", "GB"];
+      let size = value;
+      let unit = 0;
+      while (size >= 1024 && unit < units.length - 1) {
+        size /= 1024;
+        unit += 1;
+      }
+      return `${size.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
     }
 
     async function refreshCollection() {
@@ -732,6 +828,7 @@ _INDEX_HTML = """<!doctype html>
       const payload = await response.json();
       mapSnapshotStatus.textContent = `생성 ${payload.result.generated_snapshots}개, 기존 ${payload.result.skipped_existing}개, 위치없음 ${payload.result.skipped_no_position}개, 실패 ${payload.result.failed_snapshots}개, artifact ${payload.result.artifacts.length}개`;
       banner.textContent = "JPEG 생성 완료";
+      await loadReplayArtifacts();
     }
 
     async function unregisterPlayer(shard, accountId) {
@@ -760,7 +857,7 @@ _INDEX_HTML = """<!doctype html>
       await loadPlayers();
     });
 
-    Promise.all([loadStatus(), loadPlayers(), loadJobs(), loadTelemetryJobs()])
+    Promise.all([loadStatus(), loadPlayers(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
       .then(() => { banner.textContent = "localhost 전용 관리 화면"; })
       .catch((error) => { banner.textContent = `오류: ${error.message}`; });
   </script>

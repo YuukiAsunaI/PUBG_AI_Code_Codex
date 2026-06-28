@@ -221,11 +221,17 @@ The current local runtime can generate post-match 2D route summary JPEG files fo
   markers, care-package markers, match metadata, and a legend.
 - `python -m pubg_ai.cli generate-map-snapshots --limit 10` generates only missing snapshots.
 - `python -m pubg_ai.cli generate-map-snapshots --limit 200 --force` regenerates existing JPEG artifacts.
-- The local web UI has JPEG generate/regenerate buttons.
+- `GET /replay/artifacts?artifact_type=map_snapshot&limit=50` lists generated artifact metadata for local UI and
+  future Discord command reuse.
+- `GET /replay/artifacts/{artifact_id}/file` serves a generated artifact file after resolving the DB relative path
+  through `ReplayArtifactStore`, so path escape attempts are rejected by the storage layer.
+- The local web UI has JPEG generate/regenerate buttons plus a recent snapshot list with an open-image link.
 
 Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 route snapshot JPEG files were generated
 under `D:\BackUP\replay`, recorded in `replay_artifacts`, and verified as readable JPEG images. Total generated
 snapshot size was 54,922,370 bytes.
+The local artifact list endpoint returned recent `map_snapshot` rows, and the file endpoint returned `image/jpeg`
+with valid JPEG magic bytes.
 
 ## Match Job States
 

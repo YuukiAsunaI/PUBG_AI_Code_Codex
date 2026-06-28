@@ -178,6 +178,13 @@ Regenerate existing route snapshots after renderer changes:
 python -m pubg_ai.cli generate-map-snapshots --limit 200 --force
 ```
 
+The local web app also exposes generated replay artifacts:
+
+```text
+GET /replay/artifacts?artifact_type=map_snapshot&limit=50
+GET /replay/artifacts/{artifact_id}/file
+```
+
 Run the local management app:
 
 ```powershell
