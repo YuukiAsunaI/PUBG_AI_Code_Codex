@@ -103,6 +103,8 @@ class DiscordCommandDefaultsTests(unittest.TestCase):
     def test_first_mvp_korean_command_names_are_present(self) -> None:
         self.assertIn("유저등록", DEFAULT_COMMAND_GROUPS["register"])
         self.assertIn("유저조회", DEFAULT_COMMAND_GROUPS["profile_read"])
+        self.assertIn("전적", DEFAULT_COMMAND_GROUPS["profile_read"])
+        self.assertIn("pubg-stats", DEFAULT_COMMAND_GROUPS["profile_read"])
         self.assertIn("유저삭제", DEFAULT_COMMAND_GROUPS["admin"])
 
 

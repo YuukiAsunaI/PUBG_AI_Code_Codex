@@ -94,7 +94,7 @@ class DiscordScopeSettings:
 
 DEFAULT_COMMAND_GROUPS: dict[str, list[str]] = {
     "register": ["유저등록", "pubg-register"],
-    "profile_read": ["유저조회", "pubg-profile", "pubg-recent", "pubg-match", "pubg-weapon"],
+    "profile_read": ["유저조회", "전적", "pubg-profile", "pubg-stats", "pubg-recent", "pubg-match", "pubg-weapon"],
     "ranking_read": ["pubg-ranking"],
     "replay_read": ["pubg-replay"],
     "settings_write": ["pubg-settings"],

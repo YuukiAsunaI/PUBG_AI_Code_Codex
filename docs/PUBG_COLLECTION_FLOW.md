@@ -242,6 +242,8 @@ The current Discord bot slice is intentionally small and reuses the same local M
 - `!유저등록 steam 닉네임` resolves the PUBG nickname, stores the tracking target, and records the Discord
   user/guild/channel context.
 - `!유저조회 [닉네임] [shard]` lists registered targets or loads one registered target including inactive rows.
+- `!전적 닉네임 [shard]` reads parsed MySQL summaries and returns matches, chickens, KDA, damage, accuracy,
+  average survival/movement, top weapons, and recent match rows.
 - `!유저삭제 steam 닉네임또는accountId` stops future collection by setting the registered target inactive.
 - `!최근스냅샷 [match_id]` sends the latest generated `map_snapshot` JPEG artifact, or the latest snapshot for the
   requested match ID.

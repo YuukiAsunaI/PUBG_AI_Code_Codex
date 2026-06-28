@@ -16,6 +16,7 @@ from pubg_ai.map_snapshot_renderer import MapSnapshotProcessor
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.match_job_processor import MatchJobProcessor
 from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry
+from pubg_ai.player_stats import PlayerStatsService
 from pubg_ai.pubg_client import PubgApiClient, PubgApiError
 from pubg_ai.raw_storage import RawPayloadStore
 from pubg_ai.replay_artifact_catalog import get_replay_artifact, list_replay_artifacts
@@ -194,6 +195,25 @@ def create_app() -> Any:
                 limit=limit,
             )
             return {"players": [player.to_record() for player in players]}
+        finally:
+            connection.close()
+
+    @app.get("/players/profile")
+    def player_profile(shard: str = "steam", name: str | None = None, account_id: str | None = None) -> dict[str, Any]:
+        if not name and not account_id:
+            raise HTTPException(status_code=400, detail="name or account_id is required.")
+
+        connection = connect_mysql(config.database)
+        try:
+            profile = PlayerStatsService(connection).get_profile(
+                shard=shard,
+                account_id=account_id,
+                name=name,
+                global_scope=True,
+            )
+            if profile is None:
+                raise HTTPException(status_code=404, detail="registered player stats not found.")
+            return {"profile": profile.to_record()}
         finally:
             connection.close()
 
@@ -617,6 +637,22 @@ _INDEX_HTML = """<!doctype html>
       </table>
     </section>
     <section>
+      <h2>전적 조회</h2>
+      <form id="profileForm">
+        <label>플랫폼
+          <select name="shard">
+            <option value="steam">steam</option>
+            <option value="kakao">kakao</option>
+          </select>
+        </label>
+        <label>닉네임 또는 Account ID
+          <input name="target" autocomplete="off" required>
+        </label>
+        <button type="submit">조회</button>
+      </form>
+      <div class="status" id="profileBody" style="margin-top: 12px;">조회 대기 중</div>
+    </section>
+    <section>
       <h2>Match 수집 큐</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="processMatchJobs()">상세 저장</button>
@@ -709,6 +745,7 @@ _INDEX_HTML = """<!doctype html>
   <script>
     const statusGrid = document.querySelector("#statusGrid");
     const playersBody = document.querySelector("#playersBody");
+    const profileBody = document.querySelector("#profileBody");
     const jobsBody = document.querySelector("#jobsBody");
     const telemetryJobsBody = document.querySelector("#telemetryJobsBody");
     const combatStatus = document.querySelector("#combatStatus");
@@ -835,6 +872,38 @@ _INDEX_HTML = """<!doctype html>
           </td>
         </tr>
       `).join("");
+    }
+
+    async function loadPlayerProfile(target, shard) {
+      const params = new URLSearchParams({ shard });
+      if (target.startsWith("account.")) {
+        params.set("account_id", target);
+      } else {
+        params.set("name", target);
+      }
+      const response = await fetch(`/players/profile?${params.toString()}`);
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const payload = await response.json();
+      const profile = payload.profile;
+      const totals = profile.totals;
+      const weapons = (profile.top_weapons || []).slice(0, 3).map((weapon) => (
+        `${escapeHtml(weapon.weapon_name)} ${weapon.kills}킬 ${Number(weapon.damage_dealt).toFixed(0)}딜`
+      )).join(", ") || "-";
+      profileBody.innerHTML = [
+        `<strong>${escapeHtml(profile.player.current_name)} (${escapeHtml(profile.player.shard)})</strong>`,
+        `경기/치킨: ${totals.match_count}전 ${totals.wins}치킨 (${percent(totals.win_rate)})`,
+        `K/D/A: ${totals.kills}/${totals.deaths}/${totals.assists} · KDA ${Number(totals.kda).toFixed(2)}`,
+        `평균 딜/받은 딜: ${Number(totals.avg_damage_dealt).toFixed(1)} / ${Number(totals.avg_damage_taken).toFixed(1)}`,
+        `명중률: ${percent(totals.accuracy)}`,
+        `주무기: ${weapons}`,
+      ].join("<br>");
+    }
+
+    function percent(value) {
+      return `${(Number(value || 0) * 100).toFixed(1)}%`;
     }
 
     async function loadJobs() {
@@ -1058,6 +1127,18 @@ _INDEX_HTML = """<!doctype html>
       });
       event.currentTarget.reset();
       await loadPlayers();
+    });
+
+    document.querySelector("#profileForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      try {
+        await loadPlayerProfile(String(form.get("target") || ""), String(form.get("shard") || "steam"));
+        banner.textContent = "전적 조회 완료";
+      } catch (error) {
+        profileBody.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
     });
 
     document.querySelector("#discordGrantForm").addEventListener("submit", async (event) => {

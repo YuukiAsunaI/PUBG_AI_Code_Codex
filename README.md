@@ -100,6 +100,12 @@ Resolve and register a PUBG nickname:
 python -m pubg_ai.cli register-player Yuuki_Asuna--- --shard steam
 ```
 
+Show registered player stats from parsed MySQL summary tables:
+
+```powershell
+python -m pubg_ai.cli player-stats Yuuki_Asuna--- --shard steam
+```
+
 Refresh active registered players and queue unseen match IDs:
 
 ```powershell
@@ -198,6 +204,7 @@ Discord's message content intent to be enabled for the bot application. Initial 
 !배그도움말
 !유저등록 steam 닉네임
 !유저조회 [닉네임] [shard]
+!전적 닉네임 [shard]
 !최근스냅샷 [match_id]
 !유저삭제 steam 닉네임또는accountId
 ```

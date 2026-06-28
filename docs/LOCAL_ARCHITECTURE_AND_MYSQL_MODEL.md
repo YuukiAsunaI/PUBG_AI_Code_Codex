@@ -308,10 +308,11 @@ Completed slices:
 9. Combat, item, movement, location, and 2D map snapshot parser/rendering slices.
 10. Discord bot MVP runner with permission-gated `유저등록`, `유저조회`, `유저삭제`, and `최근스냅샷`.
 11. Local web and CLI management for Discord command-group grants and global admins.
+12. First player profile stats service and `전적` lookup command using parsed summary tables.
 
 Next slice:
 
-1. Discord match summary/KDA/weapon summary commands.
+1. Discord match detail and weapon-specific summary commands.
 2. Ranking query services scoped by `guild_id`.
 3. 2D replay timeline artifact generation beyond static JPEG snapshots.
 4. Recommendation queries for weapons, attachments, maps, teammates, and drop locations.

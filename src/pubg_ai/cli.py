@@ -16,6 +16,7 @@ from pubg_ai.map_snapshot_renderer import MapSnapshotProcessor
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.match_job_processor import MatchJobProcessor
 from pubg_ai.player_registry import PlayerRegistry
+from pubg_ai.player_stats import PlayerStatsService
 from pubg_ai.pubg_client import PubgApiClient
 from pubg_ai.raw_storage import RawPayloadStore
 from pubg_ai.replay_storage import ReplayArtifactStore
@@ -43,6 +44,10 @@ def main(argv: list[str] | None = None) -> int:
     register_parser.add_argument("nickname")
     register_parser.add_argument("--shard", default="steam")
     register_parser.add_argument("--private", action="store_true", help="Register with public_profile disabled.")
+
+    stats_parser = subparsers.add_parser("player-stats", help="Print registered player profile statistics.")
+    stats_parser.add_argument("target", help="Registered nickname or accountId.")
+    stats_parser.add_argument("--shard", default="steam")
 
     collect_parser = subparsers.add_parser("collect-matches", help="Refresh registered players and queue match jobs.")
     collect_parser.add_argument("--shard", default=None)
@@ -170,6 +175,22 @@ def main(argv: list[str] | None = None) -> int:
                 public_profile=not args.private,
             )
             _print_json({"player": player.to_record()})
+        finally:
+            connection.close()
+        return 0
+
+    if args.command == "player-stats":
+        connection = connect_mysql(config.database)
+        try:
+            profile = PlayerStatsService(connection).get_profile(
+                shard=args.shard,
+                account_id=args.target if args.target.startswith("account.") else None,
+                name=None if args.target.startswith("account.") else args.target,
+                global_scope=True,
+            )
+            if profile is None:
+                raise SystemExit("registered player stats not found.")
+            _print_json({"profile": profile.to_record()})
         finally:
             connection.close()
         return 0

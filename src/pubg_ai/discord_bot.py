@@ -7,6 +7,7 @@ from pubg_ai.config import RuntimeConfig
 from pubg_ai.database import connect_mysql
 from pubg_ai.discord_permissions import DiscordCommandIdentity, DiscordPermissionChecker
 from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry, RegisteredPlayer
+from pubg_ai.player_stats import PlayerProfileStats, PlayerStatsService
 from pubg_ai.pubg_client import PubgApiClient, PubgApiError
 from pubg_ai.replay_artifact_catalog import ReplayArtifactRecord, list_replay_artifacts
 from pubg_ai.replay_storage import ReplayArtifactStore, ReplayStorageError
@@ -41,6 +42,40 @@ def format_replay_artifact_summary(artifact: ReplayArtifactRecord) -> str:
         f"- map/mode: {map_name} / {mode}\n"
         f"- size: {size_kb:.1f} KB"
     )
+
+
+def format_player_profile_stats(profile: PlayerProfileStats) -> str:
+    totals = profile.totals
+    lines = [
+        f"{profile.player.current_name} 전적 ({profile.player.shard})",
+        f"- 경기/치킨: {totals.match_count}전 {totals.wins}치킨 ({_percent(totals.win_rate)})",
+        f"- K/D/A: {totals.kills}/{totals.deaths}/{totals.assists} · KDA {_number(totals.kda, 2)}",
+        f"- 평균 딜/받은 딜: {_number(totals.avg_damage_dealt, 1)} / {_number(totals.avg_damage_taken, 1)}",
+        f"- 명중률/헤드샷 킬: {_percent(totals.accuracy)} / {totals.headshot_kills}",
+        f"- 평균 생존/이동: {_minutes(totals.avg_survival_seconds)} / {_distance_km(totals.avg_movement_distance_m)}",
+    ]
+
+    if profile.top_weapons:
+        weapons = [
+            f"{weapon.weapon_name} {weapon.kills}킬 {_number(weapon.damage_dealt, 0)}딜"
+            for weapon in profile.top_weapons[:3]
+        ]
+        lines.append(f"- 주무기: {', '.join(weapons)}")
+
+    if profile.recent_matches:
+        lines.append("최근 경기")
+        for match in profile.recent_matches[:3]:
+            rank = f"#{match.win_place}" if match.win_place is not None else "-"
+            lines.append(
+                f"- {_short_match_id(match.match_id)} {rank} "
+                f"{match.kills}킬/{_number(match.damage_dealt, 0)}딜 "
+                f"{match.map_name or '-'} {match.game_mode or '-'}"
+            )
+
+    if totals.match_count == 0:
+        lines.append("아직 파싱된 전투 요약 데이터가 없습니다.")
+
+    return "\n".join(lines)
 
 
 def create_discord_bot(
@@ -90,6 +125,7 @@ def create_discord_bot(
                     "PUBG AI 명령어",
                     f"- `{command_prefix}유저등록 steam 닉네임`",
                     f"- `{command_prefix}유저조회 [닉네임] [shard]`",
+                    f"- `{command_prefix}전적 닉네임 [shard]`",
                     f"- `{command_prefix}최근스냅샷 [match_id]`",
                     f"- `{command_prefix}유저삭제 steam 닉네임또는accountId`",
                 ]
@@ -122,6 +158,37 @@ def create_discord_bot(
             connection.close()
 
         await ctx.reply(format_player_list(players), mention_author=False)
+
+    @bot.command(name="전적", aliases=["pubg-stats"])
+    async def player_stats_command(ctx: Any, name: str | None = None, shard: str = "steam") -> None:
+        if not await require_permission(ctx, "profile_read"):
+            return
+        if not name:
+            await ctx.reply(f"사용법: `{command_prefix}전적 닉네임 [shard]`", mention_author=False)
+            return
+
+        guild_id = await require_scoped_guild(ctx)
+        if guild_id is None and not has_global_scope(ctx):
+            return
+        global_scope = has_global_scope(ctx)
+
+        connection = connect_mysql(config.database)
+        try:
+            profile = PlayerStatsService(connection).get_profile(
+                shard=shard,
+                account_id=name if name.startswith("account.") else None,
+                name=None if name.startswith("account.") else name,
+                guild_id=None if global_scope else guild_id,
+                global_scope=global_scope,
+            )
+        finally:
+            connection.close()
+
+        if profile is None:
+            await ctx.reply("조회 가능한 등록 유저를 찾지 못했습니다.", mention_author=False)
+            return
+
+        await ctx.reply(format_player_profile_stats(profile), mention_author=False)
 
     @bot.command(name="유저등록", aliases=["pubg-register"])
     async def register_player_command(ctx: Any, shard: str, nickname: str) -> None:
@@ -253,6 +320,26 @@ def _short_account_id(account_id: str) -> str:
     if account_id.startswith("account.") and len(account_id) > 20:
         return f"{account_id[:15]}...{account_id[-4:]}"
     return account_id
+
+
+def _short_match_id(match_id: str) -> str:
+    return match_id[:8] if len(match_id) > 8 else match_id
+
+
+def _percent(value: float) -> str:
+    return f"{value * 100:.1f}%"
+
+
+def _number(value: float, digits: int) -> str:
+    return f"{value:.{digits}f}"
+
+
+def _minutes(seconds: float) -> str:
+    return f"{seconds / 60:.1f}분"
+
+
+def _distance_km(meters: float) -> str:
+    return f"{meters / 1000:.1f}km"
 
 
 def _player_visible_to_scope(
