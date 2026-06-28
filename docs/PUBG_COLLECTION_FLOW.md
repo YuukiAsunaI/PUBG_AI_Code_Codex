@@ -233,6 +233,23 @@ snapshot size was 54,922,370 bytes.
 The local artifact list endpoint returned recent `map_snapshot` rows, and the file endpoint returned `image/jpeg`
 with valid JPEG magic bytes.
 
+## Implemented Discord Bot MVP Slice
+
+The current Discord bot slice is intentionally small and reuses the same local MySQL and file stores:
+
+- `python -m pubg_ai.cli run-discord-bot --prefix !` starts the bot with the token from `.env`.
+- The bot requires Discord message content intent because the first MVP uses text commands.
+- `!유저등록 steam 닉네임` resolves the PUBG nickname, stores the tracking target, and records the Discord
+  user/guild/channel context.
+- `!유저조회 [닉네임] [shard]` lists registered targets or loads one registered target including inactive rows.
+- `!유저삭제 steam 닉네임또는accountId` stops future collection by setting the registered target inactive.
+- `!최근스냅샷 [match_id]` sends the latest generated `map_snapshot` JPEG artifact, or the latest snapshot for the
+  requested match ID.
+- Command access is checked through local Discord permission settings. Global admins can manage every guild, while
+  guild-specific grants stay scoped by `guild_id`.
+- The bot does not fetch live in-match data. It only reads completed-match data and already generated replay
+  artifacts.
+
 ## Match Job States
 
 Use explicit job states so the local management UI can show where a match is stuck:

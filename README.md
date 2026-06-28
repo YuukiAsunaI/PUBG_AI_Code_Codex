@@ -185,6 +185,25 @@ GET /replay/artifacts?artifact_type=map_snapshot&limit=50
 GET /replay/artifacts/{artifact_id}/file
 ```
 
+Run the Discord bot MVP:
+
+```powershell
+python -m pubg_ai.cli run-discord-bot --prefix !
+```
+
+The Discord bot token stays only in `.env` as `DISCORD_BOT_TOKEN`. The bot currently uses text commands and requires
+Discord's message content intent to be enabled for the bot application. Initial commands are:
+
+```text
+!배그도움말
+!유저등록 steam 닉네임
+!유저조회 [닉네임] [shard]
+!최근스냅샷 [match_id]
+!유저삭제 steam 닉네임또는accountId
+```
+
+Command access is checked through local Discord permission settings in `config/local_settings.json`.
+
 Run the local management app:
 
 ```powershell

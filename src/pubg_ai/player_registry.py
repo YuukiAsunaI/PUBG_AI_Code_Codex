@@ -196,6 +196,7 @@ class PlayerRegistry:
         self,
         *,
         shard: str | None = None,
+        registered_guild_id: str | None = None,
         active_only: bool = True,
         limit: int = 100,
     ) -> list[RegisteredPlayer]:
@@ -205,6 +206,9 @@ class PlayerRegistry:
         if shard:
             conditions.append("shard = %s")
             params.append(shard.lower())
+        if registered_guild_id:
+            conditions.append("registered_guild_id = %s")
+            params.append(registered_guild_id)
         if active_only:
             conditions.append("active = 1")
 

@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Any
 
-from pubg_ai.config import RuntimeConfig
+from pubg_ai.config import RuntimeConfig, load_dotenv_values
 from pubg_ai.database import connect_mysql, count_tables, initialize_database
+from pubg_ai.discord_bot import DEFAULT_DISCORD_PREFIX, run_discord_bot
+from pubg_ai.discord_permissions import DiscordPermissionChecker
+from pubg_ai.local_settings import LocalSettingsStore
 from pubg_ai.map_snapshot_renderer import MapSnapshotProcessor
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.match_job_processor import MatchJobProcessor
@@ -92,6 +96,9 @@ def main(argv: list[str] | None = None) -> int:
     web_parser = subparsers.add_parser("run-web", help="Run the local management web app.")
     web_parser.add_argument("--host", default="127.0.0.1", help="Bind host. Defaults to localhost only.")
     web_parser.add_argument("--port", default=8000, type=int, help="Bind port.")
+
+    discord_parser = subparsers.add_parser("run-discord-bot", help="Run the Discord bot.")
+    discord_parser.add_argument("--prefix", default=DEFAULT_DISCORD_PREFIX, help="Text command prefix.")
 
     args = parser.parse_args(argv)
     base_dir = Path(args.base_dir).resolve()
@@ -279,6 +286,20 @@ def main(argv: list[str] | None = None) -> int:
         _run_web_app(host=args.host, port=args.port, base_dir=base_dir, env_file=args.env_file)
         return 0
 
+    if args.command == "run-discord-bot":
+        if not config.secrets.discord_bot_token:
+            raise SystemExit("DISCORD_BOT_TOKEN is not configured in .env.")
+        settings_store = _local_settings_store(base_dir=base_dir, env_file=args.env_file)
+        permission_checker = DiscordPermissionChecker(
+            settings_store.load_discord_permission_settings()
+        )
+        run_discord_bot(
+            config=config,
+            permission_checker=permission_checker,
+            command_prefix=args.prefix,
+        )
+        return 0
+
     parser.error(f"unknown command: {args.command}")
     return 2
 
@@ -319,6 +340,14 @@ def _pubg_client_from_config(config: RuntimeConfig) -> PubgApiClient:
     if not config.secrets.pubg_api_key:
         raise SystemExit("PUBG_API_KEY is not configured in .env.")
     return PubgApiClient(config.secrets.pubg_api_key)
+
+
+def _local_settings_store(*, base_dir: Path, env_file: str) -> LocalSettingsStore:
+    values = load_dotenv_values(base_dir / env_file)
+    merged = dict(values)
+    merged.update(os.environ)
+    settings_file = merged.get("PUBG_LOCAL_SETTINGS_FILE", "./config/local_settings.json")
+    return LocalSettingsStore(Path(settings_file), base_dir=base_dir)
 
 
 def _run_web_app(*, host: str, port: int, base_dir: Path, env_file: str) -> None:

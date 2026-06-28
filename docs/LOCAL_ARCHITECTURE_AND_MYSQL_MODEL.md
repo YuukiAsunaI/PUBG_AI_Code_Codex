@@ -268,6 +268,9 @@ For Discord, do not stream the whole replay. Send a summary image/GIF or a local
 
 ## Discord Command Ideas
 
+Current MVP uses text commands with the configurable prefix, for example `!유저등록 steam nickname`. Slash commands
+can be added later after the permission model and response payloads settle.
+
 | Command | Result |
 | --- | --- |
 | `/pubg-register nickname shard` | Register nickname and required platform shard; permission-gated |
@@ -292,18 +295,23 @@ UI and Discord responses.
 
 The first useful milestone should avoid heavy AI and focus on trustworthy data:
 
-Completed first slice:
+Completed slices:
 
 1. Safe `.env` and local settings loading.
 2. MySQL initializer for the core MVP schema.
 3. Registration/list/unregister service layer using soft-delete collection stop.
 4. Localhost-only FastAPI management app.
 5. Browser UI for status, user registration, user lookup, and user unregister.
+6. PUBG player API client for nickname + shard to `accountId`.
+7. Registered-player match discovery and completed-match detail storage.
+8. Raw telemetry download into configured storage.
+9. Combat, item, movement, location, and 2D map snapshot parser/rendering slices.
+10. Discord bot MVP runner with permission-gated `유저등록`, `유저조회`, `유저삭제`, and `최근스냅샷`.
 
 Next slice:
 
-1. PUBG player API client for nickname + shard to `accountId`.
-2. Discord bot commands for `유저등록`, `유저조회`, and `유저삭제`.
-3. Match discovery queue for registered active players.
-4. Raw match and telemetry download into configured storage.
-5. Parser persistence for match summaries and weapon aggregates.
+1. Discord permission management UI and commands.
+2. Discord match summary/KDA/weapon summary commands.
+3. Ranking query services scoped by `guild_id`.
+4. 2D replay timeline artifact generation beyond static JPEG snapshots.
+5. Recommendation queries for weapons, attachments, maps, teammates, and drop locations.

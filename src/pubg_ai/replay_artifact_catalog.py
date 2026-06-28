@@ -48,6 +48,7 @@ def list_replay_artifacts(
     artifact_type: str | None = "map_snapshot",
     match_id: str | None = None,
     account_id: str | None = None,
+    registered_guild_id: str | None = None,
 ) -> list[ReplayArtifactRecord]:
     limit = normalize_artifact_limit(limit)
     where_sql = []
@@ -62,6 +63,9 @@ def list_replay_artifacts(
     if account_id:
         where_sql.append("artifacts.account_id = %s")
         params.append(account_id)
+    if registered_guild_id:
+        where_sql.append("registered_players.registered_guild_id = %s")
+        params.append(registered_guild_id)
 
     where_clause = f"WHERE {' AND '.join(where_sql)}" if where_sql else ""
     params.append(limit)
