@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Mapping
 import os
 
 
@@ -108,6 +108,101 @@ class AppConfig:
         )
 
 
+@dataclass(frozen=True)
+class SecretStatus:
+    name: str
+    configured: bool
+    length: int = 0
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "configured": self.configured,
+            "length": self.length,
+        }
+
+
+@dataclass(frozen=True)
+class SecretConfig:
+    pubg_api_key: str | None = None
+    discord_bot_token: str | None = None
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> "SecretConfig":
+        values = env or os.environ
+        return cls(
+            pubg_api_key=_non_empty(values.get("PUBG_API_KEY")),
+            discord_bot_token=_non_empty(values.get("DISCORD_BOT_TOKEN")),
+        )
+
+    def status(self) -> dict[str, SecretStatus]:
+        return {
+            "PUBG_API_KEY": _secret_status("PUBG_API_KEY", self.pubg_api_key),
+            "DISCORD_BOT_TOKEN": _secret_status("DISCORD_BOT_TOKEN", self.discord_bot_token),
+        }
+
+
+@dataclass(frozen=True)
+class DatabaseConfig:
+    host: str = "127.0.0.1"
+    port: int = 3306
+    database: str = "pubg_ai"
+    user: str = "pubg_ai"
+    password: str = ""
+    charset: str = "utf8mb4"
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> "DatabaseConfig":
+        values = env or os.environ
+        return cls(
+            host=values.get("MYSQL_HOST", "127.0.0.1").strip() or "127.0.0.1",
+            port=_env_int(values.get("MYSQL_PORT"), 3306),
+            database=values.get("MYSQL_DATABASE", "pubg_ai").strip() or "pubg_ai",
+            user=values.get("MYSQL_USER", "pubg_ai").strip() or "pubg_ai",
+            password=values.get("MYSQL_PASSWORD", ""),
+            charset=values.get("MYSQL_CHARSET", "utf8mb4").strip() or "utf8mb4",
+        )
+
+    def safe_record(self) -> dict[str, Any]:
+        return {
+            "host": self.host,
+            "port": self.port,
+            "database": self.database,
+            "user": self.user,
+            "password": {
+                "configured": bool(self.password),
+                "length": len(self.password),
+            },
+            "charset": self.charset,
+        }
+
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    app: AppConfig
+    database: DatabaseConfig
+    secrets: SecretConfig
+
+    @classmethod
+    def from_sources(
+        cls,
+        env: Mapping[str, str] | None = None,
+        base_dir: Path | None = None,
+        env_file: Path | str = ".env",
+    ) -> "RuntimeConfig":
+        base = base_dir or Path.cwd()
+        values = dict(load_dotenv_values(_config_path(str(env_file), base)))
+        if env is None:
+            values.update(os.environ)
+        else:
+            values.update(env)
+        return cls(
+            app=AppConfig.from_sources(values, base),
+            database=DatabaseConfig.from_env(values),
+            secrets=SecretConfig.from_env(values),
+        )
+
+
 def _config_path(value: str, base_dir: Path) -> Path:
     path = Path(value).expanduser()
     if not path.is_absolute():
@@ -122,3 +217,40 @@ def _env_int(value: str | None, default: int) -> int:
         return int(value)
     except ValueError:
         return default
+
+
+def load_dotenv_values(env_file: Path) -> dict[str, str]:
+    if not env_file.exists():
+        return {}
+
+    values: dict[str, str] = {}
+    for raw_line in env_file.read_text(encoding="utf-8-sig").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, raw_value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        values[key] = _parse_dotenv_value(raw_value.strip())
+    return values
+
+
+def _parse_dotenv_value(raw_value: str) -> str:
+    if len(raw_value) >= 2 and raw_value[0] == raw_value[-1] and raw_value[0] in {"'", '"'}:
+        value = raw_value[1:-1]
+        if raw_value[0] == '"':
+            value = value.replace('\\"', '"').replace("\\\\", "\\")
+        return value
+    return raw_value
+
+
+def _non_empty(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _secret_status(name: str, value: str | None) -> SecretStatus:
+    return SecretStatus(name=name, configured=bool(value), length=len(value or ""))

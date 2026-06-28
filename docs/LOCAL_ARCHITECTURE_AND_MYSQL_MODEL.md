@@ -16,6 +16,9 @@ The system should run entirely on the local computer:
   caches
 - A local settings file managed by the UI so storage paths can be changed without editing `.env`
 
+The local management app binds to `127.0.0.1` by default. Binding to `0.0.0.0` is intentionally rejected until a
+separate authenticated remote-access mode exists.
+
 ## Recommended Runtime
 
 Python is a strong first choice because the requested analytics work is event-heavy and Python has mature data
@@ -283,11 +286,18 @@ UI and Discord responses.
 
 The first useful milestone should avoid heavy AI and focus on trustworthy data:
 
-1. MySQL migrations for core/raw tables.
-2. Player registration and account ID lookup.
-3. Match discovery for registered users only.
-4. Match and telemetry download.
-5. Parser for P0 telemetry events.
-6. Match summary and weapon summary aggregates.
-7. Discord commands for register, recent, profile, weapon.
-8. Local management page for registered players, job status, and raw match drill-down.
+Completed first slice:
+
+1. Safe `.env` and local settings loading.
+2. MySQL initializer for the core MVP schema.
+3. Registration/list/unregister service layer using soft-delete collection stop.
+4. Localhost-only FastAPI management app.
+5. Browser UI for status, user registration, user lookup, and user unregister.
+
+Next slice:
+
+1. PUBG player API client for nickname + shard to `accountId`.
+2. Discord bot commands for `유저등록`, `유저조회`, and `유저삭제`.
+3. Match discovery queue for registered active players.
+4. Raw match and telemetry download into configured storage.
+5. Parser persistence for match summaries and weapon aggregates.

@@ -52,3 +52,46 @@ MySQL data model direction, 2D replay/live-view feasibility, and reference proje
 5. Immediately classify match metadata, fetch telemetry, persist raw JSON, and create normalized event rows.
 6. Expose Discord commands for match summary, KDA, weapon usage, map usage, and recent chicken/non-chicken split.
 7. Add a local 2D replay page that plays telemetry positions and fight events on a map canvas.
+
+## Local MVP Runtime
+
+The first executable slice is now available:
+
+- safe `.env` loader with masked secret status
+- MySQL schema initializer for the `pubg_ai` database
+- player registration/list/unregister service layer
+- localhost-only FastAPI management app
+- browser UI for status, user registration, user lookup, and collection stop/delete action
+
+Install dependencies:
+
+```powershell
+python -m pip install -e .
+```
+
+Initialize the local MySQL schema:
+
+```powershell
+python -m pubg_ai.cli init-db
+```
+
+Check safe configuration status:
+
+```powershell
+python -m pubg_ai.cli config-status
+```
+
+Run the local management app:
+
+```powershell
+python -m pubg_ai.cli run-web --host 127.0.0.1 --port 8000
+```
+
+Open:
+
+```text
+http://127.0.0.1:8000
+```
+
+The web app refuses non-localhost bind hosts by default. Do not run it with `0.0.0.0` unless a future authenticated
+remote-access mode is intentionally added.

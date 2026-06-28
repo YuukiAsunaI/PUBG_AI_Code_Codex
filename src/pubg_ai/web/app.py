@@ -1,0 +1,348 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from pubg_ai.config import RuntimeConfig
+from pubg_ai.database import connect_mysql, count_tables
+from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry
+
+
+def create_app() -> Any:
+    try:
+        from fastapi import FastAPI, HTTPException
+        from fastapi.responses import HTMLResponse
+        from pydantic import BaseModel, Field
+    except ImportError as exc:
+        raise RuntimeError("fastapi and pydantic are required to run the local management app.") from exc
+
+    config = RuntimeConfig.from_sources(base_dir=Path.cwd())
+    app = FastAPI(
+        title="PUBG AI Local Manager",
+        version="0.1.0",
+        docs_url="/docs",
+        redoc_url=None,
+    )
+
+    class RegisterPlayerRequest(BaseModel):
+        account_id: str = Field(min_length=1)
+        shard: str = Field(default="steam", min_length=1)
+        current_name: str = Field(min_length=1)
+        public_profile: bool = True
+        discord_user_id: str | None = None
+        guild_id: str | None = None
+        channel_id: str | None = None
+
+    class UnregisterPlayerRequest(BaseModel):
+        shard: str = Field(default="steam", min_length=1)
+        account_id: str | None = None
+        name: str | None = None
+
+    @app.get("/", response_class=HTMLResponse)
+    def index() -> str:
+        return _INDEX_HTML
+
+    @app.get("/health")
+    def health() -> dict[str, Any]:
+        return {
+            "status": "ok",
+            "local_only": True,
+            "bind_host": "127.0.0.1",
+        }
+
+    @app.get("/settings/status")
+    def settings_status() -> dict[str, Any]:
+        return {
+            "raw_data_dir": str(config.app.raw_data_dir),
+            "replay_data_dir": str(config.app.replay_data_dir),
+            "raw_compression": config.app.raw_compression,
+            "collector": {
+                "poll_interval_seconds": config.app.collector_poll_interval_seconds,
+                "cycle_player_limit": config.app.collector_cycle_player_limit,
+                "player_lookup_chunk_size": config.app.player_lookup_chunk_size,
+            },
+            "database": config.database.safe_record(),
+            "secrets": {
+                key: status.to_record()
+                for key, status in config.secrets.status().items()
+            },
+        }
+
+    @app.get("/database/status")
+    def database_status() -> dict[str, Any]:
+        connection = connect_mysql(config.database)
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT DATABASE() AS database_name, VERSION() AS version")
+                row = cursor.fetchone()
+            return {
+                "mysql_connection": "ok",
+                "database": row["database_name"],
+                "version": row["version"],
+                "table_count": count_tables(connection),
+            }
+        finally:
+            connection.close()
+
+    @app.get("/players")
+    def list_players(shard: str | None = None, active_only: bool = True, limit: int = 100) -> dict[str, Any]:
+        connection = connect_mysql(config.database)
+        try:
+            players = PlayerRegistry(connection).list_players(
+                shard=shard,
+                active_only=active_only,
+                limit=limit,
+            )
+            return {"players": [player.to_record() for player in players]}
+        finally:
+            connection.close()
+
+    @app.post("/players/register")
+    def register_player(request: RegisterPlayerRequest) -> dict[str, Any]:
+        connection = connect_mysql(config.database)
+        try:
+            player = PlayerRegistry(connection).register_player(
+                account_id=request.account_id,
+                shard=request.shard,
+                current_name=request.current_name,
+                public_profile=request.public_profile,
+                context=DiscordCommandContext(
+                    user_id=request.discord_user_id,
+                    guild_id=request.guild_id,
+                    channel_id=request.channel_id,
+                ),
+            )
+            return {"player": player.to_record()}
+        finally:
+            connection.close()
+
+    @app.post("/players/unregister")
+    def unregister_player(request: UnregisterPlayerRequest) -> dict[str, Any]:
+        if not request.account_id and not request.name:
+            raise HTTPException(status_code=400, detail="account_id or name is required.")
+
+        connection = connect_mysql(config.database)
+        try:
+            player = PlayerRegistry(connection).unregister_player(
+                shard=request.shard,
+                account_id=request.account_id,
+                name=request.name,
+            )
+            if player is None:
+                raise HTTPException(status_code=404, detail="player not found.")
+            return {"player": player.to_record()}
+        finally:
+            connection.close()
+
+    return app
+
+
+_INDEX_HTML = """<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PUBG AI Local Manager</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Arial, "Malgun Gothic", sans-serif;
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --text: #17202a;
+      --muted: #65727f;
+      --line: #d8dee6;
+      --accent: #1677c7;
+      --danger: #b42318;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); }
+    header {
+      padding: 18px 24px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    h1 { margin: 0; font-size: 20px; letter-spacing: 0; }
+    main { max-width: 1180px; margin: 0 auto; padding: 24px; display: grid; gap: 18px; }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+    }
+    h2 { margin: 0 0 14px; font-size: 16px; letter-spacing: 0; }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .kv { border-left: 3px solid var(--accent); padding: 4px 10px; min-width: 0; }
+    .kv span { display: block; color: var(--muted); font-size: 12px; }
+    .kv strong { display: block; margin-top: 4px; font-size: 14px; overflow-wrap: anywhere; }
+    form { display: grid; grid-template-columns: 120px 1fr 1fr 150px auto; gap: 10px; align-items: end; }
+    label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
+    input, select {
+      width: 100%;
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 14px;
+      background: #fff;
+    }
+    button {
+      min-height: 38px;
+      border: 0;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 14px;
+      background: var(--accent);
+      color: #fff;
+      cursor: pointer;
+    }
+    button.secondary { background: #46515c; }
+    button.danger { background: var(--danger); }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th, td { border-bottom: 1px solid var(--line); padding: 10px; text-align: left; font-size: 14px; }
+    th { color: var(--muted); font-weight: 600; }
+    td { overflow-wrap: anywhere; }
+    .actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .status { color: var(--muted); font-size: 13px; }
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      form { grid-template-columns: 1fr; }
+      header { align-items: flex-start; flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>PUBG AI Local Manager</h1>
+    <div class="status" id="banner">localhost 전용 관리 화면</div>
+  </header>
+  <main>
+    <section>
+      <h2>상태</h2>
+      <div class="grid" id="statusGrid"></div>
+    </section>
+    <section>
+      <h2>유저 등록</h2>
+      <form id="registerForm">
+        <label>플랫폼
+          <select name="shard">
+            <option value="steam">steam</option>
+            <option value="kakao">kakao</option>
+          </select>
+        </label>
+        <label>닉네임
+          <input name="current_name" autocomplete="off" required>
+        </label>
+        <label>Account ID
+          <input name="account_id" autocomplete="off" required>
+        </label>
+        <label>공개 프로필
+          <select name="public_profile">
+            <option value="true">공개</option>
+            <option value="false">비공개</option>
+          </select>
+        </label>
+        <button type="submit">등록</button>
+      </form>
+    </section>
+    <section>
+      <h2>등록 유저</h2>
+      <div class="actions" style="margin-bottom: 10px;">
+        <button class="secondary" type="button" onclick="loadPlayers()">새로고침</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>플랫폼</th>
+            <th>닉네임</th>
+            <th>Account ID</th>
+            <th>상태</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="playersBody"></tbody>
+      </table>
+    </section>
+  </main>
+  <script>
+    const statusGrid = document.querySelector("#statusGrid");
+    const playersBody = document.querySelector("#playersBody");
+    const banner = document.querySelector("#banner");
+
+    function cell(label, value) {
+      return `<div class="kv"><span>${label}</span><strong>${value}</strong></div>`;
+    }
+
+    async function loadStatus() {
+      const [settings, database] = await Promise.all([
+        fetch("/settings/status").then((r) => r.json()),
+        fetch("/database/status").then((r) => r.json()).catch(() => ({ mysql_connection: "error" })),
+      ]);
+      statusGrid.innerHTML = [
+        cell("MySQL", `${database.mysql_connection || "unknown"} / ${database.database || "-"}`),
+        cell("PUBG API Key", settings.secrets.PUBG_API_KEY.configured ? "설정됨" : "없음"),
+        cell("Discord Token", settings.secrets.DISCORD_BOT_TOKEN.configured ? "설정됨" : "없음"),
+        cell("Raw 저장소", settings.raw_data_dir),
+        cell("Replay 저장소", settings.replay_data_dir),
+        cell("수집 주기", `${settings.collector.poll_interval_seconds}초`),
+        cell("주기당 대상", `${settings.collector.cycle_player_limit}명`),
+        cell("조회 chunk", `${settings.collector.player_lookup_chunk_size}명`),
+      ].join("");
+    }
+
+    async function loadPlayers() {
+      const payload = await fetch("/players?active_only=false").then((r) => r.json());
+      playersBody.innerHTML = payload.players.map((player) => `
+        <tr>
+          <td>${player.shard}</td>
+          <td>${player.current_name}</td>
+          <td>${player.account_id}</td>
+          <td>${player.active ? "수집중" : "중지"}</td>
+          <td>
+            <div class="actions">
+              <button class="danger" type="button" onclick="unregisterPlayer('${player.shard}', '${player.account_id}')">
+                삭제
+              </button>
+            </div>
+          </td>
+        </tr>
+      `).join("");
+    }
+
+    async function unregisterPlayer(shard, accountId) {
+      await fetch("/players/unregister", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ shard, account_id: accountId }),
+      });
+      await loadPlayers();
+    }
+
+    document.querySelector("#registerForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      await fetch("/players/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shard: form.get("shard"),
+          current_name: form.get("current_name"),
+          account_id: form.get("account_id"),
+          public_profile: form.get("public_profile") === "true",
+        }),
+      });
+      event.currentTarget.reset();
+      await loadPlayers();
+    });
+
+    Promise.all([loadStatus(), loadPlayers()])
+      .then(() => { banner.textContent = "localhost 전용 관리 화면"; })
+      .catch((error) => { banner.textContent = `오류: ${error.message}`; });
+  </script>
+</body>
+</html>
+"""

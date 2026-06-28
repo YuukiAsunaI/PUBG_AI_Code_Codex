@@ -93,12 +93,12 @@ class DiscordScopeSettings:
 
 
 DEFAULT_COMMAND_GROUPS: dict[str, list[str]] = {
-    "register": ["pubg-register"],
-    "profile_read": ["pubg-profile", "pubg-recent", "pubg-match", "pubg-weapon"],
+    "register": ["유저등록", "pubg-register"],
+    "profile_read": ["유저조회", "pubg-profile", "pubg-recent", "pubg-match", "pubg-weapon"],
     "ranking_read": ["pubg-ranking"],
     "replay_read": ["pubg-replay"],
     "settings_write": ["pubg-settings"],
-    "admin": ["pubg-permission", "pubg-unregister", "pubg-delete-data"],
+    "admin": ["유저삭제", "pubg-permission", "pubg-unregister", "pubg-delete-data"],
 }
 
 FORBIDDEN_LOCAL_SETTING_KEYS = {

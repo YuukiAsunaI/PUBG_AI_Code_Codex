@@ -3,4 +3,18 @@ name = "pubg-ai-code-codex"
 version = "0.1.0"
 description = "Local-first PUBG Open API analytics tooling"
 requires-python = ">=3.11"
+dependencies = [
+    "discord.py>=2.4",
+    "fastapi>=0.115",
+    "httpx>=0.27",
+    "pymysql>=1.1",
+    "python-dotenv>=1.0",
+    "uvicorn[standard]>=0.30",
+]
 
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
