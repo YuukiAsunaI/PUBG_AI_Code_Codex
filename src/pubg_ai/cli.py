@@ -8,8 +8,10 @@ from typing import Any
 from pubg_ai.config import RuntimeConfig
 from pubg_ai.database import connect_mysql, count_tables, initialize_database
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
+from pubg_ai.match_job_processor import MatchJobProcessor
 from pubg_ai.player_registry import PlayerRegistry
 from pubg_ai.pubg_client import PubgApiClient
+from pubg_ai.raw_storage import RawPayloadStore
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -37,6 +39,12 @@ def main(argv: list[str] | None = None) -> int:
 
     jobs_parser = subparsers.add_parser("match-jobs", help="List queued match fetch jobs.")
     jobs_parser.add_argument("--limit", default=50, type=int)
+
+    process_jobs_parser = subparsers.add_parser(
+        "process-match-jobs",
+        help="Fetch queued match details, store raw JSON, and queue telemetry jobs.",
+    )
+    process_jobs_parser.add_argument("--limit", default=10, type=int)
 
     web_parser = subparsers.add_parser("run-web", help="Run the local management web app.")
     web_parser.add_argument("--host", default="127.0.0.1", help="Bind host. Defaults to localhost only.")
@@ -116,6 +124,23 @@ def main(argv: list[str] | None = None) -> int:
         try:
             jobs = RegisteredPlayerMatchCollector(connection).list_match_jobs(limit=args.limit)
             _print_json({"jobs": _json_ready(jobs)})
+        finally:
+            connection.close()
+        return 0
+
+    if args.command == "process-match-jobs":
+        client = _pubg_client_from_config(config)
+        connection = connect_mysql(config.database)
+        try:
+            result = MatchJobProcessor(
+                connection,
+                client,
+                RawPayloadStore(
+                    config.app.raw_data_dir,
+                    compression=config.app.raw_compression,  # type: ignore[arg-type]
+                ),
+            ).process_queued_matches(limit=args.limit)
+            _print_json(result.to_record())
         finally:
             connection.close()
         return 0

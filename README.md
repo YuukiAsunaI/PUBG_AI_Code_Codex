@@ -61,8 +61,10 @@ The first executable slice is now available:
 - MySQL schema initializer for the `pubg_ai` database
 - PUBG Players API lookup for nickname + shard to `accountId`
 - player registration/list/unregister service layer
+- registered-player refresh that queues unseen match IDs
+- queued match detail downloader that stores raw match JSON files and queues telemetry jobs
 - localhost-only FastAPI management app
-- browser UI for status, user registration, user lookup, and collection stop/delete action
+- browser UI for status, user registration, user lookup, collection stop/delete action, and match job processing
 
 Install dependencies:
 
@@ -104,6 +106,12 @@ List queued match fetch jobs:
 
 ```powershell
 python -m pubg_ai.cli match-jobs --limit 20
+```
+
+Fetch queued match details, store raw match JSON under `PUBG_RAW_DATA_DIR`, and queue telemetry jobs:
+
+```powershell
+python -m pubg_ai.cli process-match-jobs --limit 10
 ```
 
 Run the local management app:

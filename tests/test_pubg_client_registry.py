@@ -10,6 +10,7 @@ from pubg_ai.pubg_client import (
     PubgPlayerSnapshot,
     PubgPlayerLookupResult,
     PubgRateLimit,
+    parse_match_payload,
     parse_player_lookup_payload,
     parse_player_snapshot_payload,
 )
@@ -105,6 +106,71 @@ class PubgClientParsingTests(unittest.TestCase):
                 )
             ],
         )
+
+    def test_parse_match_payload_extracts_metadata_and_telemetry(self) -> None:
+        details = parse_match_payload(
+            {
+                "data": {
+                    "type": "match",
+                    "id": "match-1",
+                    "attributes": {
+                        "shardId": "steam",
+                        "mapName": "Erangel_Main",
+                        "gameMode": "squad-fpp",
+                        "matchType": "official",
+                        "createdAt": "2026-06-27T12:34:56Z",
+                        "duration": 1888,
+                        "seasonState": "progress",
+                        "isCustomMatch": False,
+                    },
+                    "relationships": {
+                        "assets": {
+                            "data": [
+                                {"type": "asset", "id": "asset-telemetry"},
+                            ]
+                        }
+                    },
+                },
+                "included": [
+                    {
+                        "type": "participant",
+                        "id": "participant-1",
+                        "attributes": {
+                            "stats": {
+                                "playerId": "account.test",
+                                "name": "Yuuki_Asuna---",
+                            }
+                        },
+                    },
+                    {
+                        "type": "asset",
+                        "id": "asset-telemetry",
+                        "attributes": {
+                            "URL": "https://telemetry-cdn.playbattlegrounds.com/example.json",
+                        },
+                    },
+                ],
+            },
+            shard="steam",
+            rate_limit=PubgRateLimit(limit=10, remaining=9, reset_epoch=123),
+        )
+
+        self.assertEqual(details.match_id, "match-1")
+        self.assertEqual(details.shard, "steam")
+        self.assertEqual(details.map_name, "Erangel_Main")
+        self.assertEqual(details.game_mode, "squad-fpp")
+        self.assertEqual(details.match_type, "official")
+        self.assertEqual(details.created_at, "2026-06-27T12:34:56Z")
+        self.assertEqual(details.duration_seconds, 1888)
+        self.assertEqual(details.season_state, "progress")
+        self.assertFalse(details.is_custom_match)
+        self.assertEqual(details.telemetry_url, "https://telemetry-cdn.playbattlegrounds.com/example.json")
+        self.assertEqual(len(details.participants), 1)
+        self.assertEqual(details.rate_limit.remaining, 9)
+
+    def test_parse_match_payload_rejects_missing_data_object(self) -> None:
+        with self.assertRaises(PubgApiError):
+            parse_match_payload({"data": []}, shard="steam")
 
 
 if __name__ == "__main__":

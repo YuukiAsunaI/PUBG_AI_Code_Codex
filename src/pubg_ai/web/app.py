@@ -10,8 +10,10 @@ from pydantic import BaseModel, Field
 from pubg_ai.config import RuntimeConfig
 from pubg_ai.database import connect_mysql, count_tables
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
+from pubg_ai.match_job_processor import MatchJobProcessor
 from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry
 from pubg_ai.pubg_client import PubgApiClient, PubgApiError
+from pubg_ai.raw_storage import RawPayloadStore
 
 
 class RegisterPlayerRequest(BaseModel):
@@ -33,6 +35,10 @@ class UnregisterPlayerRequest(BaseModel):
 class CollectMatchesRequest(BaseModel):
     shard: str | None = None
     limit: int | None = None
+
+
+class ProcessMatchJobsRequest(BaseModel):
+    limit: int = Field(default=10, ge=1, le=500)
 
 
 def create_app() -> Any:
@@ -187,6 +193,25 @@ def create_app() -> Any:
         finally:
             connection.close()
 
+    @app.post("/jobs/matches/process")
+    def process_match_jobs(request: ProcessMatchJobsRequest) -> dict[str, Any]:
+        if not config.secrets.pubg_api_key:
+            raise HTTPException(status_code=500, detail="PUBG_API_KEY is not configured.")
+
+        connection = connect_mysql(config.database)
+        try:
+            result = MatchJobProcessor(
+                connection,
+                PubgApiClient(config.secrets.pubg_api_key),
+                RawPayloadStore(
+                    config.app.raw_data_dir,
+                    compression=config.app.raw_compression,  # type: ignore[arg-type]
+                ),
+            ).process_queued_matches(limit=request.limit)
+            return {"result": result.to_record()}
+        finally:
+            connection.close()
+
     return app
 
 
@@ -334,6 +359,7 @@ _INDEX_HTML = """<!doctype html>
     <section>
       <h2>Match 수집 큐</h2>
       <div class="actions" style="margin-bottom: 10px;">
+        <button type="button" onclick="processMatchJobs()">상세 저장</button>
         <button class="secondary" type="button" onclick="loadJobs()">새로고침</button>
       </div>
       <table>
@@ -423,6 +449,22 @@ _INDEX_HTML = """<!doctype html>
       const payload = await response.json();
       banner.textContent = `수집 완료: 신규 ${payload.result.queued_match_jobs}개, 기존 ${payload.result.existing_match_jobs}개`;
       await Promise.all([loadPlayers(), loadJobs()]);
+    }
+
+    async function processMatchJobs() {
+      banner.textContent = "Match 상세 저장 중";
+      const response = await fetch("/jobs/matches/process", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 10 }),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const payload = await response.json();
+      banner.textContent = `상세 저장 완료: 저장 ${payload.result.stored_matches}개, telemetry 신규 ${payload.result.queued_telemetry_jobs}개, 실패 ${payload.result.failed_jobs}개`;
+      await loadJobs();
     }
 
     async function unregisterPlayer(shard, accountId) {

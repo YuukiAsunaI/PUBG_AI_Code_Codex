@@ -99,6 +99,22 @@ The current local runtime can also refresh active registered players and queue u
 
 Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 match IDs were discovered and queued.
 
+## Implemented Match Detail Storage Slice
+
+The current local runtime can process queued match detail jobs:
+
+- `PubgApiClient.fetch_match(shard, match_id)` calls `GET /shards/{shard}/matches/{match_id}`.
+- `parse_match_payload(...)` extracts match metadata, participants, and the telemetry asset URL from the match
+  payload.
+- `MatchJobProcessor.process_queued_matches(...)` stores raw match JSON under `PUBG_RAW_DATA_DIR`, verifies the
+  checksum, upserts `matches`, `raw_match_payloads`, and `match_participants`, then queues telemetry jobs with
+  `job_type = 'telemetry'`.
+- `python -m pubg_ai.cli process-match-jobs --limit 10` runs one manual match-detail processing pass.
+- The local web UI has a `상세 저장` button for processing queued match jobs.
+
+Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 queued match jobs were fetched, stored
+under `D:\BackUP\raw`, and converted into 146 queued telemetry jobs with 0 failed match jobs.
+
 ## Match Job States
 
 Use explicit job states so the local management UI can show where a match is stuck:
