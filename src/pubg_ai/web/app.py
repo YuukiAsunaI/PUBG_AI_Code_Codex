@@ -14,6 +14,7 @@ from pubg_ai.match_job_processor import MatchJobProcessor
 from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry
 from pubg_ai.pubg_client import PubgApiClient, PubgApiError
 from pubg_ai.raw_storage import RawPayloadStore
+from pubg_ai.telemetry_job_processor import TelemetryJobProcessor
 
 
 class RegisterPlayerRequest(BaseModel):
@@ -39,6 +40,10 @@ class CollectMatchesRequest(BaseModel):
 
 class ProcessMatchJobsRequest(BaseModel):
     limit: int = Field(default=10, ge=1, le=500)
+
+
+class ProcessTelemetryJobsRequest(BaseModel):
+    limit: int = Field(default=5, ge=1, le=200)
 
 
 def create_app() -> Any:
@@ -212,6 +217,36 @@ def create_app() -> Any:
         finally:
             connection.close()
 
+    @app.get("/jobs/telemetry")
+    def telemetry_jobs(limit: int = 100) -> dict[str, Any]:
+        connection = connect_mysql(config.database)
+        try:
+            jobs = TelemetryJobProcessor(
+                connection,
+                RawPayloadStore(
+                    config.app.raw_data_dir,
+                    compression=config.app.raw_compression,  # type: ignore[arg-type]
+                ),
+            ).list_telemetry_jobs(limit=limit)
+            return {"jobs": [_json_ready(job) for job in jobs]}
+        finally:
+            connection.close()
+
+    @app.post("/jobs/telemetry/process")
+    def process_telemetry_jobs(request: ProcessTelemetryJobsRequest) -> dict[str, Any]:
+        connection = connect_mysql(config.database)
+        try:
+            result = TelemetryJobProcessor(
+                connection,
+                RawPayloadStore(
+                    config.app.raw_data_dir,
+                    compression=config.app.raw_compression,  # type: ignore[arg-type]
+                ),
+            ).process_queued_telemetry(limit=request.limit)
+            return {"result": result.to_record()}
+        finally:
+            connection.close()
+
     return app
 
 
@@ -375,11 +410,31 @@ _INDEX_HTML = """<!doctype html>
         <tbody id="jobsBody"></tbody>
       </table>
     </section>
+    <section>
+      <h2>Telemetry 수집 큐</h2>
+      <div class="actions" style="margin-bottom: 10px;">
+        <button type="button" onclick="processTelemetryJobs()">Telemetry 저장</button>
+        <button class="secondary" type="button" onclick="loadTelemetryJobs()">새로고침</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>플랫폼</th>
+            <th>Match ID</th>
+            <th>상태</th>
+            <th>시도</th>
+            <th>생성</th>
+          </tr>
+        </thead>
+        <tbody id="telemetryJobsBody"></tbody>
+      </table>
+    </section>
   </main>
   <script>
     const statusGrid = document.querySelector("#statusGrid");
     const playersBody = document.querySelector("#playersBody");
     const jobsBody = document.querySelector("#jobsBody");
+    const telemetryJobsBody = document.querySelector("#telemetryJobsBody");
     const banner = document.querySelector("#banner");
 
     function cell(label, value) {
@@ -435,6 +490,19 @@ _INDEX_HTML = """<!doctype html>
       `).join("");
     }
 
+    async function loadTelemetryJobs() {
+      const payload = await fetch("/jobs/telemetry?limit=50").then((r) => r.json());
+      telemetryJobsBody.innerHTML = payload.jobs.map((job) => `
+        <tr>
+          <td>${job.shard || ""}</td>
+          <td>${job.target_id || ""}</td>
+          <td>${job.status || ""}</td>
+          <td>${job.attempts || 0}</td>
+          <td>${job.created_at_kst || ""}</td>
+        </tr>
+      `).join("");
+    }
+
     async function refreshCollection() {
       banner.textContent = "최근 매치 수집 중";
       const response = await fetch("/collection/refresh", {
@@ -464,7 +532,24 @@ _INDEX_HTML = """<!doctype html>
       }
       const payload = await response.json();
       banner.textContent = `상세 저장 완료: 저장 ${payload.result.stored_matches}개, telemetry 신규 ${payload.result.queued_telemetry_jobs}개, 실패 ${payload.result.failed_jobs}개`;
-      await loadJobs();
+      await Promise.all([loadJobs(), loadTelemetryJobs()]);
+    }
+
+    async function processTelemetryJobs() {
+      banner.textContent = "Telemetry 저장 중";
+      const response = await fetch("/jobs/telemetry/process", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 5 }),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const payload = await response.json();
+      const mb = (payload.result.stored_bytes / 1024 / 1024).toFixed(1);
+      banner.textContent = `Telemetry 저장 완료: 저장 ${payload.result.stored_telemetry}개, ${mb}MB, 실패 ${payload.result.failed_jobs}개`;
+      await loadTelemetryJobs();
     }
 
     async function unregisterPlayer(shard, accountId) {
@@ -493,7 +578,7 @@ _INDEX_HTML = """<!doctype html>
       await loadPlayers();
     });
 
-    Promise.all([loadStatus(), loadPlayers(), loadJobs()])
+    Promise.all([loadStatus(), loadPlayers(), loadJobs(), loadTelemetryJobs()])
       .then(() => { banner.textContent = "localhost 전용 관리 화면"; })
       .catch((error) => { banner.textContent = `오류: ${error.message}`; });
   </script>

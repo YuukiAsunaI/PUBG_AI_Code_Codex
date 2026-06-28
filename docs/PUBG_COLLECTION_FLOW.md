@@ -115,6 +115,27 @@ The current local runtime can process queued match detail jobs:
 Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 queued match jobs were fetched, stored
 under `D:\BackUP\raw`, and converted into 146 queued telemetry jobs with 0 failed match jobs.
 
+## Implemented Telemetry Raw Storage Slice
+
+The current local runtime can process queued telemetry jobs:
+
+- `TelemetryJobProcessor.process_queued_telemetry(...)` reads `job_type = 'telemetry'` jobs and looks up each match's
+  `telemetry_url`.
+- The telemetry JSON is downloaded from the PUBG telemetry CDN without requiring the PUBG API key.
+- The downloaded JSON bytes are stored under `PUBG_RAW_DATA_DIR` using the `telemetry/{shard}/{yyyy}/{mm}/{dd}/`
+  folder layout.
+- `raw_telemetry_payloads` stores the asset URL, local relative path, compression mode, size, checksum, fetched KST
+  timestamp, and current telemetry parser version.
+- `python -m pubg_ai.cli process-telemetry-jobs --limit 5` runs one manual telemetry download pass.
+- The local web UI has a `Telemetry 저장` button for processing queued telemetry jobs.
+
+This slice intentionally stores raw telemetry first. Normalized combat, movement, item, route, and 2D replay rows are
+created in later parser stages from the immutable raw telemetry files.
+
+Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 queued telemetry jobs were downloaded,
+stored under `D:\BackUP\raw`, and recorded in `raw_telemetry_payloads` with 0 failed telemetry jobs. Compressed stored
+telemetry size was 231,431,883 bytes.
+
 ## Match Job States
 
 Use explicit job states so the local management UI can show where a match is stuck:

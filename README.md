@@ -63,8 +63,10 @@ The first executable slice is now available:
 - player registration/list/unregister service layer
 - registered-player refresh that queues unseen match IDs
 - queued match detail downloader that stores raw match JSON files and queues telemetry jobs
+- queued telemetry downloader that stores large telemetry JSON files under the configured raw storage path
 - localhost-only FastAPI management app
-- browser UI for status, user registration, user lookup, collection stop/delete action, and match job processing
+- browser UI for status, user registration, user lookup, collection stop/delete action, match job processing, and
+  telemetry job processing
 
 Install dependencies:
 
@@ -112,6 +114,18 @@ Fetch queued match details, store raw match JSON under `PUBG_RAW_DATA_DIR`, and 
 
 ```powershell
 python -m pubg_ai.cli process-match-jobs --limit 10
+```
+
+List queued telemetry jobs:
+
+```powershell
+python -m pubg_ai.cli telemetry-jobs --limit 20
+```
+
+Download queued telemetry JSON files and store them under `PUBG_RAW_DATA_DIR`:
+
+```powershell
+python -m pubg_ai.cli process-telemetry-jobs --limit 5
 ```
 
 Run the local management app:

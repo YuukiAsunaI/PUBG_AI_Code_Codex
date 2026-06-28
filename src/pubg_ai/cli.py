@@ -12,6 +12,7 @@ from pubg_ai.match_job_processor import MatchJobProcessor
 from pubg_ai.player_registry import PlayerRegistry
 from pubg_ai.pubg_client import PubgApiClient
 from pubg_ai.raw_storage import RawPayloadStore
+from pubg_ai.telemetry_job_processor import TelemetryJobProcessor
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -45,6 +46,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Fetch queued match details, store raw JSON, and queue telemetry jobs.",
     )
     process_jobs_parser.add_argument("--limit", default=10, type=int)
+
+    telemetry_jobs_parser = subparsers.add_parser("telemetry-jobs", help="List queued telemetry fetch jobs.")
+    telemetry_jobs_parser.add_argument("--limit", default=50, type=int)
+
+    process_telemetry_jobs_parser = subparsers.add_parser(
+        "process-telemetry-jobs",
+        help="Download queued telemetry JSON files and store raw payload metadata.",
+    )
+    process_telemetry_jobs_parser.add_argument("--limit", default=5, type=int)
 
     web_parser = subparsers.add_parser("run-web", help="Run the local management web app.")
     web_parser.add_argument("--host", default="127.0.0.1", help="Bind host. Defaults to localhost only.")
@@ -140,6 +150,36 @@ def main(argv: list[str] | None = None) -> int:
                     compression=config.app.raw_compression,  # type: ignore[arg-type]
                 ),
             ).process_queued_matches(limit=args.limit)
+            _print_json(result.to_record())
+        finally:
+            connection.close()
+        return 0
+
+    if args.command == "telemetry-jobs":
+        connection = connect_mysql(config.database)
+        try:
+            jobs = TelemetryJobProcessor(
+                connection,
+                RawPayloadStore(
+                    config.app.raw_data_dir,
+                    compression=config.app.raw_compression,  # type: ignore[arg-type]
+                ),
+            ).list_telemetry_jobs(limit=args.limit)
+            _print_json({"jobs": _json_ready(jobs)})
+        finally:
+            connection.close()
+        return 0
+
+    if args.command == "process-telemetry-jobs":
+        connection = connect_mysql(config.database)
+        try:
+            result = TelemetryJobProcessor(
+                connection,
+                RawPayloadStore(
+                    config.app.raw_data_dir,
+                    compression=config.app.raw_compression,  # type: ignore[arg-type]
+                ),
+            ).process_queued_telemetry(limit=args.limit)
             _print_json(result.to_record())
         finally:
             connection.close()

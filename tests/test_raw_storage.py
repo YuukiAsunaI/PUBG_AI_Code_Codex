@@ -140,6 +140,30 @@ class RawPayloadStoreTests(unittest.TestCase):
             )
             self.assertTrue(store.verify(stored))
 
+    def test_write_telemetry_json_bytes_preserves_raw_payload(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store = RawPayloadStore(Path(temp_dir), compression="gzip")
+            created_at = datetime(2026, 6, 27, tzinfo=UTC)
+            raw_body = b'[\n  {"_T":"LogMatchStart"}\n]'
+
+            stored = store.write_json_bytes(
+                payload_type="telemetry",
+                shard="steam",
+                match_id="telemetry-789",
+                payload_bytes=raw_body,
+                match_created_at=created_at,
+            )
+
+            self.assertEqual(
+                stored.relative_path,
+                "telemetry/steam/2026/06/27/telemetry-789.telemetry.json.gz",
+            )
+            self.assertTrue(store.verify(stored))
+
+            stored_path = Path(temp_dir) / stored.relative_path
+            with gzip.open(stored_path, "rb") as file:
+                self.assertEqual(file.read(), raw_body)
+
     def test_resolve_path_rejects_escape_attempts(self) -> None:
         with TemporaryDirectory() as temp_dir:
             store = RawPayloadStore(Path(temp_dir))

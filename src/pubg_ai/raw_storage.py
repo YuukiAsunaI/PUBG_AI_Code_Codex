@@ -59,6 +59,23 @@ class RawPayloadStore:
         payload: Any,
         match_created_at: datetime | None = None,
     ) -> StoredPayload:
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        return self.write_json_bytes(
+            payload_type=payload_type,
+            shard=shard,
+            match_id=match_id,
+            payload_bytes=body,
+            match_created_at=match_created_at,
+        )
+
+    def write_json_bytes(
+        self,
+        payload_type: PayloadType,
+        shard: str,
+        match_id: str,
+        payload_bytes: bytes,
+        match_created_at: datetime | None = None,
+    ) -> StoredPayload:
         if payload_type not in {"match", "telemetry"}:
             raise ValueError("payload_type must be either 'match' or 'telemetry'.")
 
@@ -67,8 +84,7 @@ class RawPayloadStore:
         target_path = self.root / Path(relative_path)
         target_path.parent.mkdir(parents=True, exist_ok=True)
 
-        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        stored_bytes = gzip.compress(body) if self.compression == "gzip" else body
+        stored_bytes = gzip.compress(payload_bytes) if self.compression == "gzip" else payload_bytes
         digest = hashlib.sha256(stored_bytes).hexdigest()
 
         self._atomic_write(target_path, stored_bytes)
