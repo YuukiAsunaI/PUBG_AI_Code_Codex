@@ -136,6 +136,12 @@ Use a two-layer storage model:
 | `agg_player_monthly` | Monthly trend rollups |
 | `player_match_combat_summaries` | Per-match, per-player whole-match combat totals: damage dealt/taken, kills, assists, deaths, DBNOs caused/taken, finishes, headshots, shots fired/hit, and received hits |
 | `player_weapon_match_stats` | Per-match, per-player, per-weapon fired shots, hit shots, accuracy, body-part hits/taken, headshots, kills, assists, deaths, DBNOs, and finishes |
+| `player_position_samples` | Registered-player `LogPlayerPosition` samples for route/replay layers |
+| `player_landing_events` | Registered-player parachute landing events; first event is used as first drop/landing point |
+| `player_movement_summaries` | Per-match first/last position, landing point, sampled movement distance, vehicle samples, DBNO samples, and altitude range |
+| `player_combat_location_events` | DBNO, kill, death, finish, and finished-taken coordinates with related player coordinates and damage metadata |
+| `match_care_package_events` | Care-package spawn/land coordinates and package item-code lists |
+| `match_plane_routes` | Plane-route approximation from early aircraft `LogPlayerPosition` samples |
 | `agg_player_weapon` | Weapon usage, kills, deaths, damage, assists, caused DBNOs, suffered DBNOs, fight wins/losses |
 | `agg_player_weapon_body_part` | Weapon/body-part hit and hit-received rollups for accuracy and weakness analysis |
 | `agg_weapon_distance_bucket` | Weapon outcomes by distance bucket |

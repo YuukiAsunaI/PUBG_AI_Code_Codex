@@ -154,6 +154,18 @@ Reparse existing item events after parser or translation changes:
 python -m pubg_ai.cli parse-telemetry-items --limit 200 --force
 ```
 
+Parse raw telemetry into registered-player movement, landing, combat-location, care-package, and plane-route tables:
+
+```powershell
+python -m pubg_ai.cli parse-telemetry-movement --limit 10
+```
+
+Reparse existing movement/location rows after parser changes:
+
+```powershell
+python -m pubg_ai.cli parse-telemetry-movement --limit 200 --force
+```
+
 Run the local management app:
 
 ```powershell

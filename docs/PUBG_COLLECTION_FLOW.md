@@ -129,8 +129,8 @@ The current local runtime can process queued telemetry jobs:
 - `python -m pubg_ai.cli process-telemetry-jobs --limit 5` runs one manual telemetry download pass.
 - The local web UI has a `Telemetry 저장` button for processing queued telemetry jobs.
 
-This slice intentionally stores raw telemetry first. Normalized combat, movement, item, route, and 2D replay rows are
-created in later parser stages from the immutable raw telemetry files.
+This slice intentionally stores raw telemetry first. Normalized combat, item, movement, location, route, and future
+2D replay artifact rows are created from the immutable raw telemetry files.
 
 Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 queued telemetry jobs were downloaded,
 stored under `D:\BackUP\raw`, and recorded in `raw_telemetry_payloads` with 0 failed telemetry jobs. Compressed stored
@@ -175,6 +175,35 @@ The current local runtime can parse raw telemetry into registered-player item ev
 
 Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 telemetry files produced 19,814 item event
 rows and 4,133 item-stat rows with 0 failed payloads.
+
+## Implemented Movement And Location Parser Slice
+
+The current local runtime can parse raw telemetry into registered-player location tables and match-level route/event
+tables:
+
+- `TelemetryMovementProcessor.process_raw_telemetry(...)` reads stored telemetry files from `PUBG_RAW_DATA_DIR`.
+- Only registered tracking targets that participated in the match are written to player-specific movement/location
+  tables.
+- `player_position_samples` stores registered-player `LogPlayerPosition` samples with KST event time, PUBG map
+  coordinates, in-vehicle/zone/DBNO flags, elapsed time, and alive-player count.
+- `player_landing_events` stores all parachute landing events. The per-match movement summary uses the earliest
+  landing event as the first drop/landing point.
+- `player_movement_summaries` stores first/last known coordinates, landing coordinates, sampled route distance,
+  in-game sampled route distance, vehicle sample count, DBNO sample count, and altitude range.
+- `player_combat_location_events` stores DBNO caused/taken, kill, death, finish, and finished-taken locations with
+  related player coordinates, damage causer, damage reason, distance, and headshot flag.
+- `match_care_package_events` stores care-package spawn/land positions and package item-code lists for later 2D
+  replay layers.
+- `match_plane_routes` stores a match-level plane-route approximation reconstructed from early aircraft
+  `LogPlayerPosition` samples.
+- `python -m pubg_ai.cli parse-telemetry-movement --limit 10` runs one movement/location parse pass.
+- `python -m pubg_ai.cli parse-telemetry-movement --limit 200 --force` reparses already summarized movement rows
+  after parser changes.
+- The local web UI has movement parse/reparse buttons.
+
+Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 telemetry files produced 8,610 player
+position samples, 178 landing events, 146 movement summaries, 872 combat-location events, 4,734 care-package events,
+and 119 plane-route approximations with 0 failed payloads.
 
 ## Match Job States
 

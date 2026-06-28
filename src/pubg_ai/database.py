@@ -8,7 +8,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class DatabaseError(RuntimeError):
@@ -76,7 +76,7 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 VALUES (%s, %s, NOW(6))
                 ON DUPLICATE KEY UPDATE description = VALUES(description)
                 """,
-                (SCHEMA_VERSION, "initial local PUBG analytics schema"),
+                (SCHEMA_VERSION, "movement and location telemetry schema"),
             )
             applied += 1
     finally:
@@ -412,6 +412,165 @@ def schema_statements() -> list[str]:
             UNIQUE KEY uq_player_item_match_stats (match_id, account_id, item_code),
             KEY idx_player_item_stats_account_item (account_id, item_code, match_id),
             CONSTRAINT fk_player_item_match_stats_match
+                FOREIGN KEY (match_id) REFERENCES matches(match_id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS player_position_samples (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            match_id VARCHAR(191) NOT NULL,
+            account_id VARCHAR(128) NOT NULL,
+            event_index INT NOT NULL,
+            event_at_kst DATETIME(6) NULL,
+            common_is_game FLOAT NULL,
+            elapsed_time_seconds FLOAT NULL,
+            num_alive_players INT NULL,
+            x FLOAT NULL,
+            y FLOAT NULL,
+            z FLOAT NULL,
+            is_in_vehicle TINYINT(1) NULL,
+            is_in_blue_zone TINYINT(1) NULL,
+            is_in_red_zone TINYINT(1) NULL,
+            in_special_zone VARCHAR(64) NULL,
+            is_dbno TINYINT(1) NULL,
+            zone JSON NULL,
+            updated_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_player_position_samples (match_id, account_id, event_index),
+            KEY idx_player_position_samples_account_time (account_id, match_id, event_at_kst),
+            CONSTRAINT fk_player_position_samples_match
+                FOREIGN KEY (match_id) REFERENCES matches(match_id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS player_landing_events (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            match_id VARCHAR(191) NOT NULL,
+            account_id VARCHAR(128) NOT NULL,
+            event_index INT NOT NULL,
+            event_at_kst DATETIME(6) NULL,
+            common_is_game FLOAT NULL,
+            x FLOAT NULL,
+            y FLOAT NULL,
+            z FLOAT NULL,
+            distance_m FLOAT NULL,
+            updated_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_player_landing_events (match_id, account_id, event_index),
+            KEY idx_player_landing_events_account_time (account_id, event_at_kst),
+            CONSTRAINT fk_player_landing_events_match
+                FOREIGN KEY (match_id) REFERENCES matches(match_id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS player_movement_summaries (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            match_id VARCHAR(191) NOT NULL,
+            account_id VARCHAR(128) NOT NULL,
+            sample_count INT NOT NULL DEFAULT 0,
+            first_event_at_kst DATETIME(6) NULL,
+            last_event_at_kst DATETIME(6) NULL,
+            first_x FLOAT NULL,
+            first_y FLOAT NULL,
+            first_z FLOAT NULL,
+            last_x FLOAT NULL,
+            last_y FLOAT NULL,
+            last_z FLOAT NULL,
+            landing_event_at_kst DATETIME(6) NULL,
+            landing_x FLOAT NULL,
+            landing_y FLOAT NULL,
+            landing_z FLOAT NULL,
+            landing_distance_m FLOAT NULL,
+            total_sampled_distance_m FLOAT NOT NULL DEFAULT 0,
+            in_game_sampled_distance_m FLOAT NOT NULL DEFAULT 0,
+            vehicle_sample_count INT NOT NULL DEFAULT 0,
+            dbno_sample_count INT NOT NULL DEFAULT 0,
+            max_altitude_z FLOAT NULL,
+            min_altitude_z FLOAT NULL,
+            updated_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_player_movement_summaries (match_id, account_id),
+            KEY idx_player_movement_summaries_account (account_id, match_id),
+            CONSTRAINT fk_player_movement_summaries_match
+                FOREIGN KEY (match_id) REFERENCES matches(match_id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS player_combat_location_events (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            match_id VARCHAR(191) NOT NULL,
+            account_id VARCHAR(128) NOT NULL,
+            related_account_id VARCHAR(128) NULL,
+            event_index INT NOT NULL,
+            event_type VARCHAR(64) NOT NULL,
+            action VARCHAR(32) NOT NULL,
+            event_at_kst DATETIME(6) NULL,
+            common_is_game FLOAT NULL,
+            damage_type_category VARCHAR(64) NULL,
+            damage_causer_name VARCHAR(128) NULL,
+            damage_reason VARCHAR(64) NULL,
+            is_headshot TINYINT(1) NOT NULL DEFAULT 0,
+            distance_m FLOAT NULL,
+            x FLOAT NULL,
+            y FLOAT NULL,
+            z FLOAT NULL,
+            related_x FLOAT NULL,
+            related_y FLOAT NULL,
+            related_z FLOAT NULL,
+            raw_event JSON NULL,
+            updated_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_player_combat_location_events (match_id, account_id, event_index, action),
+            KEY idx_player_combat_location_account_action (account_id, action, match_id),
+            KEY idx_player_combat_location_related (related_account_id, match_id),
+            CONSTRAINT fk_player_combat_location_events_match
+                FOREIGN KEY (match_id) REFERENCES matches(match_id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS match_care_package_events (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            match_id VARCHAR(191) NOT NULL,
+            event_index INT NOT NULL,
+            event_type VARCHAR(64) NOT NULL,
+            event_at_kst DATETIME(6) NULL,
+            common_is_game FLOAT NULL,
+            item_package_id VARCHAR(191) NULL,
+            item_count INT NOT NULL DEFAULT 0,
+            item_codes JSON NULL,
+            x FLOAT NULL,
+            y FLOAT NULL,
+            z FLOAT NULL,
+            raw_event JSON NULL,
+            updated_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_match_care_package_events (match_id, event_index, event_type),
+            KEY idx_match_care_package_events_match_time (match_id, event_at_kst),
+            CONSTRAINT fk_match_care_package_events_match
+                FOREIGN KEY (match_id) REFERENCES matches(match_id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS match_plane_routes (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            match_id VARCHAR(191) NOT NULL,
+            source VARCHAR(64) NOT NULL,
+            sample_count INT NOT NULL DEFAULT 0,
+            start_event_index INT NOT NULL,
+            end_event_index INT NOT NULL,
+            start_event_at_kst DATETIME(6) NULL,
+            end_event_at_kst DATETIME(6) NULL,
+            start_x FLOAT NULL,
+            start_y FLOAT NULL,
+            start_z FLOAT NULL,
+            end_x FLOAT NULL,
+            end_y FLOAT NULL,
+            end_z FLOAT NULL,
+            sample_account_id VARCHAR(128) NULL,
+            updated_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_match_plane_routes (match_id),
+            CONSTRAINT fk_match_plane_routes_match
                 FOREIGN KEY (match_id) REFERENCES matches(match_id)
                 ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci

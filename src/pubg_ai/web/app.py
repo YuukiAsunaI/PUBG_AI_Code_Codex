@@ -17,6 +17,7 @@ from pubg_ai.raw_storage import RawPayloadStore
 from pubg_ai.telemetry_combat_processor import TelemetryCombatProcessor
 from pubg_ai.telemetry_item_processor import TelemetryItemProcessor
 from pubg_ai.telemetry_job_processor import TelemetryJobProcessor
+from pubg_ai.telemetry_movement_processor import TelemetryMovementProcessor
 
 
 class RegisterPlayerRequest(BaseModel):
@@ -54,6 +55,11 @@ class ParseTelemetryCombatRequest(BaseModel):
 
 
 class ParseTelemetryItemsRequest(BaseModel):
+    limit: int = Field(default=10, ge=1, le=200)
+    force: bool = False
+
+
+class ParseTelemetryMovementRequest(BaseModel):
     limit: int = Field(default=10, ge=1, le=200)
     force: bool = False
 
@@ -289,6 +295,21 @@ def create_app() -> Any:
         finally:
             connection.close()
 
+    @app.post("/telemetry/movement/process")
+    def process_telemetry_movement(request: ParseTelemetryMovementRequest) -> dict[str, Any]:
+        connection = connect_mysql(config.database)
+        try:
+            result = TelemetryMovementProcessor(
+                connection,
+                RawPayloadStore(
+                    config.app.raw_data_dir,
+                    compression=config.app.raw_compression,  # type: ignore[arg-type]
+                ),
+            ).process_raw_telemetry(limit=request.limit, force=request.force)
+            return {"result": result.to_record()}
+        finally:
+            connection.close()
+
     return app
 
 
@@ -487,6 +508,14 @@ _INDEX_HTML = """<!doctype html>
       </div>
       <div class="status" id="itemStatus">대기 중</div>
     </section>
+    <section>
+      <h2>Movement 파싱</h2>
+      <div class="actions" style="margin-bottom: 10px;">
+        <button type="button" onclick="parseTelemetryMovement(false)">위치 파싱</button>
+        <button class="secondary" type="button" onclick="parseTelemetryMovement(true)">재파싱</button>
+      </div>
+      <div class="status" id="movementStatus">대기 중</div>
+    </section>
   </main>
   <script>
     const statusGrid = document.querySelector("#statusGrid");
@@ -495,6 +524,7 @@ _INDEX_HTML = """<!doctype html>
     const telemetryJobsBody = document.querySelector("#telemetryJobsBody");
     const combatStatus = document.querySelector("#combatStatus");
     const itemStatus = document.querySelector("#itemStatus");
+    const movementStatus = document.querySelector("#movementStatus");
     const banner = document.querySelector("#banner");
 
     function cell(label, value) {
@@ -642,6 +672,22 @@ _INDEX_HTML = """<!doctype html>
       const payload = await response.json();
       itemStatus.textContent = `파싱 ${payload.result.parsed_payloads}개, 이벤트 ${payload.result.item_events}개, 아이템 ${payload.result.item_stats}개, 실패 ${payload.result.failed_payloads}개`;
       banner.textContent = "아이템 파싱 완료";
+    }
+
+    async function parseTelemetryMovement(force) {
+      banner.textContent = force ? "위치 재파싱 중" : "위치 파싱 중";
+      const response = await fetch("/telemetry/movement/process", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 10, force }),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const payload = await response.json();
+      movementStatus.textContent = `파싱 ${payload.result.parsed_payloads}개, 위치 ${payload.result.position_samples}개, 전투위치 ${payload.result.combat_location_events}개, 보급 ${payload.result.care_package_events}개, 비행기 ${payload.result.plane_routes}개, 실패 ${payload.result.failed_payloads}개`;
+      banner.textContent = "위치 파싱 완료";
     }
 
     async function unregisterPlayer(shard, accountId) {

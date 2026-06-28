@@ -15,6 +15,7 @@ from pubg_ai.raw_storage import RawPayloadStore
 from pubg_ai.telemetry_combat_processor import TelemetryCombatProcessor
 from pubg_ai.telemetry_item_processor import TelemetryItemProcessor
 from pubg_ai.telemetry_job_processor import TelemetryJobProcessor
+from pubg_ai.telemetry_movement_processor import TelemetryMovementProcessor
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -71,6 +72,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parse_items_parser.add_argument("--limit", default=10, type=int)
     parse_items_parser.add_argument("--force", action="store_true", help="Reparse already summarized item events.")
+
+    parse_movement_parser = subparsers.add_parser(
+        "parse-telemetry-movement",
+        help="Parse raw telemetry files into registered-player movement and location tables.",
+    )
+    parse_movement_parser.add_argument("--limit", default=10, type=int)
+    parse_movement_parser.add_argument("--force", action="store_true", help="Reparse already summarized movement rows.")
 
     web_parser = subparsers.add_parser("run-web", help="Run the local management web app.")
     web_parser.add_argument("--host", default="127.0.0.1", help="Bind host. Defaults to localhost only.")
@@ -220,6 +228,21 @@ def main(argv: list[str] | None = None) -> int:
         connection = connect_mysql(config.database)
         try:
             result = TelemetryItemProcessor(
+                connection,
+                RawPayloadStore(
+                    config.app.raw_data_dir,
+                    compression=config.app.raw_compression,  # type: ignore[arg-type]
+                ),
+            ).process_raw_telemetry(limit=args.limit, force=args.force)
+            _print_json(result.to_record())
+        finally:
+            connection.close()
+        return 0
+
+    if args.command == "parse-telemetry-movement":
+        connection = connect_mysql(config.database)
+        try:
+            result = TelemetryMovementProcessor(
                 connection,
                 RawPayloadStore(
                     config.app.raw_data_dir,
