@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable, Mapping
 
+from pubg_ai.code_translator import DAMAGE_CAUSER_KO
+
 
 BODY_PART_BY_DAMAGE_REASON = {
     "HeadShot": "head",
@@ -233,7 +235,7 @@ def summarize_player_match_combat(
         for account_id in _assist_account_ids(event):
             summary = get_summary(account_id)
             if summary is not None:
-                summary.assists += 1
+                summary.assists = max(summary.assists, _event_assist_count(event_list, account_id, include_lobby))
 
     return sorted(summaries_by_account.values(), key=lambda summary: summary.account_id)
 
@@ -248,13 +250,13 @@ def normalize_weapon_code(value: Any) -> str | None:
 
     if code.startswith("Item_Weapon_") and code.endswith("_C"):
         weapon_name = code.removeprefix("Item_Weapon_").removesuffix("_C")
-        return f"Weap{weapon_name}_C"
+        return _canonical_damage_causer_code(f"Weap{weapon_name}_C")
 
     if code.startswith("Item_Projectile_") and code.endswith("_C"):
         projectile_name = code.removeprefix("Item_Projectile_").removesuffix("_C")
-        return f"Proj{projectile_name}_C"
+        return _canonical_damage_causer_code(f"Proj{projectile_name}_C")
 
-    return _strip_weapon_instance_suffix(code)
+    return _canonical_damage_causer_code(_strip_weapon_instance_suffix(code))
 
 
 def body_part_from_damage_reason(value: Any) -> str:
@@ -363,6 +365,20 @@ def _assist_account_ids(event: Mapping[str, Any]) -> list[str]:
     return account_ids
 
 
+def _event_assist_count(
+    events: Iterable[Mapping[str, Any]],
+    account_id: str,
+    include_lobby: bool,
+) -> int:
+    count = 0
+    for event in events:
+        if not include_lobby and not _is_in_game_event(event):
+            continue
+        if event.get("_T") == "LogPlayerKillV2" and account_id in _assist_account_ids(event):
+            count += 1
+    return count
+
+
 def _character_account_id(value: Any) -> str | None:
     if not isinstance(value, Mapping):
         return None
@@ -377,6 +393,10 @@ def _strip_weapon_instance_suffix(code: str) -> str:
     if len(parts) == 2 and parts[1].isdigit():
         return parts[0]
     return code
+
+
+def _canonical_damage_causer_code(code: str) -> str:
+    return _DAMAGE_CAUSER_CODE_BY_LOWER.get(code.lower(), code)
 
 
 def _is_in_game_event(event: Mapping[str, Any]) -> bool:
@@ -414,3 +434,9 @@ def _increment(values: dict[str, int], key: str) -> None:
 def _merge_counts(destination: dict[str, int], source: Mapping[str, int]) -> None:
     for key, value in source.items():
         destination[key] = destination.get(key, 0) + value
+
+
+_DAMAGE_CAUSER_CODE_BY_LOWER = {
+    code.lower(): code
+    for code in DAMAGE_CAUSER_KO
+}

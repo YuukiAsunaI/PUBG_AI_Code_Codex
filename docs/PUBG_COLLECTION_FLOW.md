@@ -136,6 +136,25 @@ Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 queue
 stored under `D:\BackUP\raw`, and recorded in `raw_telemetry_payloads` with 0 failed telemetry jobs. Compressed stored
 telemetry size was 231,431,883 bytes.
 
+## Implemented Combat Summary Parser Slice
+
+The current local runtime can parse raw telemetry into registered-player combat summary tables:
+
+- `TelemetryCombatProcessor.process_raw_telemetry(...)` reads stored telemetry files from `PUBG_RAW_DATA_DIR`.
+- Only registered tracking targets that participated in the match are written to player summary tables.
+- `player_match_combat_summaries` stores per-match totals for shots fired, shots hit, hits taken, damage dealt,
+  damage taken, kills, assists, deaths, DBNOs caused/taken, finishes, headshot counts, and body-part hit maps.
+- `player_weapon_match_stats` stores the same combat facts split by normalized weapon/damage-causer code.
+- Weapon codes are canonicalized before storage so telemetry variants such as `WeapFamasG2_C` and
+  `WeapFAMASG2_C` collapse into one weapon row.
+- `python -m pubg_ai.cli parse-telemetry-combat --limit 10` runs one parse pass.
+- `python -m pubg_ai.cli parse-telemetry-combat --limit 200 --force` reparses already summarized matches after
+  parser changes.
+- The local web UI has combat parse/reparse buttons.
+
+Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 telemetry files were parsed with 0 failed
+payloads, reading 5,137,481 telemetry events and producing 146 match combat summaries plus 504 weapon-stat rows.
+
 ## Match Job States
 
 Use explicit job states so the local management UI can show where a match is stuck:

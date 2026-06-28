@@ -17,6 +17,10 @@ class WeaponStatsTests(unittest.TestCase):
         self.assertEqual(normalize_weapon_code("Item_Projectile_Grenade_C"), "ProjGrenade_C")
         self.assertIsNone(normalize_weapon_code("None"))
 
+    def test_normalizes_damage_causer_case_to_known_dictionary_code(self) -> None:
+        self.assertEqual(normalize_weapon_code("WeapFamasG2_C"), "WeapFAMASG2_C")
+        self.assertEqual(normalize_weapon_code("Item_Weapon_FAMASG2_C"), "WeapFAMASG2_C")
+
     def test_maps_damage_reason_to_body_part(self) -> None:
         self.assertEqual(body_part_from_damage_reason("HeadShot"), "head")
         self.assertEqual(body_part_from_damage_reason("TorsoShot"), "torso")
@@ -356,6 +360,40 @@ class WeaponStatsTests(unittest.TestCase):
         self.assertEqual(by_account["account.victim"].damage_taken, 20.0)
         self.assertEqual(by_account["account.victim"].deaths, 1)
         self.assertEqual(by_account["account.assist"].assists, 1)
+
+    def test_player_match_combat_does_not_double_count_weapon_assists(self) -> None:
+        stats = summarize_player_match_combat(
+            [
+                {
+                    "_T": "LogPlayerTakeDamage",
+                    "attacker": {"accountId": "account.assist"},
+                    "victim": {"accountId": "account.victim"},
+                    "damageTypeCategory": "Damage_Gun",
+                    "damageReason": "TorsoShot",
+                    "damage": 30.0,
+                    "damageCauserName": "WeapMini14_C",
+                    "common": {"isGame": 1},
+                },
+                {
+                    "_T": "LogPlayerKillV2",
+                    "killer": {"accountId": "account.killer"},
+                    "victim": {"accountId": "account.victim"},
+                    "assists_AccountId": ["account.assist"],
+                    "killerDamageInfo": {
+                        "damageReason": "TorsoShot",
+                        "damageTypeCategory": "Damage_Gun",
+                        "damageCauserName": "WeapBerylM762_C",
+                    },
+                    "isSuicide": False,
+                    "common": {"isGame": 1},
+                },
+            ],
+            match_id="match-1",
+            tracked_account_ids={"account.assist"},
+        )
+
+        self.assertEqual(stats[0].assists, 1)
+        self.assertEqual(stats[0].damage_dealt, 30.0)
 
 
 if __name__ == "__main__":
