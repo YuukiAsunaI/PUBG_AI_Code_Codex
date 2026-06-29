@@ -197,14 +197,16 @@ tables:
   replay layers.
 - `match_plane_routes` stores a match-level plane-route approximation reconstructed from early aircraft
   `LogPlayerPosition` samples.
+- `match_phase_events` stores match-level `LogGameStatePeriodic` safe-zone, poison-gas warning, red-zone, and
+  black-zone circles with elapsed time and alive counts for 2D replay phase overlays.
 - `python -m pubg_ai.cli parse-telemetry-movement --limit 10` runs one movement/location parse pass.
 - `python -m pubg_ai.cli parse-telemetry-movement --limit 200 --force` reparses already summarized movement rows
   after parser changes.
 - The local web UI has movement parse/reparse buttons.
 
 Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 telemetry files produced 8,610 player
-position samples, 178 landing events, 146 movement summaries, 872 combat-location events, 4,734 care-package events,
-and 119 plane-route approximations with 0 failed payloads.
+position samples, 178 landing events, 146 movement summaries, 979 combat-location events, 4,734 care-package events,
+119 plane-route approximations, and 20,720 phase events with 0 failed payloads.
 
 ## Implemented Combat Loadout Snapshot Slice
 
@@ -246,7 +248,7 @@ The current local runtime can generate post-match 2D route summary JPEG files fo
 - `python -m pubg_ai.cli generate-replay-timelines --limit 10` generates compact JSON replay timelines from the same
   parsed movement/location tables. These files are used by the local 2D playback UI.
 - Timeline artifacts store raw PUBG cm coordinates and normalized map percentage coordinates for player positions,
-  landings, combat markers, care packages, and plane routes.
+  landings, combat markers, care packages, plane routes, and phase circles.
 - Timeline artifacts also include same-roster team members from `match_participants`, registered-player emphasis
   flags, and related-player names/registration flags for combat events when those records are available.
 - If same-roster teammates also have parsed `player_position_samples`, timeline artifacts include `team_tracks`
@@ -259,8 +261,8 @@ The current local runtime can generate post-match 2D route summary JPEG files fo
 - The local web UI has JPEG and timeline JSON generate/regenerate buttons plus a recent artifact list with open-file
   links.
 - The local web UI also has a canvas-based 2D replay player that loads `timeline` artifacts and renders player route,
-  plane route, landing markers, combat markers, revive markers, and care-package markers over cached official map PNG
-  backgrounds when available. It falls back to the coordinate grid if the map asset is missing.
+  phase rings, plane route, landing markers, combat markers, revive markers, and care-package markers over cached
+  official map PNG backgrounds when available. It falls back to the coordinate grid if the map asset is missing.
 - The 2D replay player includes a time-sorted event list and event detail panel. Selecting a landing, combat, or
   care-package event pauses playback, seeks to that moment, highlights the map point, and shows event metadata such
   as weapon, damage reason, distance, related player, item count, and KST timestamp where available.
@@ -270,6 +272,8 @@ The current local runtime can generate post-match 2D route summary JPEG files fo
   labeled overlays while keeping the tracked player's route visually primary.
 - The 2D replay player has zoom and tracked-player follow controls. Follow mode keeps the viewport centered on the
   tracked player's interpolated position while all map layers use the same cropped map view.
+- The 2D replay player has a phase-ring toggle. At the current playback time it draws the most recent safe zone,
+  poison-gas warning circle, red zone, and black zone if telemetry has those circle coordinates.
 
 Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 route snapshot JPEG files were generated
 under `D:\BackUP\replay`, recorded in `replay_artifacts`, and verified as readable JPEG images. Total generated
@@ -277,7 +281,8 @@ snapshot size was 54,922,370 bytes.
 The local artifact list endpoint returned recent `map_snapshot` rows, and the file endpoint returned `image/jpeg`
 with valid JPEG magic bytes.
 Live test also regenerated one `timeline` artifact for match `751d1def-d222-4d3e-8b9d-1fc3721bb5c1`; the payload
-included a four-member squad list and 13 combat-location events with related-player display names where available.
+included a four-member squad list, 13 combat-location events with related-player display names where available, and
+171 phase-circle events.
 
 ## Implemented Discord Bot MVP Slice
 

@@ -167,6 +167,39 @@ class PlaneRoute:
 
 
 @dataclass(frozen=True)
+class PhaseEvent:
+    match_id: str
+    event_index: int
+    event_at_kst: datetime | None
+    common_is_game: float | None
+    elapsed_time_seconds: float | None
+    num_alive_players: int | None
+    num_alive_teams: int | None
+    safety_zone_x: float | None
+    safety_zone_y: float | None
+    safety_zone_z: float | None
+    safety_zone_radius: float | None
+    poison_gas_warning_x: float | None
+    poison_gas_warning_y: float | None
+    poison_gas_warning_z: float | None
+    poison_gas_warning_radius: float | None
+    red_zone_x: float | None
+    red_zone_y: float | None
+    red_zone_z: float | None
+    red_zone_radius: float | None
+    black_zone_x: float | None
+    black_zone_y: float | None
+    black_zone_z: float | None
+    black_zone_radius: float | None
+    raw_event: Mapping[str, Any]
+
+    def to_record(self) -> dict[str, Any]:
+        record = asdict(self)
+        record["event_at_kst"] = self.event_at_kst.isoformat() if self.event_at_kst else None
+        return record
+
+
+@dataclass(frozen=True)
 class TelemetryMovementProcessingResult:
     candidate_payloads: int
     parsed_payloads: int
@@ -180,6 +213,7 @@ class TelemetryMovementProcessingResult:
     combat_location_events: int
     care_package_events: int
     plane_routes: int
+    phase_events: int
 
     def to_record(self) -> dict[str, int]:
         return asdict(self)
@@ -210,6 +244,7 @@ class TelemetryMovementProcessor:
         combat_location_event_count = 0
         care_package_event_count = 0
         plane_route_count = 0
+        phase_event_count = 0
 
         for payload in payloads:
             match_id = str(payload["match_id"])
@@ -253,6 +288,7 @@ class TelemetryMovementProcessor:
                     match_id=match_id,
                     preferred_account_ids=tracked_account_ids,
                 )
+                phase_events = parse_phase_events(events, match_id=match_id)
                 self._replace_movement_rows(
                     match_id=match_id,
                     tracked_account_ids=tracked_account_ids,
@@ -262,6 +298,7 @@ class TelemetryMovementProcessor:
                     combat_location_events=combat_location_events,
                     care_package_events=care_package_events,
                     plane_route=plane_route,
+                    phase_events=phase_events,
                 )
             except Exception:
                 failed_payloads += 1
@@ -275,6 +312,7 @@ class TelemetryMovementProcessor:
             combat_location_event_count += len(combat_location_events)
             care_package_event_count += len(care_package_events)
             plane_route_count += 1 if plane_route is not None else 0
+            phase_event_count += len(phase_events)
 
         return TelemetryMovementProcessingResult(
             candidate_payloads=len(payloads),
@@ -289,6 +327,7 @@ class TelemetryMovementProcessor:
             combat_location_events=combat_location_event_count,
             care_package_events=care_package_event_count,
             plane_routes=plane_route_count,
+            phase_events=phase_event_count,
         )
 
     def _list_raw_telemetry_payloads(self, *, limit: int, force: bool) -> list[dict[str, Any]]:
@@ -369,6 +408,7 @@ class TelemetryMovementProcessor:
         combat_location_events: list[CombatLocationEvent],
         care_package_events: list[CarePackageEvent],
         plane_route: PlaneRoute | None,
+        phase_events: list[PhaseEvent],
     ) -> None:
         self._delete_existing_rows(match_id=match_id, account_ids=tracked_account_ids)
         self._insert_position_samples(position_samples)
@@ -377,6 +417,7 @@ class TelemetryMovementProcessor:
         self._insert_combat_location_events(combat_location_events)
         self._insert_care_package_events(care_package_events)
         self._insert_plane_route(plane_route)
+        self._insert_phase_events(phase_events)
 
     def _delete_existing_rows(self, *, match_id: str, account_ids: set[str]) -> None:
         with self.connection.cursor() as cursor:
@@ -399,6 +440,7 @@ class TelemetryMovementProcessor:
 
             cursor.execute("DELETE FROM match_care_package_events WHERE match_id = %s", (match_id,))
             cursor.execute("DELETE FROM match_plane_routes WHERE match_id = %s", (match_id,))
+            cursor.execute("DELETE FROM match_phase_events WHERE match_id = %s", (match_id,))
 
     def _insert_position_samples(self, samples: list[PositionSample]) -> None:
         if not samples:
@@ -719,6 +761,78 @@ class TelemetryMovementProcessor:
                     timestamp,
                 ),
             )
+
+    def _insert_phase_events(self, events: list[PhaseEvent]) -> None:
+        if not events:
+            return
+
+        timestamp = _mysql_kst_now()
+        rows = [
+            (
+                event.match_id,
+                event.event_index,
+                _mysql_datetime(event.event_at_kst),
+                event.common_is_game,
+                event.elapsed_time_seconds,
+                event.num_alive_players,
+                event.num_alive_teams,
+                event.safety_zone_x,
+                event.safety_zone_y,
+                event.safety_zone_z,
+                event.safety_zone_radius,
+                event.poison_gas_warning_x,
+                event.poison_gas_warning_y,
+                event.poison_gas_warning_z,
+                event.poison_gas_warning_radius,
+                event.red_zone_x,
+                event.red_zone_y,
+                event.red_zone_z,
+                event.red_zone_radius,
+                event.black_zone_x,
+                event.black_zone_y,
+                event.black_zone_z,
+                event.black_zone_radius,
+                json.dumps(event.raw_event, ensure_ascii=False, separators=(",", ":")),
+                timestamp,
+            )
+            for event in events
+        ]
+
+        with self.connection.cursor() as cursor:
+            for chunk in _chunked(rows, 1000):
+                cursor.executemany(
+                    """
+                    INSERT INTO match_phase_events (
+                        match_id,
+                        event_index,
+                        event_at_kst,
+                        common_is_game,
+                        elapsed_time_seconds,
+                        num_alive_players,
+                        num_alive_teams,
+                        safety_zone_x,
+                        safety_zone_y,
+                        safety_zone_z,
+                        safety_zone_radius,
+                        poison_gas_warning_x,
+                        poison_gas_warning_y,
+                        poison_gas_warning_z,
+                        poison_gas_warning_radius,
+                        red_zone_x,
+                        red_zone_y,
+                        red_zone_z,
+                        red_zone_radius,
+                        black_zone_x,
+                        black_zone_y,
+                        black_zone_z,
+                        black_zone_radius,
+                        raw_event,
+                        updated_at_kst
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    chunk,
+                )
 
 
 def parse_position_samples(
@@ -1145,6 +1259,54 @@ def parse_plane_route(
         end_z=end.z,
         sample_account_id=selected_account_id,
     )
+
+
+def parse_phase_events(
+    events: Iterable[Mapping[str, Any]],
+    *,
+    match_id: str,
+) -> list[PhaseEvent]:
+    phase_events: list[PhaseEvent] = []
+
+    for event_index, event in enumerate(events):
+        if event.get("_T") != "LogGameStatePeriodic":
+            continue
+
+        game_state = _mapping_value(event.get("gameState"))
+        safety_zone = _mapping_value(game_state.get("safetyZonePosition"))
+        poison_gas_warning = _mapping_value(game_state.get("poisonGasWarningPosition"))
+        red_zone = _mapping_value(game_state.get("redZonePosition"))
+        black_zone = _mapping_value(game_state.get("blackZonePosition"))
+        phase_events.append(
+            PhaseEvent(
+                match_id=match_id,
+                event_index=event_index,
+                event_at_kst=_parse_event_time(event.get("_D")),
+                common_is_game=_common_is_game(event),
+                elapsed_time_seconds=_optional_float(game_state.get("elapsedTime")),
+                num_alive_players=_optional_int(game_state.get("numAlivePlayers")),
+                num_alive_teams=_optional_int(game_state.get("numAliveTeams")),
+                safety_zone_x=_optional_float(safety_zone.get("x")),
+                safety_zone_y=_optional_float(safety_zone.get("y")),
+                safety_zone_z=_optional_float(safety_zone.get("z")),
+                safety_zone_radius=_optional_float(game_state.get("safetyZoneRadius")),
+                poison_gas_warning_x=_optional_float(poison_gas_warning.get("x")),
+                poison_gas_warning_y=_optional_float(poison_gas_warning.get("y")),
+                poison_gas_warning_z=_optional_float(poison_gas_warning.get("z")),
+                poison_gas_warning_radius=_optional_float(game_state.get("poisonGasWarningRadius")),
+                red_zone_x=_optional_float(red_zone.get("x")),
+                red_zone_y=_optional_float(red_zone.get("y")),
+                red_zone_z=_optional_float(red_zone.get("z")),
+                red_zone_radius=_optional_float(game_state.get("redZoneRadius")),
+                black_zone_x=_optional_float(black_zone.get("x")),
+                black_zone_y=_optional_float(black_zone.get("y")),
+                black_zone_z=_optional_float(black_zone.get("z")),
+                black_zone_radius=_optional_float(game_state.get("blackZoneRadius")),
+                raw_event=event,
+            )
+        )
+
+    return phase_events
 
 
 def _combat_location_record(

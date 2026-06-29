@@ -88,11 +88,12 @@ class DatabaseSchemaTests(unittest.TestCase):
             "player_combat_loadout_snapshots",
             "match_care_package_events",
             "match_plane_routes",
+            "match_phase_events",
             "replay_artifacts",
         ]:
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table_name}", schema)
 
-        self.assertEqual(SCHEMA_VERSION, 5)
+        self.assertEqual(SCHEMA_VERSION, 6)
 
     def test_schema_tracks_official_rate_limit_headers(self) -> None:
         schema = "\n".join(schema_statements())

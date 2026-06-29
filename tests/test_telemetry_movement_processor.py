@@ -6,6 +6,7 @@ from pubg_ai.telemetry_movement_processor import (
     parse_care_package_events,
     parse_combat_location_events,
     parse_landing_events,
+    parse_phase_events,
     parse_plane_route,
     parse_position_samples,
     summarize_movement,
@@ -238,6 +239,24 @@ class TelemetryMovementProcessorTests(unittest.TestCase):
                 },
                 "common": {"isGame": 1},
             },
+            {
+                "_T": "LogGameStatePeriodic",
+                "_D": "2026-06-28T00:03:10Z",
+                "gameState": {
+                    "elapsedTime": 190,
+                    "numAlivePlayers": 63,
+                    "numAliveTeams": 22,
+                    "safetyZonePosition": {"x": 202000.0, "y": 203000.0, "z": 0.0},
+                    "safetyZoneRadius": 291000.0,
+                    "poisonGasWarningPosition": {"x": 250000.0, "y": 260000.0, "z": 0.0},
+                    "poisonGasWarningRadius": 120000.0,
+                    "redZonePosition": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "redZoneRadius": 0.0,
+                    "blackZonePosition": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "blackZoneRadius": 0.0,
+                },
+                "common": {"isGame": 1.0},
+            },
         ]
 
         combat_locations = parse_combat_location_events(
@@ -246,6 +265,7 @@ class TelemetryMovementProcessorTests(unittest.TestCase):
             tracked_account_ids={"account.tracked"},
         )
         care_packages = parse_care_package_events(events, match_id="match-1")
+        phase_events = parse_phase_events(events, match_id="match-1")
         plane_route = parse_plane_route(
             events,
             match_id="match-1",
@@ -266,6 +286,12 @@ class TelemetryMovementProcessorTests(unittest.TestCase):
         self.assertEqual(combat_locations[4].damage_reason, "Revive")
         self.assertEqual(care_packages[0].item_count, 2)
         self.assertEqual(care_packages[0].item_codes[0], "Item_Weapon_FAMASG2_C")
+        self.assertEqual(len(phase_events), 1)
+        self.assertEqual(phase_events[0].elapsed_time_seconds, 190.0)
+        self.assertEqual(phase_events[0].num_alive_teams, 22)
+        self.assertEqual(phase_events[0].safety_zone_x, 202000.0)
+        self.assertEqual(phase_events[0].safety_zone_radius, 291000.0)
+        self.assertEqual(phase_events[0].poison_gas_warning_radius, 120000.0)
         self.assertIsNotNone(plane_route)
         assert plane_route is not None
         self.assertEqual(plane_route.sample_count, 2)

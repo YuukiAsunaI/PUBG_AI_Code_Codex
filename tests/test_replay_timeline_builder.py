@@ -128,6 +128,32 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
                 },
                 [
                     {
+                        "event_index": 35,
+                        "event_at_kst": datetime(2026, 6, 28, 9, 19, 0),
+                        "common_is_game": 1.0,
+                        "elapsed_time_seconds": 340.0,
+                        "num_alive_players": 92,
+                        "num_alive_teams": 28,
+                        "safety_zone_x": 202000.0,
+                        "safety_zone_y": 203000.0,
+                        "safety_zone_z": 0.0,
+                        "safety_zone_radius": 291000.0,
+                        "poison_gas_warning_x": 250000.0,
+                        "poison_gas_warning_y": 260000.0,
+                        "poison_gas_warning_z": 0.0,
+                        "poison_gas_warning_radius": 120000.0,
+                        "red_zone_x": 300000.0,
+                        "red_zone_y": 310000.0,
+                        "red_zone_z": 0.0,
+                        "red_zone_radius": 40000.0,
+                        "black_zone_x": None,
+                        "black_zone_y": None,
+                        "black_zone_z": None,
+                        "black_zone_radius": None,
+                    }
+                ],
+                [
+                    {
                         "account_id": "account.tracked",
                         "name": "Yuuki_Asuna---",
                         "roster_id": "roster-1",
@@ -226,6 +252,7 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
         self.assertEqual(payload["counts"]["team_tracks"], 1)
         self.assertEqual(payload["counts"]["team_position_samples"], 2)
         self.assertEqual(payload["counts"]["combat_events"], 1)
+        self.assertEqual(payload["counts"]["phase_events"], 1)
         self.assertEqual(payload["positions"][0]["map"]["x_pct"], 100000.0 / 816000.0)
         self.assertEqual(payload["team_tracks"][0]["name"], "TrackedMate")
         self.assertEqual(payload["team_tracks"][0]["positions"][0]["map"]["x_pct"], 101000.0 / 816000.0)
@@ -233,6 +260,13 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
         self.assertEqual(payload["combat_events"][0]["related_name"], "EnemyRegistered")
         self.assertTrue(payload["combat_events"][0]["related_registered"])
         self.assertEqual(payload["care_packages"][0]["item_codes"], ["Item_Weapon_AWM_C"])
+        self.assertEqual(payload["phase_events"][0]["elapsed_time_seconds"], 340.0)
+        self.assertEqual(payload["phase_events"][0]["num_alive_teams"], 28)
+        self.assertEqual(payload["phase_events"][0]["safety_zone"]["radius_m"], 2910.0)
+        self.assertEqual(payload["phase_events"][0]["safety_zone"]["map"]["x_pct"], 202000.0 / 816000.0)
+        self.assertEqual(payload["phase_events"][0]["poison_gas_warning"]["radius_m"], 1200.0)
+        self.assertEqual(payload["phase_events"][0]["red_zone"]["radius_m"], 400.0)
+        self.assertIsNone(payload["phase_events"][0]["black_zone"])
         self.assertIn("INSERT INTO replay_artifacts", connection.executed[-1][0])
         self.assertIn("player-timeline", connection.executed[-1][1])
 
@@ -258,6 +292,7 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
                 [],
                 [],
                 None,
+                [],
                 [],
             ]
         )

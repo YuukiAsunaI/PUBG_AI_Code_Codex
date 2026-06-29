@@ -245,9 +245,9 @@ GET /replay/artifacts/{artifact_id}/file
 ```
 
 The local web app includes a 2D replay player that loads generated `timeline` JSON artifacts, uses cached official
-map PNG assets as the canvas background when available, and renders movement, plane route, landing, combat, and
-care-package markers, including revive markers when telemetry has `LogPlayerRevive` events. The player also includes
-a time-sorted event list and a detail panel so fight, landing, and care-package events can be clicked to seek directly
+map PNG assets as the canvas background when available, and renders movement, plane route, phase rings, landing,
+combat, care-package, and revive markers when telemetry has the related events. The player also includes a
+time-sorted event list and a detail panel so fight, landing, and care-package events can be clicked to seek directly
 to that moment. Timeline JSON also carries the tracked player's
 team roster and marks registered teammates, so the local replay panel can show who was in the squad for that match.
 When teammate position samples exist, the player can draw teammate route overlays with current-position labels.

@@ -142,6 +142,7 @@ Use a two-layer storage model:
 | `player_combat_location_events` | DBNO, kill, death, finish, finished-taken, and revive coordinates with related player coordinates and method/damage metadata |
 | `match_care_package_events` | Care-package spawn/land coordinates and package item-code lists |
 | `match_plane_routes` | Plane-route approximation from early aircraft `LogPlayerPosition` samples |
+| `match_phase_events` | Match-level `LogGameStatePeriodic` safe-zone, next-zone warning, red-zone, and black-zone circles |
 | `agg_player_weapon` | Weapon usage, kills, deaths, damage, assists, caused DBNOs, suffered DBNOs, fight wins/losses |
 | `agg_player_weapon_body_part` | Weapon/body-part hit and hit-received rollups for accuracy and weakness analysis |
 | `agg_weapon_distance_bucket` | Weapon outcomes by distance bucket |
@@ -339,8 +340,9 @@ Completed slices:
     same cropped viewport.
 28. Movement/location parser stores `LogPlayerRevive` as revive-given/revive-received location events, and the 2D
     replay player renders them with revive markers and event detail rows.
+29. Movement/location parser stores `LogGameStatePeriodic` phase-circle events, and the 2D replay player renders the
+    current safe-zone, next-zone warning, red-zone, and black-zone rings through a map overlay toggle.
 
 Next slice:
 
-1. Add richer replay layers such as phase rings.
-2. Add local settings UI support for the optional Discord evidence-link base URL.
+1. Add local settings UI support for the optional Discord evidence-link base URL.

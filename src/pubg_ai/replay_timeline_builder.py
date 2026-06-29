@@ -160,6 +160,7 @@ class ReplayTimelineProcessor:
         )
         care_packages = self._load_care_packages(match_id=match_id, world_size_cm=world_size_cm)
         plane_route = self._load_plane_route(match_id=match_id, world_size_cm=world_size_cm)
+        phase_events = self._load_phase_events(match_id=match_id, world_size_cm=world_size_cm)
         team_members = self._load_team_members(match_id=match_id, account_id=account_id, shard=str(job["shard"]))
         team_tracks = self._load_team_position_tracks(
             match_id=match_id,
@@ -205,8 +206,10 @@ class ReplayTimelineProcessor:
                 "combat_events": len(combat_events),
                 "care_packages": len(care_packages),
                 "has_plane_route": plane_route is not None,
+                "phase_events": len(phase_events),
             },
             "plane_route": plane_route,
+            "phase_events": phase_events,
             "positions": positions,
             "team_tracks": team_tracks,
             "landings": landings,
@@ -552,6 +555,81 @@ class ReplayTimelineProcessor:
             "sample_account_id": _optional_text(row.get("sample_account_id")),
         }
 
+    def _load_phase_events(self, *, match_id: str, world_size_cm: float) -> list[dict[str, Any]]:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    event_index,
+                    event_at_kst,
+                    common_is_game,
+                    elapsed_time_seconds,
+                    num_alive_players,
+                    num_alive_teams,
+                    safety_zone_x,
+                    safety_zone_y,
+                    safety_zone_z,
+                    safety_zone_radius,
+                    poison_gas_warning_x,
+                    poison_gas_warning_y,
+                    poison_gas_warning_z,
+                    poison_gas_warning_radius,
+                    red_zone_x,
+                    red_zone_y,
+                    red_zone_z,
+                    red_zone_radius,
+                    black_zone_x,
+                    black_zone_y,
+                    black_zone_z,
+                    black_zone_radius
+                FROM match_phase_events
+                WHERE match_id = %s
+                ORDER BY event_index ASC
+                """,
+                (match_id,),
+            )
+            rows = cursor.fetchall()
+
+        return [
+            {
+                "event_index": _int(row.get("event_index")),
+                "event_at_kst": _datetime_record(row.get("event_at_kst")),
+                "t": _optional_float(row.get("common_is_game")),
+                "elapsed_time_seconds": _optional_float(row.get("elapsed_time_seconds")),
+                "num_alive_players": _optional_int(row.get("num_alive_players")),
+                "num_alive_teams": _optional_int(row.get("num_alive_teams")),
+                "safety_zone": _circle_record(
+                    row.get("safety_zone_x"),
+                    row.get("safety_zone_y"),
+                    row.get("safety_zone_z"),
+                    row.get("safety_zone_radius"),
+                    world_size_cm,
+                ),
+                "poison_gas_warning": _circle_record(
+                    row.get("poison_gas_warning_x"),
+                    row.get("poison_gas_warning_y"),
+                    row.get("poison_gas_warning_z"),
+                    row.get("poison_gas_warning_radius"),
+                    world_size_cm,
+                ),
+                "red_zone": _circle_record(
+                    row.get("red_zone_x"),
+                    row.get("red_zone_y"),
+                    row.get("red_zone_z"),
+                    row.get("red_zone_radius"),
+                    world_size_cm,
+                ),
+                "black_zone": _circle_record(
+                    row.get("black_zone_x"),
+                    row.get("black_zone_y"),
+                    row.get("black_zone_z"),
+                    row.get("black_zone_radius"),
+                    world_size_cm,
+                ),
+            }
+            for row in rows
+        ]
+
     def _upsert_artifact(self, *, job: Mapping[str, Any], stored: StoredReplayArtifact) -> None:
         source_tables = {
             "renderer": TIMELINE_RENDERER_VERSION,
@@ -562,6 +640,7 @@ class ReplayTimelineProcessor:
                 "match_participants",
                 "match_care_package_events",
                 "match_plane_routes",
+                "match_phase_events",
             ],
         }
         with self.connection.cursor() as cursor:
@@ -625,6 +704,26 @@ def _map_point(x: Any, y: Any, world_size_cm: float) -> dict[str, float] | None:
     return {
         "x_pct": clamped_x / world_size_cm,
         "y_pct": clamped_y / world_size_cm,
+    }
+
+
+def _circle_record(x: Any, y: Any, z: Any, radius: Any, world_size_cm: float) -> dict[str, Any] | None:
+    px = _optional_float(x)
+    py = _optional_float(y)
+    pz = _optional_float(z)
+    circle_radius = _optional_float(radius)
+    if px is None or py is None or circle_radius is None or circle_radius <= 0 or world_size_cm <= 0:
+        return None
+    return {
+        "x": px,
+        "y": py,
+        "z": pz,
+        "radius": circle_radius,
+        "radius_m": circle_radius / 100.0,
+        "map": {
+            **(_map_point(px, py, world_size_cm) or {"x_pct": 0.0, "y_pct": 0.0}),
+            "radius_pct": circle_radius / world_size_cm,
+        },
     }
 
 

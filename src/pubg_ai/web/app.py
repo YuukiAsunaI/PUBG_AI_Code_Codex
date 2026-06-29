@@ -1130,6 +1130,7 @@ _INDEX_HTML = """<!doctype html>
         <label><input type="checkbox" id="timelineShowCombat" checked>전투</label>
         <label><input type="checkbox" id="timelineShowCare" checked>보급</label>
         <label><input type="checkbox" id="timelineShowPlane" checked>비행기</label>
+        <label><input type="checkbox" id="timelineShowPhase" checked>자기장</label>
         <label><input type="checkbox" id="timelineShowTeam" checked>팀원</label>
         <label><input type="checkbox" id="timelineFollowPlayer">팔로우</label>
         <label>줌
@@ -1214,6 +1215,7 @@ _INDEX_HTML = """<!doctype html>
     const timelineShowCombat = document.querySelector("#timelineShowCombat");
     const timelineShowCare = document.querySelector("#timelineShowCare");
     const timelineShowPlane = document.querySelector("#timelineShowPlane");
+    const timelineShowPhase = document.querySelector("#timelineShowPhase");
     const timelineShowTeam = document.querySelector("#timelineShowTeam");
     const timelineFollowPlayer = document.querySelector("#timelineFollowPlayer");
     const timelineZoom = document.querySelector("#timelineZoom");
@@ -1776,6 +1778,7 @@ _INDEX_HTML = """<!doctype html>
       for (const event of timeline.landings || []) times.push(eventTime(event));
       for (const event of timeline.combat_events || []) times.push(eventTime(event));
       for (const event of timeline.care_packages || []) times.push(eventTime(event));
+      for (const event of timeline.phase_events || []) times.push(eventTime(event));
       const matchDuration = Number(timeline.match?.duration_seconds || 0);
       if (Number.isFinite(matchDuration) && matchDuration > 0) times.push(matchDuration);
       return Math.max(0, ...times.filter((value) => Number.isFinite(value)));
@@ -1993,6 +1996,7 @@ _INDEX_HTML = """<!doctype html>
       replayCtx.clearRect(0, 0, width, height);
       drawReplayBackground(width, height);
 
+      if (timelineShowPhase.checked) drawReplayPhaseRings(activeTimeline.phase_events || []);
       if (timelineShowPlane.checked) drawReplayPlaneRoute(activeTimeline.plane_route);
       if (timelineShowCare.checked) drawReplayCarePackages(activeTimeline.care_packages || []);
       if (timelineShowPath.checked) drawReplayPath(activeTimeline.positions || []);
@@ -2054,6 +2058,42 @@ _INDEX_HTML = """<!doctype html>
       replayCtx.stroke();
       drawCircle(start, 7, "#ffffff", "#1976d2");
       drawCircle(end, 7, "#ffffff", "#1976d2");
+    }
+
+    function drawReplayPhaseRings(events) {
+      const phase = activePhaseEvent(events);
+      if (!phase) return;
+      drawMapCircle(phase.poison_gas_warning, "rgba(33,150,243,0.78)", "rgba(33,150,243,0.05)", [10, 8], 3);
+      drawMapCircle(phase.safety_zone, "rgba(76,175,80,0.92)", "rgba(76,175,80,0.08)", [], 4);
+      drawMapCircle(phase.red_zone, "rgba(244,67,54,0.82)", "rgba(244,67,54,0.10)", [6, 6], 2);
+      drawMapCircle(phase.black_zone, "rgba(33,33,33,0.84)", "rgba(33,33,33,0.14)", [4, 5], 2);
+      replayCtx.setLineDash([]);
+    }
+
+    function activePhaseEvent(events) {
+      let current = null;
+      for (const event of events || []) {
+        if (eventTime(event) <= activeTimelineTime) current = event;
+        else break;
+      }
+      return current;
+    }
+
+    function drawMapCircle(circle, stroke, fill, dash, lineWidth) {
+      const radiusPct = Number(circle?.map?.radius_pct);
+      if (!circle?.map || !Number.isFinite(radiusPct) || radiusPct <= 0) return;
+      const center = canvasPoint(circle.map);
+      const radius = (radiusPct / replayViewport().size) * replayCanvas.width;
+      if (!Number.isFinite(radius) || radius <= 0) return;
+      replayCtx.beginPath();
+      replayCtx.arc(center.x, center.y, radius, 0, Math.PI * 2);
+      replayCtx.fillStyle = fill;
+      replayCtx.fill();
+      replayCtx.strokeStyle = stroke;
+      replayCtx.lineWidth = lineWidth;
+      replayCtx.setLineDash(dash || []);
+      replayCtx.stroke();
+      replayCtx.setLineDash([]);
     }
 
     function drawReplayCarePackages(events) {
@@ -2453,7 +2493,7 @@ _INDEX_HTML = """<!doctype html>
         throw new Error(error.detail || response.statusText);
       }
       const payload = await response.json();
-      movementStatus.textContent = `파싱 ${payload.result.parsed_payloads}개, 위치 ${payload.result.position_samples}개, 전투위치 ${payload.result.combat_location_events}개, 보급 ${payload.result.care_package_events}개, 비행기 ${payload.result.plane_routes}개, 실패 ${payload.result.failed_payloads}개`;
+      movementStatus.textContent = `파싱 ${payload.result.parsed_payloads}개, 위치 ${payload.result.position_samples}개, 전투위치 ${payload.result.combat_location_events}개, 보급 ${payload.result.care_package_events}개, 비행기 ${payload.result.plane_routes}개, 자기장 ${payload.result.phase_events || 0}개, 실패 ${payload.result.failed_payloads}개`;
       banner.textContent = "위치 파싱 완료";
     }
 
@@ -2744,7 +2784,7 @@ _INDEX_HTML = """<!doctype html>
       if (!button) return;
       seekTimelineEvent(button.dataset.timelineEvent || "");
     });
-    for (const toggle of [timelineShowPath, timelineShowCombat, timelineShowCare, timelineShowPlane, timelineShowTeam, timelineFollowPlayer]) {
+    for (const toggle of [timelineShowPath, timelineShowCombat, timelineShowCare, timelineShowPlane, timelineShowPhase, timelineShowTeam, timelineFollowPlayer]) {
       toggle.addEventListener("change", renderReplayFrame);
     }
     timelineZoom.addEventListener("change", renderReplayFrame);

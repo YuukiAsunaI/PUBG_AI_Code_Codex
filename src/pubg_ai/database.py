@@ -8,7 +8,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 class DatabaseError(RuntimeError):
@@ -76,7 +76,7 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 VALUES (%s, %s, NOW(6))
                 ON DUPLICATE KEY UPDATE description = VALUES(description)
                 """,
-                (SCHEMA_VERSION, "combat loadout snapshot schema"),
+                (SCHEMA_VERSION, "match phase event schema"),
             )
             applied += 1
     finally:
@@ -600,6 +600,41 @@ def schema_statements() -> list[str]:
             updated_at_kst DATETIME(6) NOT NULL,
             UNIQUE KEY uq_match_plane_routes (match_id),
             CONSTRAINT fk_match_plane_routes_match
+                FOREIGN KEY (match_id) REFERENCES matches(match_id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS match_phase_events (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            match_id VARCHAR(191) NOT NULL,
+            event_index INT NOT NULL,
+            event_at_kst DATETIME(6) NULL,
+            common_is_game FLOAT NULL,
+            elapsed_time_seconds FLOAT NULL,
+            num_alive_players INT NULL,
+            num_alive_teams INT NULL,
+            safety_zone_x FLOAT NULL,
+            safety_zone_y FLOAT NULL,
+            safety_zone_z FLOAT NULL,
+            safety_zone_radius FLOAT NULL,
+            poison_gas_warning_x FLOAT NULL,
+            poison_gas_warning_y FLOAT NULL,
+            poison_gas_warning_z FLOAT NULL,
+            poison_gas_warning_radius FLOAT NULL,
+            red_zone_x FLOAT NULL,
+            red_zone_y FLOAT NULL,
+            red_zone_z FLOAT NULL,
+            red_zone_radius FLOAT NULL,
+            black_zone_x FLOAT NULL,
+            black_zone_y FLOAT NULL,
+            black_zone_z FLOAT NULL,
+            black_zone_radius FLOAT NULL,
+            raw_event JSON NULL,
+            updated_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_match_phase_events (match_id, event_index),
+            KEY idx_match_phase_events_match_time (match_id, event_at_kst),
+            CONSTRAINT fk_match_phase_events_match
                 FOREIGN KEY (match_id) REFERENCES matches(match_id)
                 ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
