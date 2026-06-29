@@ -217,6 +217,31 @@ def create_app() -> Any:
         finally:
             connection.close()
 
+    @app.get("/players/weapon")
+    def player_weapon(
+        weapon: str,
+        shard: str = "steam",
+        name: str | None = None,
+        account_id: str | None = None,
+    ) -> dict[str, Any]:
+        if not name and not account_id:
+            raise HTTPException(status_code=400, detail="name or account_id is required.")
+
+        connection = connect_mysql(config.database)
+        try:
+            detail = PlayerStatsService(connection).get_weapon_detail(
+                shard=shard,
+                account_id=account_id,
+                name=name,
+                weapon=weapon,
+                global_scope=True,
+            )
+            if detail is None:
+                raise HTTPException(status_code=404, detail="registered player weapon stats not found.")
+            return {"weapon": detail.to_record()}
+        finally:
+            connection.close()
+
     @app.post("/players/register")
     def register_player(request: RegisterPlayerRequest) -> dict[str, Any]:
         connection = connect_mysql(config.database)
@@ -653,6 +678,25 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="profileBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
     <section>
+      <h2>무기 조회</h2>
+      <form id="weaponForm">
+        <label>플랫폼
+          <select name="shard">
+            <option value="steam">steam</option>
+            <option value="kakao">kakao</option>
+          </select>
+        </label>
+        <label>닉네임 또는 Account ID
+          <input name="target" autocomplete="off" required>
+        </label>
+        <label>무기
+          <input name="weapon" autocomplete="off" placeholder="M416" required>
+        </label>
+        <button type="submit">조회</button>
+      </form>
+      <div class="status" id="weaponBody" style="margin-top: 12px;">조회 대기 중</div>
+    </section>
+    <section>
       <h2>Match 수집 큐</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="processMatchJobs()">상세 저장</button>
@@ -746,6 +790,7 @@ _INDEX_HTML = """<!doctype html>
     const statusGrid = document.querySelector("#statusGrid");
     const playersBody = document.querySelector("#playersBody");
     const profileBody = document.querySelector("#profileBody");
+    const weaponBody = document.querySelector("#weaponBody");
     const jobsBody = document.querySelector("#jobsBody");
     const telemetryJobsBody = document.querySelector("#telemetryJobsBody");
     const combatStatus = document.querySelector("#combatStatus");
@@ -899,6 +944,34 @@ _INDEX_HTML = """<!doctype html>
         `평균 딜/받은 딜: ${Number(totals.avg_damage_dealt).toFixed(1)} / ${Number(totals.avg_damage_taken).toFixed(1)}`,
         `명중률: ${percent(totals.accuracy)}`,
         `주무기: ${weapons}`,
+      ].join("<br>");
+    }
+
+    async function loadPlayerWeapon(target, weapon, shard) {
+      const params = new URLSearchParams({ shard, weapon });
+      if (target.startsWith("account.")) {
+        params.set("account_id", target);
+      } else {
+        params.set("name", target);
+      }
+      const response = await fetch(`/players/weapon?${params.toString()}`);
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const payload = await response.json();
+      const detail = payload.weapon;
+      const totals = detail.totals;
+      const recent = (detail.recent_matches || []).slice(0, 3).map((match) => (
+        `${escapeHtml(match.match_id.slice(0, 8))} ${match.kills}킬 ${match.dbnos}기절 ${Number(match.damage_dealt).toFixed(0)}딜`
+      )).join("<br>") || "-";
+      weaponBody.innerHTML = [
+        `<strong>${escapeHtml(detail.player.current_name)} ${escapeHtml(detail.weapon_name)}</strong>`,
+        `사용 경기/치킨: ${totals.match_count}전 ${totals.wins}치킨 (${percent(totals.win_rate)})`,
+        `킬/어시/기절: ${totals.kills}/${totals.assists}/${totals.dbnos}`,
+        `딜/평균 딜: ${Number(totals.damage_dealt).toFixed(0)} / ${Number(totals.avg_damage_dealt).toFixed(1)}`,
+        `명중률: ${percent(totals.accuracy)} (${totals.shots_hit}/${totals.shots_fired})`,
+        `최근 사용 경기:<br>${recent}`,
       ].join("<br>");
     }
 
@@ -1137,6 +1210,22 @@ _INDEX_HTML = """<!doctype html>
         banner.textContent = "전적 조회 완료";
       } catch (error) {
         profileBody.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    document.querySelector("#weaponForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      try {
+        await loadPlayerWeapon(
+          String(form.get("target") || ""),
+          String(form.get("weapon") || ""),
+          String(form.get("shard") || "steam"),
+        );
+        banner.textContent = "무기 조회 완료";
+      } catch (error) {
+        weaponBody.textContent = `오류: ${error.message}`;
         banner.textContent = `오류: ${error.message}`;
       }
     });

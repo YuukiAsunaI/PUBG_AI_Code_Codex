@@ -244,6 +244,8 @@ The current Discord bot slice is intentionally small and reuses the same local M
 - `!유저조회 [닉네임] [shard]` lists registered targets or loads one registered target including inactive rows.
 - `!전적 닉네임 [shard]` reads parsed MySQL summaries and returns matches, chickens, KDA, damage, accuracy,
   average survival/movement, top weapons, and recent match rows.
+- `!무기 닉네임 무기명 [shard]` resolves common names such as `M416` to PUBG weapon codes and returns weapon-specific
+  usage matches, chickens, kills, assists, DBNOs, damage, accuracy, body-part hits, and recent weapon rows.
 - `!유저삭제 steam 닉네임또는accountId` stops future collection by setting the registered target inactive.
 - `!최근스냅샷 [match_id]` sends the latest generated `map_snapshot` JPEG artifact, or the latest snapshot for the
   requested match ID.

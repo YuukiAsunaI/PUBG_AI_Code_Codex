@@ -106,6 +106,12 @@ Show registered player stats from parsed MySQL summary tables:
 python -m pubg_ai.cli player-stats Yuuki_Asuna--- --shard steam
 ```
 
+Show one weapon's parsed combat stats:
+
+```powershell
+python -m pubg_ai.cli player-weapon-stats Yuuki_Asuna--- M416 --shard steam
+```
+
 Refresh active registered players and queue unseen match IDs:
 
 ```powershell
@@ -205,6 +211,7 @@ Discord's message content intent to be enabled for the bot application. Initial 
 !유저등록 steam 닉네임
 !유저조회 [닉네임] [shard]
 !전적 닉네임 [shard]
+!무기 닉네임 무기명 [shard]
 !최근스냅샷 [match_id]
 !유저삭제 steam 닉네임또는accountId
 ```

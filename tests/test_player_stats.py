@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 import unittest
 
-from pubg_ai.player_stats import PlayerStatsService
+from pubg_ai.player_stats import PlayerStatsService, weapon_code_from_identifier
 
 
 class PlayerStatsServiceTests(unittest.TestCase):
@@ -122,6 +122,109 @@ class PlayerStatsServiceTests(unittest.TestCase):
 
         self.assertIsNone(profile)
         self.assertEqual(len(connection.executed), 1)
+
+    def test_builds_weapon_detail_from_alias_and_part_maps(self) -> None:
+        connection = FakeConnection(
+            [
+                {
+                    "id": 1,
+                    "account_id": "account.test",
+                    "shard": "steam",
+                    "current_name": "Yuuki_Asuna---",
+                    "active": 1,
+                    "public_profile": 1,
+                    "registered_by_discord_user_id": "user-1",
+                    "registered_guild_id": "guild-1",
+                    "registered_channel_id": "channel-1",
+                },
+                [
+                    {"weapon_code": "WeapHK416_C"},
+                    {"weapon_code": "WeapBerylM762_C"},
+                ],
+                [
+                    {
+                        "match_id": "match-2",
+                        "created_at_kst": datetime(2026, 6, 29, 1, 0, 0),
+                        "map_name": "Erangel_Main",
+                        "game_mode": "squad-fpp",
+                        "win_place": 1,
+                        "shots_fired": 100,
+                        "shots_hit": 30,
+                        "hits_taken": 1,
+                        "damage_dealt": 350.0,
+                        "damage_taken": 90.0,
+                        "kills": 3,
+                        "assists": 1,
+                        "deaths": 0,
+                        "dbnos": 2,
+                        "dbnos_taken": 0,
+                        "finishes": 1,
+                        "finishes_taken": 0,
+                        "headshot_hits": 6,
+                        "headshot_hits_taken": 0,
+                        "headshot_kills": 1,
+                        "headshot_deaths": 0,
+                        "headshot_dbnos": 1,
+                        "headshot_dbnos_taken": 0,
+                        "hit_parts": {"head": 6, "torso": 20},
+                        "taken_hit_parts": '{"arm": 1}',
+                    },
+                    {
+                        "match_id": "match-1",
+                        "created_at_kst": datetime(2026, 6, 28, 1, 0, 0),
+                        "map_name": "Tiger_Main",
+                        "game_mode": "squad",
+                        "win_place": 4,
+                        "shots_fired": 50,
+                        "shots_hit": 10,
+                        "hits_taken": 0,
+                        "damage_dealt": 120.0,
+                        "damage_taken": 0.0,
+                        "kills": 1,
+                        "assists": 0,
+                        "deaths": 0,
+                        "dbnos": 1,
+                        "dbnos_taken": 0,
+                        "finishes": 0,
+                        "finishes_taken": 0,
+                        "headshot_hits": 2,
+                        "headshot_hits_taken": 0,
+                        "headshot_kills": 0,
+                        "headshot_deaths": 0,
+                        "headshot_dbnos": 0,
+                        "headshot_dbnos_taken": 0,
+                        "hit_parts": {"head": 2, "leg": 3},
+                        "taken_hit_parts": {},
+                    },
+                ],
+            ]
+        )
+
+        detail = PlayerStatsService(connection).get_weapon_detail(
+            shard="steam",
+            name="Yuuki_Asuna---",
+            guild_id="guild-1",
+            weapon="M416",
+        )
+
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertEqual(detail.weapon_code, "WeapHK416_C")
+        self.assertEqual(detail.weapon_name, "M416")
+        self.assertEqual(detail.totals.match_count, 2)
+        self.assertEqual(detail.totals.wins, 1)
+        self.assertEqual(detail.totals.kills, 4)
+        self.assertEqual(detail.totals.dbnos, 3)
+        self.assertAlmostEqual(detail.totals.accuracy, 40 / 150)
+        self.assertAlmostEqual(detail.totals.avg_damage_dealt, 235.0)
+        self.assertEqual(detail.totals.hit_parts, {"head": 8, "torso": 20, "leg": 3})
+        self.assertEqual(detail.totals.taken_hit_parts, {"arm": 1})
+        self.assertEqual(detail.recent_matches[0].match_id, "match-2")
+
+    def test_weapon_identifier_aliases_common_names(self) -> None:
+        self.assertEqual(weapon_code_from_identifier("M416"), "WeapHK416_C")
+        self.assertEqual(weapon_code_from_identifier("Beryl"), "WeapBerylM762_C")
+        self.assertEqual(weapon_code_from_identifier("Item_Weapon_AK47_C"), "WeapAK47_C")
 
 
 class FakeConnection:

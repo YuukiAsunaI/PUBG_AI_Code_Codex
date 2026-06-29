@@ -49,6 +49,14 @@ def main(argv: list[str] | None = None) -> int:
     stats_parser.add_argument("target", help="Registered nickname or accountId.")
     stats_parser.add_argument("--shard", default="steam")
 
+    weapon_stats_parser = subparsers.add_parser(
+        "player-weapon-stats",
+        help="Print registered player weapon statistics.",
+    )
+    weapon_stats_parser.add_argument("target", help="Registered nickname or accountId.")
+    weapon_stats_parser.add_argument("weapon", help="Weapon code or common weapon name, for example M416.")
+    weapon_stats_parser.add_argument("--shard", default="steam")
+
     collect_parser = subparsers.add_parser("collect-matches", help="Refresh registered players and queue match jobs.")
     collect_parser.add_argument("--shard", default=None)
     collect_parser.add_argument("--limit", default=None, type=int)
@@ -191,6 +199,23 @@ def main(argv: list[str] | None = None) -> int:
             if profile is None:
                 raise SystemExit("registered player stats not found.")
             _print_json({"profile": profile.to_record()})
+        finally:
+            connection.close()
+        return 0
+
+    if args.command == "player-weapon-stats":
+        connection = connect_mysql(config.database)
+        try:
+            detail = PlayerStatsService(connection).get_weapon_detail(
+                shard=args.shard,
+                account_id=args.target if args.target.startswith("account.") else None,
+                name=None if args.target.startswith("account.") else args.target,
+                weapon=args.weapon,
+                global_scope=True,
+            )
+            if detail is None:
+                raise SystemExit("registered player weapon stats not found.")
+            _print_json({"weapon": detail.to_record()})
         finally:
             connection.close()
         return 0

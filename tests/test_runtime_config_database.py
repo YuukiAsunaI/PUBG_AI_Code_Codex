@@ -104,7 +104,9 @@ class DiscordCommandDefaultsTests(unittest.TestCase):
         self.assertIn("유저등록", DEFAULT_COMMAND_GROUPS["register"])
         self.assertIn("유저조회", DEFAULT_COMMAND_GROUPS["profile_read"])
         self.assertIn("전적", DEFAULT_COMMAND_GROUPS["profile_read"])
+        self.assertIn("무기", DEFAULT_COMMAND_GROUPS["profile_read"])
         self.assertIn("pubg-stats", DEFAULT_COMMAND_GROUPS["profile_read"])
+        self.assertIn("pubg-weapon", DEFAULT_COMMAND_GROUPS["profile_read"])
         self.assertIn("유저삭제", DEFAULT_COMMAND_GROUPS["admin"])
 
 

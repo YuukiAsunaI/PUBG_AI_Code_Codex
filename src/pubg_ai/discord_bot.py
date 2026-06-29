@@ -7,7 +7,7 @@ from pubg_ai.config import RuntimeConfig
 from pubg_ai.database import connect_mysql
 from pubg_ai.discord_permissions import DiscordCommandIdentity, DiscordPermissionChecker
 from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry, RegisteredPlayer
-from pubg_ai.player_stats import PlayerProfileStats, PlayerStatsService
+from pubg_ai.player_stats import PlayerProfileStats, PlayerStatsService, PlayerWeaponDetail
 from pubg_ai.pubg_client import PubgApiClient, PubgApiError
 from pubg_ai.replay_artifact_catalog import ReplayArtifactRecord, list_replay_artifacts
 from pubg_ai.replay_storage import ReplayArtifactStore, ReplayStorageError
@@ -78,6 +78,34 @@ def format_player_profile_stats(profile: PlayerProfileStats) -> str:
     return "\n".join(lines)
 
 
+def format_player_weapon_detail(detail: PlayerWeaponDetail) -> str:
+    totals = detail.totals
+    lines = [
+        f"{detail.player.current_name} {detail.weapon_name} 무기 통계",
+        f"- 사용 경기/치킨: {totals.match_count}전 {totals.wins}치킨 ({_percent(totals.win_rate)})",
+        f"- 킬/어시/기절: {totals.kills}/{totals.assists}/{totals.dbnos}",
+        f"- 딜/평균 딜: {_number(totals.damage_dealt, 0)} / {_number(totals.avg_damage_dealt, 1)}",
+        f"- 명중률: {_percent(totals.accuracy)} ({totals.shots_hit}/{totals.shots_fired})",
+        f"- 헤드샷 킬/기절: {totals.headshot_kills}/{totals.headshot_dbnos}",
+    ]
+
+    hit_parts = _top_parts(totals.hit_parts)
+    if hit_parts:
+        lines.append(f"- 맞춘 부위: {hit_parts}")
+
+    if detail.recent_matches:
+        lines.append("최근 사용 경기")
+        for match in detail.recent_matches[:3]:
+            rank = f"#{match.win_place}" if match.win_place is not None else "-"
+            lines.append(
+                f"- {_short_match_id(match.match_id)} {rank} "
+                f"{match.kills}킬/{match.dbnos}기절/{_number(match.damage_dealt, 0)}딜 "
+                f"{_percent(match.accuracy)}"
+            )
+
+    return "\n".join(lines)
+
+
 def create_discord_bot(
     *,
     config: RuntimeConfig,
@@ -126,6 +154,7 @@ def create_discord_bot(
                     f"- `{command_prefix}유저등록 steam 닉네임`",
                     f"- `{command_prefix}유저조회 [닉네임] [shard]`",
                     f"- `{command_prefix}전적 닉네임 [shard]`",
+                    f"- `{command_prefix}무기 닉네임 무기명 [shard]`",
                     f"- `{command_prefix}최근스냅샷 [match_id]`",
                     f"- `{command_prefix}유저삭제 steam 닉네임또는accountId`",
                 ]
@@ -189,6 +218,43 @@ def create_discord_bot(
             return
 
         await ctx.reply(format_player_profile_stats(profile), mention_author=False)
+
+    @bot.command(name="무기", aliases=["pubg-weapon"])
+    async def player_weapon_command(
+        ctx: Any,
+        name: str | None = None,
+        weapon: str | None = None,
+        shard: str = "steam",
+    ) -> None:
+        if not await require_permission(ctx, "profile_read"):
+            return
+        if not name or not weapon:
+            await ctx.reply(f"사용법: `{command_prefix}무기 닉네임 무기명 [shard]`", mention_author=False)
+            return
+
+        guild_id = await require_scoped_guild(ctx)
+        if guild_id is None and not has_global_scope(ctx):
+            return
+        global_scope = has_global_scope(ctx)
+
+        connection = connect_mysql(config.database)
+        try:
+            detail = PlayerStatsService(connection).get_weapon_detail(
+                shard=shard,
+                account_id=name if name.startswith("account.") else None,
+                name=None if name.startswith("account.") else name,
+                weapon=weapon,
+                guild_id=None if global_scope else guild_id,
+                global_scope=global_scope,
+            )
+        finally:
+            connection.close()
+
+        if detail is None:
+            await ctx.reply("조회 가능한 무기 통계를 찾지 못했습니다.", mention_author=False)
+            return
+
+        await ctx.reply(format_player_weapon_detail(detail), mention_author=False)
 
     @bot.command(name="유저등록", aliases=["pubg-register"])
     async def register_player_command(ctx: Any, shard: str, nickname: str) -> None:
@@ -340,6 +406,23 @@ def _minutes(seconds: float) -> str:
 
 def _distance_km(meters: float) -> str:
     return f"{meters / 1000:.1f}km"
+
+
+def _top_parts(parts: dict[str, int]) -> str:
+    if not parts:
+        return ""
+    ordered = sorted(parts.items(), key=lambda item: (-item[1], item[0]))
+    return ", ".join(f"{_part_label(key)} {value}" for key, value in ordered[:4])
+
+
+def _part_label(value: str) -> str:
+    return {
+        "head": "머리",
+        "torso": "몸통",
+        "pelvis": "골반",
+        "arm": "팔",
+        "leg": "다리",
+    }.get(value, value)
 
 
 def _player_visible_to_scope(

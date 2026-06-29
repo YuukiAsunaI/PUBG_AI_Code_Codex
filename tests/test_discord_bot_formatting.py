@@ -7,6 +7,7 @@ from pubg_ai.discord_bot import (
     _player_visible_to_scope,
     format_player_list,
     format_player_profile_stats,
+    format_player_weapon_detail,
     format_replay_artifact_summary,
 )
 from pubg_ai.player_registry import RegisteredPlayer
@@ -14,6 +15,9 @@ from pubg_ai.player_stats import (
     PlayerCombatTotals,
     PlayerProfileStats,
     PlayerRecentMatch,
+    PlayerWeaponDetail,
+    PlayerWeaponDetailTotals,
+    PlayerWeaponRecentMatch,
     PlayerWeaponStats,
 )
 from pubg_ai.replay_artifact_catalog import ReplayArtifactRecord
@@ -126,6 +130,71 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("KDA 3.75", body)
         self.assertIn("베릴 M762 12킬 1200딜", body)
         self.assertIn("match-12 #1 5킬/550딜", body)
+
+    def test_weapon_detail_summary_formats_weapon_metrics(self) -> None:
+        detail = PlayerWeaponDetail(
+            player=RegisteredPlayer(
+                id=1,
+                account_id="account.test",
+                shard="steam",
+                current_name="Yuuki_Asuna---",
+                active=True,
+                public_profile=True,
+            ),
+            weapon_code="WeapHK416_C",
+            weapon_name="M416",
+            totals=PlayerWeaponDetailTotals(
+                match_count=12,
+                wins=2,
+                kills=20,
+                assists=4,
+                deaths_taken=1,
+                dbnos=16,
+                dbnos_taken=0,
+                finishes=8,
+                finishes_taken=0,
+                damage_dealt=2400.0,
+                damage_taken=90.0,
+                shots_fired=1000,
+                shots_hit=230,
+                hits_taken=1,
+                headshot_hits=30,
+                headshot_kills=5,
+                headshot_dbnos=4,
+                accuracy=0.23,
+                avg_damage_dealt=200.0,
+                win_rate=2 / 12,
+                headshot_kill_rate=0.25,
+                hit_parts={"head": 30, "torso": 140},
+                taken_hit_parts={"arm": 1},
+            ),
+            recent_matches=[
+                PlayerWeaponRecentMatch(
+                    match_id="match-123456789",
+                    created_at_kst=datetime(2026, 6, 29, 1, 0, 0),
+                    map_name="Erangel_Main",
+                    game_mode="squad-fpp",
+                    win_place=1,
+                    kills=4,
+                    assists=1,
+                    deaths_taken=0,
+                    dbnos=3,
+                    damage_dealt=520.0,
+                    shots_fired=120,
+                    shots_hit=40,
+                    accuracy=1 / 3,
+                )
+            ],
+        )
+
+        body = format_player_weapon_detail(detail)
+
+        self.assertIn("Yuuki_Asuna--- M416 무기 통계", body)
+        self.assertIn("12전 2치킨", body)
+        self.assertIn("20/4/16", body)
+        self.assertIn("23.0%", body)
+        self.assertIn("몸통 140", body)
+        self.assertIn("match-12 #1 4킬/3기절/520딜", body)
 
     def test_player_scope_visibility_requires_matching_guild_or_global_scope(self) -> None:
         player = RegisteredPlayer(
