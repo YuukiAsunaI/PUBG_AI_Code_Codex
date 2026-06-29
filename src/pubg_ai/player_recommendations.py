@@ -62,6 +62,60 @@ class WeaponAttachmentRecommendation:
 
 
 @dataclass(frozen=True)
+class WeaponAttachmentSnapshotEvidence:
+    match_id: str
+    shard: str
+    map_name: str | None
+    map_name_ko: str | None
+    game_mode: str | None
+    match_type: str | None
+    match_created_at_kst: str | None
+    combat_event_index: int
+    combat_action: str
+    combat_event_at_kst: str | None
+    weapon_code: str
+    weapon_name: str
+    attachment_code: str
+    attachment_name: str
+    equipped_attachment_codes: tuple[str, ...]
+    equipped_attachment_names: tuple[str, ...]
+    distance_m: float | None
+    is_headshot: bool
+    win_place: int | None
+    player_kills: int
+    player_dbnos: int
+    player_damage_dealt: float
+
+    def to_record(self) -> dict[str, Any]:
+        record = asdict(self)
+        record["equipped_attachment_codes"] = list(self.equipped_attachment_codes)
+        record["equipped_attachment_names"] = list(self.equipped_attachment_names)
+        return record
+
+
+@dataclass(frozen=True)
+class WeaponAttachmentEvidenceReport:
+    player: RegisteredPlayer
+    weapon_code: str
+    weapon_name: str
+    attachment_code: str
+    attachment_name: str
+    snapshots: list[WeaponAttachmentSnapshotEvidence]
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "player": self.player.to_record(),
+            "weapon_code": self.weapon_code,
+            "weapon_name": self.weapon_name,
+            "attachment_code": self.attachment_code,
+            "attachment_name": self.attachment_name,
+            "snapshot_count": len(self.snapshots),
+            "totals": _weapon_attachment_evidence_totals(self.snapshots),
+            "snapshots": [snapshot.to_record() for snapshot in self.snapshots],
+        }
+
+
+@dataclass(frozen=True)
 class WeaponRecommendation:
     weapon_code: str
     weapon_name: str
@@ -242,6 +296,46 @@ class PlayerRecommendationService:
             maps=self._map_recommendations(player, limit=limit, min_matches=min_matches),
             teammates=self._teammate_recommendations(player, limit=limit, min_matches=min_matches),
             drop_zones=self._drop_zone_recommendations(player, limit=limit, min_matches=min_matches),
+        )
+
+    def get_weapon_attachment_evidence(
+        self,
+        *,
+        shard: str,
+        weapon_code: str,
+        attachment_code: str,
+        account_id: str | None = None,
+        name: str | None = None,
+        guild_id: str | None = None,
+        global_scope: bool = False,
+        limit: int = 20,
+    ) -> WeaponAttachmentEvidenceReport | None:
+        player = self._get_player(
+            shard=shard,
+            account_id=account_id,
+            name=name,
+            guild_id=guild_id,
+            global_scope=global_scope,
+        )
+        if player is None:
+            return None
+
+        normalized_weapon_code = normalize_weapon_code(weapon_code) or _required_text(weapon_code, "weapon_code")
+        attachment_code = _required_text(attachment_code, "attachment_code")
+        limit = max(1, min(int(limit), 100))
+        snapshots = self._weapon_attachment_snapshot_evidence(
+            player,
+            weapon_code=normalized_weapon_code,
+            attachment_code=attachment_code,
+            limit=limit,
+        )
+        return WeaponAttachmentEvidenceReport(
+            player=player,
+            weapon_code=normalized_weapon_code,
+            weapon_name=translate_code(normalized_weapon_code, "damage_causer"),
+            attachment_code=attachment_code,
+            attachment_name=translate_code(attachment_code, "item"),
+            snapshots=snapshots,
         )
 
     def _get_player(
@@ -766,6 +860,95 @@ class PlayerRecommendationService:
             )
         return _top(recommendations, limit)
 
+    def _weapon_attachment_snapshot_evidence(
+        self,
+        player: RegisteredPlayer,
+        *,
+        weapon_code: str,
+        attachment_code: str,
+        limit: int,
+    ) -> list[WeaponAttachmentSnapshotEvidence]:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    snapshots.match_id,
+                    matches.shard,
+                    matches.map_name,
+                    matches.game_mode,
+                    matches.match_type,
+                    matches.created_at_kst,
+                    snapshots.combat_event_index,
+                    snapshots.combat_action,
+                    snapshots.combat_event_at_kst,
+                    snapshots.weapon_code,
+                    snapshots.weapon_name_ko,
+                    snapshots.attachment_codes,
+                    snapshots.attachment_names_ko,
+                    snapshots.distance_m,
+                    snapshots.is_headshot,
+                    participants.win_place,
+                    COALESCE(summaries.kills, 0) AS player_kills,
+                    COALESCE(summaries.dbnos_caused, 0) AS player_dbnos,
+                    COALESCE(summaries.damage_dealt, 0) AS player_damage_dealt
+                FROM player_combat_loadout_snapshots snapshots
+                INNER JOIN matches
+                    ON matches.match_id = snapshots.match_id
+                LEFT JOIN match_participants participants
+                    ON participants.match_id = snapshots.match_id
+                   AND participants.account_id = snapshots.account_id
+                LEFT JOIN player_match_combat_summaries summaries
+                    ON summaries.match_id = snapshots.match_id
+                   AND summaries.account_id = snapshots.account_id
+                WHERE snapshots.account_id = %s
+                  AND matches.shard = %s
+                  AND snapshots.weapon_code = %s
+                  AND snapshots.attachment_count > 0
+                ORDER BY matches.created_at_kst DESC, snapshots.match_id DESC, snapshots.combat_event_index DESC
+                LIMIT 5000
+                """,
+                (player.account_id, player.shard, weapon_code),
+            )
+            rows = cursor.fetchall()
+
+        evidence: list[WeaponAttachmentSnapshotEvidence] = []
+        for row in rows:
+            attachment_codes = tuple(_json_string_list(row.get("attachment_codes")))
+            if attachment_code not in attachment_codes:
+                continue
+            attachment_names = tuple(_json_string_list(row.get("attachment_names_ko")))
+            names_by_code = dict(zip(attachment_codes, attachment_names))
+            map_name = _optional_text(row.get("map_name"))
+            evidence.append(
+                WeaponAttachmentSnapshotEvidence(
+                    match_id=str(row.get("match_id") or ""),
+                    shard=str(row.get("shard") or player.shard),
+                    map_name=map_name,
+                    map_name_ko=translate_code(map_name, "map") if map_name else None,
+                    game_mode=_optional_text(row.get("game_mode")),
+                    match_type=_optional_text(row.get("match_type")),
+                    match_created_at_kst=_datetime_record(row.get("created_at_kst")),
+                    combat_event_index=_int(row.get("combat_event_index")),
+                    combat_action=str(row.get("combat_action") or ""),
+                    combat_event_at_kst=_datetime_record(row.get("combat_event_at_kst")),
+                    weapon_code=str(row.get("weapon_code") or weapon_code),
+                    weapon_name=str(row.get("weapon_name_ko") or translate_code(weapon_code, "damage_causer")),
+                    attachment_code=attachment_code,
+                    attachment_name=names_by_code.get(attachment_code) or translate_code(attachment_code, "item"),
+                    equipped_attachment_codes=attachment_codes,
+                    equipped_attachment_names=attachment_names,
+                    distance_m=_optional_float(row.get("distance_m")),
+                    is_headshot=bool(_int(row.get("is_headshot"))),
+                    win_place=_optional_int(row.get("win_place")),
+                    player_kills=_int(row.get("player_kills")),
+                    player_dbnos=_int(row.get("player_dbnos")),
+                    player_damage_dealt=_float(row.get("player_damage_dealt")),
+                )
+            )
+            if len(evidence) >= limit:
+                break
+        return evidence
+
     def _attachment_recommendations(
         self,
         player: RegisteredPlayer,
@@ -1162,6 +1345,25 @@ def _distance_by_weapon(
     return by_weapon
 
 
+def _weapon_attachment_evidence_totals(snapshots: list[WeaponAttachmentSnapshotEvidence]) -> dict[str, Any]:
+    match_ids = {snapshot.match_id for snapshot in snapshots}
+    distance_values = [
+        snapshot.distance_m
+        for snapshot in snapshots
+        if snapshot.distance_m is not None
+    ]
+    return {
+        "event_count": len(snapshots),
+        "match_count": len(match_ids),
+        "wins": len({snapshot.match_id for snapshot in snapshots if snapshot.win_place == 1}),
+        "kills": sum(1 for snapshot in snapshots if snapshot.combat_action == "kill"),
+        "dbnos": sum(1 for snapshot in snapshots if snapshot.combat_action == "dbno_caused"),
+        "finishes": sum(1 for snapshot in snapshots if snapshot.combat_action == "finish"),
+        "headshots": sum(1 for snapshot in snapshots if snapshot.is_headshot),
+        "avg_distance_m": _safe_divide(sum(distance_values), len(distance_values)) if distance_values else None,
+    }
+
+
 def _weapon_family(weapon_code: str) -> WeaponFamily:
     if weapon_code in AR_WEAPONS:
         return "AR"
@@ -1244,6 +1446,14 @@ def _json_string_list(value: Any) -> list[str]:
     return [str(item) for item in payload if item is not None and str(item)]
 
 
+def _datetime_record(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
 def _combat_distance_from_row(row: Mapping[str, Any]) -> float | None:
     x = _optional_float(row.get("x"))
     y = _optional_float(row.get("y"))
@@ -1263,6 +1473,13 @@ def _required_text(value: str, label: str) -> str:
     if not text:
         raise ValueError(f"{label} is required.")
     return text
+
+
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _int(value: Any) -> int:

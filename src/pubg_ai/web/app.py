@@ -287,6 +287,35 @@ def create_app() -> Any:
         finally:
             connection.close()
 
+    @app.get("/players/recommendations/weapon-attachment-evidence")
+    def player_recommendation_weapon_attachment_evidence(
+        weapon_code: str,
+        attachment_code: str,
+        shard: str = "steam",
+        name: str | None = None,
+        account_id: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        if not name and not account_id:
+            raise HTTPException(status_code=400, detail="name or account_id is required.")
+
+        connection = connect_mysql(config.database)
+        try:
+            evidence = PlayerRecommendationService(connection).get_weapon_attachment_evidence(
+                shard=shard,
+                account_id=account_id,
+                name=name,
+                global_scope=True,
+                weapon_code=weapon_code,
+                attachment_code=attachment_code,
+                limit=limit,
+            )
+            if evidence is None:
+                raise HTTPException(status_code=404, detail="registered player recommendation evidence not found.")
+            return {"evidence": evidence.to_record()}
+        finally:
+            connection.close()
+
     @app.get("/players/match")
     def player_match(
         match_id: str,
@@ -681,6 +710,22 @@ _INDEX_HTML = """<!doctype html>
     td { overflow-wrap: anywhere; }
     .actions { display: flex; gap: 8px; justify-content: flex-end; }
     .status { color: var(--muted); font-size: 13px; }
+    .recommendation-line {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 32px;
+    }
+    .recommendation-line button { min-height: 30px; padding: 5px 9px; font-size: 12px; flex: 0 0 auto; }
+    .detail-panel {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-left: 3px solid var(--accent);
+      background: #f8fafc;
+    }
+    .detail-table { margin-top: 8px; table-layout: auto; }
+    .detail-table th, .detail-table td { font-size: 12px; padding: 7px; vertical-align: top; }
     .player-controls { display: grid; grid-template-columns: minmax(220px, 1fr) 110px auto auto; gap: 10px; align-items: end; }
     .toggle-row { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; color: var(--muted); font-size: 13px; }
     .toggle-row label { display: inline-flex; grid-template-columns: none; align-items: center; gap: 6px; }
@@ -1076,6 +1121,8 @@ _INDEX_HTML = """<!doctype html>
     let replayAnimationId = null;
     let replayLastFrameMs = 0;
     let replayPlaying = false;
+    let activeRecommendationTarget = "";
+    let activeRecommendationShard = "steam";
 
     function cell(label, value) {
       return `<div class="kv"><span>${label}</span><strong>${value}</strong></div>`;
@@ -1251,6 +1298,8 @@ _INDEX_HTML = """<!doctype html>
     }
 
     async function loadPlayerRecommendations(target, shard, minMatches) {
+      activeRecommendationTarget = target;
+      activeRecommendationShard = shard;
       const params = new URLSearchParams({
         shard,
         limit: "5",
@@ -1272,7 +1321,8 @@ _INDEX_HTML = """<!doctype html>
         `${escapeHtml(item.weapon_name)} score ${Number(item.score).toFixed(1)} / ${item.match_count} matches / ${Number(item.avg_damage_dealt).toFixed(1)} avg dmg / ${percent(item.win_rate)} win`
       ));
       const weaponParts = recommendationLines(report.weapon_attachments, (item) => (
-        `${escapeHtml(item.weapon_name)} + ${escapeHtml(item.attachment_name)} score ${Number(item.score).toFixed(1)} / ${item.match_count} matches / ${Number(item.avg_damage_dealt).toFixed(1)} avg dmg / ${percent(item.win_rate)} win`
+        `<span>${escapeHtml(item.weapon_name)} + ${escapeHtml(item.attachment_name)} score ${Number(item.score).toFixed(1)} / ${item.match_count} matches / ${item.event_count || item.attached_events} events / ${distanceM(item.avg_distance_m)} avg</span>
+        <button class="secondary" type="button" data-evidence="weapon-attachment" data-weapon-code="${attr(item.weapon_code)}" data-attachment-code="${attr(item.attachment_code)}">근거</button>`
       ));
       const weaponRanges = recommendationLines(report.weapon_ranges, (item) => (
         `${escapeHtml(item.weapon_name)} ${escapeHtml(item.bucket_label)} / ${item.event_count} events / ${item.kills} kills / ${item.dbnos} DBNOs`
@@ -1298,12 +1348,62 @@ _INDEX_HTML = """<!doctype html>
         `<br><strong>Maps</strong><br>${maps}`,
         `<br><strong>Teammates</strong><br>${teammates}`,
         `<br><strong>Drop zones</strong><br>${drops}`,
+        `<div class="detail-panel status" id="recommendationEvidence">추천 근거 대기 중</div>`,
       ].join("");
     }
 
     function recommendationLines(items, formatter) {
       if (!items || !items.length) return "-";
-      return items.slice(0, 5).map((item) => `- ${formatter(item)}`).join("<br>");
+      return items.slice(0, 5).map((item) => `<div class="recommendation-line">- ${formatter(item)}</div>`).join("");
+    }
+
+    async function loadWeaponAttachmentEvidence(weaponCode, attachmentCode) {
+      const panel = document.querySelector("#recommendationEvidence");
+      if (!panel) return;
+      if (!activeRecommendationTarget) {
+        panel.textContent = "추천 조회 후 근거를 확인할 수 있습니다.";
+        return;
+      }
+
+      panel.textContent = "추천 근거 조회 중";
+      const params = new URLSearchParams({
+        shard: activeRecommendationShard,
+        weapon_code: weaponCode,
+        attachment_code: attachmentCode,
+        limit: "10",
+      });
+      if (activeRecommendationTarget.startsWith("account.")) {
+        params.set("account_id", activeRecommendationTarget);
+      } else {
+        params.set("name", activeRecommendationTarget);
+      }
+
+      const response = await fetch(`/players/recommendations/weapon-attachment-evidence?${params.toString()}`);
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const payload = await response.json();
+      const report = payload.evidence;
+      const totals = report.totals || {};
+      const rows = (report.snapshots || []).map((snapshot) => `
+        <tr>
+          <td>${escapeHtml(snapshot.combat_event_at_kst || "-")}</td>
+          <td>${escapeHtml(snapshot.map_name_ko || snapshot.map_name || "-")}<br>${escapeHtml(snapshot.game_mode || "-")}</td>
+          <td>${escapeHtml(snapshot.combat_action)}${snapshot.is_headshot ? " / HS" : ""}</td>
+          <td>${distanceM(snapshot.distance_m)}</td>
+          <td>${escapeHtml((snapshot.equipped_attachment_names || []).join(", ") || "-")}</td>
+          <td>${escapeHtml(snapshot.match_id)}</td>
+        </tr>
+      `).join("");
+
+      panel.innerHTML = [
+        `<strong>${escapeHtml(report.weapon_name)} + ${escapeHtml(report.attachment_name)} 근거</strong>`,
+        `<br>events ${totals.event_count || 0}, matches ${totals.match_count || 0}, kills ${totals.kills || 0}, DBNO ${totals.dbnos || 0}, finishes ${totals.finishes || 0}, HS ${totals.headshots || 0}, avg ${distanceM(totals.avg_distance_m)}`,
+        rows
+          ? `<table class="detail-table"><thead><tr><th>시간</th><th>맵/모드</th><th>결과</th><th>거리</th><th>장착 파츠</th><th>Match</th></tr></thead><tbody>${rows}</tbody></table>`
+          : `<br>해당 무기+파츠 스냅샷 근거가 없습니다.`,
+      ].join("");
     }
 
     async function loadPlayerMatch(matchId, target, shard) {
@@ -2017,6 +2117,22 @@ _INDEX_HTML = """<!doctype html>
         banner.textContent = "Recommendation 조회 완료";
       } catch (error) {
         recommendationBody.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    recommendationBody.addEventListener("click", async (event) => {
+      const button = event.target.closest("button[data-evidence='weapon-attachment']");
+      if (!button) return;
+      try {
+        await loadWeaponAttachmentEvidence(
+          button.dataset.weaponCode || "",
+          button.dataset.attachmentCode || "",
+        );
+        banner.textContent = "추천 근거 조회 완료";
+      } catch (error) {
+        const panel = document.querySelector("#recommendationEvidence");
+        if (panel) panel.textContent = `오류: ${error.message}`;
         banner.textContent = `오류: ${error.message}`;
       }
     });

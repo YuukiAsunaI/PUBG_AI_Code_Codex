@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime
 
 from pubg_ai.player_recommendations import PlayerRecommendationService
 
@@ -204,6 +205,89 @@ class PlayerRecommendationServiceTests(unittest.TestCase):
 
         self.assertIsNone(report)
         self.assertEqual(connection.executed, [])
+
+    def test_gets_weapon_attachment_snapshot_evidence(self) -> None:
+        connection = FakeConnection(
+            [
+                {
+                    "id": 1,
+                    "account_id": "account.test",
+                    "shard": "steam",
+                    "current_name": "Yuuki_Asuna---",
+                    "active": 1,
+                    "public_profile": 1,
+                    "registered_by_discord_user_id": None,
+                    "registered_guild_id": None,
+                    "registered_channel_id": None,
+                },
+                [
+                    {
+                        "match_id": "match-1",
+                        "shard": "steam",
+                        "map_name": "Tiger_Main",
+                        "game_mode": "squad-fpp",
+                        "match_type": "official",
+                        "created_at_kst": datetime(2026, 1, 1, 11, 0, 0),
+                        "combat_event_index": 100,
+                        "combat_action": "kill",
+                        "combat_event_at_kst": datetime(2026, 1, 1, 11, 12, 0),
+                        "weapon_code": "WeapHK416_C",
+                        "weapon_name_ko": "M416",
+                        "attachment_codes": '["Item_Attach_Weapon_Upper_DotSight_01_C","Item_Attach_Weapon_Lower_Foregrip_C"]',
+                        "attachment_names_ko": '["Red Dot Sight","Vertical Grip"]',
+                        "distance_m": 20.0,
+                        "is_headshot": 1,
+                        "win_place": 1,
+                        "player_kills": 3,
+                        "player_dbnos": 2,
+                        "player_damage_dealt": 500.0,
+                    },
+                    {
+                        "match_id": "match-2",
+                        "shard": "steam",
+                        "map_name": "Erangel_Main",
+                        "game_mode": "duo",
+                        "match_type": "official",
+                        "created_at_kst": datetime(2026, 1, 1, 10, 0, 0),
+                        "combat_event_index": 80,
+                        "combat_action": "dbno_caused",
+                        "combat_event_at_kst": datetime(2026, 1, 1, 10, 8, 0),
+                        "weapon_code": "WeapHK416_C",
+                        "weapon_name_ko": "M416",
+                        "attachment_codes": ["Item_Attach_Weapon_Lower_Foregrip_C"],
+                        "attachment_names_ko": ["Vertical Grip"],
+                        "distance_m": 40.0,
+                        "is_headshot": 0,
+                        "win_place": 3,
+                        "player_kills": 1,
+                        "player_dbnos": 1,
+                        "player_damage_dealt": 220.0,
+                    },
+                ],
+            ]
+        )
+
+        report = PlayerRecommendationService(connection).get_weapon_attachment_evidence(
+            shard="steam",
+            name="Yuuki_Asuna---",
+            global_scope=True,
+            weapon_code="Item_Weapon_HK416_C",
+            attachment_code="Item_Attach_Weapon_Lower_Foregrip_C",
+        )
+
+        self.assertIsNotNone(report)
+        assert report is not None
+        record = report.to_record()
+        self.assertEqual(record["weapon_code"], "WeapHK416_C")
+        self.assertEqual(record["snapshot_count"], 2)
+        self.assertEqual(record["totals"]["kills"], 1)
+        self.assertEqual(record["totals"]["dbnos"], 1)
+        self.assertEqual(record["totals"]["headshots"], 1)
+        self.assertEqual(record["totals"]["wins"], 1)
+        self.assertEqual(record["totals"]["avg_distance_m"], 30.0)
+        self.assertEqual(record["snapshots"][0]["map_name_ko"], "태이고")
+        self.assertEqual(record["snapshots"][0]["combat_event_at_kst"], "2026-01-01T11:12:00")
+        self.assertEqual(len(connection.executed), 2)
 
 
 class FakeConnection:

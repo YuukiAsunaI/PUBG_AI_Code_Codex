@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -57,6 +58,62 @@ class WebRecommendationTests(unittest.TestCase):
         self.assertEqual(payload["weapons"][0]["weapon_code"], "WeapHK416_C")
         self.assertEqual(payload["weapons"][0]["weapon_name"], "M416")
         self.assertEqual(payload["attachments"], [])
+        self.assertTrue(connection.closed)
+
+    def test_player_recommendation_evidence_endpoint_returns_snapshots(self) -> None:
+        connection = FakeConnection(
+            [
+                {
+                    "id": 1,
+                    "account_id": "account.test",
+                    "shard": "steam",
+                    "current_name": "Yuuki_Asuna---",
+                    "active": 1,
+                    "public_profile": 1,
+                    "registered_by_discord_user_id": None,
+                    "registered_guild_id": None,
+                    "registered_channel_id": None,
+                },
+                [
+                    {
+                        "match_id": "match-1",
+                        "shard": "steam",
+                        "map_name": "Tiger_Main",
+                        "game_mode": "squad-fpp",
+                        "match_type": "official",
+                        "created_at_kst": datetime(2026, 1, 1, 11, 0, 0),
+                        "combat_event_index": 100,
+                        "combat_action": "kill",
+                        "combat_event_at_kst": datetime(2026, 1, 1, 11, 12, 0),
+                        "weapon_code": "WeapHK416_C",
+                        "weapon_name_ko": "M416",
+                        "attachment_codes": '["Item_Attach_Weapon_Lower_Foregrip_C"]',
+                        "attachment_names_ko": '["Vertical Grip"]',
+                        "distance_m": 20.0,
+                        "is_headshot": 1,
+                        "win_place": 1,
+                        "player_kills": 3,
+                        "player_dbnos": 2,
+                        "player_damage_dealt": 500.0,
+                    }
+                ],
+            ]
+        )
+
+        with patch("pubg_ai.web.app.connect_mysql", return_value=connection):
+            client = TestClient(create_app())
+            response = client.get(
+                "/players/recommendations/weapon-attachment-evidence"
+                "?shard=steam&name=Yuuki_Asuna---"
+                "&weapon_code=WeapHK416_C"
+                "&attachment_code=Item_Attach_Weapon_Lower_Foregrip_C"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["evidence"]
+        self.assertEqual(payload["snapshot_count"], 1)
+        self.assertEqual(payload["totals"]["kills"], 1)
+        self.assertEqual(payload["snapshots"][0]["match_id"], "match-1")
         self.assertTrue(connection.closed)
 
 

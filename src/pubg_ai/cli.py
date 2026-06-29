@@ -70,6 +70,16 @@ def main(argv: list[str] | None = None) -> int:
     recommendations_parser.add_argument("--limit", default=5, type=int)
     recommendations_parser.add_argument("--min-matches", default=1, type=int)
 
+    recommendation_evidence_parser = subparsers.add_parser(
+        "player-recommendation-evidence",
+        help="Print supporting combat snapshots for one weapon + attachment recommendation.",
+    )
+    recommendation_evidence_parser.add_argument("target", help="Registered nickname or accountId.")
+    recommendation_evidence_parser.add_argument("weapon", help="Weapon code, for example WeapHK416_C.")
+    recommendation_evidence_parser.add_argument("attachment", help="Attachment code, for example Item_Attach_...")
+    recommendation_evidence_parser.add_argument("--shard", default="steam")
+    recommendation_evidence_parser.add_argument("--limit", default=20, type=int)
+
     match_stats_parser = subparsers.add_parser(
         "player-match-stats",
         help="Print one parsed match detail for a registered player.",
@@ -281,6 +291,25 @@ def main(argv: list[str] | None = None) -> int:
             if recommendations is None:
                 raise SystemExit("registered player recommendations not found.")
             _print_json({"recommendations": recommendations.to_record()})
+        finally:
+            connection.close()
+        return 0
+
+    if args.command == "player-recommendation-evidence":
+        connection = connect_mysql(config.database)
+        try:
+            evidence = PlayerRecommendationService(connection).get_weapon_attachment_evidence(
+                shard=args.shard,
+                account_id=args.target if args.target.startswith("account.") else None,
+                name=None if args.target.startswith("account.") else args.target,
+                global_scope=True,
+                weapon_code=args.weapon,
+                attachment_code=args.attachment,
+                limit=args.limit,
+            )
+            if evidence is None:
+                raise SystemExit("registered player recommendation evidence not found.")
+            _print_json({"evidence": evidence.to_record()})
         finally:
             connection.close()
         return 0

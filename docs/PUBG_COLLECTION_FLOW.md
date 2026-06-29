@@ -221,6 +221,10 @@ The current local runtime can reconstruct weapon + attachment state at fight-res
 - The local web UI has a Loadout Snapshot generate/regenerate section.
 - Recommendation lookup uses these snapshots first for weapon+attachment pairs, then falls back to attach-event
   co-occurrence if snapshots have not been generated yet.
+- `python -m pubg_ai.cli player-recommendation-evidence <nickname> <weapon_code> <attachment_code>` shows the
+  supporting kill, DBNO-caused, and finish snapshots behind one recommendation.
+- The local web recommendation panel has per-row evidence buttons that show match, map, mode, fight result, distance,
+  full equipped attachment list, and match ID for the selected weapon+attachment pair.
 
 ## Implemented Map Snapshot Artifact Slice
 

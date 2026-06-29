@@ -123,6 +123,12 @@ Recommendations include distance-weighted weapon ranges and weapon+attachment pa
 snapshots are used first so parts reflect the actual kill/DBNO/finish moment; attach-event co-occurrence remains the
 fallback for older parsed data.
 
+Show the supporting combat snapshots behind one weapon+attachment recommendation:
+
+```powershell
+python -m pubg_ai.cli player-recommendation-evidence Yuuki_Asuna--- WeapHK416_C Item_Attach_Weapon_Lower_TiltedGrip_C --shard steam
+```
+
 Show one completed-match detail from parsed MySQL summary tables:
 
 ```powershell
