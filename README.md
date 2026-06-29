@@ -37,7 +37,7 @@ MySQL data model direction, 2D replay/live-view feasibility, and reference proje
 - Generated 2D replay files should use a separate configurable path such as
   `PUBG_REPLAY_DATA_DIR=E:\PUBG_AI_Data\replays`.
 - The local management app should save user-changed storage paths to `config/local_settings.json`, so paths can be
-  changed from the program without editing `.env`.
+  changed from the program without editing `.env`. It also saves collector polling limits there.
 - Discord permissions and rankings are scoped by `guild_id`; global admins can view and manage all guilds.
 - PUBG match detail and telemetry are available after the match finishes. A 2D viewer is therefore post-match replay,
   not in-match live tracking.
@@ -70,6 +70,8 @@ The first executable slice is now available:
 - localhost-only FastAPI management app
 - browser UI for status, user registration, user lookup, collection stop/delete action, match job processing, and
   telemetry job/combat/item processing
+- browser UI for raw/replay storage paths, raw compression, collector limits, Discord permission grants, and local
+  evidence-link base URL settings
 
 Install dependencies:
 

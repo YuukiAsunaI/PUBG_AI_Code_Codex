@@ -344,7 +344,9 @@ Completed slices:
     current safe-zone, next-zone warning, red-zone, and black-zone rings through a map overlay toggle.
 30. Local settings can store the optional Discord recommendation evidence-link base URL, and the local manager can
     save, clear, and display it without touching `.env` secrets.
+31. Local manager can save raw/replay storage roots, raw compression, collector poll interval, collection-cycle player
+    limit, and player lookup chunk size, with live storage write/free-space status in the settings panel.
 
 Next slice:
 
-1. Add local settings UI support for storage roots and collector polling limits.
+1. Add local settings UI support for Discord guild ranking scopes and the public profile default.

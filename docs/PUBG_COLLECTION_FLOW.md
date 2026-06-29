@@ -96,6 +96,8 @@ The current local runtime can also refresh active registered players and queue u
 - `python -m pubg_ai.cli collect-matches --shard steam --limit 10` runs one manual collection pass.
 - `python -m pubg_ai.cli match-jobs --limit 20` lists queued match detail jobs.
 - The local web UI has a `최근 매치 수집` button and a `Match 수집 큐` table.
+- The local web settings panel can save the polling interval, per-cycle player limit, and player lookup chunk size
+  used by collection refresh actions.
 
 Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 match IDs were discovered and queued.
 

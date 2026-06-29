@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from pubg_ai.config import RuntimeConfig, load_dotenv_values
 from pubg_ai.database import connect_mysql, count_tables
 from pubg_ai.discord_permission_manager import DiscordPermissionManager
-from pubg_ai.local_settings import LocalSettingsError, LocalSettingsStore
+from pubg_ai.local_settings import LocalSettingsError, LocalSettingsStore, check_storage_path
 from pubg_ai.loadout_snapshot_processor import LoadoutSnapshotProcessor
 from pubg_ai.map_snapshot_renderer import MAP_ASSET_FILENAMES, MapAssetProvider, MapSnapshotProcessor
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
@@ -104,11 +104,26 @@ class WebSettingsRequest(BaseModel):
     local_web_base_url: str | None = None
 
 
+class StorageSettingsRequest(BaseModel):
+    raw_data_dir: str = Field(min_length=1)
+    replay_data_dir: str = Field(min_length=1)
+    raw_compression: str = "gzip"
+
+
+class CollectorSettingsRequest(BaseModel):
+    poll_interval_seconds: int = Field(ge=60, le=300)
+    cycle_player_limit: int = Field(ge=1, le=100)
+    player_lookup_chunk_size: int = Field(ge=1, le=10)
+
+
 def create_app() -> Any:
     base_dir = Path.cwd()
     config = RuntimeConfig.from_sources(base_dir=base_dir)
     settings_store = _local_settings_store(base_dir)
     permission_manager = DiscordPermissionManager(settings_store)
+
+    def current_config() -> RuntimeConfig:
+        return RuntimeConfig.from_sources(base_dir=base_dir)
     app = FastAPI(
         title="PUBG AI Local Manager",
         version="0.1.0",
@@ -134,7 +149,7 @@ def create_app() -> Any:
 
     @app.get("/settings/status")
     def settings_status() -> dict[str, Any]:
-        return _settings_status_record(RuntimeConfig.from_sources(base_dir=base_dir))
+        return _settings_status_record(current_config())
 
     @app.post("/settings/web")
     def save_web_settings(request: WebSettingsRequest) -> dict[str, Any]:
@@ -144,7 +159,42 @@ def create_app() -> Any:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
             "web": web_settings.to_record(),
-            "settings": _settings_status_record(RuntimeConfig.from_sources(base_dir=base_dir)),
+            "settings": _settings_status_record(current_config()),
+        }
+
+    @app.post("/settings/storage")
+    def save_storage_settings(request: StorageSettingsRequest) -> dict[str, Any]:
+        try:
+            storage_settings = settings_store.save_storage_settings(
+                raw_data_dir=request.raw_data_dir,
+                replay_data_dir=request.replay_data_dir,
+                raw_compression=request.raw_compression,
+            )
+            storage_status = {
+                key: value.to_record()
+                for key, value in settings_store.get_storage_status().items()
+            }
+        except LocalSettingsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "storage": storage_settings.to_record(),
+            "storage_status": storage_status,
+            "settings": _settings_status_record(current_config()),
+        }
+
+    @app.post("/settings/collector")
+    def save_collector_settings(request: CollectorSettingsRequest) -> dict[str, Any]:
+        try:
+            collector_settings = settings_store.save_collector_settings(
+                poll_interval_seconds=request.poll_interval_seconds,
+                cycle_player_limit=request.cycle_player_limit,
+                player_lookup_chunk_size=request.player_lookup_chunk_size,
+            )
+        except LocalSettingsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "collector": collector_settings.to_record(),
+            "settings": _settings_status_record(current_config()),
         }
 
     @app.get("/discord/permissions")
@@ -367,6 +417,7 @@ def create_app() -> Any:
 
     @app.post("/players/register")
     def register_player(request: RegisterPlayerRequest) -> dict[str, Any]:
+        runtime_config = current_config()
         connection = connect_mysql(config.database)
         try:
             context = DiscordCommandContext(
@@ -384,11 +435,11 @@ def create_app() -> Any:
                     context=context,
                 )
             else:
-                if not config.secrets.pubg_api_key:
+                if not runtime_config.secrets.pubg_api_key:
                     raise HTTPException(status_code=500, detail="PUBG_API_KEY is not configured.")
                 try:
                     player = registry.register_player_by_name(
-                        pubg_client=PubgApiClient(config.secrets.pubg_api_key),
+                        pubg_client=PubgApiClient(runtime_config.secrets.pubg_api_key),
                         shard=request.shard,
                         player_name=request.current_name,
                         public_profile=request.public_profile,
@@ -420,7 +471,8 @@ def create_app() -> Any:
 
     @app.post("/collection/refresh")
     def refresh_collection(request: CollectMatchesRequest) -> dict[str, Any]:
-        if not config.secrets.pubg_api_key:
+        runtime_config = current_config()
+        if not runtime_config.secrets.pubg_api_key:
             raise HTTPException(status_code=500, detail="PUBG_API_KEY is not configured.")
 
         connection = connect_mysql(config.database)
@@ -428,11 +480,11 @@ def create_app() -> Any:
             try:
                 result = RegisteredPlayerMatchCollector(
                     connection,
-                    PubgApiClient(config.secrets.pubg_api_key),
-                    lookup_chunk_size=config.app.player_lookup_chunk_size,
+                    PubgApiClient(runtime_config.secrets.pubg_api_key),
+                    lookup_chunk_size=runtime_config.app.player_lookup_chunk_size,
                 ).collect_active_players(
                     shard=request.shard,
-                    limit=request.limit or config.app.collector_cycle_player_limit,
+                    limit=request.limit or runtime_config.app.collector_cycle_player_limit,
                 )
             except PubgApiError as exc:
                 raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -451,17 +503,18 @@ def create_app() -> Any:
 
     @app.post("/jobs/matches/process")
     def process_match_jobs(request: ProcessMatchJobsRequest) -> dict[str, Any]:
-        if not config.secrets.pubg_api_key:
+        runtime_config = current_config()
+        if not runtime_config.secrets.pubg_api_key:
             raise HTTPException(status_code=500, detail="PUBG_API_KEY is not configured.")
 
         connection = connect_mysql(config.database)
         try:
             result = MatchJobProcessor(
                 connection,
-                PubgApiClient(config.secrets.pubg_api_key),
+                PubgApiClient(runtime_config.secrets.pubg_api_key),
                 RawPayloadStore(
-                    config.app.raw_data_dir,
-                    compression=config.app.raw_compression,  # type: ignore[arg-type]
+                    runtime_config.app.raw_data_dir,
+                    compression=runtime_config.app.raw_compression,  # type: ignore[arg-type]
                 ),
             ).process_queued_matches(limit=request.limit)
             return {"result": result.to_record()}
@@ -470,13 +523,14 @@ def create_app() -> Any:
 
     @app.get("/jobs/telemetry")
     def telemetry_jobs(limit: int = 100) -> dict[str, Any]:
+        runtime_config = current_config()
         connection = connect_mysql(config.database)
         try:
             jobs = TelemetryJobProcessor(
                 connection,
                 RawPayloadStore(
-                    config.app.raw_data_dir,
-                    compression=config.app.raw_compression,  # type: ignore[arg-type]
+                    runtime_config.app.raw_data_dir,
+                    compression=runtime_config.app.raw_compression,  # type: ignore[arg-type]
                 ),
             ).list_telemetry_jobs(limit=limit)
             return {"jobs": [_json_ready(job) for job in jobs]}
@@ -485,13 +539,14 @@ def create_app() -> Any:
 
     @app.post("/jobs/telemetry/process")
     def process_telemetry_jobs(request: ProcessTelemetryJobsRequest) -> dict[str, Any]:
+        runtime_config = current_config()
         connection = connect_mysql(config.database)
         try:
             result = TelemetryJobProcessor(
                 connection,
                 RawPayloadStore(
-                    config.app.raw_data_dir,
-                    compression=config.app.raw_compression,  # type: ignore[arg-type]
+                    runtime_config.app.raw_data_dir,
+                    compression=runtime_config.app.raw_compression,  # type: ignore[arg-type]
                 ),
             ).process_queued_telemetry(limit=request.limit)
             return {"result": result.to_record()}
@@ -500,13 +555,14 @@ def create_app() -> Any:
 
     @app.post("/telemetry/combat/process")
     def process_telemetry_combat(request: ParseTelemetryCombatRequest) -> dict[str, Any]:
+        runtime_config = current_config()
         connection = connect_mysql(config.database)
         try:
             result = TelemetryCombatProcessor(
                 connection,
                 RawPayloadStore(
-                    config.app.raw_data_dir,
-                    compression=config.app.raw_compression,  # type: ignore[arg-type]
+                    runtime_config.app.raw_data_dir,
+                    compression=runtime_config.app.raw_compression,  # type: ignore[arg-type]
                 ),
             ).process_raw_telemetry(limit=request.limit, force=request.force)
             return {"result": result.to_record()}
@@ -515,13 +571,14 @@ def create_app() -> Any:
 
     @app.post("/telemetry/items/process")
     def process_telemetry_items(request: ParseTelemetryItemsRequest) -> dict[str, Any]:
+        runtime_config = current_config()
         connection = connect_mysql(config.database)
         try:
             result = TelemetryItemProcessor(
                 connection,
                 RawPayloadStore(
-                    config.app.raw_data_dir,
-                    compression=config.app.raw_compression,  # type: ignore[arg-type]
+                    runtime_config.app.raw_data_dir,
+                    compression=runtime_config.app.raw_compression,  # type: ignore[arg-type]
                 ),
             ).process_raw_telemetry(limit=request.limit, force=request.force)
             return {"result": result.to_record()}
@@ -530,13 +587,14 @@ def create_app() -> Any:
 
     @app.post("/telemetry/movement/process")
     def process_telemetry_movement(request: ParseTelemetryMovementRequest) -> dict[str, Any]:
+        runtime_config = current_config()
         connection = connect_mysql(config.database)
         try:
             result = TelemetryMovementProcessor(
                 connection,
                 RawPayloadStore(
-                    config.app.raw_data_dir,
-                    compression=config.app.raw_compression,  # type: ignore[arg-type]
+                    runtime_config.app.raw_data_dir,
+                    compression=runtime_config.app.raw_compression,  # type: ignore[arg-type]
                 ),
             ).process_raw_telemetry(limit=request.limit, force=request.force)
             return {"result": result.to_record()}
@@ -554,11 +612,12 @@ def create_app() -> Any:
 
     @app.post("/replay/map-snapshots/generate")
     def generate_map_snapshots(request: GenerateMapSnapshotsRequest) -> dict[str, Any]:
+        runtime_config = current_config()
         connection = connect_mysql(config.database)
         try:
             result = MapSnapshotProcessor(
                 connection,
-                ReplayArtifactStore(config.app.replay_data_dir),
+                ReplayArtifactStore(runtime_config.app.replay_data_dir),
             ).generate_player_snapshots(limit=request.limit, force=request.force)
             return {"result": result.to_record()}
         finally:
@@ -566,11 +625,12 @@ def create_app() -> Any:
 
     @app.post("/replay/timelines/generate")
     def generate_replay_timelines(request: GenerateReplayTimelinesRequest) -> dict[str, Any]:
+        runtime_config = current_config()
         connection = connect_mysql(config.database)
         try:
             result = ReplayTimelineProcessor(
                 connection,
-                ReplayArtifactStore(config.app.replay_data_dir),
+                ReplayArtifactStore(runtime_config.app.replay_data_dir),
             ).generate_player_timelines(limit=request.limit, force=request.force)
             return {"result": result.to_record()}
         finally:
@@ -578,11 +638,12 @@ def create_app() -> Any:
 
     @app.get("/replay/map-assets/{map_name}")
     def replay_map_asset(map_name: str) -> FileResponse:
+        runtime_config = current_config()
         filename = MAP_ASSET_FILENAMES.get(map_name)
         if filename is None:
             raise HTTPException(status_code=404, detail="map asset is not registered.")
 
-        cache_root = config.app.replay_data_dir / "cache"
+        cache_root = runtime_config.app.replay_data_dir / "cache"
         asset_path = cache_root / "map_assets" / filename
         if not asset_path.exists():
             MapAssetProvider(cache_root).load_map(map_name)
@@ -620,6 +681,7 @@ def create_app() -> Any:
 
     @app.get("/replay/artifacts/{artifact_id}/file")
     def replay_artifact_file(artifact_id: int) -> FileResponse:
+        runtime_config = current_config()
         connection = connect_mysql(config.database)
         try:
             artifact = get_replay_artifact(connection, artifact_id)
@@ -629,7 +691,7 @@ def create_app() -> Any:
         if artifact is None:
             raise HTTPException(status_code=404, detail="replay artifact not found.")
 
-        store = ReplayArtifactStore(config.app.replay_data_dir)
+        store = ReplayArtifactStore(runtime_config.app.replay_data_dir)
         try:
             path = store.resolve_path(artifact.relative_path)
         except ReplayStorageError as exc:
@@ -662,6 +724,10 @@ def _settings_status_record(config: RuntimeConfig) -> dict[str, Any]:
         "replay_data_dir": str(config.app.replay_data_dir),
         "local_web_base_url": config.app.local_web_base_url,
         "raw_compression": config.app.raw_compression,
+        "storage_status": {
+            "raw_data_dir": check_storage_path(config.app.raw_data_dir).to_record(),
+            "replay_data_dir": check_storage_path(config.app.replay_data_dir).to_record(),
+        },
         "collector": {
             "poll_interval_seconds": config.app.collector_poll_interval_seconds,
             "cycle_player_limit": config.app.collector_cycle_player_limit,
@@ -861,6 +927,41 @@ _INDEX_HTML = """<!doctype html>
     <section>
       <h2>상태</h2>
       <div class="grid" id="statusGrid"></div>
+    </section>
+    <section>
+      <h2>Storage Settings</h2>
+      <form id="storageSettingsForm">
+        <label>Raw directory
+          <input name="raw_data_dir" autocomplete="off" required>
+        </label>
+        <label>Replay directory
+          <input name="replay_data_dir" autocomplete="off" required>
+        </label>
+        <label>Compression
+          <select name="raw_compression">
+            <option value="gzip">gzip</option>
+            <option value="none">none</option>
+          </select>
+        </label>
+        <button type="submit">Save</button>
+      </form>
+      <div class="status" id="storageSettingsStatus" style="margin-top: 12px;">Waiting</div>
+    </section>
+    <section>
+      <h2>Collector Settings</h2>
+      <form id="collectorSettingsForm">
+        <label>Poll seconds
+          <input name="poll_interval_seconds" type="number" min="60" max="300" value="180" required>
+        </label>
+        <label>Cycle players
+          <input name="cycle_player_limit" type="number" min="1" max="100" value="100" required>
+        </label>
+        <label>Lookup chunk
+          <input name="player_lookup_chunk_size" type="number" min="1" max="10" value="10" required>
+        </label>
+        <button type="submit">Save</button>
+      </form>
+      <div class="status" id="collectorSettingsStatus" style="margin-top: 12px;">Waiting</div>
     </section>
     <section>
       <h2>Local Web Link</h2>
@@ -1230,6 +1331,10 @@ _INDEX_HTML = """<!doctype html>
     const replayArtifactsBody = document.querySelector("#replayArtifactsBody");
     const discordPermissionsBody = document.querySelector("#discordPermissionsBody");
     const discordPermissionGroup = document.querySelector("#discordPermissionGroup");
+    const storageSettingsForm = document.querySelector("#storageSettingsForm");
+    const storageSettingsStatus = document.querySelector("#storageSettingsStatus");
+    const collectorSettingsForm = document.querySelector("#collectorSettingsForm");
+    const collectorSettingsStatus = document.querySelector("#collectorSettingsStatus");
     const webSettingsForm = document.querySelector("#webSettingsForm");
     const webSettingsStatus = document.querySelector("#webSettingsStatus");
     const banner = document.querySelector("#banner");
@@ -1301,10 +1406,33 @@ _INDEX_HTML = """<!doctype html>
         cell("주기당 대상", `${settings.collector.cycle_player_limit}명`),
         cell("조회 chunk", `${settings.collector.player_lookup_chunk_size}명`),
       ].join("");
+      storageSettingsForm.elements.raw_data_dir.value = settings.raw_data_dir || "";
+      storageSettingsForm.elements.replay_data_dir.value = settings.replay_data_dir || "";
+      storageSettingsForm.elements.raw_compression.value = settings.raw_compression || "gzip";
+      storageSettingsStatus.textContent = [
+        `Raw ${formatStoragePathStatus(settings.storage_status?.raw_data_dir)}`,
+        `Replay ${formatStoragePathStatus(settings.storage_status?.replay_data_dir)}`,
+      ].join(" / ");
+      collectorSettingsForm.elements.poll_interval_seconds.value = settings.collector.poll_interval_seconds || 180;
+      collectorSettingsForm.elements.cycle_player_limit.value = settings.collector.cycle_player_limit || 100;
+      collectorSettingsForm.elements.player_lookup_chunk_size.value = settings.collector.player_lookup_chunk_size || 10;
+      collectorSettingsStatus.textContent = [
+        `${settings.collector.poll_interval_seconds}초`,
+        `${settings.collector.cycle_player_limit}명`,
+        `chunk ${settings.collector.player_lookup_chunk_size}`,
+      ].join(" / ");
       webSettingsForm.elements.local_web_base_url.value = settings.local_web_base_url || "";
       webSettingsStatus.textContent = settings.local_web_base_url
         ? `Enabled: ${settings.local_web_base_url}`
         : "Disabled";
+    }
+
+    function formatStoragePathStatus(status) {
+      if (!status) return "unknown";
+      if (!status.exists) return "missing";
+      if (!status.is_dir) return "not directory";
+      if (!status.writable) return `not writable${status.error ? `: ${status.error}` : ""}`;
+      return `ok / free ${formatBytes(Number(status.free_bytes || 0))}`;
     }
 
     async function loadDiscordPermissions() {
@@ -2606,6 +2734,37 @@ _INDEX_HTML = """<!doctype html>
       return response.json();
     }
 
+    async function saveStorageSettings(event) {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const payload = await postJson("/settings/storage", {
+        raw_data_dir: String(form.get("raw_data_dir") || "").trim(),
+        replay_data_dir: String(form.get("replay_data_dir") || "").trim(),
+        raw_compression: String(form.get("raw_compression") || "gzip"),
+      });
+      storageSettingsStatus.textContent = [
+        `Raw ${formatStoragePathStatus(payload.storage_status?.raw_data_dir)}`,
+        `Replay ${formatStoragePathStatus(payload.storage_status?.replay_data_dir)}`,
+      ].join(" / ");
+      await loadStatus();
+    }
+
+    async function saveCollectorSettings(event) {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const payload = await postJson("/settings/collector", {
+        poll_interval_seconds: Number(form.get("poll_interval_seconds") || 180),
+        cycle_player_limit: Number(form.get("cycle_player_limit") || 100),
+        player_lookup_chunk_size: Number(form.get("player_lookup_chunk_size") || 10),
+      });
+      collectorSettingsStatus.textContent = [
+        `${payload.collector.poll_interval_seconds}초`,
+        `${payload.collector.cycle_player_limit}명`,
+        `chunk ${payload.collector.player_lookup_chunk_size}`,
+      ].join(" / ");
+      await loadStatus();
+    }
+
     async function saveWebSettings(event) {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
@@ -2740,6 +2899,28 @@ _INDEX_HTML = """<!doctype html>
       } catch (error) {
         rankingBody.textContent = `오류: ${error.message}`;
         banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    storageSettingsForm.addEventListener("submit", async (event) => {
+      try {
+        await saveStorageSettings(event);
+        banner.textContent = "Storage settings saved";
+      } catch (error) {
+        event.preventDefault();
+        storageSettingsStatus.textContent = `Error: ${error.message}`;
+        banner.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    collectorSettingsForm.addEventListener("submit", async (event) => {
+      try {
+        await saveCollectorSettings(event);
+        banner.textContent = "Collector settings saved";
+      } catch (error) {
+        event.preventDefault();
+        collectorSettingsStatus.textContent = `Error: ${error.message}`;
+        banner.textContent = `Error: ${error.message}`;
       }
     });
 

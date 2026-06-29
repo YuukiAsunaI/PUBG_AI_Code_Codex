@@ -86,21 +86,24 @@ Runtime priority:
 This means `.env` is still useful for first boot, but the local program can override the paths after the user changes
 them in the UI.
 
-The settings screen should provide:
+The current settings screen provides:
 
-- match/telemetry raw-data path picker
-- 2D replay artifact path picker
+- match/telemetry raw-data path editor
+- 2D replay artifact path editor
+- raw compression selector
 - polling interval selector from 1 to 5 minutes
 - collection cycle player limit selector up to 100
 - player lookup chunk size selector up to the official player lookup limit
 - Discord command group editor
 - Discord per-user permission grant editor
-- Discord guild-specific permission/ranking scope editor
 - global admin editor
-- write-test button for each path
 - free disk space display for each path
-- save button that creates missing folders only after user confirmation
 - warning when a configured drive is disconnected
+
+Still planned:
+
+- Discord guild-specific ranking scope editor
+- public profile default editor
 
 Discord permission settings can also be changed from the CLI:
 

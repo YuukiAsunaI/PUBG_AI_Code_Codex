@@ -13,6 +13,19 @@ from pubg_ai.web.app import create_app
 
 
 class WebSettingsTests(unittest.TestCase):
+    def test_index_includes_storage_and_collector_settings_forms(self) -> None:
+        client = TestClient(create_app())
+        response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.text
+        self.assertIn('id="storageSettingsForm"', body)
+        self.assertIn('id="collectorSettingsForm"', body)
+        self.assertIn("/settings/storage", body)
+        self.assertIn("/settings/collector", body)
+        self.assertIn("saveStorageSettings", body)
+        self.assertIn("saveCollectorSettings", body)
+
     def test_web_settings_endpoint_updates_local_settings_file(self) -> None:
         with TemporaryDirectory() as temp_dir:
             settings_file = Path(temp_dir) / "config" / "local_settings.json"
@@ -45,6 +58,59 @@ class WebSettingsTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertFalse(settings_file.exists())
+
+    def test_storage_settings_endpoint_updates_paths_and_status(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            settings_file = base_dir / "config" / "local_settings.json"
+            raw_dir = base_dir / "raw-drive" / "raw"
+            replay_dir = base_dir / "replay-drive" / "replay"
+            with patch.dict(os.environ, {"PUBG_LOCAL_SETTINGS_FILE": str(settings_file)}):
+                client = TestClient(create_app())
+                response = client.post(
+                    "/settings/storage",
+                    json={
+                        "raw_data_dir": str(raw_dir),
+                        "replay_data_dir": str(replay_dir),
+                        "raw_compression": "none",
+                    },
+                )
+                status = client.get("/settings/status")
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertEqual(payload["storage"]["raw_data_dir"], str(raw_dir))
+            self.assertEqual(payload["storage"]["replay_data_dir"], str(replay_dir))
+            self.assertEqual(payload["storage"]["raw_compression"], "none")
+            self.assertTrue(payload["storage_status"]["raw_data_dir"]["writable"])
+            self.assertTrue(payload["storage_status"]["replay_data_dir"]["writable"])
+            self.assertEqual(status.json()["raw_data_dir"], str(raw_dir))
+            self.assertEqual(status.json()["raw_compression"], "none")
+            self.assertTrue(raw_dir.is_dir())
+            self.assertTrue(replay_dir.is_dir())
+
+    def test_collector_settings_endpoint_updates_limits(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            settings_file = Path(temp_dir) / "config" / "local_settings.json"
+            with patch.dict(os.environ, {"PUBG_LOCAL_SETTINGS_FILE": str(settings_file)}):
+                client = TestClient(create_app())
+                response = client.post(
+                    "/settings/collector",
+                    json={
+                        "poll_interval_seconds": 90,
+                        "cycle_player_limit": 50,
+                        "player_lookup_chunk_size": 5,
+                    },
+                )
+                status = client.get("/settings/status")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["collector"]["poll_interval_seconds"], 90)
+            self.assertEqual(response.json()["collector"]["cycle_player_limit"], 50)
+            self.assertEqual(response.json()["collector"]["player_lookup_chunk_size"], 5)
+            self.assertEqual(status.json()["collector"]["poll_interval_seconds"], 90)
+            self.assertEqual(status.json()["collector"]["cycle_player_limit"], 50)
+            self.assertEqual(status.json()["collector"]["player_lookup_chunk_size"], 5)
 
 
 if __name__ == "__main__":
