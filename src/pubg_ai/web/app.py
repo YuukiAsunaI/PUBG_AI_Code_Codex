@@ -131,6 +131,7 @@ def create_app() -> Any:
         return {
             "raw_data_dir": str(config.app.raw_data_dir),
             "replay_data_dir": str(config.app.replay_data_dir),
+            "local_web_base_url": config.app.local_web_base_url,
             "raw_compression": config.app.raw_compression,
             "collector": {
                 "poll_interval_seconds": config.app.collector_poll_interval_seconds,

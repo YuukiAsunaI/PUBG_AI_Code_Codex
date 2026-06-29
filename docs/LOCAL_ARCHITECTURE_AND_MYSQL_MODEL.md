@@ -333,9 +333,10 @@ Completed slices:
     and related-player display names/registration flags for combat events when available.
 25. 2D replay timeline payloads can include teammate `team_tracks` when same-roster teammates have parsed position
     samples, and the local player can draw those routes through a teammate overlay toggle.
+26. Discord recommendation responses can include local web evidence links for weapon+attachment rows when
+    `PUBG_LOCAL_WEB_BASE_URL` is configured.
 
 Next slice:
 
-1. Add weapon+attachment evidence links from Discord recommendation responses where a local web URL can be shared
-   safely.
-2. Add richer replay layers such as phase rings, revive markers, and follow-player viewport controls.
+1. Add richer replay layers such as phase rings, revive markers, and follow-player viewport controls.
+2. Add local settings UI support for the optional Discord evidence-link base URL.

@@ -113,6 +113,19 @@ python -m pubg_ai.cli discord-permissions
 
 These commands update `config/local_settings.json` only. API keys and bot tokens still remain in `.env`.
 
+## Local Web Link Sharing
+
+Discord recommendation responses can include local web evidence links for weapon+attachment recommendations. Configure
+this only when Discord readers can reach the local management app URL:
+
+```env
+PUBG_LOCAL_WEB_BASE_URL=http://127.0.0.1:8000
+```
+
+Leave `PUBG_LOCAL_WEB_BASE_URL` unset when the bot is running on a private machine and Discord readers cannot open the
+local app. This setting is not a secret, but it should not be confused with remote access; the web app still refuses
+non-localhost bind hosts by default.
+
 ## Recommended File Layout
 
 Store files under deterministic relative paths:

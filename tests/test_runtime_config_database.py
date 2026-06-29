@@ -41,6 +41,7 @@ class RuntimeConfigTests(unittest.TestCase):
                         "MYSQL_PASSWORD=db-secret",
                         "PUBG_RAW_DATA_DIR=raw",
                         "PUBG_REPLAY_DATA_DIR=replays",
+                        "PUBG_LOCAL_WEB_BASE_URL=http://127.0.0.1:8000/",
                     ]
                 ),
                 encoding="utf-8",
@@ -54,6 +55,7 @@ class RuntimeConfigTests(unittest.TestCase):
             self.assertNotIn("pubg-secret", str(secret_status["PUBG_API_KEY"].to_record()))
             self.assertEqual(config.database.password, "db-secret")
             self.assertEqual(config.app.raw_data_dir, base_dir / "raw")
+            self.assertEqual(config.app.local_web_base_url, "http://127.0.0.1:8000")
 
     def test_database_config_safe_record_masks_password(self) -> None:
         config = DatabaseConfig(password="super-secret")

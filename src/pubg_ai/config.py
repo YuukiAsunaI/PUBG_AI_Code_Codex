@@ -16,6 +16,7 @@ def _env_bool(value: str | None, default: bool = False) -> bool:
 class AppConfig:
     raw_data_dir: Path
     replay_data_dir: Path
+    local_web_base_url: str | None = None
     raw_compression: str = "gzip"
     allow_storage_fallback: bool = False
     allow_replay_storage_fallback: bool = False
@@ -44,6 +45,7 @@ class AppConfig:
         return cls(
             raw_data_dir=raw_dir,
             replay_data_dir=replay_dir,
+            local_web_base_url=_normalize_base_url(values.get("PUBG_LOCAL_WEB_BASE_URL")),
             raw_compression=compression,
             allow_storage_fallback=_env_bool(
                 values.get("PUBG_ALLOW_STORAGE_FALLBACK"),
@@ -99,6 +101,7 @@ class AppConfig:
         return cls(
             raw_data_dir=storage_settings.raw_data_dir if storage_settings else config.raw_data_dir,
             replay_data_dir=storage_settings.replay_data_dir if storage_settings else config.replay_data_dir,
+            local_web_base_url=config.local_web_base_url,
             raw_compression=storage_settings.raw_compression if storage_settings else config.raw_compression,
             allow_storage_fallback=config.allow_storage_fallback,
             allow_replay_storage_fallback=config.allow_replay_storage_fallback,
@@ -217,6 +220,17 @@ def _env_int(value: str | None, default: int) -> int:
         return int(value)
     except ValueError:
         return default
+
+
+def _normalize_base_url(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip().rstrip("/")
+    if not stripped:
+        return None
+    if not (stripped.startswith("http://") or stripped.startswith("https://")):
+        raise ValueError("PUBG_LOCAL_WEB_BASE_URL must start with http:// or https://.")
+    return stripped
 
 
 def load_dotenv_values(env_file: Path) -> dict[str, str]:

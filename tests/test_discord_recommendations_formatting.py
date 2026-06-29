@@ -173,6 +173,20 @@ class DiscordRecommendationFormattingTests(unittest.TestCase):
         self.assertIn("Erangel", body)
         self.assertIn("Friend registered", body)
         self.assertIn("Taego grid 5,2", body)
+        self.assertNotIn("/players/recommendations/weapon-attachment-evidence", body)
+
+        body_with_links = format_player_recommendations(
+            report,
+            evidence_base_url="http://127.0.0.1:8000/",
+        )
+
+        self.assertIn(
+            "http://127.0.0.1:8000/players/recommendations/weapon-attachment-evidence",
+            body_with_links,
+        )
+        self.assertIn("account_id=account.test", body_with_links)
+        self.assertIn("weapon_code=WeapHK416_C", body_with_links)
+        self.assertIn("attachment_code=Item_Attach_Weapon_Lower_Foregrip_C", body_with_links)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 from pubg_ai.config import RuntimeConfig
 from pubg_ai.database import connect_mysql
@@ -164,7 +165,11 @@ def format_player_ranking(ranking: PlayerRanking) -> str:
     return "\n".join(lines)
 
 
-def format_player_recommendations(report: PlayerRecommendationReport) -> str:
+def format_player_recommendations(
+    report: PlayerRecommendationReport,
+    *,
+    evidence_base_url: str | None = None,
+) -> str:
     lines = [
         f"{report.player.current_name} recommendations ({report.player.shard})",
         f"- min matches: {report.min_matches}",
@@ -182,6 +187,7 @@ def format_player_recommendations(report: PlayerRecommendationReport) -> str:
         lines.append("- weapon parts: " + ", ".join(
             f"{item.weapon_name} + {item.attachment_name} "
             f"({_number(item.avg_damage_dealt, 1)} dmg, {_percent(item.win_rate)} win)"
+            f"{_recommendation_evidence_link(report, item, evidence_base_url)}"
             for item in report.weapon_attachments[:3]
         ))
     else:
@@ -417,7 +423,13 @@ def create_discord_bot(
             await ctx.reply("조회 가능한 추천 데이터를 찾지 못했습니다.", mention_author=False)
             return
 
-        await ctx.reply(format_player_recommendations(recommendations), mention_author=False)
+        await ctx.reply(
+            format_player_recommendations(
+                recommendations,
+                evidence_base_url=config.app.local_web_base_url,
+            ),
+            mention_author=False,
+        )
 
     @bot.command(name="매치", aliases=["pubg-match"])
     async def player_match_command(
@@ -634,6 +646,24 @@ def _short_account_id(account_id: str) -> str:
     if account_id.startswith("account.") and len(account_id) > 20:
         return f"{account_id[:15]}...{account_id[-4:]}"
     return account_id
+
+
+def _recommendation_evidence_link(
+    report: PlayerRecommendationReport,
+    item: Any,
+    base_url: str | None,
+) -> str:
+    if not base_url:
+        return ""
+    query = urlencode(
+        {
+            "shard": report.player.shard,
+            "account_id": report.player.account_id,
+            "weapon_code": item.weapon_code,
+            "attachment_code": item.attachment_code,
+        }
+    )
+    return f" [evidence]({base_url.rstrip('/')}/players/recommendations/weapon-attachment-evidence?{query})"
 
 
 def _short_match_id(match_id: str) -> str:
