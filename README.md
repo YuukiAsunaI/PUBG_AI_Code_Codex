@@ -250,6 +250,7 @@ care-package markers. The player also includes a time-sorted event list and a de
 care-package events can be clicked to seek directly to that moment. Timeline JSON also carries the tracked player's
 team roster and marks registered teammates, so the local replay panel can show who was in the squad for that match.
 When teammate position samples exist, the player can draw teammate route overlays with current-position labels.
+The replay view also supports map zoom and tracked-player follow mode for inspecting dense fight moments.
 
 Run the Discord bot MVP:
 

@@ -1131,6 +1131,16 @@ _INDEX_HTML = """<!doctype html>
         <label><input type="checkbox" id="timelineShowCare" checked>보급</label>
         <label><input type="checkbox" id="timelineShowPlane" checked>비행기</label>
         <label><input type="checkbox" id="timelineShowTeam" checked>팀원</label>
+        <label><input type="checkbox" id="timelineFollowPlayer">팔로우</label>
+        <label>줌
+          <select id="timelineZoom">
+            <option value="1" selected>1x</option>
+            <option value="1.5">1.5x</option>
+            <option value="2">2x</option>
+            <option value="3">3x</option>
+            <option value="4">4x</option>
+          </select>
+        </label>
       </div>
       <div class="timeline-range">
         <input id="timelineScrubber" type="range" min="0" max="0" value="0" step="0.1">
@@ -1205,6 +1215,8 @@ _INDEX_HTML = """<!doctype html>
     const timelineShowCare = document.querySelector("#timelineShowCare");
     const timelineShowPlane = document.querySelector("#timelineShowPlane");
     const timelineShowTeam = document.querySelector("#timelineShowTeam");
+    const timelineFollowPlayer = document.querySelector("#timelineFollowPlayer");
+    const timelineZoom = document.querySelector("#timelineZoom");
     const replayCtx = replayCanvas.getContext("2d");
     let replayTimelineArtifacts = [];
     let activeTimeline = null;
@@ -1983,8 +1995,19 @@ _INDEX_HTML = """<!doctype html>
     }
 
     function drawReplayBackground(width, height) {
+      const viewport = replayViewport();
       if (replayMapImage) {
-        replayCtx.drawImage(replayMapImage, 0, 0, width, height);
+        replayCtx.drawImage(
+          replayMapImage,
+          viewport.x * replayMapImage.naturalWidth,
+          viewport.y * replayMapImage.naturalHeight,
+          viewport.size * replayMapImage.naturalWidth,
+          viewport.size * replayMapImage.naturalHeight,
+          0,
+          0,
+          width,
+          height,
+        );
         replayCtx.fillStyle = "rgba(10,16,22,0.16)";
         replayCtx.fillRect(0, 0, width, height);
       } else {
@@ -1994,12 +2017,14 @@ _INDEX_HTML = """<!doctype html>
       replayCtx.strokeStyle = "rgba(255,255,255,0.12)";
       replayCtx.lineWidth = 1;
       for (let index = 0; index <= 8; index += 1) {
-        const position = Math.round(width * index / 8);
+        const mapPosition = index / 8;
+        const vertical = canvasPoint({ x_pct: mapPosition, y_pct: viewport.y });
+        const horizontal = canvasPoint({ x_pct: viewport.x, y_pct: mapPosition });
         replayCtx.beginPath();
-        replayCtx.moveTo(position, 0);
-        replayCtx.lineTo(position, height);
-        replayCtx.moveTo(0, position);
-        replayCtx.lineTo(width, position);
+        replayCtx.moveTo(vertical.x, 0);
+        replayCtx.lineTo(vertical.x, height);
+        replayCtx.moveTo(0, horizontal.y);
+        replayCtx.lineTo(width, horizontal.y);
         replayCtx.stroke();
       }
     }
@@ -2066,6 +2091,7 @@ _INDEX_HTML = """<!doctype html>
         const current = interpolatedPosition(samples, activeTimelineTime);
         if (!current) return;
         const point = canvasPoint(current);
+        if (!canvasPointVisible(point, 16)) return;
         drawCircle(point, track.registered ? 7 : 6, track.registered ? "#ffffff" : color, color);
         drawReplayLabel(point, track.name || track.account_id || "team", color);
       });
@@ -2137,12 +2163,13 @@ _INDEX_HTML = """<!doctype html>
 
     function drawReplayOverlay() {
       replayCtx.fillStyle = "rgba(17,24,32,0.82)";
-      replayCtx.fillRect(12, 12, 340, 66);
+      replayCtx.fillRect(12, 12, 360, 88);
       replayCtx.fillStyle = "#f5f7fa";
       replayCtx.font = "14px Arial";
       replayCtx.fillText(activeTimelineArtifact?.match_id || activeTimeline?.match?.match_id || "-", 24, 36);
       replayCtx.fillStyle = "#c3ccd6";
       replayCtx.fillText(`${activeTimeline?.match?.map_name || "-"} / ${activeTimeline?.match?.game_mode || "-"} / ${activeTimelineTime.toFixed(1)}s`, 24, 60);
+      replayCtx.fillText(`view ${replayZoom().toFixed(1)}x / follow ${timelineFollowPlayer.checked ? "on" : "off"}`, 24, 84);
     }
 
     function drawReplayLabel(point, label, color) {
@@ -2194,10 +2221,44 @@ _INDEX_HTML = """<!doctype html>
     }
 
     function canvasPoint(mapPoint) {
+      const viewport = replayViewport();
       return {
-        x: Math.max(0, Math.min(1, Number(mapPoint.x_pct || 0))) * replayCanvas.width,
-        y: Math.max(0, Math.min(1, Number(mapPoint.y_pct || 0))) * replayCanvas.height,
+        x: ((Math.max(0, Math.min(1, Number(mapPoint.x_pct || 0))) - viewport.x) / viewport.size) * replayCanvas.width,
+        y: ((Math.max(0, Math.min(1, Number(mapPoint.y_pct || 0))) - viewport.y) / viewport.size) * replayCanvas.height,
       };
+    }
+
+    function canvasPointVisible(point, margin = 0) {
+      return (
+        point.x >= -margin
+        && point.x <= replayCanvas.width + margin
+        && point.y >= -margin
+        && point.y <= replayCanvas.height + margin
+      );
+    }
+
+    function replayViewport() {
+      const zoom = replayZoom();
+      const size = 1 / zoom;
+      const center = replayViewportCenter();
+      return {
+        x: Math.max(0, Math.min(1 - size, center.x_pct - size / 2)),
+        y: Math.max(0, Math.min(1 - size, center.y_pct - size / 2)),
+        size,
+      };
+    }
+
+    function replayViewportCenter() {
+      if (timelineFollowPlayer?.checked && activeTimeline) {
+        const current = interpolatedPosition(activeTimeline.positions || [], activeTimelineTime);
+        if (current) return current;
+      }
+      return { x_pct: 0.5, y_pct: 0.5 };
+    }
+
+    function replayZoom() {
+      const value = Number(timelineZoom?.value || 1);
+      return Number.isFinite(value) ? Math.max(1, Math.min(4, value)) : 1;
     }
 
     function drawCircle(point, radius, fill, stroke) {
@@ -2656,9 +2717,10 @@ _INDEX_HTML = """<!doctype html>
       if (!button) return;
       seekTimelineEvent(button.dataset.timelineEvent || "");
     });
-    for (const toggle of [timelineShowPath, timelineShowCombat, timelineShowCare, timelineShowPlane, timelineShowTeam]) {
+    for (const toggle of [timelineShowPath, timelineShowCombat, timelineShowCare, timelineShowPlane, timelineShowTeam, timelineFollowPlayer]) {
       toggle.addEventListener("change", renderReplayFrame);
     }
+    timelineZoom.addEventListener("change", renderReplayFrame);
 
     drawEmptyReplayCanvas();
     Promise.all([loadStatus(), loadDiscordPermissions(), loadPlayers(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])

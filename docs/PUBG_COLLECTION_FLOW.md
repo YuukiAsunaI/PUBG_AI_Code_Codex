@@ -267,6 +267,8 @@ The current local runtime can generate post-match 2D route summary JPEG files fo
   registered teammates.
 - The 2D replay player has a teammate-route toggle. When `team_tracks` are present, it draws teammate paths as
   labeled overlays while keeping the tracked player's route visually primary.
+- The 2D replay player has zoom and tracked-player follow controls. Follow mode keeps the viewport centered on the
+  tracked player's interpolated position while all map layers use the same cropped map view.
 
 Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 route snapshot JPEG files were generated
 under `D:\BackUP\replay`, recorded in `replay_artifacts`, and verified as readable JPEG images. Total generated

@@ -335,8 +335,10 @@ Completed slices:
     samples, and the local player can draw those routes through a teammate overlay toggle.
 26. Discord recommendation responses can include local web evidence links for weapon+attachment rows when
     `PUBG_LOCAL_WEB_BASE_URL` is configured.
+27. 2D replay player supports map zoom and tracked-player follow mode, with all canvas layers rendered through the
+    same cropped viewport.
 
 Next slice:
 
-1. Add richer replay layers such as phase rings, revive markers, and follow-player viewport controls.
+1. Add richer replay layers such as phase rings and revive markers.
 2. Add local settings UI support for the optional Discord evidence-link base URL.
