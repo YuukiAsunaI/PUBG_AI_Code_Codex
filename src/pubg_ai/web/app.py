@@ -12,6 +12,7 @@ from pubg_ai.config import RuntimeConfig, load_dotenv_values
 from pubg_ai.database import connect_mysql, count_tables
 from pubg_ai.discord_permission_manager import DiscordPermissionManager
 from pubg_ai.local_settings import LocalSettingsError, LocalSettingsStore
+from pubg_ai.loadout_snapshot_processor import LoadoutSnapshotProcessor
 from pubg_ai.map_snapshot_renderer import MapSnapshotProcessor
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.match_job_processor import MatchJobProcessor
@@ -81,6 +82,11 @@ class GenerateMapSnapshotsRequest(BaseModel):
 
 class GenerateReplayTimelinesRequest(BaseModel):
     limit: int = Field(default=10, ge=1, le=200)
+    force: bool = False
+
+
+class GenerateLoadoutSnapshotsRequest(BaseModel):
+    limit: int = Field(default=10, ge=1, le=500)
     force: bool = False
 
 
@@ -501,6 +507,15 @@ def create_app() -> Any:
                     compression=config.app.raw_compression,  # type: ignore[arg-type]
                 ),
             ).process_raw_telemetry(limit=request.limit, force=request.force)
+            return {"result": result.to_record()}
+        finally:
+            connection.close()
+
+    @app.post("/telemetry/loadout-snapshots/generate")
+    def generate_loadout_snapshots(request: GenerateLoadoutSnapshotsRequest) -> dict[str, Any]:
+        connection = connect_mysql(config.database)
+        try:
+            result = LoadoutSnapshotProcessor(connection).process_matches(limit=request.limit, force=request.force)
             return {"result": result.to_record()}
         finally:
             connection.close()
@@ -943,6 +958,14 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="movementStatus">대기 중</div>
     </section>
     <section>
+      <h2>Loadout Snapshot 생성</h2>
+      <div class="actions" style="margin-bottom: 10px;">
+        <button type="button" onclick="generateLoadoutSnapshots(false)">파츠 스냅샷 생성</button>
+        <button class="secondary" type="button" onclick="generateLoadoutSnapshots(true)">재생성</button>
+      </div>
+      <div class="status" id="loadoutSnapshotStatus">대기 중</div>
+    </section>
+    <section>
       <h2>Map Snapshot 생성</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="generateMapSnapshots(false)">JPEG 생성</button>
@@ -1025,6 +1048,7 @@ _INDEX_HTML = """<!doctype html>
     const combatStatus = document.querySelector("#combatStatus");
     const itemStatus = document.querySelector("#itemStatus");
     const movementStatus = document.querySelector("#movementStatus");
+    const loadoutSnapshotStatus = document.querySelector("#loadoutSnapshotStatus");
     const mapSnapshotStatus = document.querySelector("#mapSnapshotStatus");
     const timelineStatus = document.querySelector("#timelineStatus");
     const replayArtifactsBody = document.querySelector("#replayArtifactsBody");
@@ -1848,6 +1872,22 @@ _INDEX_HTML = """<!doctype html>
       const payload = await response.json();
       movementStatus.textContent = `파싱 ${payload.result.parsed_payloads}개, 위치 ${payload.result.position_samples}개, 전투위치 ${payload.result.combat_location_events}개, 보급 ${payload.result.care_package_events}개, 비행기 ${payload.result.plane_routes}개, 실패 ${payload.result.failed_payloads}개`;
       banner.textContent = "위치 파싱 완료";
+    }
+
+    async function generateLoadoutSnapshots(force) {
+      banner.textContent = force ? "Loadout snapshot 재생성 중" : "Loadout snapshot 생성 중";
+      const response = await fetch("/telemetry/loadout-snapshots/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 50, force }),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const payload = await response.json();
+      loadoutSnapshotStatus.textContent = `처리 ${payload.result.processed_matches}개, 기존 ${payload.result.skipped_existing}개, item없음 ${payload.result.skipped_no_items}개, 실패 ${payload.result.failed_matches}개, snapshot ${payload.result.generated_snapshots}개`;
+      banner.textContent = "Loadout snapshot 생성 완료";
     }
 
     async function generateMapSnapshots(force) {

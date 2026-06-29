@@ -8,7 +8,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class DatabaseError(RuntimeError):
@@ -76,7 +76,7 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 VALUES (%s, %s, NOW(6))
                 ON DUPLICATE KEY UPDATE description = VALUES(description)
                 """,
-                (SCHEMA_VERSION, "map snapshot replay artifact schema"),
+                (SCHEMA_VERSION, "combat loadout snapshot schema"),
             )
             applied += 1
     finally:
@@ -524,6 +524,35 @@ def schema_statements() -> list[str]:
             KEY idx_player_combat_location_account_action (account_id, action, match_id),
             KEY idx_player_combat_location_related (related_account_id, match_id),
             CONSTRAINT fk_player_combat_location_events_match
+                FOREIGN KEY (match_id) REFERENCES matches(match_id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS player_combat_loadout_snapshots (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            match_id VARCHAR(191) NOT NULL,
+            account_id VARCHAR(128) NOT NULL,
+            combat_event_index INT NOT NULL,
+            combat_action VARCHAR(32) NOT NULL,
+            combat_event_at_kst DATETIME(6) NULL,
+            weapon_code VARCHAR(128) NOT NULL,
+            weapon_name_ko VARCHAR(191) NULL,
+            attachment_codes JSON NULL,
+            attachment_names_ko JSON NULL,
+            attachment_count INT NOT NULL DEFAULT 0,
+            distance_m FLOAT NULL,
+            is_headshot TINYINT(1) NOT NULL DEFAULT 0,
+            updated_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_player_combat_loadout_snapshots (
+                match_id,
+                account_id,
+                combat_event_index,
+                combat_action
+            ),
+            KEY idx_player_combat_loadout_account_weapon (account_id, weapon_code, match_id),
+            KEY idx_player_combat_loadout_weapon_count (weapon_code, attachment_count),
+            CONSTRAINT fk_player_combat_loadout_snapshots_match
                 FOREIGN KEY (match_id) REFERENCES matches(match_id)
                 ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci

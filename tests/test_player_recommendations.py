@@ -66,28 +66,26 @@ class PlayerRecommendationServiceTests(unittest.TestCase):
                 [
                     {
                         "match_id": "match-1",
-                        "parent_item_code": "Item_Weapon_HK416_C",
-                        "item_code": "Item_Attach_Weapon_Lower_Foregrip_C",
-                        "item_name_ko": "Vertical Grip",
-                        "item_category": "Attachment",
-                        "item_sub_category": "Lower",
-                        "attached_events": 2,
+                        "weapon_code": "WeapHK416_C",
+                        "weapon_name_ko": "M416",
+                        "attachment_codes": '["Item_Attach_Weapon_Lower_Foregrip_C"]',
+                        "attachment_names_ko": '["Vertical Grip"]',
+                        "combat_action": "kill",
+                        "distance_m": 12.0,
+                        "is_headshot": 1,
                         "win": 1,
-                        "kills": 3,
-                        "dbnos": 2,
                         "damage_dealt": 500.0,
                     },
                     {
                         "match_id": "match-2",
-                        "parent_item_code": "Item_Weapon_HK416_C",
-                        "item_code": "Item_Attach_Weapon_Lower_Foregrip_C",
-                        "item_name_ko": "Vertical Grip",
-                        "item_category": "Attachment",
-                        "item_sub_category": "Lower",
-                        "attached_events": 1,
+                        "weapon_code": "WeapHK416_C",
+                        "weapon_name_ko": "M416",
+                        "attachment_codes": ["Item_Attach_Weapon_Lower_Foregrip_C"],
+                        "attachment_names_ko": ["Vertical Grip"],
+                        "combat_action": "dbno_caused",
+                        "distance_m": 82.0,
+                        "is_headshot": 0,
                         "win": 0,
-                        "kills": 1,
-                        "dbnos": 1,
                         "damage_dealt": 220.0,
                     },
                 ],
@@ -180,6 +178,10 @@ class PlayerRecommendationServiceTests(unittest.TestCase):
         self.assertEqual(report.weapon_attachments[0].weapon_code, "WeapHK416_C")
         self.assertEqual(report.weapon_attachments[0].attachment_name, "Vertical Grip")
         self.assertEqual(report.weapon_attachments[0].match_count, 2)
+        self.assertEqual(report.weapon_attachments[0].event_count, 2)
+        self.assertEqual(report.weapon_attachments[0].kills, 1)
+        self.assertEqual(report.weapon_attachments[0].dbnos, 1)
+        self.assertEqual(report.weapon_attachments[0].source, "loadout_snapshots")
         self.assertEqual(report.attachments[0].item_name, "Vertical Grip")
         self.assertEqual(report.maps[0].map_name, "Erangel_Main")
         self.assertTrue(report.teammates[0].registered)

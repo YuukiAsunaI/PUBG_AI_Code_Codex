@@ -43,6 +43,7 @@ class WebRecommendationTests(unittest.TestCase):
                 [],
                 [],
                 [],
+                [],
             ]
         )
 

@@ -12,6 +12,7 @@ from pubg_ai.discord_bot import DEFAULT_DISCORD_PREFIX, run_discord_bot
 from pubg_ai.discord_permission_manager import DiscordPermissionManager
 from pubg_ai.discord_permissions import DiscordPermissionChecker
 from pubg_ai.local_settings import LocalSettingsError, LocalSettingsStore
+from pubg_ai.loadout_snapshot_processor import LoadoutSnapshotProcessor
 from pubg_ai.map_snapshot_renderer import MapSnapshotProcessor
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.match_job_processor import MatchJobProcessor
@@ -145,6 +146,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     replay_timelines_parser.add_argument("--limit", default=10, type=int)
     replay_timelines_parser.add_argument("--force", action="store_true", help="Regenerate existing timeline artifacts.")
+
+    loadout_snapshots_parser = subparsers.add_parser(
+        "generate-loadout-snapshots",
+        help="Reconstruct weapon attachment loadout snapshots for kill/DBNO combat events.",
+    )
+    loadout_snapshots_parser.add_argument("--limit", default=10, type=int)
+    loadout_snapshots_parser.add_argument("--force", action="store_true", help="Regenerate existing loadout snapshots.")
 
     web_parser = subparsers.add_parser("run-web", help="Run the local management web app.")
     web_parser.add_argument("--host", default="127.0.0.1", help="Bind host. Defaults to localhost only.")
@@ -448,6 +456,15 @@ def main(argv: list[str] | None = None) -> int:
                 connection,
                 ReplayArtifactStore(config.app.replay_data_dir),
             ).generate_player_timelines(limit=args.limit, force=args.force)
+            _print_json(result.to_record())
+        finally:
+            connection.close()
+        return 0
+
+    if args.command == "generate-loadout-snapshots":
+        connection = connect_mysql(config.database)
+        try:
+            result = LoadoutSnapshotProcessor(connection).process_matches(limit=args.limit, force=args.force)
             _print_json(result.to_record())
         finally:
             connection.close()

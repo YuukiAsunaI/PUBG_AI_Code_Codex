@@ -112,7 +112,7 @@ Use a two-layer storage model:
 | --- | --- |
 | `telemetry_events` | Generic event index: event type, timestamp, elapsed time, actor, raw payload JSON |
 | `item_events` | Pick/drop/use/equip/unequip/attach/detach/trunk/carepackage/lootbox events |
-| `loadout_snapshots` | Reconstructed weapon + attachment state over time |
+| `player_combat_loadout_snapshots` | Reconstructed weapon + attachment state at kill, DBNO-caused, and finish moments |
 | `weapon_fire_events` | Attack, throwable, flare, fire-count events |
 | `damage_events` | Damage dealt/taken with causer, reason, distance, armor notes |
 | `body_part_hit_events` | One row per gun hit with attacker, victim, weapon, damage reason/body part, damage, and headshot flag |
@@ -322,8 +322,11 @@ Completed slices:
     teammates, and coordinate-clustered drop zones from parsed summary tables.
 19. Distance-weighted weapon recommendations and first-pass weapon+attachment pair recommendations from
     combat-location distance buckets and attach events.
+20. Combat loadout snapshot generator and recommendation upgrade so weapon+attachment pairs prefer the actual
+    attachment state at kill, DBNO-caused, and finish moments.
 
 Next slice:
 
-1. Improve recommendation quality with true time-based loadout snapshots at kill/DBNO moments.
+1. Add richer recommendation detail views that show the supporting kill/DBNO/finish snapshots behind each
+   weapon+attachment recommendation.
 2. Richer 2D replay playback features such as team overlays, minimap assets, and event detail panels.

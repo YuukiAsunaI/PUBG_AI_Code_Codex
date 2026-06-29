@@ -66,6 +66,7 @@ The first executable slice is now available:
 - queued telemetry downloader that stores large telemetry JSON files under the configured raw storage path
 - raw telemetry combat parser for registered-player match summaries and weapon-level stats
 - raw telemetry item parser for pickups, drops, uses, equips, attachment changes, and item summary stats
+- combat loadout snapshot generator for weapon + attachment state at kill/DBNO/finish moments
 - localhost-only FastAPI management app
 - browser UI for status, user registration, user lookup, collection stop/delete action, match job processing, and
   telemetry job/combat/item processing
@@ -118,8 +119,9 @@ Show first-pass recommendations from parsed summary tables:
 python -m pubg_ai.cli player-recommendations Yuuki_Asuna--- --shard steam --min-matches 1
 ```
 
-Recommendations include distance-weighted weapon ranges plus first-pass weapon+attachment pairs reconstructed from
-attach events.
+Recommendations include distance-weighted weapon ranges and weapon+attachment pairs. When generated, combat loadout
+snapshots are used first so parts reflect the actual kill/DBNO/finish moment; attach-event co-occurrence remains the
+fallback for older parsed data.
 
 Show one completed-match detail from parsed MySQL summary tables:
 
@@ -197,6 +199,18 @@ Reparse existing movement/location rows after parser changes:
 
 ```powershell
 python -m pubg_ai.cli parse-telemetry-movement --limit 200 --force
+```
+
+Generate weapon + attachment loadout snapshots for kill/DBNO/finish events:
+
+```powershell
+python -m pubg_ai.cli generate-loadout-snapshots --limit 50
+```
+
+Regenerate existing combat loadout snapshots after parser changes:
+
+```powershell
+python -m pubg_ai.cli generate-loadout-snapshots --limit 200 --force
 ```
 
 Generate registered-player 2D route JPEG snapshots under `PUBG_REPLAY_DATA_DIR`:

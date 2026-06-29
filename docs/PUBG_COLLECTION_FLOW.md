@@ -205,6 +205,23 @@ Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 telem
 position samples, 178 landing events, 146 movement summaries, 872 combat-location events, 4,734 care-package events,
 and 119 plane-route approximations with 0 failed payloads.
 
+## Implemented Combat Loadout Snapshot Slice
+
+The current local runtime can reconstruct weapon + attachment state at fight-result moments:
+
+- `LoadoutSnapshotProcessor.process_matches(...)` reads `player_item_events` attach/detach rows and
+  `player_combat_location_events` kill, DBNO-caused, and finish rows.
+- Item event order is reconstructed with telemetry `event_index`, so same-second events still apply in the correct
+  sequence.
+- `player_combat_loadout_snapshots` stores one row per fight-result event with weapon code/name, current attachment
+  codes/names, distance, headshot flag, and KST combat event time.
+- `python -m pubg_ai.cli generate-loadout-snapshots --limit 50` runs one snapshot pass.
+- `python -m pubg_ai.cli generate-loadout-snapshots --limit 200 --force` rebuilds existing snapshots after parser
+  changes.
+- The local web UI has a Loadout Snapshot generate/regenerate section.
+- Recommendation lookup uses these snapshots first for weapon+attachment pairs, then falls back to attach-event
+  co-occurrence if snapshots have not been generated yet.
+
 ## Implemented Map Snapshot Artifact Slice
 
 The current local runtime can generate post-match 2D route summary JPEG files for registered players:
@@ -259,8 +276,8 @@ The current Discord bot slice is intentionally small and reuses the same local M
 - `!랭킹 [지표] [shard] [limit] [전체]` ranks registered targets from completed-match summary tables. Server channels
   default to that `guild_id` scope; global admins can request the full local ranking with `전체`.
 - `!추천 닉네임 [shard]` reads parsed summary tables and returns recommendations for weapons, distance-weighted
-  weapon ranges, weapon+attachment pairs from attach events, attachments, maps, teammates, and coordinate-clustered
-  drop zones.
+  weapon ranges, weapon+attachment pairs from combat loadout snapshots when available, attachments, maps, teammates,
+  and coordinate-clustered drop zones.
 - `!유저삭제 steam 닉네임또는accountId` stops future collection by setting the registered target inactive.
 - `!최근스냅샷 [match_id]` sends the latest generated `map_snapshot` JPEG artifact, or the latest snapshot for the
   requested match ID.

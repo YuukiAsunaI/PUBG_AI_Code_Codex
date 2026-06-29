@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from math import sqrt
 from typing import Any, Mapping
+import json
 
 from pubg_ai.code_translator import translate_code
 from pubg_ai.distance_buckets import WeaponFamily, distance_bucket
@@ -50,6 +51,11 @@ class WeaponAttachmentRecommendation:
     kills_per_match: float
     avg_damage_dealt: float
     reason: str
+    event_count: int = 0
+    finishes: int = 0
+    headshots: int = 0
+    avg_distance_m: float | None = None
+    source: str = "attach_events"
 
     def to_record(self) -> dict[str, Any]:
         return asdict(self)
@@ -469,6 +475,180 @@ class PlayerRecommendationService:
         limit: int,
         min_matches: int,
     ) -> list[WeaponAttachmentRecommendation]:
+        snapshot_recommendations = self._loadout_snapshot_attachment_recommendations(
+            player,
+            limit=limit,
+            min_matches=min_matches,
+        )
+        if snapshot_recommendations:
+            return snapshot_recommendations
+        return self._attach_event_weapon_attachment_recommendations(
+            player,
+            limit=limit,
+            min_matches=min_matches,
+        )
+
+    def _loadout_snapshot_attachment_recommendations(
+        self,
+        player: RegisteredPlayer,
+        *,
+        limit: int,
+        min_matches: int,
+    ) -> list[WeaponAttachmentRecommendation]:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    snapshots.match_id,
+                    snapshots.weapon_code,
+                    snapshots.weapon_name_ko,
+                    snapshots.attachment_codes,
+                    snapshots.attachment_names_ko,
+                    snapshots.combat_action,
+                    snapshots.distance_m,
+                    snapshots.is_headshot,
+                    CASE WHEN participants.win_place = 1 THEN 1 ELSE 0 END AS win,
+                    COALESCE(summaries.damage_dealt, 0) AS damage_dealt
+                FROM player_combat_loadout_snapshots snapshots
+                INNER JOIN matches
+                    ON matches.match_id = snapshots.match_id
+                LEFT JOIN player_match_combat_summaries summaries
+                    ON summaries.match_id = snapshots.match_id
+                   AND summaries.account_id = snapshots.account_id
+                LEFT JOIN match_participants participants
+                    ON participants.match_id = snapshots.match_id
+                   AND participants.account_id = snapshots.account_id
+                WHERE snapshots.account_id = %s
+                  AND matches.shard = %s
+                  AND snapshots.attachment_count > 0
+                ORDER BY matches.created_at_kst DESC, snapshots.match_id DESC, snapshots.combat_event_index DESC
+                LIMIT 5000
+                """,
+                (player.account_id, player.shard),
+            )
+            rows = cursor.fetchall()
+
+        combos: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in rows:
+            match_id = str(row.get("match_id") or "")
+            weapon_code = str(row.get("weapon_code") or "")
+            if not weapon_code.startswith("Weap"):
+                continue
+
+            attachment_codes = _json_string_list(row.get("attachment_codes"))
+            attachment_names = _json_string_list(row.get("attachment_names_ko"))
+            names_by_code = dict(zip(attachment_codes, attachment_names))
+            for attachment_code in attachment_codes:
+                if not attachment_code:
+                    continue
+                key = (weapon_code, attachment_code)
+                record = combos.setdefault(
+                    key,
+                    {
+                        "weapon_code": weapon_code,
+                        "weapon_name": row.get("weapon_name_ko"),
+                        "attachment_code": attachment_code,
+                        "attachment_name": names_by_code.get(attachment_code),
+                        "match_ids": set(),
+                        "win_match_ids": set(),
+                        "damage_by_match": {},
+                        "event_count": 0,
+                        "kills": 0,
+                        "dbnos": 0,
+                        "finishes": 0,
+                        "headshots": 0,
+                        "distance_sum": 0.0,
+                        "distance_count": 0,
+                    },
+                )
+                record["match_ids"].add(match_id)
+                if _int(row.get("win")):
+                    record["win_match_ids"].add(match_id)
+                record["damage_by_match"][match_id] = max(
+                    _float(record["damage_by_match"].get(match_id)),
+                    _float(row.get("damage_dealt")),
+                )
+                record["event_count"] += 1
+                action = str(row.get("combat_action") or "")
+                if action == "kill":
+                    record["kills"] += 1
+                elif action == "dbno_caused":
+                    record["dbnos"] += 1
+                elif action == "finish":
+                    record["finishes"] += 1
+                if _int(row.get("is_headshot")):
+                    record["headshots"] += 1
+                distance_m = _optional_float(row.get("distance_m"))
+                if distance_m is not None:
+                    record["distance_sum"] += distance_m
+                    record["distance_count"] += 1
+
+        recommendations: list[WeaponAttachmentRecommendation] = []
+        for record in combos.values():
+            match_count = len(record["match_ids"])
+            if match_count < min_matches:
+                continue
+            wins = len(record["win_match_ids"])
+            kills = _int(record["kills"])
+            dbnos = _int(record["dbnos"])
+            finishes = _int(record["finishes"])
+            headshots = _int(record["headshots"])
+            event_count = _int(record["event_count"])
+            damage_dealt = sum(_float(value) for value in record["damage_by_match"].values())
+            score = (
+                kills * 120
+                + dbnos * 70
+                + finishes * 40
+                + headshots * 20
+                + event_count * 8
+                + wins * 50
+                + _safe_divide(damage_dealt, match_count) * 0.15
+            )
+            weapon_code = str(record["weapon_code"])
+            attachment_code = str(record["attachment_code"])
+            recommendations.append(
+                WeaponAttachmentRecommendation(
+                    weapon_code=weapon_code,
+                    weapon_name=str(record["weapon_name"] or translate_code(weapon_code, "damage_causer")),
+                    attachment_code=attachment_code,
+                    attachment_name=str(record["attachment_name"] or translate_code(attachment_code, "item")),
+                    attachment_category=None,
+                    attachment_sub_category=None,
+                    score=score,
+                    match_count=match_count,
+                    attached_events=event_count,
+                    wins=wins,
+                    kills=kills,
+                    dbnos=dbnos,
+                    damage_dealt=damage_dealt,
+                    win_rate=_safe_divide(wins, match_count),
+                    kills_per_match=_safe_divide(kills, match_count),
+                    avg_damage_dealt=_safe_divide(damage_dealt, match_count),
+                    reason=(
+                        f"{event_count} combat snapshots with "
+                        f"{translate_code(weapon_code, 'damage_causer')} + "
+                        f"{translate_code(attachment_code, 'item')}"
+                    ),
+                    event_count=event_count,
+                    finishes=finishes,
+                    headshots=headshots,
+                    avg_distance_m=(
+                        _safe_divide(record["distance_sum"], record["distance_count"])
+                        if record["distance_count"]
+                        else None
+                    ),
+                    source="loadout_snapshots",
+                )
+            )
+        return _top(recommendations, limit)
+
+    def _attach_event_weapon_attachment_recommendations(
+        self,
+        player: RegisteredPlayer,
+        *,
+        limit: int,
+        min_matches: int,
+    ) -> list[WeaponAttachmentRecommendation]:
         with self.connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -580,6 +760,8 @@ class PlayerRecommendationService:
                         f"{match_count} matches with {translate_code(weapon_code, 'damage_causer')} + "
                         f"{translate_code(attachment_code, 'item')}"
                     ),
+                    event_count=attached_events,
+                    source="attach_events",
                 )
             )
         return _top(recommendations, limit)
@@ -1035,8 +1217,6 @@ def _reason(match_count: int, wins: int, damage_dealt: float, kills: int) -> str
 def _survival_seconds_from_row(row: Mapping[str, Any]) -> float:
     raw_stats = row.get("raw_stats")
     if isinstance(raw_stats, str):
-        import json
-
         try:
             raw_stats = json.loads(raw_stats)
         except json.JSONDecodeError:
@@ -1046,6 +1226,22 @@ def _survival_seconds_from_row(row: Mapping[str, Any]) -> float:
         if survived is not None:
             return survived
     return _float(row.get("duration_seconds"))
+
+
+def _json_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    payload = value
+    if isinstance(payload, (bytes, bytearray)):
+        payload = payload.decode("utf-8", errors="replace")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(payload, list):
+        return []
+    return [str(item) for item in payload if item is not None and str(item)]
 
 
 def _combat_distance_from_row(row: Mapping[str, Any]) -> float | None:
