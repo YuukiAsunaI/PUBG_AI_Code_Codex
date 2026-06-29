@@ -196,6 +196,36 @@ class TelemetryMovementProcessorTests(unittest.TestCase):
                 "common": {"isGame": 1},
             },
             {
+                "_T": "LogPlayerRevive",
+                "_D": "2026-06-28T00:02:20Z",
+                "reviver": {
+                    "accountId": "account.tracked",
+                    "location": {"x": 210, "y": 310, "z": 300},
+                },
+                "victim": {
+                    "accountId": "account.friend",
+                    "location": {"x": 240, "y": 350, "z": 300},
+                },
+                "useTraumaBag": True,
+                "dBNOId": 123,
+                "common": {"isGame": 1},
+            },
+            {
+                "_T": "LogPlayerRevive",
+                "_D": "2026-06-28T00:02:30Z",
+                "reviver": {
+                    "accountId": "account.friend",
+                    "location": {"x": 410, "y": 510, "z": 300},
+                },
+                "victim": {
+                    "accountId": "account.tracked",
+                    "location": {"x": 440, "y": 550, "z": 300},
+                },
+                "useTraumaBag": False,
+                "dBNOId": 124,
+                "common": {"isGame": 1},
+            },
+            {
                 "_T": "LogCarePackageSpawn",
                 "_D": "2026-06-28T00:03:00Z",
                 "itemPackage": {
@@ -222,11 +252,18 @@ class TelemetryMovementProcessorTests(unittest.TestCase):
             preferred_account_ids={"account.tracked"},
         )
 
-        self.assertEqual([event.action for event in combat_locations], ["dbno_caused", "kill", "finish"])
+        self.assertEqual(
+            [event.action for event in combat_locations],
+            ["dbno_caused", "kill", "finish", "revive_given", "revive_received"],
+        )
         self.assertTrue(combat_locations[0].is_headshot)
         self.assertEqual(combat_locations[0].damage_causer_name, "WeapAUG_C")
         self.assertAlmostEqual(combat_locations[0].distance_m, 0.707)
         self.assertEqual(combat_locations[0].related_x, 150.0)
+        self.assertEqual(combat_locations[3].event_type, "LogPlayerRevive")
+        self.assertEqual(combat_locations[3].damage_reason, "TraumaBag")
+        self.assertAlmostEqual(combat_locations[3].distance_m, 0.5)
+        self.assertEqual(combat_locations[4].damage_reason, "Revive")
         self.assertEqual(care_packages[0].item_count, 2)
         self.assertEqual(care_packages[0].item_codes[0], "Item_Weapon_FAMASG2_C")
         self.assertIsNotNone(plane_route)

@@ -985,6 +985,44 @@ def parse_combat_location_events(
                     )
                 )
 
+        elif event_type == "LogPlayerRevive":
+            reviver = _mapping_value(event.get("reviver"))
+            victim = _mapping_value(event.get("victim"))
+            reviver_account_id = _optional_text(reviver.get("accountId"))
+            victim_account_id = _optional_text(victim.get("accountId"))
+            revive_info = {
+                "damageTypeCategory": "Revive",
+                "damageReason": "TraumaBag" if event.get("useTraumaBag") is True else "Revive",
+                "distance": _character_xy_distance_cm(reviver, victim),
+            }
+
+            if reviver_account_id in tracked_account_ids:
+                location_events.append(
+                    _combat_location_record(
+                        event=event,
+                        match_id=match_id,
+                        event_index=event_index,
+                        event_type="LogPlayerRevive",
+                        action="revive_given",
+                        account=reviver,
+                        related=victim,
+                        damage_info=revive_info,
+                    )
+                )
+            if victim_account_id in tracked_account_ids:
+                location_events.append(
+                    _combat_location_record(
+                        event=event,
+                        match_id=match_id,
+                        event_index=event_index,
+                        event_type="LogPlayerRevive",
+                        action="revive_received",
+                        account=victim,
+                        related=reviver,
+                        damage_info=revive_info,
+                    )
+                )
+
     return location_events
 
 
@@ -1174,6 +1212,18 @@ def _damage_distance_m(value: Any) -> float | None:
     if distance is None:
         return None
     return distance / 100.0
+
+
+def _character_xy_distance_cm(left: Mapping[str, Any], right: Mapping[str, Any]) -> float | None:
+    left_location = _mapping_value(left.get("location"))
+    right_location = _mapping_value(right.get("location"))
+    left_x = _optional_float(left_location.get("x"))
+    left_y = _optional_float(left_location.get("y"))
+    right_x = _optional_float(right_location.get("x"))
+    right_y = _optional_float(right_location.get("y"))
+    if left_x is None or left_y is None or right_x is None or right_y is None:
+        return None
+    return sqrt((right_x - left_x) ** 2 + (right_y - left_y) ** 2)
 
 
 def _looks_like_aircraft_sample(event: Mapping[str, Any], character: Mapping[str, Any]) -> bool:

@@ -1815,7 +1815,10 @@ _INDEX_HTML = """<!doctype html>
         const weapon = event.damage_causer_label || event.damage_causer_name || "-";
         const suffix = event.is_headshot ? " / HS" : "";
         const related = event.related_name || event.related_account_id;
-        const meta = [weapon, distanceM(event.distance_m)].concat(related ? [related] : []).join(" / ");
+        const baseMeta = isReviveAction(event.action)
+          ? [event.damage_reason || "Revive", distanceM(event.distance_m)]
+          : [weapon, distanceM(event.distance_m)];
+        const meta = baseMeta.concat(related ? [related] : []).join(" / ");
         add("combat", event, `${action}${suffix}`, meta);
       }
       for (const event of timeline.care_packages || []) {
@@ -1838,8 +1841,14 @@ _INDEX_HTML = """<!doctype html>
         death: "Death",
         finish: "Finish",
         finished_taken: "Finished taken",
+        revive_given: "Revive given",
+        revive_received: "Revived",
       };
       return labels[action] || action || "Combat";
+    }
+
+    function isReviveAction(action) {
+      return action === "revive_given" || action === "revive_received";
     }
 
     function renderTimelineTeamList() {
@@ -1916,8 +1925,12 @@ _INDEX_HTML = """<!doctype html>
         `time ${formatReplayTime(nearest.time)} / index ${nearest.event_index || "-"}`,
       ];
       if (nearest.category === "combat") {
-        detailLines.push(`weapon ${escapeHtml(source.damage_causer_label || source.damage_causer_name || "-")}`);
-        detailLines.push(`reason ${escapeHtml(source.damage_reason || "-")} / distance ${distanceM(source.distance_m)}`);
+        if (isReviveAction(source.action)) {
+          detailLines.push(`method ${escapeHtml(source.damage_reason || "Revive")} / distance ${distanceM(source.distance_m)}`);
+        } else {
+          detailLines.push(`weapon ${escapeHtml(source.damage_causer_label || source.damage_causer_name || "-")}`);
+          detailLines.push(`reason ${escapeHtml(source.damage_reason || "-")} / distance ${distanceM(source.distance_m)}`);
+        }
         const relatedLabel = combatRelatedLabel(source);
         if (relatedLabel) detailLines.push(`related ${relatedLabel}`);
       } else if (nearest.category === "care") {
@@ -2119,7 +2132,7 @@ _INDEX_HTML = """<!doctype html>
       for (const event of events) {
         if (eventTime(event) > activeTimelineTime || !event.map) continue;
         const point = canvasPoint(event.map);
-        if (event.related_map && ["dbno_caused", "kill", "finish"].includes(event.action)) {
+        if (event.related_map && ["dbno_caused", "kill", "finish", "revive_given"].includes(event.action)) {
           const related = canvasPoint(event.related_map);
           replayCtx.strokeStyle = "rgba(255,255,255,0.35)";
           replayCtx.lineWidth = 1;
@@ -2128,7 +2141,9 @@ _INDEX_HTML = """<!doctype html>
           replayCtx.lineTo(related.x, related.y);
           replayCtx.stroke();
         }
-        if (["kill", "finish"].includes(event.action)) {
+        if (isReviveAction(event.action)) {
+          drawPlus(point, event.action === "revive_given" ? "#00bcd4" : "#26a69a");
+        } else if (["kill", "finish"].includes(event.action)) {
           drawX(point, event.is_headshot ? "#ff1744" : "#ef5350");
         } else if (event.action === "dbno_caused") {
           drawCircle(point, 8, "#ff9800", "#202020");
@@ -2279,6 +2294,18 @@ _INDEX_HTML = """<!doctype html>
       replayCtx.lineTo(point.x + 9, point.y + 9);
       replayCtx.moveTo(point.x + 9, point.y - 9);
       replayCtx.lineTo(point.x - 9, point.y + 9);
+      replayCtx.stroke();
+    }
+
+    function drawPlus(point, color) {
+      drawCircle(point, 8, "rgba(255,255,255,0.72)", color);
+      replayCtx.strokeStyle = color;
+      replayCtx.lineWidth = 5;
+      replayCtx.beginPath();
+      replayCtx.moveTo(point.x - 10, point.y);
+      replayCtx.lineTo(point.x + 10, point.y);
+      replayCtx.moveTo(point.x, point.y - 10);
+      replayCtx.lineTo(point.x, point.y + 10);
       replayCtx.stroke();
     }
 

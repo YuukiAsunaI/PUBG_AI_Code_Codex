@@ -190,8 +190,9 @@ tables:
   landing event as the first drop/landing point.
 - `player_movement_summaries` stores first/last known coordinates, landing coordinates, sampled route distance,
   in-game sampled route distance, vehicle sample count, DBNO sample count, and altitude range.
-- `player_combat_location_events` stores DBNO caused/taken, kill, death, finish, and finished-taken locations with
-  related player coordinates, damage causer, damage reason, distance, and headshot flag.
+- `player_combat_location_events` stores DBNO caused/taken, kill, death, finish, finished-taken, revive-given, and
+  revive-received locations with related player coordinates, damage causer/method, reason, distance, and headshot
+  flag where applicable.
 - `match_care_package_events` stores care-package spawn/land positions and package item-code lists for later 2D
   replay layers.
 - `match_plane_routes` stores a match-level plane-route approximation reconstructed from early aircraft
@@ -258,8 +259,8 @@ The current local runtime can generate post-match 2D route summary JPEG files fo
 - The local web UI has JPEG and timeline JSON generate/regenerate buttons plus a recent artifact list with open-file
   links.
 - The local web UI also has a canvas-based 2D replay player that loads `timeline` artifacts and renders player route,
-  plane route, landing markers, combat markers, and care-package markers over cached official map PNG backgrounds
-  when available. It falls back to the coordinate grid if the map asset is missing.
+  plane route, landing markers, combat markers, revive markers, and care-package markers over cached official map PNG
+  backgrounds when available. It falls back to the coordinate grid if the map asset is missing.
 - The 2D replay player includes a time-sorted event list and event detail panel. Selecting a landing, combat, or
   care-package event pauses playback, seeks to that moment, highlights the map point, and shows event metadata such
   as weapon, damage reason, distance, related player, item count, and KST timestamp where available.

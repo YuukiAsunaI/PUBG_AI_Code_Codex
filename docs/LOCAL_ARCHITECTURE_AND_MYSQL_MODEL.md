@@ -139,7 +139,7 @@ Use a two-layer storage model:
 | `player_position_samples` | Registered-player `LogPlayerPosition` samples for route/replay layers |
 | `player_landing_events` | Registered-player parachute landing events; first event is used as first drop/landing point |
 | `player_movement_summaries` | Per-match first/last position, landing point, sampled movement distance, vehicle samples, DBNO samples, and altitude range |
-| `player_combat_location_events` | DBNO, kill, death, finish, and finished-taken coordinates with related player coordinates and damage metadata |
+| `player_combat_location_events` | DBNO, kill, death, finish, finished-taken, and revive coordinates with related player coordinates and method/damage metadata |
 | `match_care_package_events` | Care-package spawn/land coordinates and package item-code lists |
 | `match_plane_routes` | Plane-route approximation from early aircraft `LogPlayerPosition` samples |
 | `agg_player_weapon` | Weapon usage, kills, deaths, damage, assists, caused DBNOs, suffered DBNOs, fight wins/losses |
@@ -337,8 +337,10 @@ Completed slices:
     `PUBG_LOCAL_WEB_BASE_URL` is configured.
 27. 2D replay player supports map zoom and tracked-player follow mode, with all canvas layers rendered through the
     same cropped viewport.
+28. Movement/location parser stores `LogPlayerRevive` as revive-given/revive-received location events, and the 2D
+    replay player renders them with revive markers and event detail rows.
 
 Next slice:
 
-1. Add richer replay layers such as phase rings and revive markers.
+1. Add richer replay layers such as phase rings.
 2. Add local settings UI support for the optional Discord evidence-link base URL.
