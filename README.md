@@ -118,6 +118,12 @@ Show one completed-match detail from parsed MySQL summary tables:
 python -m pubg_ai.cli player-match-stats 751d1def-d222-4d3e-8b9d-1fc3721bb5c1 Yuuki_Asuna--- --shard steam
 ```
 
+Show registered player rankings. Add `--guild-id` to view one Discord server scope; omit it for the local global view:
+
+```powershell
+python -m pubg_ai.cli player-ranking --metric 평딜 --shard steam --limit 10
+```
+
 Refresh active registered players and queue unseen match IDs:
 
 ```powershell
@@ -219,6 +225,7 @@ Discord's message content intent to be enabled for the bot application. Initial 
 !전적 닉네임 [shard]
 !무기 닉네임 무기명 [shard]
 !매치 match_id [닉네임|accountId] [shard]
+!랭킹 [지표] [shard] [limit] [전체]
 !최근스냅샷 [match_id]
 !유저삭제 steam 닉네임또는accountId
 ```

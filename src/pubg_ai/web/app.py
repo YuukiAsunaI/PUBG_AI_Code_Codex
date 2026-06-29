@@ -16,6 +16,7 @@ from pubg_ai.map_snapshot_renderer import MapSnapshotProcessor
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.match_job_processor import MatchJobProcessor
 from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry
+from pubg_ai.player_rankings import PlayerRankingService
 from pubg_ai.player_stats import PlayerStatsService
 from pubg_ai.pubg_client import PubgApiClient, PubgApiError
 from pubg_ai.raw_storage import RawPayloadStore
@@ -261,6 +262,30 @@ def create_app() -> Any:
             if detail is None:
                 raise HTTPException(status_code=404, detail="registered player match detail not found.")
             return {"match": detail.to_record()}
+        finally:
+            connection.close()
+
+    @app.get("/rankings/players")
+    def player_ranking(
+        metric: str = "kda",
+        shard: str = "steam",
+        guild_id: str | None = None,
+        limit: int = 10,
+        min_matches: int = 1,
+        active_only: bool = True,
+    ) -> dict[str, Any]:
+        connection = connect_mysql(config.database)
+        try:
+            ranking = PlayerRankingService(connection).get_player_ranking(
+                shard=shard,
+                metric=metric,
+                guild_id=guild_id,
+                global_scope=guild_id is None,
+                active_only=active_only,
+                min_matches=min_matches,
+                limit=limit,
+            )
+            return {"ranking": ranking.to_record()}
         finally:
             connection.close()
 
@@ -738,6 +763,38 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="matchBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
     <section>
+      <h2>랭킹 조회</h2>
+      <form id="rankingForm">
+        <label>플랫폼
+          <select name="shard">
+            <option value="steam">steam</option>
+            <option value="kakao">kakao</option>
+          </select>
+        </label>
+        <label>지표
+          <select name="metric">
+            <option value="kda">KDA</option>
+            <option value="win_rate">승률</option>
+            <option value="avg_damage">평균 딜</option>
+            <option value="damage">총 딜</option>
+            <option value="kills">킬</option>
+            <option value="dbnos">기절</option>
+            <option value="accuracy">명중률</option>
+            <option value="headshot_rate">헤드샷 킬 비율</option>
+            <option value="matches">경기 수</option>
+          </select>
+        </label>
+        <label>Guild ID
+          <input name="guild_id" autocomplete="off" placeholder="비우면 전체">
+        </label>
+        <label>Limit
+          <input name="limit" type="number" min="1" max="100" value="10">
+        </label>
+        <button type="submit">조회</button>
+      </form>
+      <div class="status" id="rankingBody" style="margin-top: 12px;">조회 대기 중</div>
+    </section>
+    <section>
       <h2>Match 수집 큐</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="processMatchJobs()">상세 저장</button>
@@ -833,6 +890,7 @@ _INDEX_HTML = """<!doctype html>
     const profileBody = document.querySelector("#profileBody");
     const weaponBody = document.querySelector("#weaponBody");
     const matchBody = document.querySelector("#matchBody");
+    const rankingBody = document.querySelector("#rankingBody");
     const jobsBody = document.querySelector("#jobsBody");
     const telemetryJobsBody = document.querySelector("#telemetryJobsBody");
     const combatStatus = document.querySelector("#combatStatus");
@@ -1053,8 +1111,64 @@ _INDEX_HTML = """<!doctype html>
       ].join("<br>");
     }
 
+    async function loadPlayerRanking(metric, shard, guildId, limit) {
+      const params = new URLSearchParams({
+        metric,
+        shard,
+        limit: String(limit || 10),
+      });
+      if (guildId) {
+        params.set("guild_id", guildId);
+      }
+      const response = await fetch(`/rankings/players?${params.toString()}`);
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const payload = await response.json();
+      const ranking = payload.ranking;
+      const rows = (ranking.rows || []).map((row) => `
+        <tr>
+          <td>#${row.rank}</td>
+          <td>${escapeHtml(row.player.current_name)}</td>
+          <td>${rankingScore(ranking.metric, row.score)}</td>
+          <td>${row.match_count}</td>
+          <td>${row.wins}</td>
+          <td>${row.kills}/${row.deaths}/${row.assists}</td>
+          <td>${Number(row.avg_damage_dealt).toFixed(1)}</td>
+        </tr>
+      `).join("");
+      rankingBody.innerHTML = `
+        <strong>${escapeHtml(ranking.metric_label)} 랭킹 (${escapeHtml(ranking.shard)}, ${ranking.global_scope ? "전체" : escapeHtml(ranking.guild_id || "-")})</strong>
+        <table style="margin-top: 10px;">
+          <thead>
+            <tr>
+              <th>순위</th>
+              <th>닉네임</th>
+              <th>점수</th>
+              <th>경기</th>
+              <th>치킨</th>
+              <th>K/D/A</th>
+              <th>평딜</th>
+            </tr>
+          </thead>
+          <tbody>${rows || `<tr><td colspan="7">랭킹 데이터가 없습니다.</td></tr>`}</tbody>
+        </table>
+      `;
+    }
+
     function percent(value) {
       return `${(Number(value || 0) * 100).toFixed(1)}%`;
+    }
+
+    function rankingScore(metric, value) {
+      if (["win_rate", "accuracy", "headshot_rate"].includes(metric)) {
+        return percent(value);
+      }
+      if (["kda", "avg_damage"].includes(metric)) {
+        return Number(value || 0).toFixed(2);
+      }
+      return Number(value || 0).toFixed(0);
     }
 
     function minutes(value) {
@@ -1332,6 +1446,23 @@ _INDEX_HTML = """<!doctype html>
         banner.textContent = "매치 조회 완료";
       } catch (error) {
         matchBody.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    document.querySelector("#rankingForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      try {
+        await loadPlayerRanking(
+          String(form.get("metric") || "kda"),
+          String(form.get("shard") || "steam"),
+          String(form.get("guild_id") || ""),
+          Number(form.get("limit") || 10),
+        );
+        banner.textContent = "랭킹 조회 완료";
+      } catch (error) {
+        rankingBody.textContent = `오류: ${error.message}`;
         banner.textContent = `오류: ${error.message}`;
       }
     });

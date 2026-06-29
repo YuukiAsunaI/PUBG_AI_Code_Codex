@@ -158,6 +158,53 @@ class WebPlayerStatsTests(unittest.TestCase):
         self.assertEqual(payload["weapons"][0]["weapon_name"], "M416")
         self.assertTrue(connection.closed)
 
+    def test_player_ranking_endpoint_returns_rows(self) -> None:
+        connection = FakeConnection(
+            [
+                [
+                    {
+                        "id": 1,
+                        "account_id": "account.test",
+                        "shard": "steam",
+                        "current_name": "Yuuki_Asuna---",
+                        "active": 1,
+                        "public_profile": 1,
+                        "registered_by_discord_user_id": None,
+                        "registered_guild_id": "guild-1",
+                        "registered_channel_id": None,
+                        "match_count": 10,
+                        "wins": 2,
+                        "kills": 25,
+                        "assists": 5,
+                        "deaths": 8,
+                        "dbnos_caused": 13,
+                        "dbnos_taken": 4,
+                        "damage_dealt": 2500.0,
+                        "damage_taken": 1600.0,
+                        "shots_fired": 1000,
+                        "shots_hit": 210,
+                        "headshot_kills": 6,
+                        "avg_survival_seconds": 1420.5,
+                        "avg_movement_distance_m": 3650.0,
+                        "last_match_at_kst": datetime(2026, 6, 29, 1, 0, 0),
+                    }
+                ]
+            ]
+        )
+
+        with patch("pubg_ai.web.app.connect_mysql", return_value=connection):
+            client = TestClient(create_app())
+            response = client.get("/rankings/players?shard=steam&metric=kda&guild_id=guild-1&limit=10")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["ranking"]
+        self.assertEqual(payload["metric"], "kda")
+        self.assertEqual(payload["guild_id"], "guild-1")
+        self.assertFalse(payload["global_scope"])
+        self.assertEqual(payload["rows"][0]["player"]["current_name"], "Yuuki_Asuna---")
+        self.assertAlmostEqual(payload["rows"][0]["score"], 3.75)
+        self.assertTrue(connection.closed)
+
 
 class FakeConnection:
     def __init__(self, results: list[object]) -> None:

@@ -15,6 +15,7 @@ from pubg_ai.local_settings import LocalSettingsError, LocalSettingsStore
 from pubg_ai.map_snapshot_renderer import MapSnapshotProcessor
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.match_job_processor import MatchJobProcessor
+from pubg_ai.player_rankings import PlayerRankingService
 from pubg_ai.player_registry import PlayerRegistry
 from pubg_ai.player_stats import PlayerStatsService
 from pubg_ai.pubg_client import PubgApiClient
@@ -68,6 +69,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Registered nickname or accountId. If omitted, the first registered participant is used.",
     )
     match_stats_parser.add_argument("--shard", default="steam")
+
+    ranking_parser = subparsers.add_parser("player-ranking", help="Print registered player rankings.")
+    ranking_parser.add_argument("--metric", default="kda", help="kda, 승률, 평딜, 딜, 킬, 경기, 명중률, 헤드샷, 기절")
+    ranking_parser.add_argument("--shard", default="steam")
+    ranking_parser.add_argument("--guild-id", default=None, help="Limit ranking to one Discord guild scope.")
+    ranking_parser.add_argument("--limit", default=10, type=int)
+    ranking_parser.add_argument("--min-matches", default=1, type=int)
+    ranking_parser.add_argument("--include-inactive", action="store_true")
 
     collect_parser = subparsers.add_parser("collect-matches", help="Refresh registered players and queue match jobs.")
     collect_parser.add_argument("--shard", default=None)
@@ -245,6 +254,23 @@ def main(argv: list[str] | None = None) -> int:
             if detail is None:
                 raise SystemExit("registered player match detail not found.")
             _print_json({"match": detail.to_record()})
+        finally:
+            connection.close()
+        return 0
+
+    if args.command == "player-ranking":
+        connection = connect_mysql(config.database)
+        try:
+            ranking = PlayerRankingService(connection).get_player_ranking(
+                shard=args.shard,
+                metric=args.metric,
+                guild_id=args.guild_id,
+                global_scope=args.guild_id is None,
+                active_only=not args.include_inactive,
+                min_matches=args.min_matches,
+                limit=args.limit,
+            )
+            _print_json({"ranking": ranking.to_record()})
         finally:
             connection.close()
         return 0

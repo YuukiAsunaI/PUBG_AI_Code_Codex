@@ -119,7 +119,7 @@ Suggested command groups:
 | --- | --- |
 | `register` | register player, update shard/name mapping |
 | `profile_read` | profile, recent matches, match details, weapon stats |
-| `ranking_read` | server ranking, map ranking, weapon ranking |
+| `ranking_read` | server ranking, global ranking for admins, map ranking, weapon ranking |
 | `replay_read` | replay link, replay summary |
 | `settings_write` | storage paths, polling interval, API settings |
 | `admin` | grant permissions, unregister players, delete data |

@@ -249,6 +249,8 @@ The current Discord bot slice is intentionally small and reuses the same local M
 - `!매치 match_id [닉네임|accountId] [shard]` reads one completed-match summary for a registered target, including
   map/mode/type, chicken/non-chicken, total/human/bot player counts, kills, deaths, assists, caused/taken DBNOs,
   damage, accuracy, survival/movement/landing distance, top weapons, hit parts, and generated 2D snapshot status.
+- `!랭킹 [지표] [shard] [limit] [전체]` ranks registered targets from completed-match summary tables. Server channels
+  default to that `guild_id` scope; global admins can request the full local ranking with `전체`.
 - `!유저삭제 steam 닉네임또는accountId` stops future collection by setting the registered target inactive.
 - `!최근스냅샷 [match_id]` sends the latest generated `map_snapshot` JPEG artifact, or the latest snapshot for the
   requested match ID.

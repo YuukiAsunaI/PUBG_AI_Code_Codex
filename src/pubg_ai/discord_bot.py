@@ -6,6 +6,7 @@ from typing import Any
 from pubg_ai.config import RuntimeConfig
 from pubg_ai.database import connect_mysql
 from pubg_ai.discord_permissions import DiscordCommandIdentity, DiscordPermissionChecker
+from pubg_ai.player_rankings import PlayerRanking, PlayerRankingService
 from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry, RegisteredPlayer
 from pubg_ai.player_stats import PlayerMatchDetail, PlayerProfileStats, PlayerStatsService, PlayerWeaponDetail
 from pubg_ai.pubg_client import PubgApiClient, PubgApiError
@@ -146,6 +147,22 @@ def format_player_match_detail(detail: PlayerMatchDetail) -> str:
     return "\n".join(lines)
 
 
+def format_player_ranking(ranking: PlayerRanking) -> str:
+    scope = "전체" if ranking.global_scope else f"서버 {ranking.guild_id}"
+    lines = [f"{ranking.metric_label} 랭킹 ({ranking.shard}, {scope})"]
+    if not ranking.rows:
+        lines.append("- 랭킹 데이터가 없습니다.")
+        return "\n".join(lines)
+
+    for row in ranking.rows:
+        lines.append(
+            f"- #{row.rank} {row.player.current_name}: {_ranking_score(ranking.metric, row.score)} "
+            f"({row.match_count}전 {row.wins}치킨, {row.kills}K/{row.deaths}D/{row.assists}A, "
+            f"평딜 {_number(row.avg_damage_dealt, 1)})"
+        )
+    return "\n".join(lines)
+
+
 def create_discord_bot(
     *,
     config: RuntimeConfig,
@@ -196,6 +213,7 @@ def create_discord_bot(
                     f"- `{command_prefix}전적 닉네임 [shard]`",
                     f"- `{command_prefix}무기 닉네임 무기명 [shard]`",
                     f"- `{command_prefix}매치 match_id [닉네임|accountId] [shard]`",
+                    f"- `{command_prefix}랭킹 [지표] [shard] [limit] [전체]`",
                     f"- `{command_prefix}최근스냅샷 [match_id]`",
                     f"- `{command_prefix}유저삭제 steam 닉네임또는accountId`",
                 ]
@@ -340,6 +358,47 @@ def create_discord_bot(
             return
 
         await ctx.reply(format_player_match_detail(detail), mention_author=False)
+
+    @bot.command(name="랭킹", aliases=["pubg-ranking"])
+    async def ranking_command(
+        ctx: Any,
+        metric: str = "kda",
+        shard_or_limit: str = "steam",
+        limit_or_scope: str | None = None,
+        scope: str | None = None,
+    ) -> None:
+        if not await require_permission(ctx, "ranking_read"):
+            return
+
+        parsed_metric, shard, limit, global_requested = _parse_ranking_args(
+            metric,
+            shard_or_limit,
+            limit_or_scope,
+            scope,
+        )
+        guild_id = await require_scoped_guild(ctx)
+        if guild_id is None and not has_global_scope(ctx):
+            return
+        if global_requested and not has_global_scope(ctx):
+            await ctx.reply("전체 랭킹은 글로벌 관리자만 조회할 수 있습니다.", mention_author=False)
+            return
+
+        global_scope = global_requested or (guild_id is None and has_global_scope(ctx))
+        ranking_guild_id = None if global_scope else guild_id
+
+        connection = connect_mysql(config.database)
+        try:
+            ranking = PlayerRankingService(connection).get_player_ranking(
+                shard=shard,
+                metric=parsed_metric,
+                guild_id=ranking_guild_id,
+                global_scope=global_scope,
+                limit=limit,
+            )
+        finally:
+            connection.close()
+
+        await ctx.reply(format_player_ranking(ranking), mention_author=False)
 
     @bot.command(name="유저등록", aliases=["pubg-register"])
     async def register_player_command(ctx: Any, shard: str, nickname: str) -> None:
@@ -507,6 +566,68 @@ def _optional_distance_m(meters: float | None) -> str:
 
 def _optional_number(value: int | None) -> str:
     return str(value) if value is not None else "-"
+
+
+def _ranking_score(metric: str, score: float) -> str:
+    if metric in {"win_rate", "accuracy", "headshot_rate"}:
+        return _percent(score)
+    if metric in {"kda", "avg_damage"}:
+        return _number(score, 2)
+    return _number(score, 0)
+
+
+def _parse_ranking_args(
+    metric: str,
+    shard_or_limit: str,
+    limit_or_scope: str | None,
+    scope: str | None,
+) -> tuple[str, str, int, bool]:
+    metric_value = metric or "kda"
+    shard = "steam"
+    limit = 10
+    global_requested = False
+
+    if _is_scope_token(metric_value):
+        metric_value = "kda"
+        global_requested = True
+    elif _is_shard_token(metric_value):
+        shard = metric_value.lower()
+        metric_value = "kda"
+    elif _is_int_token(metric_value):
+        limit = _ranking_limit(metric_value)
+        metric_value = "kda"
+
+    for token in [shard_or_limit, limit_or_scope, scope]:
+        if not token:
+            continue
+        if _is_scope_token(token):
+            global_requested = True
+        elif _is_shard_token(token):
+            shard = token.lower()
+        elif _is_int_token(token):
+            limit = _ranking_limit(token)
+
+    return metric_value, shard, limit, global_requested
+
+
+def _is_scope_token(value: str) -> bool:
+    return value.lower() in {"전체", "global", "all"}
+
+
+def _is_shard_token(value: str) -> bool:
+    return value.lower() in {"steam", "kakao", "psn", "xbox", "console"}
+
+
+def _is_int_token(value: str) -> bool:
+    try:
+        int(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _ranking_limit(value: str) -> int:
+    return max(1, min(int(value), 20))
 
 
 def _top_parts(parts: dict[str, int]) -> str:

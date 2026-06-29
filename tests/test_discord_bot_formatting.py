@@ -8,9 +8,11 @@ from pubg_ai.discord_bot import (
     format_player_list,
     format_player_match_detail,
     format_player_profile_stats,
+    format_player_ranking,
     format_player_weapon_detail,
     format_replay_artifact_summary,
 )
+from pubg_ai.player_rankings import PlayerRanking, PlayerRankingRow
 from pubg_ai.player_registry import RegisteredPlayer
 from pubg_ai.player_stats import (
     PlayerCombatTotals,
@@ -300,6 +302,59 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("200/50/25.0%", body)
         self.assertIn("M416 3킬/4기절/420딜/30.0%", body)
         self.assertIn("!최근스냅샷 match-123456789", body)
+
+    def test_player_ranking_summary_formats_rows(self) -> None:
+        ranking = PlayerRanking(
+            metric="kda",
+            metric_label="KDA",
+            shard="steam",
+            guild_id="guild-1",
+            global_scope=False,
+            active_only=True,
+            min_matches=1,
+            rows=[
+                PlayerRankingRow(
+                    rank=1,
+                    player=RegisteredPlayer(
+                        id=1,
+                        account_id="account.test",
+                        shard="steam",
+                        current_name="Yuuki_Asuna---",
+                        active=True,
+                        public_profile=True,
+                    ),
+                    score=3.75,
+                    match_count=10,
+                    wins=2,
+                    kills=25,
+                    assists=5,
+                    deaths=8,
+                    dbnos_caused=13,
+                    dbnos_taken=4,
+                    damage_dealt=2500.0,
+                    damage_taken=1600.0,
+                    shots_fired=1000,
+                    shots_hit=210,
+                    headshot_kills=6,
+                    avg_damage_dealt=250.0,
+                    avg_damage_taken=160.0,
+                    win_rate=0.2,
+                    kda=3.75,
+                    accuracy=0.21,
+                    headshot_kill_rate=0.24,
+                    avg_survival_seconds=1420.5,
+                    avg_movement_distance_m=3650.0,
+                    last_match_at_kst=datetime(2026, 6, 29, 1, 0, 0),
+                )
+            ],
+        )
+
+        body = format_player_ranking(ranking)
+
+        self.assertIn("KDA 랭킹 (steam, 서버 guild-1)", body)
+        self.assertIn("#1 Yuuki_Asuna---: 3.75", body)
+        self.assertIn("10전 2치킨", body)
+        self.assertIn("25K/8D/5A", body)
 
     def test_player_scope_visibility_requires_matching_guild_or_global_scope(self) -> None:
         player = RegisteredPlayer(

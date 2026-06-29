@@ -105,7 +105,7 @@ DEFAULT_COMMAND_GROUPS: dict[str, list[str]] = {
         "pubg-match",
         "pubg-weapon",
     ],
-    "ranking_read": ["pubg-ranking"],
+    "ranking_read": ["랭킹", "pubg-ranking"],
     "replay_read": ["pubg-replay"],
     "settings_write": ["pubg-settings"],
     "admin": ["유저삭제", "pubg-permission", "pubg-unregister", "pubg-delete-data"],

@@ -312,9 +312,10 @@ Completed slices:
 13. Weapon-specific lookup service and `무기` command for per-weapon damage, accuracy, DBNO, and hit-part stats.
 14. Match detail lookup service and `매치` command for one completed match's map/mode/type, player/bot counts,
     combat totals, weapon rows, movement/landing summary, and generated map snapshot status.
+15. Player ranking service and `랭킹` command for KDA, win rate, average damage, total damage, kills, matches,
+    accuracy, headshot rate, and DBNO ranking with `guild_id` scope.
 
 Next slice:
 
-1. Ranking query services scoped by `guild_id`.
-2. 2D replay timeline artifact generation beyond static JPEG snapshots.
-3. Recommendation queries for weapons, attachments, maps, teammates, and drop locations.
+1. 2D replay timeline artifact generation beyond static JPEG snapshots.
+2. Recommendation queries for weapons, attachments, maps, teammates, and drop locations.

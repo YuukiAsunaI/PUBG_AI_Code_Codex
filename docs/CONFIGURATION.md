@@ -51,7 +51,7 @@ Recommended JSON shape:
     "command_groups": {
       "register": ["유저등록", "pubg-register"],
       "profile_read": ["유저조회", "전적", "무기", "매치", "pubg-profile", "pubg-stats", "pubg-recent", "pubg-match", "pubg-weapon"],
-      "ranking_read": ["pubg-ranking"],
+      "ranking_read": ["랭킹", "pubg-ranking"],
       "replay_read": ["pubg-replay"],
       "settings_write": ["pubg-settings"],
       "admin": ["유저삭제", "pubg-permission", "pubg-unregister", "pubg-delete-data"]
