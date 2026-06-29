@@ -17,6 +17,7 @@ from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.match_job_processor import MatchJobProcessor
 from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry
 from pubg_ai.player_rankings import PlayerRankingService
+from pubg_ai.player_recommendations import PlayerRecommendationService
 from pubg_ai.player_stats import PlayerStatsService
 from pubg_ai.pubg_client import PubgApiClient, PubgApiError
 from pubg_ai.raw_storage import RawPayloadStore
@@ -250,6 +251,33 @@ def create_app() -> Any:
             if detail is None:
                 raise HTTPException(status_code=404, detail="registered player weapon stats not found.")
             return {"weapon": detail.to_record()}
+        finally:
+            connection.close()
+
+    @app.get("/players/recommendations")
+    def player_recommendations(
+        shard: str = "steam",
+        name: str | None = None,
+        account_id: str | None = None,
+        limit: int = 5,
+        min_matches: int = 1,
+    ) -> dict[str, Any]:
+        if not name and not account_id:
+            raise HTTPException(status_code=400, detail="name or account_id is required.")
+
+        connection = connect_mysql(config.database)
+        try:
+            recommendations = PlayerRecommendationService(connection).get_recommendations(
+                shard=shard,
+                account_id=account_id,
+                name=name,
+                global_scope=True,
+                limit=limit,
+                min_matches=min_matches,
+            )
+            if recommendations is None:
+                raise HTTPException(status_code=404, detail="registered player recommendations not found.")
+            return {"recommendations": recommendations.to_record()}
         finally:
             connection.close()
 
@@ -783,6 +811,25 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="weaponBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
     <section>
+      <h2>Recommendation 조회</h2>
+      <form id="recommendationForm">
+        <label>플랫폼
+          <select name="shard">
+            <option value="steam">steam</option>
+            <option value="kakao">kakao</option>
+          </select>
+        </label>
+        <label>닉네임 또는 Account ID
+          <input name="target" autocomplete="off" required>
+        </label>
+        <label>Min matches
+          <input name="min_matches" type="number" min="1" max="50" value="1">
+        </label>
+        <button type="submit">조회</button>
+      </form>
+      <div class="status" id="recommendationBody" style="margin-top: 12px;">조회 대기 중</div>
+    </section>
+    <section>
       <h2>매치 조회</h2>
       <form id="matchForm">
         <label>플랫폼
@@ -970,6 +1017,7 @@ _INDEX_HTML = """<!doctype html>
     const playersBody = document.querySelector("#playersBody");
     const profileBody = document.querySelector("#profileBody");
     const weaponBody = document.querySelector("#weaponBody");
+    const recommendationBody = document.querySelector("#recommendationBody");
     const matchBody = document.querySelector("#matchBody");
     const rankingBody = document.querySelector("#rankingBody");
     const jobsBody = document.querySelector("#jobsBody");
@@ -1176,6 +1224,54 @@ _INDEX_HTML = """<!doctype html>
         `명중률: ${percent(totals.accuracy)} (${totals.shots_hit}/${totals.shots_fired})`,
         `최근 사용 경기:<br>${recent}`,
       ].join("<br>");
+    }
+
+    async function loadPlayerRecommendations(target, shard, minMatches) {
+      const params = new URLSearchParams({
+        shard,
+        limit: "5",
+        min_matches: String(minMatches || 1),
+      });
+      if (target.startsWith("account.")) {
+        params.set("account_id", target);
+      } else {
+        params.set("name", target);
+      }
+      const response = await fetch(`/players/recommendations?${params.toString()}`);
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const payload = await response.json();
+      const report = payload.recommendations;
+      const weapons = recommendationLines(report.weapons, (item) => (
+        `${escapeHtml(item.weapon_name)} score ${Number(item.score).toFixed(1)} / ${item.match_count} matches / ${Number(item.avg_damage_dealt).toFixed(1)} avg dmg / ${percent(item.win_rate)} win`
+      ));
+      const attachments = recommendationLines(report.attachments, (item) => (
+        `${escapeHtml(item.item_name)} score ${Number(item.score).toFixed(1)} / ${item.attached_events} attaches / ${Number(item.avg_damage_dealt).toFixed(1)} avg dmg`
+      ));
+      const maps = recommendationLines(report.maps, (item) => (
+        `${escapeHtml(item.map_name_ko)} score ${Number(item.score).toFixed(1)} / ${item.match_count} matches / ${percent(item.win_rate)} win`
+      ));
+      const teammates = recommendationLines(report.teammates, (item) => (
+        `${escapeHtml(item.name)}${item.registered ? " (registered)" : ""} score ${Number(item.score).toFixed(1)} / ${item.match_count} matches / ${percent(item.win_rate)} win`
+      ));
+      const drops = recommendationLines(report.drop_zones, (item) => (
+        `${escapeHtml(item.map_name_ko)} grid ${item.grid_x},${item.grid_y} / ${percent(item.x_pct)} x ${percent(item.y_pct)} / ${item.match_count} matches / ${percent(item.win_rate)} win`
+      ));
+      recommendationBody.innerHTML = [
+        `<strong>${escapeHtml(report.player.current_name)} recommendations</strong>`,
+        `<br><strong>Weapons</strong><br>${weapons}`,
+        `<br><strong>Attachments</strong><br>${attachments}`,
+        `<br><strong>Maps</strong><br>${maps}`,
+        `<br><strong>Teammates</strong><br>${teammates}`,
+        `<br><strong>Drop zones</strong><br>${drops}`,
+      ].join("");
+    }
+
+    function recommendationLines(items, formatter) {
+      if (!items || !items.length) return "-";
+      return items.slice(0, 5).map((item) => `- ${formatter(item)}`).join("<br>");
     }
 
     async function loadPlayerMatch(matchId, target, shard) {
@@ -1857,6 +1953,22 @@ _INDEX_HTML = """<!doctype html>
         banner.textContent = "무기 조회 완료";
       } catch (error) {
         weaponBody.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    document.querySelector("#recommendationForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      try {
+        await loadPlayerRecommendations(
+          String(form.get("target") || ""),
+          String(form.get("shard") || "steam"),
+          Number(form.get("min_matches") || 1),
+        );
+        banner.textContent = "Recommendation 조회 완료";
+      } catch (error) {
+        recommendationBody.textContent = `오류: ${error.message}`;
         banner.textContent = `오류: ${error.message}`;
       }
     });

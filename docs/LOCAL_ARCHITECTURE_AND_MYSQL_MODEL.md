@@ -318,8 +318,10 @@ Completed slices:
     care-package, landing, and plane-route tables.
 17. Local canvas-based 2D replay player that loads generated timeline JSON artifacts with play/pause, seek, speed,
     route/combat/care-package/plane visibility controls, and artifact-list load buttons.
+18. First-pass recommendation service, CLI, web endpoint, and Discord command for weapons, attachments, maps,
+    teammates, and coordinate-clustered drop zones from parsed summary tables.
 
 Next slice:
 
-1. Recommendation queries for weapons, attachments, maps, teammates, and drop locations.
+1. Improve recommendation quality with weapon+attachment loadout reconstruction and distance-bucket weighting.
 2. Richer 2D replay playback features such as team overlays, minimap assets, and event detail panels.

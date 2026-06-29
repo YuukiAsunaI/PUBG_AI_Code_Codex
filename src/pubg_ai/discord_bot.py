@@ -7,6 +7,7 @@ from pubg_ai.config import RuntimeConfig
 from pubg_ai.database import connect_mysql
 from pubg_ai.discord_permissions import DiscordCommandIdentity, DiscordPermissionChecker
 from pubg_ai.player_rankings import PlayerRanking, PlayerRankingService
+from pubg_ai.player_recommendations import PlayerRecommendationReport, PlayerRecommendationService
 from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry, RegisteredPlayer
 from pubg_ai.player_stats import PlayerMatchDetail, PlayerProfileStats, PlayerStatsService, PlayerWeaponDetail
 from pubg_ai.pubg_client import PubgApiClient, PubgApiError
@@ -163,6 +164,55 @@ def format_player_ranking(ranking: PlayerRanking) -> str:
     return "\n".join(lines)
 
 
+def format_player_recommendations(report: PlayerRecommendationReport) -> str:
+    lines = [
+        f"{report.player.current_name} recommendations ({report.player.shard})",
+        f"- min matches: {report.min_matches}",
+    ]
+    if report.weapons:
+        lines.append("- weapons: " + ", ".join(
+            f"{item.weapon_name} score {_number(item.score, 1)} "
+            f"({_number(item.avg_damage_dealt, 1)} dmg, {_percent(item.win_rate)} win)"
+            for item in report.weapons[:3]
+        ))
+    else:
+        lines.append("- weapons: no data")
+
+    if report.attachments:
+        lines.append("- attachments: " + ", ".join(
+            f"{item.item_name} ({item.attached_events} attach)"
+            for item in report.attachments[:3]
+        ))
+    else:
+        lines.append("- attachments: no data")
+
+    if report.maps:
+        lines.append("- maps: " + ", ".join(
+            f"{item.map_name_ko} {_percent(item.win_rate)} win"
+            for item in report.maps[:3]
+        ))
+    else:
+        lines.append("- maps: no data")
+
+    if report.teammates:
+        lines.append("- teammates: " + ", ".join(
+            f"{item.name}{' registered' if item.registered else ''} {_percent(item.win_rate)} win"
+            for item in report.teammates[:3]
+        ))
+    else:
+        lines.append("- teammates: no data")
+
+    if report.drop_zones:
+        lines.append("- drop zones: " + ", ".join(
+            f"{item.map_name_ko} grid {item.grid_x},{item.grid_y} {_percent(item.win_rate)} win"
+            for item in report.drop_zones[:3]
+        ))
+    else:
+        lines.append("- drop zones: no data")
+
+    return "\n".join(lines)
+
+
 def create_discord_bot(
     *,
     config: RuntimeConfig,
@@ -212,6 +262,7 @@ def create_discord_bot(
                     f"- `{command_prefix}유저조회 [닉네임] [shard]`",
                     f"- `{command_prefix}전적 닉네임 [shard]`",
                     f"- `{command_prefix}무기 닉네임 무기명 [shard]`",
+                    f"- `{command_prefix}추천 닉네임 [shard]`",
                     f"- `{command_prefix}매치 match_id [닉네임|accountId] [shard]`",
                     f"- `{command_prefix}랭킹 [지표] [shard] [limit] [전체]`",
                     f"- `{command_prefix}최근스냅샷 [match_id]`",
@@ -314,6 +365,41 @@ def create_discord_bot(
             return
 
         await ctx.reply(format_player_weapon_detail(detail), mention_author=False)
+
+    @bot.command(name="추천", aliases=["pubg-recommend"])
+    async def player_recommendations_command(
+        ctx: Any,
+        name: str | None = None,
+        shard: str = "steam",
+    ) -> None:
+        if not await require_permission(ctx, "profile_read"):
+            return
+        if not name:
+            await ctx.reply(f"사용법: `{command_prefix}추천 닉네임 [shard]`", mention_author=False)
+            return
+
+        guild_id = await require_scoped_guild(ctx)
+        if guild_id is None and not has_global_scope(ctx):
+            return
+        global_scope = has_global_scope(ctx)
+
+        connection = connect_mysql(config.database)
+        try:
+            recommendations = PlayerRecommendationService(connection).get_recommendations(
+                shard=shard,
+                account_id=name if name.startswith("account.") else None,
+                name=None if name.startswith("account.") else name,
+                guild_id=None if global_scope else guild_id,
+                global_scope=global_scope,
+            )
+        finally:
+            connection.close()
+
+        if recommendations is None:
+            await ctx.reply("조회 가능한 추천 데이터를 찾지 못했습니다.", mention_author=False)
+            return
+
+        await ctx.reply(format_player_recommendations(recommendations), mention_author=False)
 
     @bot.command(name="매치", aliases=["pubg-match"])
     async def player_match_command(

@@ -16,6 +16,7 @@ from pubg_ai.map_snapshot_renderer import MapSnapshotProcessor
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.match_job_processor import MatchJobProcessor
 from pubg_ai.player_rankings import PlayerRankingService
+from pubg_ai.player_recommendations import PlayerRecommendationService
 from pubg_ai.player_registry import PlayerRegistry
 from pubg_ai.player_stats import PlayerStatsService
 from pubg_ai.pubg_client import PubgApiClient
@@ -58,6 +59,15 @@ def main(argv: list[str] | None = None) -> int:
     weapon_stats_parser.add_argument("target", help="Registered nickname or accountId.")
     weapon_stats_parser.add_argument("weapon", help="Weapon code or common weapon name, for example M416.")
     weapon_stats_parser.add_argument("--shard", default="steam")
+
+    recommendations_parser = subparsers.add_parser(
+        "player-recommendations",
+        help="Print registered player weapon, attachment, map, teammate, and drop recommendations.",
+    )
+    recommendations_parser.add_argument("target", help="Registered nickname or accountId.")
+    recommendations_parser.add_argument("--shard", default="steam")
+    recommendations_parser.add_argument("--limit", default=5, type=int)
+    recommendations_parser.add_argument("--min-matches", default=1, type=int)
 
     match_stats_parser = subparsers.add_parser(
         "player-match-stats",
@@ -245,6 +255,24 @@ def main(argv: list[str] | None = None) -> int:
             if detail is None:
                 raise SystemExit("registered player weapon stats not found.")
             _print_json({"weapon": detail.to_record()})
+        finally:
+            connection.close()
+        return 0
+
+    if args.command == "player-recommendations":
+        connection = connect_mysql(config.database)
+        try:
+            recommendations = PlayerRecommendationService(connection).get_recommendations(
+                shard=args.shard,
+                account_id=args.target if args.target.startswith("account.") else None,
+                name=None if args.target.startswith("account.") else args.target,
+                global_scope=True,
+                limit=args.limit,
+                min_matches=args.min_matches,
+            )
+            if recommendations is None:
+                raise SystemExit("registered player recommendations not found.")
+            _print_json({"recommendations": recommendations.to_record()})
         finally:
             connection.close()
         return 0

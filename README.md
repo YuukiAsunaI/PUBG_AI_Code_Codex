@@ -112,6 +112,12 @@ Show one weapon's parsed combat stats:
 python -m pubg_ai.cli player-weapon-stats Yuuki_Asuna--- M416 --shard steam
 ```
 
+Show first-pass recommendations from parsed summary tables:
+
+```powershell
+python -m pubg_ai.cli player-recommendations Yuuki_Asuna--- --shard steam --min-matches 1
+```
+
 Show one completed-match detail from parsed MySQL summary tables:
 
 ```powershell
@@ -240,6 +246,7 @@ Discord's message content intent to be enabled for the bot application. Initial 
 ```
 
 Command access is checked through local Discord permission settings in `config/local_settings.json`.
+Recommendation lookup is available through `!추천 닉네임 [shard]` and `!pubg-recommend nickname [shard]`.
 
 Manage Discord command permissions from the local program or CLI. For first boot, add yourself as a global admin or
 grant a command group to a Discord user ID:
