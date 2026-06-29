@@ -155,10 +155,12 @@ class ReplayTimelineProcessor:
         combat_events = self._load_combat_events(
             match_id=match_id,
             account_id=account_id,
+            shard=str(job["shard"]),
             world_size_cm=world_size_cm,
         )
         care_packages = self._load_care_packages(match_id=match_id, world_size_cm=world_size_cm)
         plane_route = self._load_plane_route(match_id=match_id, world_size_cm=world_size_cm)
+        team_members = self._load_team_members(match_id=match_id, account_id=account_id, shard=str(job["shard"]))
 
         return {
             "schema_version": TIMELINE_RENDERER_VERSION,
@@ -176,6 +178,14 @@ class ReplayTimelineProcessor:
             "player": {
                 "account_id": account_id,
                 "name": _optional_text(job.get("current_name")),
+            },
+            "team": {
+                "member_count": len(team_members),
+                "registered_member_count": sum(1 for member in team_members if member["registered"]),
+                "registered_teammate_count": sum(
+                    1 for member in team_members if member["registered"] and not member["is_self"]
+                ),
+                "members": team_members,
             },
             "counts": {
                 "positions": len(positions),
@@ -264,33 +274,51 @@ class ReplayTimelineProcessor:
             for row in rows
         ]
 
-    def _load_combat_events(self, *, match_id: str, account_id: str, world_size_cm: float) -> list[dict[str, Any]]:
+    def _load_combat_events(
+        self,
+        *,
+        match_id: str,
+        account_id: str,
+        shard: str,
+        world_size_cm: float,
+    ) -> list[dict[str, Any]]:
         with self.connection.cursor() as cursor:
             cursor.execute(
                 """
                 SELECT
-                    related_account_id,
-                    event_index,
-                    event_type,
-                    action,
-                    event_at_kst,
-                    common_is_game,
-                    damage_type_category,
-                    damage_causer_name,
-                    damage_reason,
-                    is_headshot,
-                    distance_m,
-                    x,
-                    y,
-                    z,
-                    related_x,
-                    related_y,
-                    related_z
-                FROM player_combat_location_events
-                WHERE match_id = %s AND account_id = %s
-                ORDER BY event_index ASC, action ASC
+                    events.related_account_id,
+                    related_participant.name AS related_name,
+                    related_participant.is_ai_or_bot AS related_is_ai_or_bot,
+                    CASE WHEN related_registered.id IS NULL THEN 0 ELSE 1 END AS related_registered,
+                    related_registered.active AS related_registered_active,
+                    related_registered.current_name AS related_registered_name,
+                    events.event_index,
+                    events.event_type,
+                    events.action,
+                    events.event_at_kst,
+                    events.common_is_game,
+                    events.damage_type_category,
+                    events.damage_causer_name,
+                    events.damage_reason,
+                    events.is_headshot,
+                    events.distance_m,
+                    events.x,
+                    events.y,
+                    events.z,
+                    events.related_x,
+                    events.related_y,
+                    events.related_z
+                FROM player_combat_location_events events
+                LEFT JOIN match_participants related_participant
+                    ON related_participant.match_id = events.match_id
+                   AND related_participant.account_id = events.related_account_id
+                LEFT JOIN registered_players related_registered
+                    ON related_registered.account_id = events.related_account_id
+                   AND related_registered.shard = %s
+                WHERE events.match_id = %s AND events.account_id = %s
+                ORDER BY events.event_index ASC, events.action ASC
                 """,
-                (match_id, account_id),
+                (shard, match_id, account_id),
             )
             rows = cursor.fetchall()
 
@@ -302,6 +330,11 @@ class ReplayTimelineProcessor:
                 "event_at_kst": _datetime_record(row.get("event_at_kst")),
                 "t": _optional_float(row.get("common_is_game")),
                 "related_account_id": _optional_text(row.get("related_account_id")),
+                "related_name": _optional_text(row.get("related_registered_name"))
+                or _optional_text(row.get("related_name")),
+                "related_registered": bool(row.get("related_registered")),
+                "related_registered_active": _optional_bool(row.get("related_registered_active")),
+                "related_is_ai_or_bot": _optional_bool(row.get("related_is_ai_or_bot")),
                 "damage_type_category": _optional_text(row.get("damage_type_category")),
                 "damage_causer_name": _optional_text(row.get("damage_causer_name")),
                 "damage_causer_label": _damage_causer_label(row.get("damage_causer_name")),
@@ -316,6 +349,76 @@ class ReplayTimelineProcessor:
                 "related_y": _optional_float(row.get("related_y")),
                 "related_z": _optional_float(row.get("related_z")),
                 "related_map": _map_point(row.get("related_x"), row.get("related_y"), world_size_cm),
+            }
+            for row in rows
+        ]
+
+    def _load_team_members(self, *, match_id: str, account_id: str, shard: str) -> list[dict[str, Any]]:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    teammate.account_id,
+                    teammate.name,
+                    teammate.roster_id,
+                    teammate.team_id,
+                    teammate.win_place,
+                    teammate.kills,
+                    teammate.assists,
+                    teammate.damage_dealt,
+                    teammate.death_type,
+                    teammate.is_ai_or_bot,
+                    CASE WHEN registered_players.id IS NULL THEN 0 ELSE 1 END AS registered,
+                    registered_players.active AS registered_active,
+                    registered_players.public_profile,
+                    registered_players.current_name AS registered_name,
+                    CASE WHEN teammate.account_id = %s THEN 1 ELSE 0 END AS is_self
+                FROM match_participants self_participant
+                INNER JOIN match_participants teammate
+                    ON teammate.match_id = self_participant.match_id
+                   AND (
+                        (
+                            self_participant.roster_id IS NOT NULL
+                            AND teammate.roster_id = self_participant.roster_id
+                        )
+                        OR (
+                            self_participant.roster_id IS NULL
+                            AND self_participant.team_id IS NOT NULL
+                            AND teammate.team_id = self_participant.team_id
+                        )
+                   )
+                LEFT JOIN registered_players
+                    ON registered_players.account_id = teammate.account_id
+                   AND registered_players.shard = %s
+                WHERE self_participant.match_id = %s
+                  AND self_participant.account_id = %s
+                ORDER BY
+                    CASE WHEN teammate.account_id = %s THEN 0 ELSE 1 END,
+                    CASE WHEN registered_players.id IS NULL THEN 1 ELSE 0 END,
+                    teammate.name ASC,
+                    teammate.account_id ASC
+                """,
+                (account_id, shard, match_id, account_id, account_id),
+            )
+            rows = cursor.fetchall()
+
+        return [
+            {
+                "account_id": _optional_text(row.get("account_id")),
+                "name": _optional_text(row.get("registered_name")) or _optional_text(row.get("name")),
+                "match_name": _optional_text(row.get("name")),
+                "roster_id": _optional_text(row.get("roster_id")),
+                "team_id": _optional_int(row.get("team_id")),
+                "win_place": _optional_int(row.get("win_place")),
+                "kills": _optional_int(row.get("kills")),
+                "assists": _optional_int(row.get("assists")),
+                "damage_dealt": _optional_float(row.get("damage_dealt")),
+                "death_type": _optional_text(row.get("death_type")),
+                "is_ai_or_bot": bool(row.get("is_ai_or_bot")),
+                "registered": bool(row.get("registered")),
+                "registered_active": _optional_bool(row.get("registered_active")),
+                "public_profile": _optional_bool(row.get("public_profile")),
+                "is_self": bool(row.get("is_self")),
             }
             for row in rows
         ]
@@ -407,6 +510,7 @@ class ReplayTimelineProcessor:
                 "player_position_samples",
                 "player_landing_events",
                 "player_combat_location_events",
+                "match_participants",
                 "match_care_package_events",
                 "match_plane_routes",
             ],

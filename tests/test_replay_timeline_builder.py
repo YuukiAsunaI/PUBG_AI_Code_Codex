@@ -74,6 +74,11 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
                 [
                     {
                         "related_account_id": "account.enemy",
+                        "related_name": "EnemyPlayer",
+                        "related_is_ai_or_bot": 0,
+                        "related_registered": 1,
+                        "related_registered_active": 1,
+                        "related_registered_name": "EnemyRegistered",
                         "event_index": 30,
                         "event_type": "LogPlayerKillV2",
                         "action": "kill",
@@ -121,6 +126,42 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
                     "end_z": 0.0,
                     "sample_account_id": "account.tracked",
                 },
+                [
+                    {
+                        "account_id": "account.tracked",
+                        "name": "Yuuki_Asuna---",
+                        "roster_id": "roster-1",
+                        "team_id": 12,
+                        "win_place": 1,
+                        "kills": 5,
+                        "assists": 1,
+                        "damage_dealt": 650.0,
+                        "death_type": "alive",
+                        "is_ai_or_bot": 0,
+                        "registered": 1,
+                        "registered_active": 1,
+                        "public_profile": 1,
+                        "registered_name": "Yuuki_Asuna---",
+                        "is_self": 1,
+                    },
+                    {
+                        "account_id": "account.teammate",
+                        "name": "Teammate",
+                        "roster_id": "roster-1",
+                        "team_id": 12,
+                        "win_place": 1,
+                        "kills": 2,
+                        "assists": 3,
+                        "damage_dealt": 310.5,
+                        "death_type": "alive",
+                        "is_ai_or_bot": 0,
+                        "registered": 1,
+                        "registered_active": 1,
+                        "public_profile": 1,
+                        "registered_name": "TrackedMate",
+                        "is_self": 0,
+                    },
+                ],
             ]
         )
 
@@ -140,10 +181,17 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
         self.assertEqual(payload["schema_version"], "player-timeline-v1")
         self.assertEqual(payload["match"]["match_id"], "match-1")
         self.assertEqual(payload["player"]["name"], "Yuuki_Asuna---")
+        self.assertEqual(payload["team"]["member_count"], 2)
+        self.assertEqual(payload["team"]["registered_member_count"], 2)
+        self.assertEqual(payload["team"]["registered_teammate_count"], 1)
+        self.assertTrue(payload["team"]["members"][0]["is_self"])
+        self.assertEqual(payload["team"]["members"][1]["name"], "TrackedMate")
         self.assertEqual(payload["counts"]["positions"], 2)
         self.assertEqual(payload["counts"]["combat_events"], 1)
         self.assertEqual(payload["positions"][0]["map"]["x_pct"], 100000.0 / 816000.0)
         self.assertEqual(payload["combat_events"][0]["damage_causer_label"], "M416")
+        self.assertEqual(payload["combat_events"][0]["related_name"], "EnemyRegistered")
+        self.assertTrue(payload["combat_events"][0]["related_registered"])
         self.assertEqual(payload["care_packages"][0]["item_codes"], ["Item_Weapon_AWM_C"])
         self.assertIn("INSERT INTO replay_artifacts", connection.executed[-1][0])
         self.assertIn("player-timeline", connection.executed[-1][1])
@@ -170,6 +218,7 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
                 [],
                 [],
                 None,
+                [],
             ]
         )
 

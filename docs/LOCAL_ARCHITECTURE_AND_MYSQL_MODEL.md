@@ -329,9 +329,12 @@ Completed slices:
 22. 2D replay event list and detail panel with click-to-seek behavior for landing, combat, and care-package events.
 23. 2D replay canvas map-image backgrounds using the same cached official map PNG assets as static route snapshots,
     with grid fallback when an asset is unavailable.
+24. 2D replay timeline payloads and local player UI now include same-roster team lists, registered-teammate emphasis,
+    and related-player display names/registration flags for combat events when available.
 
 Next slice:
 
-1. Richer 2D replay playback features such as team overlays and registered-teammate emphasis.
+1. Richer 2D replay playback features such as teammate route overlays when enough teammate position samples are
+   available.
 2. Add weapon+attachment evidence links from Discord recommendation responses where a local web URL can be shared
    safely.

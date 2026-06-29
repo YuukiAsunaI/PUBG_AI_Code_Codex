@@ -802,6 +802,24 @@ _INDEX_HTML = """<!doctype html>
       background: #f8fafc;
       min-height: 110px;
     }
+    .timeline-team-list {
+      display: grid;
+      gap: 6px;
+    }
+    .team-member {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 4px 8px;
+      align-items: center;
+      border: 1px solid var(--line);
+      background: #fff;
+      padding: 8px 10px;
+    }
+    .team-member.self { border-color: #39ff14; }
+    .team-member.registered { background: #eef7ff; border-color: var(--accent); }
+    .team-member strong { overflow-wrap: anywhere; }
+    .team-member span { color: var(--muted); font-size: 12px; }
+    .team-member span:last-child { grid-column: 1 / -1; }
     @media (max-width: 900px) {
       .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       form { grid-template-columns: 1fr; }
@@ -1121,6 +1139,7 @@ _INDEX_HTML = """<!doctype html>
           <canvas id="replayCanvas" width="960" height="960"></canvas>
         </div>
         <div class="timeline-event-panel">
+          <div class="timeline-team-list" id="timelineTeamList"></div>
           <div class="status" id="timelineEventDetail">이벤트 대기 중</div>
           <div class="timeline-event-list" id="timelineEventList"></div>
         </div>
@@ -1176,6 +1195,7 @@ _INDEX_HTML = """<!doctype html>
     const timelineClock = document.querySelector("#timelineClock");
     const timelineEventDetail = document.querySelector("#timelineEventDetail");
     const timelineEventList = document.querySelector("#timelineEventList");
+    const timelineTeamList = document.querySelector("#timelineTeamList");
     const replayCanvas = document.querySelector("#replayCanvas");
     const replayPlayerStatus = document.querySelector("#replayPlayerStatus");
     const timelineShowPath = document.querySelector("#timelineShowPath");
@@ -1648,6 +1668,7 @@ _INDEX_HTML = """<!doctype html>
         activeTimelineArtifact = null;
         activeTimelineEvents = [];
         activeTimelineSelectedEventId = null;
+        renderTimelineTeamList();
         renderTimelineEventList();
         renderTimelineEventDetail(null);
         replayPlayerStatus.textContent = "timeline artifact가 없습니다.";
@@ -1683,6 +1704,13 @@ _INDEX_HTML = """<!doctype html>
     async function loadSelectedTimeline() {
       const artifact = replayTimelineArtifacts.find((item) => String(item.id) === timelineSelect.value);
       if (!artifact) {
+        activeTimeline = null;
+        activeTimelineArtifact = null;
+        activeTimelineEvents = [];
+        activeTimelineSelectedEventId = null;
+        renderTimelineTeamList();
+        renderTimelineEventList();
+        renderTimelineEventDetail(null);
         replayPlayerStatus.textContent = "timeline artifact가 없습니다.";
         drawEmptyReplayCanvas();
         return;
@@ -1704,6 +1732,7 @@ _INDEX_HTML = """<!doctype html>
       timelineScrubber.value = "0";
       replayPlayerStatus.textContent = `${payload.player?.name || artifact.player_name || "unknown"} / ${payload.match?.map_name || "-"} / ${payload.match?.match_id || artifact.match_id}`;
       await loadReplayMapImage(payload.match?.map_name);
+      renderTimelineTeamList();
       renderTimelineEventList();
       renderTimelineEventDetail(null);
       renderReplayFrame();
@@ -1770,7 +1799,9 @@ _INDEX_HTML = """<!doctype html>
         const action = combatActionLabel(event.action);
         const weapon = event.damage_causer_label || event.damage_causer_name || "-";
         const suffix = event.is_headshot ? " / HS" : "";
-        add("combat", event, `${action}${suffix}`, `${weapon} / ${distanceM(event.distance_m)}`);
+        const related = event.related_name || event.related_account_id;
+        const meta = [weapon, distanceM(event.distance_m)].concat(related ? [related] : []).join(" / ");
+        add("combat", event, `${action}${suffix}`, meta);
       }
       for (const event of timeline.care_packages || []) {
         const label = event.event_type === "LogCarePackageLand" ? "Care package landed" : "Care package spawned";
@@ -1794,6 +1825,34 @@ _INDEX_HTML = """<!doctype html>
         finished_taken: "Finished taken",
       };
       return labels[action] || action || "Combat";
+    }
+
+    function renderTimelineTeamList() {
+      if (!timelineTeamList) return;
+      const members = activeTimeline?.team?.members || [];
+      if (!members.length) {
+        timelineTeamList.innerHTML = `<div class="status">Team data unavailable</div>`;
+        return;
+      }
+      timelineTeamList.innerHTML = members.map((member) => {
+        const badges = [];
+        if (member.is_self) badges.push("self");
+        if (member.registered && !member.is_self) badges.push("registered");
+        if (member.is_ai_or_bot) badges.push("bot");
+        const stats = [
+          `K ${Number(member.kills || 0)}`,
+          `A ${Number(member.assists || 0)}`,
+          `DMG ${Number(member.damage_dealt || 0).toFixed(0)}`,
+          member.win_place ? `#${member.win_place}` : "",
+        ].filter(Boolean).join(" / ");
+        return `
+          <div class="team-member ${member.is_self ? "self" : ""} ${member.registered && !member.is_self ? "registered" : ""}">
+            <strong>${escapeHtml(member.name || member.account_id || "unknown")}</strong>
+            <span>${escapeHtml(badges.join(" / ") || "team")}</span>
+            <span>${escapeHtml(stats || "-")}</span>
+          </div>
+        `;
+      }).join("");
     }
 
     function formatReplayTime(value) {
@@ -1842,7 +1901,8 @@ _INDEX_HTML = """<!doctype html>
       if (nearest.category === "combat") {
         detailLines.push(`weapon ${escapeHtml(source.damage_causer_label || source.damage_causer_name || "-")}`);
         detailLines.push(`reason ${escapeHtml(source.damage_reason || "-")} / distance ${distanceM(source.distance_m)}`);
-        if (source.related_account_id) detailLines.push(`related ${escapeHtml(source.related_account_id)}`);
+        const relatedLabel = combatRelatedLabel(source);
+        if (relatedLabel) detailLines.push(`related ${relatedLabel}`);
       } else if (nearest.category === "care") {
         detailLines.push(`type ${escapeHtml(source.event_type || "-")} / items ${source.item_count || 0}`);
         const itemCodes = (source.item_codes || []).slice(0, 8).join(", ");
@@ -1853,6 +1913,15 @@ _INDEX_HTML = """<!doctype html>
       if (source.event_at_kst) detailLines.push(`KST ${escapeHtml(source.event_at_kst)}`);
       timelineEventDetail.className = "timeline-event-detail";
       timelineEventDetail.innerHTML = detailLines.join("<br>");
+    }
+
+    function combatRelatedLabel(source) {
+      const name = source.related_name || source.related_account_id;
+      if (!name) return "";
+      const badges = [];
+      if (source.related_registered) badges.push("registered");
+      if (source.related_is_ai_or_bot) badges.push("bot");
+      return `${escapeHtml(name)}${badges.length ? ` (${escapeHtml(badges.join(", "))})` : ""}`;
     }
 
     function selectedTimelineEvent() {

@@ -243,9 +243,11 @@ The current local runtime can generate post-match 2D route summary JPEG files fo
 - `python -m pubg_ai.cli generate-map-snapshots --limit 10` generates only missing snapshots.
 - `python -m pubg_ai.cli generate-map-snapshots --limit 200 --force` regenerates existing JPEG artifacts.
 - `python -m pubg_ai.cli generate-replay-timelines --limit 10` generates compact JSON replay timelines from the same
-  parsed movement/location tables. These files are intended for the future local 2D playback UI.
+  parsed movement/location tables. These files are used by the local 2D playback UI.
 - Timeline artifacts store raw PUBG cm coordinates and normalized map percentage coordinates for player positions,
   landings, combat markers, care packages, and plane routes.
+- Timeline artifacts also include same-roster team members from `match_participants`, registered-player emphasis
+  flags, and related-player names/registration flags for combat events when those records are available.
 - `GET /replay/artifacts?artifact_type=map_snapshot&limit=50` lists generated artifact metadata for local UI and
   future Discord command reuse.
 - `GET /replay/artifacts/{artifact_id}/file` serves a generated artifact file after resolving the DB relative path
@@ -258,12 +260,16 @@ The current local runtime can generate post-match 2D route summary JPEG files fo
 - The 2D replay player includes a time-sorted event list and event detail panel. Selecting a landing, combat, or
   care-package event pauses playback, seeks to that moment, highlights the map point, and shows event metadata such
   as weapon, damage reason, distance, related player, item count, and KST timestamp where available.
+- The 2D replay player shows the tracked player's team list beside the event panel and visually emphasizes
+  registered teammates.
 
 Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 route snapshot JPEG files were generated
 under `D:\BackUP\replay`, recorded in `replay_artifacts`, and verified as readable JPEG images. Total generated
 snapshot size was 54,922,370 bytes.
 The local artifact list endpoint returned recent `map_snapshot` rows, and the file endpoint returned `image/jpeg`
 with valid JPEG magic bytes.
+Live test also regenerated one `timeline` artifact for match `751d1def-d222-4d3e-8b9d-1fc3721bb5c1`; the payload
+included a four-member squad list and 13 combat-location events with related-player display names where available.
 
 ## Implemented Discord Bot MVP Slice
 
