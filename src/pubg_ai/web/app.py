@@ -13,7 +13,7 @@ from pubg_ai.database import connect_mysql, count_tables
 from pubg_ai.discord_permission_manager import DiscordPermissionManager
 from pubg_ai.local_settings import LocalSettingsError, LocalSettingsStore
 from pubg_ai.loadout_snapshot_processor import LoadoutSnapshotProcessor
-from pubg_ai.map_snapshot_renderer import MapSnapshotProcessor
+from pubg_ai.map_snapshot_renderer import MAP_ASSET_FILENAMES, MapAssetProvider, MapSnapshotProcessor
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.match_job_processor import MatchJobProcessor
 from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry
@@ -572,6 +572,28 @@ def create_app() -> Any:
             return {"result": result.to_record()}
         finally:
             connection.close()
+
+    @app.get("/replay/map-assets/{map_name}")
+    def replay_map_asset(map_name: str) -> FileResponse:
+        filename = MAP_ASSET_FILENAMES.get(map_name)
+        if filename is None:
+            raise HTTPException(status_code=404, detail="map asset is not registered.")
+
+        cache_root = config.app.replay_data_dir / "cache"
+        asset_path = cache_root / "map_assets" / filename
+        if not asset_path.exists():
+            MapAssetProvider(cache_root).load_map(map_name)
+
+        resolved = asset_path.resolve()
+        allowed_root = (cache_root / "map_assets").resolve()
+        if allowed_root != resolved.parent or not resolved.is_file():
+            raise HTTPException(status_code=404, detail="map asset file not found.")
+
+        return FileResponse(
+            resolved,
+            media_type="image/png",
+            filename=filename,
+        )
 
     @app.get("/replay/artifacts")
     def replay_artifacts(
@@ -1169,6 +1191,8 @@ _INDEX_HTML = """<!doctype html>
     let activeTimelineDetailKey = "";
     let activeTimelineDuration = 0;
     let activeTimelineTime = 0;
+    let replayMapImage = null;
+    let replayMapImageName = "";
     let replayAnimationId = null;
     let replayLastFrameMs = 0;
     let replayPlaying = false;
@@ -1679,9 +1703,27 @@ _INDEX_HTML = """<!doctype html>
       timelineScrubber.max = String(activeTimelineDuration);
       timelineScrubber.value = "0";
       replayPlayerStatus.textContent = `${payload.player?.name || artifact.player_name || "unknown"} / ${payload.match?.map_name || "-"} / ${payload.match?.match_id || artifact.match_id}`;
+      await loadReplayMapImage(payload.match?.map_name);
       renderTimelineEventList();
       renderTimelineEventDetail(null);
       renderReplayFrame();
+    }
+
+    async function loadReplayMapImage(mapName) {
+      replayMapImage = null;
+      replayMapImageName = mapName || "";
+      if (!mapName) return;
+
+      const image = new Image();
+      image.decoding = "async";
+      image.src = `/replay/map-assets/${encodeURIComponent(mapName)}`;
+      await new Promise((resolve) => {
+        image.onload = resolve;
+        image.onerror = resolve;
+      });
+      if (image.naturalWidth > 0 && image.naturalHeight > 0 && replayMapImageName === mapName) {
+        replayMapImage = image;
+      }
     }
 
     function timelineDuration(timeline) {
@@ -1866,8 +1908,14 @@ _INDEX_HTML = """<!doctype html>
     }
 
     function drawReplayBackground(width, height) {
-      replayCtx.fillStyle = "#17212b";
-      replayCtx.fillRect(0, 0, width, height);
+      if (replayMapImage) {
+        replayCtx.drawImage(replayMapImage, 0, 0, width, height);
+        replayCtx.fillStyle = "rgba(10,16,22,0.16)";
+        replayCtx.fillRect(0, 0, width, height);
+      } else {
+        replayCtx.fillStyle = "#17212b";
+        replayCtx.fillRect(0, 0, width, height);
+      }
       replayCtx.strokeStyle = "rgba(255,255,255,0.12)";
       replayCtx.lineWidth = 1;
       for (let index = 0; index <= 8; index += 1) {

@@ -253,7 +253,8 @@ The current local runtime can generate post-match 2D route summary JPEG files fo
 - The local web UI has JPEG and timeline JSON generate/regenerate buttons plus a recent artifact list with open-file
   links.
 - The local web UI also has a canvas-based 2D replay player that loads `timeline` artifacts and renders player route,
-  plane route, landing markers, combat markers, and care-package markers with play/pause, speed, and seek controls.
+  plane route, landing markers, combat markers, and care-package markers over cached official map PNG backgrounds
+  when available. It falls back to the coordinate grid if the map asset is missing.
 - The 2D replay player includes a time-sorted event list and event detail panel. Selecting a landing, combat, or
   care-package event pauses playback, seeks to that moment, highlights the map point, and shows event metadata such
   as weapon, damage reason, distance, related player, item count, and KST timestamp where available.

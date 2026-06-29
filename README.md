@@ -244,9 +244,10 @@ GET /replay/artifacts?artifact_type=&limit=50
 GET /replay/artifacts/{artifact_id}/file
 ```
 
-The local web app includes a 2D replay player that loads generated `timeline` JSON artifacts and renders movement,
-plane route, landing, combat, and care-package markers on a canvas. The player also includes a time-sorted event
-list and a detail panel so fight, landing, and care-package events can be clicked to seek directly to that moment.
+The local web app includes a 2D replay player that loads generated `timeline` JSON artifacts, uses cached official
+map PNG assets as the canvas background when available, and renders movement, plane route, landing, combat, and
+care-package markers. The player also includes a time-sorted event list and a detail panel so fight, landing, and
+care-package events can be clicked to seek directly to that moment.
 
 Run the Discord bot MVP:
 
