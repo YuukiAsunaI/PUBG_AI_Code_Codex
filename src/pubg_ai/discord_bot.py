@@ -178,6 +178,24 @@ def format_player_recommendations(report: PlayerRecommendationReport) -> str:
     else:
         lines.append("- weapons: no data")
 
+    if report.weapon_attachments:
+        lines.append("- weapon parts: " + ", ".join(
+            f"{item.weapon_name} + {item.attachment_name} "
+            f"({_number(item.avg_damage_dealt, 1)} dmg, {_percent(item.win_rate)} win)"
+            for item in report.weapon_attachments[:3]
+        ))
+    else:
+        lines.append("- weapon parts: no data")
+
+    if report.weapon_ranges:
+        lines.append("- weapon ranges: " + ", ".join(
+            f"{item.weapon_name} {item.bucket_label} "
+            f"({item.kills}K/{item.dbnos}DBNO)"
+            for item in report.weapon_ranges[:3]
+        ))
+    else:
+        lines.append("- weapon ranges: no data")
+
     if report.attachments:
         lines.append("- attachments: " + ", ".join(
             f"{item.item_name} ({item.attached_events} attach)"

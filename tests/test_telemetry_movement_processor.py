@@ -225,6 +225,7 @@ class TelemetryMovementProcessorTests(unittest.TestCase):
         self.assertEqual([event.action for event in combat_locations], ["dbno_caused", "kill", "finish"])
         self.assertTrue(combat_locations[0].is_headshot)
         self.assertEqual(combat_locations[0].damage_causer_name, "WeapAUG_C")
+        self.assertAlmostEqual(combat_locations[0].distance_m, 0.707)
         self.assertEqual(combat_locations[0].related_x, 150.0)
         self.assertEqual(care_packages[0].item_count, 2)
         self.assertEqual(care_packages[0].item_codes[0], "Item_Weapon_FAMASG2_C")

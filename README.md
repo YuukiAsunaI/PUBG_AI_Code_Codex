@@ -118,6 +118,9 @@ Show first-pass recommendations from parsed summary tables:
 python -m pubg_ai.cli player-recommendations Yuuki_Asuna--- --shard steam --min-matches 1
 ```
 
+Recommendations include distance-weighted weapon ranges plus first-pass weapon+attachment pairs reconstructed from
+attach events.
+
 Show one completed-match detail from parsed MySQL summary tables:
 
 ```powershell

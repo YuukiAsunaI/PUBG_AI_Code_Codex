@@ -23,6 +23,7 @@ class WebRecommendationTests(unittest.TestCase):
                     "registered_guild_id": None,
                     "registered_channel_id": None,
                 },
+                [],
                 [
                     {
                         "weapon_code": "WeapHK416_C",
@@ -37,6 +38,7 @@ class WebRecommendationTests(unittest.TestCase):
                         "shots_hit": 60,
                     }
                 ],
+                [],
                 [],
                 [],
                 [],

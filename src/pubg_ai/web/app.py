@@ -1247,6 +1247,12 @@ _INDEX_HTML = """<!doctype html>
       const weapons = recommendationLines(report.weapons, (item) => (
         `${escapeHtml(item.weapon_name)} score ${Number(item.score).toFixed(1)} / ${item.match_count} matches / ${Number(item.avg_damage_dealt).toFixed(1)} avg dmg / ${percent(item.win_rate)} win`
       ));
+      const weaponParts = recommendationLines(report.weapon_attachments, (item) => (
+        `${escapeHtml(item.weapon_name)} + ${escapeHtml(item.attachment_name)} score ${Number(item.score).toFixed(1)} / ${item.match_count} matches / ${Number(item.avg_damage_dealt).toFixed(1)} avg dmg / ${percent(item.win_rate)} win`
+      ));
+      const weaponRanges = recommendationLines(report.weapon_ranges, (item) => (
+        `${escapeHtml(item.weapon_name)} ${escapeHtml(item.bucket_label)} / ${item.event_count} events / ${item.kills} kills / ${item.dbnos} DBNOs`
+      ));
       const attachments = recommendationLines(report.attachments, (item) => (
         `${escapeHtml(item.item_name)} score ${Number(item.score).toFixed(1)} / ${item.attached_events} attaches / ${Number(item.avg_damage_dealt).toFixed(1)} avg dmg`
       ));
@@ -1262,6 +1268,8 @@ _INDEX_HTML = """<!doctype html>
       recommendationBody.innerHTML = [
         `<strong>${escapeHtml(report.player.current_name)} recommendations</strong>`,
         `<br><strong>Weapons</strong><br>${weapons}`,
+        `<br><strong>Weapon parts</strong><br>${weaponParts}`,
+        `<br><strong>Weapon ranges</strong><br>${weaponRanges}`,
         `<br><strong>Attachments</strong><br>${attachments}`,
         `<br><strong>Maps</strong><br>${maps}`,
         `<br><strong>Teammates</strong><br>${teammates}`,

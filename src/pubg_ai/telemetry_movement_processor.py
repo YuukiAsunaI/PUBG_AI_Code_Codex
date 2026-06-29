@@ -1136,7 +1136,7 @@ def _combat_location_record(
         damage_causer_name=_optional_text(damage_info.get("damageCauserName")),
         damage_reason=damage_reason,
         is_headshot=damage_reason == "HeadShot",
-        distance_m=_optional_float(damage_info.get("distance")),
+        distance_m=_damage_distance_m(damage_info.get("distance")),
         x=_optional_float(location.get("x")),
         y=_optional_float(location.get("y")),
         z=_optional_float(location.get("z")),
@@ -1167,6 +1167,13 @@ def _xy_distance_m(left: PositionSample, right: PositionSample) -> float | None:
     if left.x is None or left.y is None or right.x is None or right.y is None:
         return None
     return sqrt((right.x - left.x) ** 2 + (right.y - left.y) ** 2) / 100.0
+
+
+def _damage_distance_m(value: Any) -> float | None:
+    distance = _optional_float(value)
+    if distance is None:
+        return None
+    return distance / 100.0
 
 
 def _looks_like_aircraft_sample(event: Mapping[str, Any], character: Mapping[str, Any]) -> bool:

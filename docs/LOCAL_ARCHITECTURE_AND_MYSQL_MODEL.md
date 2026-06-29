@@ -320,8 +320,10 @@ Completed slices:
     route/combat/care-package/plane visibility controls, and artifact-list load buttons.
 18. First-pass recommendation service, CLI, web endpoint, and Discord command for weapons, attachments, maps,
     teammates, and coordinate-clustered drop zones from parsed summary tables.
+19. Distance-weighted weapon recommendations and first-pass weapon+attachment pair recommendations from
+    combat-location distance buckets and attach events.
 
 Next slice:
 
-1. Improve recommendation quality with weapon+attachment loadout reconstruction and distance-bucket weighting.
+1. Improve recommendation quality with true time-based loadout snapshots at kill/DBNO moments.
 2. Richer 2D replay playback features such as team overlays, minimap assets, and event detail panels.

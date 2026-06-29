@@ -1,11 +1,58 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+from math import sqrt
 from typing import Any, Mapping
 
 from pubg_ai.code_translator import translate_code
+from pubg_ai.distance_buckets import WeaponFamily, distance_bucket
 from pubg_ai.map_snapshot_renderer import DEFAULT_WORLD_SIZE_CM, MAP_WORLD_SIZE_CM
 from pubg_ai.player_registry import RegisteredPlayer
+from pubg_ai.weapon_stats import normalize_weapon_code
+
+
+@dataclass(frozen=True)
+class WeaponDistanceBucketRecommendation:
+    weapon_code: str
+    weapon_name: str
+    bucket_label: str
+    min_m: int
+    max_m: int | None
+    weapon_family: str
+    score: float
+    event_count: int
+    kills: int
+    dbnos: int
+    finishes: int
+    avg_distance_m: float
+    reason: str
+
+    def to_record(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class WeaponAttachmentRecommendation:
+    weapon_code: str
+    weapon_name: str
+    attachment_code: str
+    attachment_name: str
+    attachment_category: str | None
+    attachment_sub_category: str | None
+    score: float
+    match_count: int
+    attached_events: int
+    wins: int
+    kills: int
+    dbnos: int
+    damage_dealt: float
+    win_rate: float
+    kills_per_match: float
+    avg_damage_dealt: float
+    reason: str
+
+    def to_record(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -28,6 +75,8 @@ class WeaponRecommendation:
     avg_damage_dealt: float
     accuracy: float
     reason: str
+    range_score: float = 0.0
+    top_distance_buckets: list[WeaponDistanceBucketRecommendation] = field(default_factory=list)
 
     def to_record(self) -> dict[str, Any]:
         return asdict(self)
@@ -123,6 +172,8 @@ class PlayerRecommendationReport:
     player: RegisteredPlayer
     min_matches: int
     weapons: list[WeaponRecommendation]
+    weapon_attachments: list[WeaponAttachmentRecommendation]
+    weapon_ranges: list[WeaponDistanceBucketRecommendation]
     attachments: list[AttachmentRecommendation]
     maps: list[MapRecommendation]
     teammates: list[TeammateRecommendation]
@@ -133,6 +184,8 @@ class PlayerRecommendationReport:
             "player": self.player.to_record(),
             "min_matches": self.min_matches,
             "weapons": [item.to_record() for item in self.weapons],
+            "weapon_attachments": [item.to_record() for item in self.weapon_attachments],
+            "weapon_ranges": [item.to_record() for item in self.weapon_ranges],
             "attachments": [item.to_record() for item in self.attachments],
             "maps": [item.to_record() for item in self.maps],
             "teammates": [item.to_record() for item in self.teammates],
@@ -167,10 +220,18 @@ class PlayerRecommendationService:
 
         limit = max(1, min(int(limit), 20))
         min_matches = max(1, int(min_matches))
+        weapon_ranges = self._weapon_distance_recommendations(player, limit=max(limit * 4, 12))
         return PlayerRecommendationReport(
             player=player,
             min_matches=min_matches,
-            weapons=self._weapon_recommendations(player, limit=limit, min_matches=min_matches),
+            weapons=self._weapon_recommendations(
+                player,
+                limit=limit,
+                min_matches=min_matches,
+                distance_by_weapon=_distance_by_weapon(weapon_ranges),
+            ),
+            weapon_attachments=self._weapon_attachment_recommendations(player, limit=limit, min_matches=min_matches),
+            weapon_ranges=weapon_ranges[:limit],
             attachments=self._attachment_recommendations(player, limit=limit, min_matches=min_matches),
             maps=self._map_recommendations(player, limit=limit, min_matches=min_matches),
             teammates=self._teammate_recommendations(player, limit=limit, min_matches=min_matches),
@@ -223,6 +284,7 @@ class PlayerRecommendationService:
         *,
         limit: int,
         min_matches: int,
+        distance_by_weapon: Mapping[str, list[WeaponDistanceBucketRecommendation]],
     ) -> list[WeaponRecommendation]:
         with self.connection.cursor() as cursor:
             cursor.execute(
@@ -267,6 +329,9 @@ class PlayerRecommendationService:
             shots_fired = _int(row.get("shots_fired"))
             shots_hit = _int(row.get("shots_hit"))
             accuracy = _accuracy(shots_hit, shots_fired)
+            weapon_code = str(row["weapon_code"])
+            top_distance_buckets = list(distance_by_weapon.get(weapon_code, []))[:3]
+            range_score = sum(bucket.score for bucket in top_distance_buckets[:2]) * 0.05
             score = _performance_score(
                 match_count=match_count,
                 wins=wins,
@@ -277,8 +342,7 @@ class PlayerRecommendationService:
                 damage_dealt=damage_dealt,
                 shots_fired=shots_fired,
                 shots_hit=shots_hit,
-            )
-            weapon_code = str(row["weapon_code"])
+            ) + range_score
             recommendations.append(
                 WeaponRecommendation(
                     weapon_code=weapon_code,
@@ -299,6 +363,223 @@ class PlayerRecommendationService:
                     avg_damage_dealt=_safe_divide(damage_dealt, match_count),
                     accuracy=accuracy,
                     reason=_reason(match_count, wins, damage_dealt, kills),
+                    range_score=range_score,
+                    top_distance_buckets=top_distance_buckets,
+                )
+            )
+        return _top(recommendations, limit)
+
+    def _weapon_distance_recommendations(
+        self,
+        player: RegisteredPlayer,
+        *,
+        limit: int,
+    ) -> list[WeaponDistanceBucketRecommendation]:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    location_events.damage_causer_name,
+                    location_events.action,
+                    location_events.distance_m,
+                    location_events.x,
+                    location_events.y,
+                    location_events.related_x,
+                    location_events.related_y
+                FROM player_combat_location_events location_events
+                INNER JOIN matches
+                    ON matches.match_id = location_events.match_id
+                WHERE location_events.account_id = %s
+                  AND matches.shard = %s
+                  AND location_events.action IN ('kill', 'dbno_caused', 'finish')
+                  AND location_events.damage_causer_name IS NOT NULL
+                  AND location_events.distance_m IS NOT NULL
+                  AND location_events.distance_m >= 0
+                ORDER BY matches.created_at_kst DESC, location_events.match_id DESC, location_events.event_index DESC
+                LIMIT 5000
+                """,
+                (player.account_id, player.shard),
+            )
+            rows = cursor.fetchall()
+
+        buckets: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in rows:
+            weapon_code = normalize_weapon_code(row.get("damage_causer_name"))
+            if not weapon_code or not weapon_code.startswith("Weap"):
+                continue
+            distance_m = _combat_distance_from_row(row)
+            if distance_m is None or distance_m < 0:
+                continue
+            bucket = distance_bucket(distance_m, _weapon_family(weapon_code))
+            key = (weapon_code, bucket.label)
+            record = buckets.setdefault(
+                key,
+                {
+                    "weapon_code": weapon_code,
+                    "bucket": bucket,
+                    "event_count": 0,
+                    "kills": 0,
+                    "dbnos": 0,
+                    "finishes": 0,
+                    "distance_sum": 0.0,
+                },
+            )
+            action = str(row.get("action") or "")
+            record["event_count"] += 1
+            record["distance_sum"] += distance_m
+            if action == "kill":
+                record["kills"] += 1
+            elif action == "dbno_caused":
+                record["dbnos"] += 1
+            elif action == "finish":
+                record["finishes"] += 1
+
+        recommendations: list[WeaponDistanceBucketRecommendation] = []
+        for record in buckets.values():
+            bucket = record["bucket"]
+            event_count = _int(record["event_count"])
+            kills = _int(record["kills"])
+            dbnos = _int(record["dbnos"])
+            finishes = _int(record["finishes"])
+            score = kills * 120 + dbnos * 70 + finishes * 40 + event_count * 8
+            weapon_code = str(record["weapon_code"])
+            recommendations.append(
+                WeaponDistanceBucketRecommendation(
+                    weapon_code=weapon_code,
+                    weapon_name=translate_code(weapon_code, "damage_causer"),
+                    bucket_label=bucket.label,
+                    min_m=bucket.min_m,
+                    max_m=bucket.max_m,
+                    weapon_family=bucket.weapon_family,
+                    score=score,
+                    event_count=event_count,
+                    kills=kills,
+                    dbnos=dbnos,
+                    finishes=finishes,
+                    avg_distance_m=_safe_divide(record["distance_sum"], event_count),
+                    reason=f"{event_count} events, {kills} kills, {dbnos} DBNOs at {bucket.label}",
+                )
+            )
+        return _top(recommendations, limit)
+
+    def _weapon_attachment_recommendations(
+        self,
+        player: RegisteredPlayer,
+        *,
+        limit: int,
+        min_matches: int,
+    ) -> list[WeaponAttachmentRecommendation]:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    item_events.match_id,
+                    item_events.parent_item_code,
+                    item_events.item_code,
+                    MAX(item_events.item_name_ko) AS item_name_ko,
+                    MAX(item_events.item_category) AS item_category,
+                    MAX(item_events.item_sub_category) AS item_sub_category,
+                    COUNT(*) AS attached_events,
+                    MAX(CASE WHEN participants.win_place = 1 THEN 1 ELSE 0 END) AS win,
+                    MAX(COALESCE(summaries.kills, 0)) AS kills,
+                    MAX(COALESCE(summaries.dbnos_caused, 0)) AS dbnos,
+                    MAX(COALESCE(summaries.damage_dealt, 0)) AS damage_dealt
+                FROM player_item_events item_events
+                INNER JOIN matches
+                    ON matches.match_id = item_events.match_id
+                LEFT JOIN player_match_combat_summaries summaries
+                    ON summaries.match_id = item_events.match_id
+                   AND summaries.account_id = item_events.account_id
+                LEFT JOIN match_participants participants
+                    ON participants.match_id = item_events.match_id
+                   AND participants.account_id = item_events.account_id
+                WHERE item_events.account_id = %s
+                  AND matches.shard = %s
+                  AND item_events.action = 'attach'
+                  AND item_events.parent_item_code IS NOT NULL
+                  AND item_events.item_code IS NOT NULL
+                  AND item_events.item_code LIKE %s
+                GROUP BY
+                    item_events.match_id,
+                    item_events.parent_item_code,
+                    item_events.item_code
+                LIMIT 1000
+                """,
+                (player.account_id, player.shard, "Item_Attach_%"),
+            )
+            rows = cursor.fetchall()
+
+        combos: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in rows:
+            weapon_code = normalize_weapon_code(row.get("parent_item_code"))
+            attachment_code = str(row.get("item_code") or "")
+            if not weapon_code or not weapon_code.startswith("Weap") or not attachment_code:
+                continue
+            key = (weapon_code, attachment_code)
+            record = combos.setdefault(
+                key,
+                {
+                    "weapon_code": weapon_code,
+                    "attachment_code": attachment_code,
+                    "attachment_name": row.get("item_name_ko"),
+                    "attachment_category": row.get("item_category"),
+                    "attachment_sub_category": row.get("item_sub_category"),
+                    "match_count": 0,
+                    "attached_events": 0,
+                    "wins": 0,
+                    "kills": 0,
+                    "dbnos": 0,
+                    "damage_dealt": 0.0,
+                },
+            )
+            record["match_count"] += 1
+            record["attached_events"] += _int(row.get("attached_events"))
+            record["wins"] += _int(row.get("win"))
+            record["kills"] += _int(row.get("kills"))
+            record["dbnos"] += _int(row.get("dbnos"))
+            record["damage_dealt"] += _float(row.get("damage_dealt"))
+
+        recommendations: list[WeaponAttachmentRecommendation] = []
+        for record in combos.values():
+            match_count = _int(record["match_count"])
+            if match_count < min_matches:
+                continue
+            wins = _int(record["wins"])
+            kills = _int(record["kills"])
+            dbnos = _int(record["dbnos"])
+            damage_dealt = _float(record["damage_dealt"])
+            attached_events = _int(record["attached_events"])
+            score = (
+                _safe_divide(damage_dealt, match_count)
+                + _safe_divide(kills, match_count) * 70
+                + _safe_divide(dbnos, match_count) * 30
+                + _safe_divide(wins, match_count) * 100
+                + attached_events
+            )
+            weapon_code = str(record["weapon_code"])
+            attachment_code = str(record["attachment_code"])
+            recommendations.append(
+                WeaponAttachmentRecommendation(
+                    weapon_code=weapon_code,
+                    weapon_name=translate_code(weapon_code, "damage_causer"),
+                    attachment_code=attachment_code,
+                    attachment_name=str(record["attachment_name"] or translate_code(attachment_code, "item")),
+                    attachment_category=record["attachment_category"],
+                    attachment_sub_category=record["attachment_sub_category"],
+                    score=score,
+                    match_count=match_count,
+                    attached_events=attached_events,
+                    wins=wins,
+                    kills=kills,
+                    dbnos=dbnos,
+                    damage_dealt=damage_dealt,
+                    win_rate=_safe_divide(wins, match_count),
+                    kills_per_match=_safe_divide(kills, match_count),
+                    avg_damage_dealt=_safe_divide(damage_dealt, match_count),
+                    reason=(
+                        f"{match_count} matches with {translate_code(weapon_code, 'damage_causer')} + "
+                        f"{translate_code(attachment_code, 'item')}"
+                    ),
                 )
             )
         return _top(recommendations, limit)
@@ -680,8 +961,33 @@ def _player_from_row(row: dict[str, Any]) -> RegisteredPlayer:
 def _top(items: list[Any], limit: int) -> list[Any]:
     return sorted(
         items,
-        key=lambda item: (-float(item.score), -int(item.match_count), str(getattr(item, "reason", ""))),
+        key=lambda item: (
+            -float(item.score),
+            -int(getattr(item, "match_count", getattr(item, "event_count", 0))),
+            str(getattr(item, "reason", "")),
+        ),
     )[:limit]
+
+
+def _distance_by_weapon(
+    ranges: list[WeaponDistanceBucketRecommendation],
+) -> dict[str, list[WeaponDistanceBucketRecommendation]]:
+    by_weapon: dict[str, list[WeaponDistanceBucketRecommendation]] = {}
+    for item in ranges:
+        by_weapon.setdefault(item.weapon_code, []).append(item)
+    for weapon_code, items in by_weapon.items():
+        by_weapon[weapon_code] = _top(items, 3)
+    return by_weapon
+
+
+def _weapon_family(weapon_code: str) -> WeaponFamily:
+    if weapon_code in AR_WEAPONS:
+        return "AR"
+    if weapon_code in DMR_WEAPONS:
+        return "DMR"
+    if weapon_code in SR_WEAPONS:
+        return "SR"
+    return "OTHER"
 
 
 def _performance_score(
@@ -742,6 +1048,20 @@ def _survival_seconds_from_row(row: Mapping[str, Any]) -> float:
     return _float(row.get("duration_seconds"))
 
 
+def _combat_distance_from_row(row: Mapping[str, Any]) -> float | None:
+    x = _optional_float(row.get("x"))
+    y = _optional_float(row.get("y"))
+    related_x = _optional_float(row.get("related_x"))
+    related_y = _optional_float(row.get("related_y"))
+    if x is not None and y is not None and related_x is not None and related_y is not None:
+        return sqrt((related_x - x) ** 2 + (related_y - y) ** 2) / 100.0
+
+    distance = _optional_float(row.get("distance_m"))
+    if distance is None:
+        return None
+    return distance / 100.0 if distance > 1000 else distance
+
+
 def _required_text(value: str, label: str) -> str:
     text = value.strip()
     if not text:
@@ -785,3 +1105,40 @@ def _accuracy(shots_hit: int, shots_fired: int) -> float:
 
 def _clamped(value: float) -> float:
     return max(0.0, min(1.0, value))
+
+
+AR_WEAPONS = {
+    "WeapACE32_C",
+    "WeapAK47_C",
+    "WeapAUG_C",
+    "WeapBerylM762_C",
+    "WeapFAMASG2_C",
+    "WeapG36C_C",
+    "WeapGroza_C",
+    "WeapHK416_C",
+    "WeapK2_C",
+    "WeapM16A4_C",
+    "WeapMk47Mutant_C",
+    "WeapQBZ95_C",
+    "WeapSCAR-L_C",
+}
+
+DMR_WEAPONS = {
+    "WeapDragunov_C",
+    "WeapFNFal_C",
+    "WeapMini14_C",
+    "WeapMk12_C",
+    "WeapMk14_C",
+    "WeapQBU88_C",
+    "WeapSKS_C",
+    "WeapVSS_C",
+}
+
+SR_WEAPONS = {
+    "WeapAWM_C",
+    "WeapKar98k_C",
+    "WeapL6_C",
+    "WeapM24_C",
+    "WeapMosinNagant_C",
+    "WeapWin94_C",
+}

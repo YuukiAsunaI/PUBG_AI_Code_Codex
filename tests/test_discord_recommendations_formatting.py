@@ -9,6 +9,8 @@ from pubg_ai.player_recommendations import (
     MapRecommendation,
     PlayerRecommendationReport,
     TeammateRecommendation,
+    WeaponAttachmentRecommendation,
+    WeaponDistanceBucketRecommendation,
     WeaponRecommendation,
 )
 from pubg_ai.player_registry import RegisteredPlayer
@@ -45,6 +47,44 @@ class DiscordRecommendationFormattingTests(unittest.TestCase):
                     dbnos_per_match=1.6,
                     avg_damage_dealt=360.0,
                     accuracy=0.3,
+                    reason="test",
+                )
+            ],
+            weapon_attachments=[
+                WeaponAttachmentRecommendation(
+                    weapon_code="WeapHK416_C",
+                    weapon_name="M416",
+                    attachment_code="Item_Attach_Weapon_Lower_Foregrip_C",
+                    attachment_name="Vertical Grip",
+                    attachment_category="Attachment",
+                    attachment_sub_category="Lower",
+                    score=500.0,
+                    match_count=2,
+                    attached_events=3,
+                    wins=1,
+                    kills=4,
+                    dbnos=3,
+                    damage_dealt=720.0,
+                    win_rate=0.5,
+                    kills_per_match=2.0,
+                    avg_damage_dealt=360.0,
+                    reason="test",
+                )
+            ],
+            weapon_ranges=[
+                WeaponDistanceBucketRecommendation(
+                    weapon_code="WeapHK416_C",
+                    weapon_name="M416",
+                    bucket_label="10-15m",
+                    min_m=10,
+                    max_m=15,
+                    weapon_family="AR",
+                    score=128.0,
+                    event_count=1,
+                    kills=1,
+                    dbnos=0,
+                    finishes=0,
+                    avg_distance_m=12.0,
                     reason="test",
                 )
             ],
@@ -128,6 +168,8 @@ class DiscordRecommendationFormattingTests(unittest.TestCase):
         self.assertIn("Yuuki_Asuna--- recommendations", body)
         self.assertIn("M416", body)
         self.assertIn("Vertical Grip", body)
+        self.assertIn("M416 + Vertical Grip", body)
+        self.assertIn("M416 10-15m", body)
         self.assertIn("Erangel", body)
         self.assertIn("Friend registered", body)
         self.assertIn("Taego grid 5,2", body)
