@@ -122,6 +122,9 @@ this only when Discord readers can reach the local management app URL:
 PUBG_LOCAL_WEB_BASE_URL=http://127.0.0.1:8000
 ```
 
+The local management app can also save this value under `config/local_settings.json` from the `Local Web Link` section.
+That local setting overrides `.env`, and saving an empty value disables evidence links without storing a secret.
+
 Leave `PUBG_LOCAL_WEB_BASE_URL` unset when the bot is running on a private machine and Discord readers cannot open the
 local app. This setting is not a secret, but it should not be confused with remote access; the web app still refuses
 non-localhost bind hosts by default.

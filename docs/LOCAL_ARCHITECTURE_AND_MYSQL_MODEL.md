@@ -342,7 +342,9 @@ Completed slices:
     replay player renders them with revive markers and event detail rows.
 29. Movement/location parser stores `LogGameStatePeriodic` phase-circle events, and the 2D replay player renders the
     current safe-zone, next-zone warning, red-zone, and black-zone rings through a map overlay toggle.
+30. Local settings can store the optional Discord recommendation evidence-link base URL, and the local manager can
+    save, clear, and display it without touching `.env` secrets.
 
 Next slice:
 
-1. Add local settings UI support for the optional Discord evidence-link base URL.
+1. Add local settings UI support for storage roots and collector polling limits.

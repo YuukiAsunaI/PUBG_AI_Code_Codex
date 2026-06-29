@@ -306,7 +306,8 @@ The current Discord bot slice is intentionally small and reuses the same local M
   weapon ranges, weapon+attachment pairs from combat loadout snapshots when available, attachments, maps, teammates,
   and coordinate-clustered drop zones.
 - When `PUBG_LOCAL_WEB_BASE_URL` is configured, `!추천` adds local web evidence links to weapon+attachment rows so the
-  supporting kill, DBNO-caused, and finish snapshots can be opened from Discord.
+  supporting kill, DBNO-caused, and finish snapshots can be opened from Discord. The local manager can save or clear
+  this base URL in `config/local_settings.json`.
 - `!유저삭제 steam 닉네임또는accountId` stops future collection by setting the registered target inactive.
 - `!최근스냅샷 [match_id]` sends the latest generated `map_snapshot` JPEG artifact, or the latest snapshot for the
   requested match ID.

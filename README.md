@@ -277,7 +277,8 @@ Discord's message content intent to be enabled for the bot application. Initial 
 Command access is checked through local Discord permission settings in `config/local_settings.json`.
 Recommendation lookup is available through `!추천 닉네임 [shard]` and `!pubg-recommend nickname [shard]`.
 If `PUBG_LOCAL_WEB_BASE_URL` is set, weapon+attachment recommendation rows include local web evidence links for
-supporting combat snapshots. Leave it unset when Discord readers cannot reach the local web app.
+supporting combat snapshots. This can be set from the local manager's `Local Web Link` section or through `.env`.
+Leave it unset when Discord readers cannot reach the local web app.
 
 Manage Discord command permissions from the local program or CLI. For first boot, add yourself as a global admin or
 grant a command group to a Discord user ID:

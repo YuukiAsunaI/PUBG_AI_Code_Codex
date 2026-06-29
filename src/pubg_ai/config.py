@@ -90,6 +90,7 @@ class AppConfig:
 
         settings_store = LocalSettingsStore(settings_file, base_dir=base)
         storage_settings = settings_store.load_storage_settings()
+        web_settings = settings_store.load_web_settings()
         collector_settings = settings_store.load_collector_settings(
             default=CollectorSettings(
                 poll_interval_seconds=config.collector_poll_interval_seconds,
@@ -101,7 +102,7 @@ class AppConfig:
         return cls(
             raw_data_dir=storage_settings.raw_data_dir if storage_settings else config.raw_data_dir,
             replay_data_dir=storage_settings.replay_data_dir if storage_settings else config.replay_data_dir,
-            local_web_base_url=config.local_web_base_url,
+            local_web_base_url=web_settings.local_web_base_url if web_settings else config.local_web_base_url,
             raw_compression=storage_settings.raw_compression if storage_settings else config.raw_compression,
             allow_storage_fallback=config.allow_storage_fallback,
             allow_replay_storage_fallback=config.allow_replay_storage_fallback,

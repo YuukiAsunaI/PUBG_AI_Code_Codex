@@ -92,6 +92,18 @@ class DiscordScopeSettings:
         }
 
 
+@dataclass(frozen=True)
+class WebSettings:
+    local_web_base_url: str | None = None
+    updated_at: str | None = None
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "local_web_base_url": self.local_web_base_url,
+            "updated_at": self.updated_at,
+        }
+
+
 DEFAULT_COMMAND_GROUPS: dict[str, list[str]] = {
     "register": ["유저등록", "pubg-register"],
     "profile_read": [
@@ -185,6 +197,14 @@ class LocalSettingsStore:
 
         return _discord_scopes_from_record(discord_scopes)
 
+    def load_web_settings(self) -> WebSettings | None:
+        payload = self._read_settings() or {}
+        web = payload.get("web")
+        if not isinstance(web, dict):
+            return None
+
+        return _web_settings_from_record(web)
+
     def save_storage_settings(
         self,
         raw_data_dir: str | Path,
@@ -274,6 +294,16 @@ class LocalSettingsStore:
         )
         payload = self._read_settings() or {}
         payload["discord_scopes"] = settings.to_record()
+        self._write_settings(payload)
+        return settings
+
+    def save_web_settings(self, local_web_base_url: str | None) -> WebSettings:
+        settings = WebSettings(
+            local_web_base_url=_normalize_optional_url(local_web_base_url),
+            updated_at=isoformat_kst(),
+        )
+        payload = self._read_settings() or {}
+        payload["web"] = settings.to_record()
         self._write_settings(payload)
         return settings
 
@@ -546,6 +576,27 @@ def _discord_scopes_from_record(record: dict[str, Any]) -> DiscordScopeSettings:
         public_profile_default=public_profile_default,
         updated_at=_optional_str(record.get("updated_at")),
     )
+
+
+def _web_settings_from_record(record: dict[str, Any]) -> WebSettings:
+    return WebSettings(
+        local_web_base_url=_normalize_optional_url(record.get("local_web_base_url")),
+        updated_at=_optional_str(record.get("updated_at")),
+    )
+
+
+def _normalize_optional_url(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise LocalSettingsError("local_web_base_url must be a string.")
+
+    stripped = value.strip().rstrip("/")
+    if not stripped:
+        return None
+    if not (stripped.startswith("http://") or stripped.startswith("https://")):
+        raise LocalSettingsError("local_web_base_url must start with http:// or https://.")
+    return stripped
 
 
 def _reject_forbidden_secret_keys(value: Any) -> None:

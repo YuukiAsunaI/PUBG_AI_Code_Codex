@@ -95,6 +95,34 @@ class AppConfigTests(unittest.TestCase):
             self.assertEqual(config.collector_cycle_player_limit, 75)
             self.assertEqual(config.player_lookup_chunk_size, 5)
 
+    def test_local_program_web_settings_override_env_link(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            settings_file = base_dir / "config" / "local_settings.json"
+            store = LocalSettingsStore(settings_file, base_dir=base_dir)
+            store.save_web_settings("https://local.example:8000/")
+
+            config = AppConfig.from_sources(
+                {
+                    "PUBG_LOCAL_WEB_BASE_URL": "http://env.example:8000",
+                    "PUBG_LOCAL_SETTINGS_FILE": str(settings_file),
+                },
+                base_dir=base_dir,
+            )
+
+            self.assertEqual(config.local_web_base_url, "https://local.example:8000")
+
+            store.save_web_settings(None)
+            disabled = AppConfig.from_sources(
+                {
+                    "PUBG_LOCAL_WEB_BASE_URL": "http://env.example:8000",
+                    "PUBG_LOCAL_SETTINGS_FILE": str(settings_file),
+                },
+                base_dir=base_dir,
+            )
+
+            self.assertIsNone(disabled.local_web_base_url)
+
 
 class RawPayloadStoreTests(unittest.TestCase):
     def test_write_match_json_to_configured_root(self) -> None:
@@ -258,6 +286,24 @@ class LocalSettingsStoreTests(unittest.TestCase):
             self.assertEqual(saved.guild_ranking_scopes["guild-1"], "guild")
             self.assertEqual(saved.guild_ranking_scopes["guild-2"], "global")
             self.assertTrue(loaded.public_profile_default)
+
+    def test_web_settings_can_be_saved_by_program(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store = LocalSettingsStore(Path(temp_dir) / "config" / "local_settings.json")
+            saved = store.save_web_settings("http://127.0.0.1:8000/")
+            loaded = store.load_web_settings()
+
+            self.assertEqual(saved.local_web_base_url, "http://127.0.0.1:8000")
+            self.assertIsNotNone(loaded)
+            assert loaded is not None
+            self.assertEqual(loaded.local_web_base_url, "http://127.0.0.1:8000")
+
+    def test_web_settings_reject_invalid_url(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store = LocalSettingsStore(Path(temp_dir) / "config" / "local_settings.json")
+
+            with self.assertRaises(LocalSettingsError):
+                store.save_web_settings("ftp://127.0.0.1:8000")
 
     def test_local_settings_reject_secret_keys(self) -> None:
         with TemporaryDirectory() as temp_dir:

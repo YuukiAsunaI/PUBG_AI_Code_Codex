@@ -100,9 +100,15 @@ class DiscordGlobalAdminRequest(BaseModel):
     user_id: str = Field(min_length=1)
 
 
+class WebSettingsRequest(BaseModel):
+    local_web_base_url: str | None = None
+
+
 def create_app() -> Any:
-    config = RuntimeConfig.from_sources(base_dir=Path.cwd())
-    permission_manager = DiscordPermissionManager(_local_settings_store(Path.cwd()))
+    base_dir = Path.cwd()
+    config = RuntimeConfig.from_sources(base_dir=base_dir)
+    settings_store = _local_settings_store(base_dir)
+    permission_manager = DiscordPermissionManager(settings_store)
     app = FastAPI(
         title="PUBG AI Local Manager",
         version="0.1.0",
@@ -128,21 +134,17 @@ def create_app() -> Any:
 
     @app.get("/settings/status")
     def settings_status() -> dict[str, Any]:
+        return _settings_status_record(RuntimeConfig.from_sources(base_dir=base_dir))
+
+    @app.post("/settings/web")
+    def save_web_settings(request: WebSettingsRequest) -> dict[str, Any]:
+        try:
+            web_settings = settings_store.save_web_settings(request.local_web_base_url)
+        except LocalSettingsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
-            "raw_data_dir": str(config.app.raw_data_dir),
-            "replay_data_dir": str(config.app.replay_data_dir),
-            "local_web_base_url": config.app.local_web_base_url,
-            "raw_compression": config.app.raw_compression,
-            "collector": {
-                "poll_interval_seconds": config.app.collector_poll_interval_seconds,
-                "cycle_player_limit": config.app.collector_cycle_player_limit,
-                "player_lookup_chunk_size": config.app.player_lookup_chunk_size,
-            },
-            "database": config.database.safe_record(),
-            "secrets": {
-                key: status.to_record()
-                for key, status in config.secrets.status().items()
-            },
+            "web": web_settings.to_record(),
+            "settings": _settings_status_record(RuntimeConfig.from_sources(base_dir=base_dir)),
         }
 
     @app.get("/discord/permissions")
@@ -654,6 +656,25 @@ def _json_ready(value: Any) -> Any:
     return value
 
 
+def _settings_status_record(config: RuntimeConfig) -> dict[str, Any]:
+    return {
+        "raw_data_dir": str(config.app.raw_data_dir),
+        "replay_data_dir": str(config.app.replay_data_dir),
+        "local_web_base_url": config.app.local_web_base_url,
+        "raw_compression": config.app.raw_compression,
+        "collector": {
+            "poll_interval_seconds": config.app.collector_poll_interval_seconds,
+            "cycle_player_limit": config.app.collector_cycle_player_limit,
+            "player_lookup_chunk_size": config.app.player_lookup_chunk_size,
+        },
+        "database": config.database.safe_record(),
+        "secrets": {
+            key: status.to_record()
+            for key, status in config.secrets.status().items()
+        },
+    }
+
+
 def _local_settings_store(base_dir: Path) -> LocalSettingsStore:
     values = load_dotenv_values(base_dir / ".env")
     merged = dict(values)
@@ -840,6 +861,16 @@ _INDEX_HTML = """<!doctype html>
     <section>
       <h2>상태</h2>
       <div class="grid" id="statusGrid"></div>
+    </section>
+    <section>
+      <h2>Local Web Link</h2>
+      <form id="webSettingsForm">
+        <label>Base URL
+          <input name="local_web_base_url" autocomplete="off" placeholder="http://127.0.0.1:8000">
+        </label>
+        <button type="submit">Save</button>
+      </form>
+      <div class="status" id="webSettingsStatus" style="margin-top: 12px;">Waiting</div>
     </section>
     <section>
       <h2>Discord 권한</h2>
@@ -1199,6 +1230,8 @@ _INDEX_HTML = """<!doctype html>
     const replayArtifactsBody = document.querySelector("#replayArtifactsBody");
     const discordPermissionsBody = document.querySelector("#discordPermissionsBody");
     const discordPermissionGroup = document.querySelector("#discordPermissionGroup");
+    const webSettingsForm = document.querySelector("#webSettingsForm");
+    const webSettingsStatus = document.querySelector("#webSettingsStatus");
     const banner = document.querySelector("#banner");
     const timelineSelect = document.querySelector("#timelineSelect");
     const timelineSpeed = document.querySelector("#timelineSpeed");
@@ -1268,6 +1301,10 @@ _INDEX_HTML = """<!doctype html>
         cell("주기당 대상", `${settings.collector.cycle_player_limit}명`),
         cell("조회 chunk", `${settings.collector.player_lookup_chunk_size}명`),
       ].join("");
+      webSettingsForm.elements.local_web_base_url.value = settings.local_web_base_url || "";
+      webSettingsStatus.textContent = settings.local_web_base_url
+        ? `Enabled: ${settings.local_web_base_url}`
+        : "Disabled";
     }
 
     async function loadDiscordPermissions() {
@@ -2569,6 +2606,19 @@ _INDEX_HTML = """<!doctype html>
       return response.json();
     }
 
+    async function saveWebSettings(event) {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const localWebBaseUrl = String(form.get("local_web_base_url") || "").trim();
+      const payload = await postJson("/settings/web", {
+        local_web_base_url: localWebBaseUrl || null,
+      });
+      webSettingsStatus.textContent = payload.web.local_web_base_url
+        ? `Saved: ${payload.web.local_web_base_url}`
+        : "Saved: disabled";
+      await loadStatus();
+    }
+
     async function revokeDiscordPermission(userId, group, guildId) {
       await postJson("/discord/permissions/revoke", {
         user_id: userId,
@@ -2690,6 +2740,17 @@ _INDEX_HTML = """<!doctype html>
       } catch (error) {
         rankingBody.textContent = `오류: ${error.message}`;
         banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    webSettingsForm.addEventListener("submit", async (event) => {
+      try {
+        await saveWebSettings(event);
+        banner.textContent = "Local web link settings saved";
+      } catch (error) {
+        event.preventDefault();
+        webSettingsStatus.textContent = `Error: ${error.message}`;
+        banner.textContent = `Error: ${error.message}`;
       }
     });
 
