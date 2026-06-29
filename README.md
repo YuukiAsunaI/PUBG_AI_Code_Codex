@@ -72,6 +72,8 @@ The first executable slice is now available:
   telemetry job/combat/item processing
 - browser UI for raw/replay storage paths, raw compression, collector limits, Discord permission grants, guild ranking
   scopes, public profile defaults, and local evidence-link base URL settings
+- automatic collector loop from CLI or the local manager for player refresh, match-detail storage, and telemetry
+  download cycles
 
 Install dependencies:
 
@@ -171,6 +173,13 @@ Download queued telemetry JSON files and store them under `PUBG_RAW_DATA_DIR`:
 
 ```powershell
 python -m pubg_ai.cli process-telemetry-jobs --limit 5
+```
+
+Run the completed-match collector loop. This repeats player refresh, match-detail jobs, and telemetry-download jobs
+using the saved polling interval, cycle player limit, and player lookup chunk size:
+
+```powershell
+python -m pubg_ai.cli run-collector --shard steam --match-job-limit 10 --telemetry-job-limit 5
 ```
 
 Parse raw telemetry into registered-player combat summaries and weapon stats:
@@ -308,3 +317,6 @@ http://127.0.0.1:8000
 
 The web app refuses non-localhost bind hosts by default. Do not run it with `0.0.0.0` unless a future authenticated
 remote-access mode is intentionally added.
+
+The local manager's `Collector Settings` section can also start or stop the in-process automatic collector. It stops
+when the local web server stops; use the CLI `run-collector` command for a separate long-running collector process.

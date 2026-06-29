@@ -348,8 +348,10 @@ Completed slices:
     limit, and player lookup chunk size, with live storage write/free-space status in the settings panel.
 32. Local manager can save Discord guild ranking scope overrides and the default `public_profile` value for new
     registrations, and ranking queries apply a guild's `global` override immediately.
+33. Automatic collector worker can run player refresh, queued match-detail storage, and queued telemetry download
+    cycles from the CLI or local manager, using the saved polling interval, player limit, and lookup chunk size.
 
 Next slice:
 
-1. Add an automatic collector worker loop that uses the saved polling interval, cycle player limit, and lookup chunk
-   size without requiring manual UI button clicks.
+1. Extend automation past raw collection by adding a post-processing worker for telemetry combat/item/movement parsing,
+   loadout snapshots, map snapshots, and replay timeline generation.

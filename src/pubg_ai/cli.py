@@ -4,8 +4,10 @@ import argparse
 import json
 import os
 from pathlib import Path
+from time import sleep
 from typing import Any, Callable
 
+from pubg_ai.collector_worker import CollectorWorkerOptions, run_collector_cycle
 from pubg_ai.config import RuntimeConfig, load_dotenv_values
 from pubg_ai.database import connect_mysql, count_tables, initialize_database
 from pubg_ai.discord_bot import DEFAULT_DISCORD_PREFIX, run_discord_bot
@@ -167,6 +169,15 @@ def main(argv: list[str] | None = None) -> int:
     web_parser = subparsers.add_parser("run-web", help="Run the local management web app.")
     web_parser.add_argument("--host", default="127.0.0.1", help="Bind host. Defaults to localhost only.")
     web_parser.add_argument("--port", default=8000, type=int, help="Bind port.")
+
+    collector_parser = subparsers.add_parser(
+        "run-collector",
+        help="Run the automatic completed-match collector loop.",
+    )
+    collector_parser.add_argument("--shard", default=None, help="Optional shard filter, for example steam.")
+    collector_parser.add_argument("--match-job-limit", default=10, type=int)
+    collector_parser.add_argument("--telemetry-job-limit", default=5, type=int)
+    collector_parser.add_argument("--once", action="store_true", help="Run one collector cycle and exit.")
 
     discord_parser = subparsers.add_parser("run-discord-bot", help="Run the Discord bot.")
     discord_parser.add_argument("--prefix", default=DEFAULT_DISCORD_PREFIX, help="Text command prefix.")
@@ -502,6 +513,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "run-web":
         _run_web_app(host=args.host, port=args.port, base_dir=base_dir, env_file=args.env_file)
         return 0
+
+    if args.command == "run-collector":
+        options = CollectorWorkerOptions(
+            shard=args.shard,
+            match_job_limit=args.match_job_limit,
+            telemetry_job_limit=args.telemetry_job_limit,
+        )
+        while True:
+            current = RuntimeConfig.from_sources(base_dir=base_dir, env_file=args.env_file)
+            result = run_collector_cycle(current, options=options)
+            _print_json({"cycle": result.to_record()})
+            if args.once:
+                return 0
+            try:
+                sleep(max(60, min(current.app.collector_poll_interval_seconds, 300)))
+            except KeyboardInterrupt:
+                return 0
 
     if args.command == "run-discord-bot":
         if not config.secrets.discord_bot_token:

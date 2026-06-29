@@ -25,6 +25,9 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn("/settings/collector", body)
         self.assertIn("saveStorageSettings", body)
         self.assertIn("saveCollectorSettings", body)
+        self.assertIn('id="collectorWorkerForm"', body)
+        self.assertIn("/collector/worker/start", body)
+        self.assertIn("/collector/worker/status", body)
         self.assertIn('id="discordScopeForm"', body)
         self.assertIn('id="publicProfileDefaultForm"', body)
         self.assertIn('id="discordScopesBody"', body)
@@ -115,6 +118,29 @@ class WebSettingsTests(unittest.TestCase):
             self.assertEqual(status.json()["collector"]["poll_interval_seconds"], 90)
             self.assertEqual(status.json()["collector"]["cycle_player_limit"], 50)
             self.assertEqual(status.json()["collector"]["player_lookup_chunk_size"], 5)
+
+    def test_collector_worker_status_defaults_to_stopped(self) -> None:
+        client = TestClient(create_app())
+        response = client.get("/collector/worker/status")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["worker"]
+        self.assertFalse(payload["running"])
+        self.assertFalse(payload["stop_requested"])
+        self.assertEqual(payload["cycle_count"], 0)
+
+    def test_collector_worker_start_requires_pubg_key(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            settings_file = Path(temp_dir) / "config" / "local_settings.json"
+            with patch.dict(os.environ, {"PUBG_LOCAL_SETTINGS_FILE": str(settings_file), "PUBG_API_KEY": ""}):
+                client = TestClient(create_app())
+                response = client.post(
+                    "/collector/worker/start",
+                    json={"match_job_limit": 10, "telemetry_job_limit": 5},
+                )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json()["detail"], "PUBG_API_KEY is not configured.")
 
     def test_discord_scope_settings_endpoint_updates_local_settings_file(self) -> None:
         with TemporaryDirectory() as temp_dir:

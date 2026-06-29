@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import os
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field
 
+from pubg_ai.collector_worker import CollectorWorkerController, CollectorWorkerError, CollectorWorkerOptions
 from pubg_ai.config import RuntimeConfig, load_dotenv_values
 from pubg_ai.database import connect_mysql, count_tables
 from pubg_ai.discord_permission_manager import DiscordPermissionManager
@@ -121,6 +123,12 @@ class CollectorSettingsRequest(BaseModel):
     player_lookup_chunk_size: int = Field(ge=1, le=10)
 
 
+class CollectorWorkerStartRequest(BaseModel):
+    shard: str | None = None
+    match_job_limit: int = Field(default=10, ge=1, le=500)
+    telemetry_job_limit: int = Field(default=5, ge=1, le=200)
+
+
 def create_app() -> Any:
     base_dir = Path.cwd()
     config = RuntimeConfig.from_sources(base_dir=base_dir)
@@ -129,11 +137,21 @@ def create_app() -> Any:
 
     def current_config() -> RuntimeConfig:
         return RuntimeConfig.from_sources(base_dir=base_dir)
+    collector_worker = CollectorWorkerController(config_loader=current_config)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> Any:
+        try:
+            yield
+        finally:
+            collector_worker.stop()
+
     app = FastAPI(
         title="PUBG AI Local Manager",
         version="0.1.0",
         docs_url="/docs",
         redoc_url=None,
+        lifespan=lifespan,
     )
 
     @app.get("/", response_class=HTMLResponse)
@@ -201,6 +219,31 @@ def create_app() -> Any:
             "collector": collector_settings.to_record(),
             "settings": _settings_status_record(current_config()),
         }
+
+    @app.get("/collector/worker/status")
+    def collector_worker_status() -> dict[str, Any]:
+        return {"worker": collector_worker.status().to_record()}
+
+    @app.post("/collector/worker/start")
+    def start_collector_worker(request: CollectorWorkerStartRequest) -> dict[str, Any]:
+        runtime_config = current_config()
+        if not runtime_config.secrets.pubg_api_key:
+            raise HTTPException(status_code=500, detail="PUBG_API_KEY is not configured.")
+        try:
+            state = collector_worker.start(
+                CollectorWorkerOptions(
+                    shard=request.shard.strip() if isinstance(request.shard, str) and request.shard.strip() else None,
+                    match_job_limit=request.match_job_limit,
+                    telemetry_job_limit=request.telemetry_job_limit,
+                )
+            )
+        except CollectorWorkerError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"worker": state.to_record()}
+
+    @app.post("/collector/worker/stop")
+    def stop_collector_worker() -> dict[str, Any]:
+        return {"worker": collector_worker.stop().to_record()}
 
     @app.get("/discord/permissions")
     def discord_permissions() -> dict[str, Any]:
@@ -1009,6 +1052,26 @@ _INDEX_HTML = """<!doctype html>
         <button type="submit">Save</button>
       </form>
       <div class="status" id="collectorSettingsStatus" style="margin-top: 12px;">Waiting</div>
+      <form id="collectorWorkerForm" style="margin-top: 10px;">
+        <label>Shard
+          <select name="shard">
+            <option value="">all</option>
+            <option value="steam">steam</option>
+            <option value="kakao">kakao</option>
+            <option value="psn">psn</option>
+            <option value="xbox">xbox</option>
+          </select>
+        </label>
+        <label>Match jobs
+          <input name="match_job_limit" type="number" min="1" max="500" value="10" required>
+        </label>
+        <label>Telemetry jobs
+          <input name="telemetry_job_limit" type="number" min="1" max="200" value="5" required>
+        </label>
+        <button type="submit">Start auto</button>
+        <button class="secondary" type="button" id="collectorWorkerStop">Stop</button>
+      </form>
+      <div class="status" id="collectorWorkerStatus" style="margin-top: 12px;">Auto collector stopped</div>
     </section>
     <section>
       <h2>Local Web Link</h2>
@@ -1420,6 +1483,9 @@ _INDEX_HTML = """<!doctype html>
     const storageSettingsStatus = document.querySelector("#storageSettingsStatus");
     const collectorSettingsForm = document.querySelector("#collectorSettingsForm");
     const collectorSettingsStatus = document.querySelector("#collectorSettingsStatus");
+    const collectorWorkerForm = document.querySelector("#collectorWorkerForm");
+    const collectorWorkerStop = document.querySelector("#collectorWorkerStop");
+    const collectorWorkerStatus = document.querySelector("#collectorWorkerStatus");
     const webSettingsForm = document.querySelector("#webSettingsForm");
     const webSettingsStatus = document.querySelector("#webSettingsStatus");
     const banner = document.querySelector("#banner");
@@ -2906,6 +2972,53 @@ _INDEX_HTML = """<!doctype html>
       await loadStatus();
     }
 
+    async function loadCollectorWorkerStatus() {
+      const payload = await fetch("/collector/worker/status").then((r) => r.json());
+      renderCollectorWorkerStatus(payload.worker);
+    }
+
+    function renderCollectorWorkerStatus(worker) {
+      if (!worker) {
+        collectorWorkerStatus.textContent = "Auto collector status unavailable";
+        return;
+      }
+      const state = worker.running
+        ? (worker.stop_requested ? "stopping" : "running")
+        : "stopped";
+      const lastCycle = worker.last_cycle;
+      const lastSummary = lastCycle
+        ? [
+            `last ${escapeHtml(lastCycle.finished_at_kst || "-")}`,
+            `new matches ${lastCycle.collection?.queued_match_jobs ?? "-"}`,
+            `stored matches ${lastCycle.match_jobs?.stored_matches ?? "-"}`,
+            `stored telemetry ${lastCycle.telemetry_jobs?.stored_telemetry ?? "-"}`,
+          ].join(" / ")
+        : "no cycle yet";
+      collectorWorkerStatus.textContent = [
+        `Auto collector ${state}`,
+        `cycles ${worker.cycle_count || 0}`,
+        worker.next_run_at_kst ? `next ${worker.next_run_at_kst}` : null,
+        worker.last_error ? `error ${worker.last_error}` : null,
+        lastSummary,
+      ].filter(Boolean).join(" / ");
+    }
+
+    async function startCollectorWorker(event) {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const payload = await postJson("/collector/worker/start", {
+        shard: String(form.get("shard") || "").trim() || null,
+        match_job_limit: Number(form.get("match_job_limit") || 10),
+        telemetry_job_limit: Number(form.get("telemetry_job_limit") || 5),
+      });
+      renderCollectorWorkerStatus(payload.worker);
+    }
+
+    async function stopCollectorWorker() {
+      const payload = await postJson("/collector/worker/stop", {});
+      renderCollectorWorkerStatus(payload.worker);
+    }
+
     async function saveWebSettings(event) {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
@@ -3062,6 +3175,27 @@ _INDEX_HTML = """<!doctype html>
       } catch (error) {
         event.preventDefault();
         collectorSettingsStatus.textContent = `Error: ${error.message}`;
+        banner.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    collectorWorkerForm.addEventListener("submit", async (event) => {
+      try {
+        await startCollectorWorker(event);
+        banner.textContent = "Auto collector started";
+      } catch (error) {
+        event.preventDefault();
+        collectorWorkerStatus.textContent = `Error: ${error.message}`;
+        banner.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    collectorWorkerStop.addEventListener("click", async () => {
+      try {
+        await stopCollectorWorker();
+        banner.textContent = "Auto collector stop requested";
+      } catch (error) {
+        collectorWorkerStatus.textContent = `Error: ${error.message}`;
         banner.textContent = `Error: ${error.message}`;
       }
     });
@@ -3232,9 +3366,10 @@ _INDEX_HTML = """<!doctype html>
     timelineZoom.addEventListener("change", renderReplayFrame);
 
     drawEmptyReplayCanvas();
-    Promise.all([loadStatus(), loadDiscordPermissions(), loadDiscordScopes(), loadPlayers(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
+    Promise.all([loadStatus(), loadDiscordPermissions(), loadDiscordScopes(), loadCollectorWorkerStatus(), loadPlayers(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
       .then(() => { banner.textContent = "localhost 전용 관리 화면"; })
       .catch((error) => { banner.textContent = `오류: ${error.message}`; });
+    setInterval(loadCollectorWorkerStatus, 10000);
   </script>
 </body>
 </html>

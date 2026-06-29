@@ -94,6 +94,7 @@ The current settings screen provides:
 - polling interval selector from 1 to 5 minutes
 - collection cycle player limit selector up to 100
 - player lookup chunk size selector up to the official player lookup limit
+- in-process automatic collector start/stop/status controls
 - Discord command group editor
 - Discord per-user permission grant editor
 - global admin editor

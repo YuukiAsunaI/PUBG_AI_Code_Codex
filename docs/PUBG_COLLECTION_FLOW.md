@@ -100,6 +100,10 @@ The current local runtime can also refresh active registered players and queue u
   used by collection refresh actions.
 - The local web settings panel can also save Discord guild ranking scopes and the default public/private profile
   value used for new registrations.
+- `python -m pubg_ai.cli run-collector` runs the automatic completed-match collector loop. Each cycle refreshes active
+  registered players, processes queued match-detail jobs, and downloads queued telemetry files.
+- The local web UI can start or stop the same collector loop inside the local web process and shows cycle count,
+  next run time, and the last cycle summary.
 
 Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 match IDs were discovered and queued.
 
