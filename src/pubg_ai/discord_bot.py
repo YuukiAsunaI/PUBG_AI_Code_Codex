@@ -7,7 +7,7 @@ from pubg_ai.config import RuntimeConfig
 from pubg_ai.database import connect_mysql
 from pubg_ai.discord_permissions import DiscordCommandIdentity, DiscordPermissionChecker
 from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry, RegisteredPlayer
-from pubg_ai.player_stats import PlayerProfileStats, PlayerStatsService, PlayerWeaponDetail
+from pubg_ai.player_stats import PlayerMatchDetail, PlayerProfileStats, PlayerStatsService, PlayerWeaponDetail
 from pubg_ai.pubg_client import PubgApiClient, PubgApiError
 from pubg_ai.replay_artifact_catalog import ReplayArtifactRecord, list_replay_artifacts
 from pubg_ai.replay_storage import ReplayArtifactStore, ReplayStorageError
@@ -106,6 +106,46 @@ def format_player_weapon_detail(detail: PlayerWeaponDetail) -> str:
     return "\n".join(lines)
 
 
+def format_player_match_detail(detail: PlayerMatchDetail) -> str:
+    rank = f"#{detail.win_place}" if detail.win_place is not None else "-"
+    total_players = _optional_number(detail.total_players)
+    human_players = _optional_number(detail.human_players)
+    bot_players = _optional_number(detail.bot_players)
+    result = "치킨" if detail.is_chicken else "치킨 아님"
+    lines = [
+        f"{detail.player.current_name} 매치 상세 ({detail.shard})",
+        f"- Match: {detail.match_id}",
+        f"- 맵/모드: {detail.map_name or '-'} / {detail.game_mode or '-'} / {detail.match_type or '-'}",
+        f"- 결과/등수: {result} / {rank}",
+        f"- 인원: 총 {total_players}명, 사람 {human_players}명, 봇 {bot_players}명",
+        f"- K/D/A/기절: {detail.kills}/{detail.deaths}/{detail.assists}/{detail.dbnos_caused}"
+        f" (당한 기절 {detail.dbnos_taken})",
+        f"- 딜/받은 딜: {_number(detail.damage_dealt, 1)} / {_number(detail.damage_taken, 1)}",
+        f"- 발사/명중/명중률: {detail.shots_fired}/{detail.shots_hit}/{_percent(detail.accuracy)}",
+        f"- 헤드샷 킬/기절: {detail.headshot_kills}/{detail.headshot_dbnos_caused}",
+        f"- 생존/이동/낙하: {_optional_minutes(detail.survival_seconds)} / "
+        f"{_optional_distance_km(detail.movement_distance_m)} / {_optional_distance_m(detail.landing_distance_m)}",
+    ]
+
+    if detail.weapons:
+        weapon_lines = []
+        for weapon in detail.weapons[:4]:
+            weapon_lines.append(
+                f"{weapon.weapon_name} {weapon.kills}킬/{weapon.dbnos}기절/"
+                f"{_number(weapon.damage_dealt, 0)}딜/{_percent(weapon.accuracy)}"
+            )
+        lines.append(f"- 사용 무기: {', '.join(weapon_lines)}")
+
+    hit_parts = _top_parts(detail.hit_parts)
+    if hit_parts:
+        lines.append(f"- 맞춘 부위: {hit_parts}")
+
+    if detail.replay_artifact:
+        lines.append(f"- 2D 스냅샷: 생성됨 (`!최근스냅샷 {detail.match_id}`)")
+
+    return "\n".join(lines)
+
+
 def create_discord_bot(
     *,
     config: RuntimeConfig,
@@ -155,6 +195,7 @@ def create_discord_bot(
                     f"- `{command_prefix}유저조회 [닉네임] [shard]`",
                     f"- `{command_prefix}전적 닉네임 [shard]`",
                     f"- `{command_prefix}무기 닉네임 무기명 [shard]`",
+                    f"- `{command_prefix}매치 match_id [닉네임|accountId] [shard]`",
                     f"- `{command_prefix}최근스냅샷 [match_id]`",
                     f"- `{command_prefix}유저삭제 steam 닉네임또는accountId`",
                 ]
@@ -255,6 +296,50 @@ def create_discord_bot(
             return
 
         await ctx.reply(format_player_weapon_detail(detail), mention_author=False)
+
+    @bot.command(name="매치", aliases=["pubg-match"])
+    async def player_match_command(
+        ctx: Any,
+        match_id: str | None = None,
+        name: str | None = None,
+        shard: str = "steam",
+    ) -> None:
+        if not await require_permission(ctx, "profile_read"):
+            return
+        if not match_id:
+            await ctx.reply(
+                f"사용법: `{command_prefix}매치 match_id [닉네임|accountId] [shard]`",
+                mention_author=False,
+            )
+            return
+
+        if name and shard == "steam" and name.lower() in {"steam", "kakao", "psn", "xbox", "console"}:
+            shard = name
+            name = None
+
+        guild_id = await require_scoped_guild(ctx)
+        if guild_id is None and not has_global_scope(ctx):
+            return
+        global_scope = has_global_scope(ctx)
+
+        connection = connect_mysql(config.database)
+        try:
+            detail = PlayerStatsService(connection).get_match_detail(
+                shard=shard,
+                match_id=match_id,
+                account_id=name if name and name.startswith("account.") else None,
+                name=None if not name or name.startswith("account.") else name,
+                guild_id=None if global_scope else guild_id,
+                global_scope=global_scope,
+            )
+        finally:
+            connection.close()
+
+        if detail is None:
+            await ctx.reply("조회 가능한 등록 유저의 매치 상세를 찾지 못했습니다.", mention_author=False)
+            return
+
+        await ctx.reply(format_player_match_detail(detail), mention_author=False)
 
     @bot.command(name="유저등록", aliases=["pubg-register"])
     async def register_player_command(ctx: Any, shard: str, nickname: str) -> None:
@@ -404,8 +489,24 @@ def _minutes(seconds: float) -> str:
     return f"{seconds / 60:.1f}분"
 
 
+def _optional_minutes(seconds: float | None) -> str:
+    return _minutes(seconds) if seconds is not None else "-"
+
+
 def _distance_km(meters: float) -> str:
     return f"{meters / 1000:.1f}km"
+
+
+def _optional_distance_km(meters: float | None) -> str:
+    return _distance_km(meters) if meters is not None else "-"
+
+
+def _optional_distance_m(meters: float | None) -> str:
+    return f"{meters:.0f}m" if meters is not None else "-"
+
+
+def _optional_number(value: int | None) -> str:
+    return str(value) if value is not None else "-"
 
 
 def _top_parts(parts: dict[str, int]) -> str:

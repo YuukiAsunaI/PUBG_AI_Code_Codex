@@ -7,6 +7,7 @@ import json
 
 from pubg_ai.code_translator import translate_code
 from pubg_ai.player_registry import RegisteredPlayer
+from pubg_ai.replay_artifact_catalog import ReplayArtifactRecord, list_replay_artifacts
 from pubg_ai.weapon_stats import normalize_weapon_code
 
 
@@ -154,6 +155,120 @@ class PlayerWeaponDetail:
 
 
 @dataclass(frozen=True)
+class PlayerMatchWeaponStats:
+    weapon_code: str
+    weapon_name: str
+    kills: int
+    assists: int
+    deaths: int
+    dbnos: int
+    dbnos_taken: int
+    damage_dealt: float
+    damage_taken: float
+    shots_fired: int
+    shots_hit: int
+    accuracy: float
+    headshot_kills: int
+    hit_parts: dict[str, int]
+    taken_hit_parts: dict[str, int]
+
+    def to_record(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class PlayerMatchDetail:
+    player: RegisteredPlayer
+    match_id: str
+    shard: str
+    map_name: str | None
+    game_mode: str | None
+    match_type: str | None
+    created_at_kst: datetime | None
+    duration_seconds: int | None
+    total_players: int | None
+    human_players: int | None
+    bot_players: int | None
+    roster_id: str | None
+    team_id: int | None
+    win_place: int | None
+    is_chicken: bool
+    death_type: str | None
+    kills: int
+    assists: int
+    deaths: int
+    dbnos_caused: int
+    dbnos_taken: int
+    finishes: int
+    finishes_taken: int
+    damage_dealt: float
+    damage_taken: float
+    shots_fired: int
+    shots_hit: int
+    hits_taken: int
+    accuracy: float
+    headshot_hits: int
+    headshot_hits_taken: int
+    headshot_kills: int
+    headshot_deaths: int
+    headshot_dbnos_caused: int
+    headshot_dbnos_taken: int
+    hit_parts: dict[str, int]
+    taken_hit_parts: dict[str, int]
+    survival_seconds: float | None
+    landing_distance_m: float | None
+    movement_distance_m: float | None
+    weapons: list[PlayerMatchWeaponStats]
+    replay_artifact: ReplayArtifactRecord | None
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "player": self.player.to_record(),
+            "match_id": self.match_id,
+            "shard": self.shard,
+            "map_name": self.map_name,
+            "game_mode": self.game_mode,
+            "match_type": self.match_type,
+            "created_at_kst": _datetime_record(self.created_at_kst),
+            "duration_seconds": self.duration_seconds,
+            "total_players": self.total_players,
+            "human_players": self.human_players,
+            "bot_players": self.bot_players,
+            "roster_id": self.roster_id,
+            "team_id": self.team_id,
+            "win_place": self.win_place,
+            "is_chicken": self.is_chicken,
+            "death_type": self.death_type,
+            "kills": self.kills,
+            "assists": self.assists,
+            "deaths": self.deaths,
+            "dbnos_caused": self.dbnos_caused,
+            "dbnos_taken": self.dbnos_taken,
+            "finishes": self.finishes,
+            "finishes_taken": self.finishes_taken,
+            "damage_dealt": self.damage_dealt,
+            "damage_taken": self.damage_taken,
+            "shots_fired": self.shots_fired,
+            "shots_hit": self.shots_hit,
+            "hits_taken": self.hits_taken,
+            "accuracy": self.accuracy,
+            "headshot_hits": self.headshot_hits,
+            "headshot_hits_taken": self.headshot_hits_taken,
+            "headshot_kills": self.headshot_kills,
+            "headshot_deaths": self.headshot_deaths,
+            "headshot_dbnos_caused": self.headshot_dbnos_caused,
+            "headshot_dbnos_taken": self.headshot_dbnos_taken,
+            "hit_parts": self.hit_parts,
+            "taken_hit_parts": self.taken_hit_parts,
+            "survival_seconds": self.survival_seconds,
+            "landing_distance_m": self.landing_distance_m,
+            "movement_distance_m": self.movement_distance_m,
+            "weapons": [weapon.to_record() for weapon in self.weapons],
+            "replay_artifact": self.replay_artifact.to_record() if self.replay_artifact else None,
+        }
+
+
+@dataclass(frozen=True)
 class PlayerProfileStats:
     player: RegisteredPlayer
     totals: PlayerCombatTotals
@@ -237,6 +352,96 @@ class PlayerStatsService:
             recent_limit=recent_limit,
         )
 
+    def get_match_detail(
+        self,
+        *,
+        shard: str,
+        match_id: str,
+        account_id: str | None = None,
+        name: str | None = None,
+        guild_id: str | None = None,
+        global_scope: bool = False,
+        weapon_limit: int = 8,
+    ) -> PlayerMatchDetail | None:
+        match_id = _required_text(match_id, "match_id")
+        if account_id or name:
+            player = self._get_player(
+                shard=shard,
+                account_id=account_id,
+                name=name,
+                guild_id=guild_id,
+                global_scope=global_scope,
+            )
+        else:
+            player = self._get_match_player(
+                shard=shard,
+                match_id=match_id,
+                guild_id=guild_id,
+                global_scope=global_scope,
+            )
+        if player is None:
+            return None
+
+        row = self._get_match_detail_row(player, match_id)
+        if row is None:
+            return None
+
+        shots_fired = _int(row.get("shots_fired"))
+        shots_hit = _int(row.get("shots_hit"))
+        win_place = _optional_int(row.get("win_place"))
+        artifacts = list_replay_artifacts(
+            self.connection,
+            limit=1,
+            artifact_type="map_snapshot",
+            match_id=match_id,
+            account_id=player.account_id,
+        )
+
+        return PlayerMatchDetail(
+            player=player,
+            match_id=str(row["match_id"]),
+            shard=str(row["shard"]),
+            map_name=row.get("map_name"),
+            game_mode=row.get("game_mode"),
+            match_type=row.get("match_type"),
+            created_at_kst=row.get("created_at_kst"),
+            duration_seconds=_optional_int(row.get("duration_seconds")),
+            total_players=_optional_int(row.get("total_players")),
+            human_players=_optional_int(row.get("human_players")),
+            bot_players=_optional_int(row.get("bot_players")),
+            roster_id=row.get("roster_id"),
+            team_id=_optional_int(row.get("team_id")),
+            win_place=win_place,
+            is_chicken=win_place == 1,
+            death_type=row.get("death_type"),
+            kills=_int(row.get("kills")),
+            assists=_int(row.get("assists")),
+            deaths=_int(row.get("deaths")),
+            dbnos_caused=_int(row.get("dbnos_caused")),
+            dbnos_taken=_int(row.get("dbnos_taken")),
+            finishes=_int(row.get("finishes")),
+            finishes_taken=_int(row.get("finishes_taken")),
+            damage_dealt=_float(row.get("damage_dealt")),
+            damage_taken=_float(row.get("damage_taken")),
+            shots_fired=shots_fired,
+            shots_hit=shots_hit,
+            hits_taken=_int(row.get("hits_taken")),
+            accuracy=_safe_divide(shots_hit, shots_fired),
+            headshot_hits=_int(row.get("headshot_hits")),
+            headshot_hits_taken=_int(row.get("headshot_hits_taken")),
+            headshot_kills=_int(row.get("headshot_kills")),
+            headshot_deaths=_int(row.get("headshot_deaths")),
+            headshot_dbnos_caused=_int(row.get("headshot_dbnos_caused")),
+            headshot_dbnos_taken=_int(row.get("headshot_dbnos_taken")),
+            hit_parts=_part_map(row.get("hit_parts")),
+            taken_hit_parts=_part_map(row.get("taken_hit_parts")),
+            survival_seconds=_survival_seconds_from_row(row),
+            landing_distance_m=_optional_float(row.get("landing_distance_m")),
+            movement_distance_m=_movement_distance_from_row(row),
+            weapons=self._get_match_weapons(player, match_id=match_id, limit=weapon_limit),
+            replay_artifact=artifacts[0] if artifacts else None,
+        )
+
     def _get_player(
         self,
         *,
@@ -277,6 +482,187 @@ class PlayerStatsService:
             cursor.execute(query, params)
             row = cursor.fetchone()
         return _player_from_row(row) if row else None
+
+    def _get_match_player(
+        self,
+        *,
+        shard: str,
+        match_id: str,
+        guild_id: str | None,
+        global_scope: bool,
+    ) -> RegisteredPlayer | None:
+        shard = _required_text(shard, "shard").lower()
+        conditions = ["matches.shard = %s", "summaries.match_id = %s"]
+        params: list[Any] = [shard, match_id]
+
+        if not global_scope:
+            if not guild_id:
+                return None
+            conditions.append("registered_players.registered_guild_id = %s")
+            params.append(guild_id)
+
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    registered_players.id,
+                    registered_players.account_id,
+                    registered_players.shard,
+                    registered_players.current_name,
+                    registered_players.active,
+                    registered_players.public_profile,
+                    registered_players.registered_by_discord_user_id,
+                    registered_players.registered_guild_id,
+                    registered_players.registered_channel_id
+                FROM player_match_combat_summaries summaries
+                INNER JOIN matches
+                    ON matches.match_id = summaries.match_id
+                INNER JOIN registered_players
+                    ON registered_players.account_id = summaries.account_id
+                   AND registered_players.shard = matches.shard
+                WHERE
+                """
+                + " AND ".join(conditions)
+                + """
+                ORDER BY registered_players.active DESC, registered_players.current_name ASC
+                LIMIT 1
+                """,
+                params,
+            )
+            row = cursor.fetchone()
+        return _player_from_row(row) if row else None
+
+    def _get_match_detail_row(self, player: RegisteredPlayer, match_id: str) -> dict[str, Any] | None:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    matches.match_id,
+                    matches.shard,
+                    matches.map_name,
+                    matches.game_mode,
+                    matches.match_type,
+                    matches.created_at_kst,
+                    matches.duration_seconds,
+                    matches.total_players,
+                    matches.human_players,
+                    matches.bot_players,
+                    participants.roster_id,
+                    participants.team_id,
+                    participants.win_place,
+                    participants.death_type,
+                    participants.raw_stats,
+                    summaries.shots_fired,
+                    summaries.shots_hit,
+                    summaries.hits_taken,
+                    summaries.damage_dealt,
+                    summaries.damage_taken,
+                    summaries.kills,
+                    summaries.assists,
+                    summaries.deaths,
+                    summaries.dbnos_caused,
+                    summaries.dbnos_taken,
+                    summaries.finishes,
+                    summaries.finishes_taken,
+                    summaries.headshot_hits,
+                    summaries.headshot_hits_taken,
+                    summaries.headshot_kills,
+                    summaries.headshot_deaths,
+                    summaries.headshot_dbnos_caused,
+                    summaries.headshot_dbnos_taken,
+                    summaries.hit_parts,
+                    summaries.taken_hit_parts,
+                    movement.landing_distance_m,
+                    movement.in_game_sampled_distance_m
+                FROM player_match_combat_summaries summaries
+                INNER JOIN matches
+                    ON matches.match_id = summaries.match_id
+                LEFT JOIN match_participants participants
+                    ON participants.match_id = summaries.match_id
+                   AND participants.account_id = summaries.account_id
+                LEFT JOIN player_movement_summaries movement
+                    ON movement.match_id = summaries.match_id
+                   AND movement.account_id = summaries.account_id
+                WHERE summaries.account_id = %s
+                  AND matches.shard = %s
+                  AND summaries.match_id = %s
+                LIMIT 1
+                """,
+                (player.account_id, player.shard, match_id),
+            )
+            row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def _get_match_weapons(
+        self,
+        player: RegisteredPlayer,
+        *,
+        match_id: str,
+        limit: int,
+    ) -> list[PlayerMatchWeaponStats]:
+        limit = max(1, min(int(limit), 20))
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    weapon_code,
+                    shots_fired,
+                    shots_hit,
+                    hits_taken,
+                    damage_dealt,
+                    damage_taken,
+                    kills,
+                    assists,
+                    deaths,
+                    dbnos,
+                    dbnos_taken,
+                    headshot_kills,
+                    hit_parts,
+                    taken_hit_parts
+                FROM player_weapon_match_stats
+                WHERE account_id = %s
+                  AND match_id = %s
+                  AND (
+                    shots_fired > 0
+                    OR damage_dealt > 0
+                    OR damage_taken > 0
+                    OR kills > 0
+                    OR assists > 0
+                    OR dbnos > 0
+                    OR dbnos_taken > 0
+                  )
+                ORDER BY kills DESC, damage_dealt DESC, shots_fired DESC, weapon_code ASC
+                LIMIT %s
+                """,
+                (player.account_id, match_id, limit),
+            )
+            rows = cursor.fetchall()
+
+        weapons: list[PlayerMatchWeaponStats] = []
+        for row in rows:
+            weapon_code = str(row["weapon_code"])
+            shots_fired = _int(row.get("shots_fired"))
+            shots_hit = _int(row.get("shots_hit"))
+            weapons.append(
+                PlayerMatchWeaponStats(
+                    weapon_code=weapon_code,
+                    weapon_name=translate_code(weapon_code, "damage_causer"),
+                    kills=_int(row.get("kills")),
+                    assists=_int(row.get("assists")),
+                    deaths=_int(row.get("deaths")),
+                    dbnos=_int(row.get("dbnos")),
+                    dbnos_taken=_int(row.get("dbnos_taken")),
+                    damage_dealt=_float(row.get("damage_dealt")),
+                    damage_taken=_float(row.get("damage_taken")),
+                    shots_fired=shots_fired,
+                    shots_hit=shots_hit,
+                    accuracy=_safe_divide(shots_hit, shots_fired),
+                    headshot_kills=_int(row.get("headshot_kills")),
+                    hit_parts=_part_map(row.get("hit_parts")),
+                    taken_hit_parts=_part_map(row.get("taken_hit_parts")),
+                )
+            )
+        return weapons
 
     def _get_totals(self, player: RegisteredPlayer) -> PlayerCombatTotals:
         with self.connection.cursor() as cursor:
@@ -651,12 +1037,26 @@ def _player_from_row(row: dict[str, Any]) -> RegisteredPlayer:
 
 
 def _survival_seconds_from_row(row: dict[str, Any]) -> float | None:
-    raw_stats = row.get("raw_stats")
-    if isinstance(raw_stats, dict):
-        survived = _optional_float(raw_stats.get("timeSurvived"))
-        if survived is not None:
-            return survived
+    raw_stats = _json_mapping(row.get("raw_stats"))
+    survived = _optional_float(raw_stats.get("timeSurvived"))
+    if survived is not None:
+        return survived
     return _optional_float(row.get("duration_seconds"))
+
+
+def _movement_distance_from_row(row: dict[str, Any]) -> float | None:
+    movement_distance = _optional_float(row.get("in_game_sampled_distance_m"))
+    if movement_distance is not None:
+        return movement_distance
+
+    raw_stats = _json_mapping(row.get("raw_stats"))
+    parts = [
+        _optional_float(raw_stats.get("walkDistance")),
+        _optional_float(raw_stats.get("rideDistance")),
+        _optional_float(raw_stats.get("swimDistance")),
+    ]
+    known_parts = [part for part in parts if part is not None]
+    return sum(known_parts) if known_parts else None
 
 
 def _datetime_record(value: datetime | None) -> str | None:
@@ -684,6 +1084,17 @@ def _part_map(value: Any) -> dict[str, int]:
         for key, count in value.items()
         if _int(count) > 0
     }
+
+
+def _json_mapping(value: Any) -> Mapping[str, Any]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+    if isinstance(value, Mapping):
+        return value
+    return {}
 
 
 def _normalize_weapon_text(value: str) -> str:

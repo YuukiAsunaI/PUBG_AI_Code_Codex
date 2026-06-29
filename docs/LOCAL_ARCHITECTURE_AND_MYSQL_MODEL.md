@@ -310,10 +310,11 @@ Completed slices:
 11. Local web and CLI management for Discord command-group grants and global admins.
 12. First player profile stats service and `전적` lookup command using parsed summary tables.
 13. Weapon-specific lookup service and `무기` command for per-weapon damage, accuracy, DBNO, and hit-part stats.
+14. Match detail lookup service and `매치` command for one completed match's map/mode/type, player/bot counts,
+    combat totals, weapon rows, movement/landing summary, and generated map snapshot status.
 
 Next slice:
 
-1. Discord match detail command.
-2. Ranking query services scoped by `guild_id`.
-3. 2D replay timeline artifact generation beyond static JPEG snapshots.
-4. Recommendation queries for weapons, attachments, maps, teammates, and drop locations.
+1. Ranking query services scoped by `guild_id`.
+2. 2D replay timeline artifact generation beyond static JPEG snapshots.
+3. Recommendation queries for weapons, attachments, maps, teammates, and drop locations.

@@ -246,6 +246,9 @@ The current Discord bot slice is intentionally small and reuses the same local M
   average survival/movement, top weapons, and recent match rows.
 - `!무기 닉네임 무기명 [shard]` resolves common names such as `M416` to PUBG weapon codes and returns weapon-specific
   usage matches, chickens, kills, assists, DBNOs, damage, accuracy, body-part hits, and recent weapon rows.
+- `!매치 match_id [닉네임|accountId] [shard]` reads one completed-match summary for a registered target, including
+  map/mode/type, chicken/non-chicken, total/human/bot player counts, kills, deaths, assists, caused/taken DBNOs,
+  damage, accuracy, survival/movement/landing distance, top weapons, hit parts, and generated 2D snapshot status.
 - `!유저삭제 steam 닉네임또는accountId` stops future collection by setting the registered target inactive.
 - `!최근스냅샷 [match_id]` sends the latest generated `map_snapshot` JPEG artifact, or the latest snapshot for the
   requested match ID.

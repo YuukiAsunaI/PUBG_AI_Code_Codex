@@ -6,6 +6,7 @@ import unittest
 from pubg_ai.discord_bot import (
     _player_visible_to_scope,
     format_player_list,
+    format_player_match_detail,
     format_player_profile_stats,
     format_player_weapon_detail,
     format_replay_artifact_summary,
@@ -13,6 +14,8 @@ from pubg_ai.discord_bot import (
 from pubg_ai.player_registry import RegisteredPlayer
 from pubg_ai.player_stats import (
     PlayerCombatTotals,
+    PlayerMatchDetail,
+    PlayerMatchWeaponStats,
     PlayerProfileStats,
     PlayerRecentMatch,
     PlayerWeaponDetail,
@@ -195,6 +198,108 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("23.0%", body)
         self.assertIn("몸통 140", body)
         self.assertIn("match-12 #1 4킬/3기절/520딜", body)
+
+    def test_match_detail_summary_formats_core_metrics(self) -> None:
+        artifact = ReplayArtifactRecord(
+            id=10,
+            match_id="match-123456789",
+            shard="steam",
+            artifact_type="map_snapshot",
+            artifact_name="player-route",
+            account_id="account.test",
+            player_name="Yuuki_Asuna---",
+            map_name="Erangel_Main",
+            game_mode="squad-fpp",
+            match_type="official",
+            match_created_at_kst=datetime(2026, 6, 29, 1, 0, 0),
+            storage_backend="local_file",
+            storage_root="PUBG_REPLAY_DATA_DIR",
+            relative_path="map_snapshot/steam/2026/06/29/match-123456789/player-route.jpg",
+            content_type="image/jpeg",
+            size_bytes=2048,
+            sha256="abc123",
+            renderer_version="test",
+            generated_at_kst=datetime(2026, 6, 29, 1, 3, 0),
+        )
+        detail = PlayerMatchDetail(
+            player=RegisteredPlayer(
+                id=1,
+                account_id="account.test",
+                shard="steam",
+                current_name="Yuuki_Asuna---",
+                active=True,
+                public_profile=True,
+            ),
+            match_id="match-123456789",
+            shard="steam",
+            map_name="Erangel_Main",
+            game_mode="squad-fpp",
+            match_type="official",
+            created_at_kst=datetime(2026, 6, 29, 1, 0, 0),
+            duration_seconds=1800,
+            total_players=100,
+            human_players=96,
+            bot_players=4,
+            roster_id="roster-1",
+            team_id=12,
+            win_place=2,
+            is_chicken=False,
+            death_type="byplayer",
+            kills=4,
+            assists=1,
+            deaths=1,
+            dbnos_caused=5,
+            dbnos_taken=1,
+            finishes=3,
+            finishes_taken=1,
+            damage_dealt=620.0,
+            damage_taken=310.0,
+            shots_fired=200,
+            shots_hit=50,
+            hits_taken=8,
+            accuracy=0.25,
+            headshot_hits=10,
+            headshot_hits_taken=2,
+            headshot_kills=2,
+            headshot_deaths=0,
+            headshot_dbnos_caused=2,
+            headshot_dbnos_taken=0,
+            hit_parts={"head": 10, "torso": 34},
+            taken_hit_parts={"arm": 3},
+            survival_seconds=1750.5,
+            landing_distance_m=760.0,
+            movement_distance_m=3500.0,
+            weapons=[
+                PlayerMatchWeaponStats(
+                    weapon_code="WeapHK416_C",
+                    weapon_name="M416",
+                    kills=3,
+                    assists=1,
+                    deaths=0,
+                    dbnos=4,
+                    dbnos_taken=1,
+                    damage_dealt=420.0,
+                    damage_taken=50.0,
+                    shots_fired=120,
+                    shots_hit=36,
+                    accuracy=0.3,
+                    headshot_kills=1,
+                    hit_parts={"head": 6},
+                    taken_hit_parts={"arm": 1},
+                )
+            ],
+            replay_artifact=artifact,
+        )
+
+        body = format_player_match_detail(detail)
+
+        self.assertIn("Yuuki_Asuna--- 매치 상세 (steam)", body)
+        self.assertIn("match-123456789", body)
+        self.assertIn("총 100명, 사람 96명, 봇 4명", body)
+        self.assertIn("4/1/1/5", body)
+        self.assertIn("200/50/25.0%", body)
+        self.assertIn("M416 3킬/4기절/420딜/30.0%", body)
+        self.assertIn("!최근스냅샷 match-123456789", body)
 
     def test_player_scope_visibility_requires_matching_guild_or_global_scope(self) -> None:
         player = RegisteredPlayer(

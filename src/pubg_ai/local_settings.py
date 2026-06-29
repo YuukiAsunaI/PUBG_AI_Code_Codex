@@ -98,6 +98,7 @@ DEFAULT_COMMAND_GROUPS: dict[str, list[str]] = {
         "유저조회",
         "전적",
         "무기",
+        "매치",
         "pubg-profile",
         "pubg-stats",
         "pubg-recent",

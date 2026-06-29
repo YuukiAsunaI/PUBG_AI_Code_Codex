@@ -242,6 +242,28 @@ def create_app() -> Any:
         finally:
             connection.close()
 
+    @app.get("/players/match")
+    def player_match(
+        match_id: str,
+        shard: str = "steam",
+        name: str | None = None,
+        account_id: str | None = None,
+    ) -> dict[str, Any]:
+        connection = connect_mysql(config.database)
+        try:
+            detail = PlayerStatsService(connection).get_match_detail(
+                shard=shard,
+                match_id=match_id,
+                account_id=account_id,
+                name=name,
+                global_scope=True,
+            )
+            if detail is None:
+                raise HTTPException(status_code=404, detail="registered player match detail not found.")
+            return {"match": detail.to_record()}
+        finally:
+            connection.close()
+
     @app.post("/players/register")
     def register_player(request: RegisterPlayerRequest) -> dict[str, Any]:
         connection = connect_mysql(config.database)
@@ -697,6 +719,25 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="weaponBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
     <section>
+      <h2>매치 조회</h2>
+      <form id="matchForm">
+        <label>플랫폼
+          <select name="shard">
+            <option value="steam">steam</option>
+            <option value="kakao">kakao</option>
+          </select>
+        </label>
+        <label>Match ID
+          <input name="match_id" autocomplete="off" required>
+        </label>
+        <label>닉네임 또는 Account ID
+          <input name="target" autocomplete="off" placeholder="비우면 등록 참가자 자동 선택">
+        </label>
+        <button type="submit">조회</button>
+      </form>
+      <div class="status" id="matchBody" style="margin-top: 12px;">조회 대기 중</div>
+    </section>
+    <section>
       <h2>Match 수집 큐</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="processMatchJobs()">상세 저장</button>
@@ -791,6 +832,7 @@ _INDEX_HTML = """<!doctype html>
     const playersBody = document.querySelector("#playersBody");
     const profileBody = document.querySelector("#profileBody");
     const weaponBody = document.querySelector("#weaponBody");
+    const matchBody = document.querySelector("#matchBody");
     const jobsBody = document.querySelector("#jobsBody");
     const telemetryJobsBody = document.querySelector("#telemetryJobsBody");
     const combatStatus = document.querySelector("#combatStatus");
@@ -975,8 +1017,56 @@ _INDEX_HTML = """<!doctype html>
       ].join("<br>");
     }
 
+    async function loadPlayerMatch(matchId, target, shard) {
+      const params = new URLSearchParams({ shard, match_id: matchId });
+      if (target) {
+        if (target.startsWith("account.")) {
+          params.set("account_id", target);
+        } else {
+          params.set("name", target);
+        }
+      }
+      const response = await fetch(`/players/match?${params.toString()}`);
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const payload = await response.json();
+      const detail = payload.match;
+      const weapons = (detail.weapons || []).slice(0, 4).map((weapon) => (
+        `${escapeHtml(weapon.weapon_name)} ${weapon.kills}킬/${weapon.dbnos}기절/${Number(weapon.damage_dealt).toFixed(0)}딜/${percent(weapon.accuracy)}`
+      )).join(", ") || "-";
+      const snapshot = detail.replay_artifact
+        ? `<a href="${detail.replay_artifact.view_url}" target="_blank" rel="noreferrer">2D 스냅샷 열기</a>`
+        : "-";
+      matchBody.innerHTML = [
+        `<strong>${escapeHtml(detail.player.current_name)} ${escapeHtml(detail.match_id)}</strong>`,
+        `맵/모드: ${escapeHtml(detail.map_name || "-")} / ${escapeHtml(detail.game_mode || "-")} / ${escapeHtml(detail.match_type || "-")}`,
+        `결과/등수: ${detail.is_chicken ? "치킨" : "치킨 아님"} / ${detail.win_place ? `#${detail.win_place}` : "-"}`,
+        `인원: 총 ${detail.total_players ?? "-"}명, 사람 ${detail.human_players ?? "-"}명, 봇 ${detail.bot_players ?? "-"}명`,
+        `K/D/A/기절: ${detail.kills}/${detail.deaths}/${detail.assists}/${detail.dbnos_caused} (당한 기절 ${detail.dbnos_taken})`,
+        `딜/받은 딜: ${Number(detail.damage_dealt).toFixed(1)} / ${Number(detail.damage_taken).toFixed(1)}`,
+        `발사/명중/명중률: ${detail.shots_fired}/${detail.shots_hit}/${percent(detail.accuracy)}`,
+        `생존/이동/낙하: ${minutes(detail.survival_seconds)} / ${distanceKm(detail.movement_distance_m)} / ${distanceM(detail.landing_distance_m)}`,
+        `사용 무기: ${weapons}`,
+        `2D 스냅샷: ${snapshot}`,
+      ].join("<br>");
+    }
+
     function percent(value) {
       return `${(Number(value || 0) * 100).toFixed(1)}%`;
+    }
+
+    function minutes(value) {
+      return value === null || value === undefined ? "-" : `${(Number(value) / 60).toFixed(1)}분`;
+    }
+
+    function distanceKm(value) {
+      return value === null || value === undefined ? "-" : `${(Number(value) / 1000).toFixed(1)}km`;
+    }
+
+    function distanceM(value) {
+      return value === null || value === undefined ? "-" : `${Number(value).toFixed(0)}m`;
     }
 
     async function loadJobs() {
@@ -1226,6 +1316,22 @@ _INDEX_HTML = """<!doctype html>
         banner.textContent = "무기 조회 완료";
       } catch (error) {
         weaponBody.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    document.querySelector("#matchForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      try {
+        await loadPlayerMatch(
+          String(form.get("match_id") || ""),
+          String(form.get("target") || ""),
+          String(form.get("shard") || "steam"),
+        );
+        banner.textContent = "매치 조회 완료";
+      } catch (error) {
+        matchBody.textContent = `오류: ${error.message}`;
         banner.textContent = `오류: ${error.message}`;
       }
     });

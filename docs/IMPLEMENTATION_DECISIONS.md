@@ -118,7 +118,7 @@ Suggested command groups:
 | Group | Examples |
 | --- | --- |
 | `register` | register player, update shard/name mapping |
-| `profile_read` | profile, recent matches, weapon stats |
+| `profile_read` | profile, recent matches, match details, weapon stats |
 | `ranking_read` | server ranking, map ranking, weapon ranking |
 | `replay_read` | replay link, replay summary |
 | `settings_write` | storage paths, polling interval, API settings |
