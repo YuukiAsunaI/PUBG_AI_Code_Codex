@@ -17,9 +17,13 @@ class WebReplayPlayerTests(unittest.TestCase):
         self.assertIn("2D Replay Player", body)
         self.assertIn('id="timelineSelect"', body)
         self.assertIn('id="timelineScrubber"', body)
+        self.assertIn('id="timelineEventList"', body)
+        self.assertIn('id="timelineEventDetail"', body)
         self.assertIn('id="replayCanvas"', body)
         self.assertIn("loadSelectedTimeline", body)
         self.assertIn("renderReplayFrame", body)
+        self.assertIn("timelineEvents", body)
+        self.assertIn("seekTimelineEvent", body)
 
 
 if __name__ == "__main__":

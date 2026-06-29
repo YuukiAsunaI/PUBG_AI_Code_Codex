@@ -732,6 +732,12 @@ _INDEX_HTML = """<!doctype html>
     .toggle-row input { width: auto; min-height: 0; }
     .timeline-range { display: grid; grid-template-columns: 1fr 110px; gap: 12px; align-items: center; margin: 12px 0; }
     #timelineScrubber { padding: 0; }
+    .replay-detail-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+      gap: 14px;
+      align-items: start;
+    }
     .replay-canvas-wrap {
       width: 100%;
       max-width: 960px;
@@ -741,11 +747,45 @@ _INDEX_HTML = """<!doctype html>
       overflow: hidden;
     }
     #replayCanvas { display: block; width: 100%; height: 100%; }
+    .timeline-event-panel {
+      display: grid;
+      gap: 10px;
+      min-width: 0;
+    }
+    .timeline-event-list {
+      display: grid;
+      gap: 6px;
+      max-height: 360px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+    .timeline-event-row {
+      display: grid;
+      grid-template-columns: 58px minmax(0, 1fr);
+      gap: 4px 8px;
+      align-items: center;
+      text-align: left;
+      min-height: 46px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--text);
+    }
+    .timeline-event-row span { color: var(--muted); font-size: 12px; }
+    .timeline-event-row strong { overflow-wrap: anywhere; }
+    .timeline-event-row em { grid-column: 2; color: var(--muted); font-size: 12px; font-style: normal; overflow-wrap: anywhere; }
+    .timeline-event-row.active { border-color: var(--accent); background: #eef7ff; }
+    .timeline-event-detail {
+      border-left: 3px solid var(--accent);
+      padding: 10px 12px;
+      background: #f8fafc;
+      min-height: 110px;
+    }
     @media (max-width: 900px) {
       .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       form { grid-template-columns: 1fr; }
       .player-controls { grid-template-columns: 1fr; }
       .timeline-range { grid-template-columns: 1fr; }
+      .replay-detail-layout { grid-template-columns: 1fr; }
       header { align-items: flex-start; flex-direction: column; }
     }
   </style>
@@ -1054,8 +1094,14 @@ _INDEX_HTML = """<!doctype html>
         <input id="timelineScrubber" type="range" min="0" max="0" value="0" step="0.1">
         <div class="status" id="timelineClock">0.0초</div>
       </div>
-      <div class="replay-canvas-wrap">
-        <canvas id="replayCanvas" width="960" height="960"></canvas>
+      <div class="replay-detail-layout">
+        <div class="replay-canvas-wrap">
+          <canvas id="replayCanvas" width="960" height="960"></canvas>
+        </div>
+        <div class="timeline-event-panel">
+          <div class="status" id="timelineEventDetail">이벤트 대기 중</div>
+          <div class="timeline-event-list" id="timelineEventList"></div>
+        </div>
       </div>
       <div class="status" id="replayPlayerStatus" style="margin-top: 12px;">대기 중</div>
     </section>
@@ -1106,6 +1152,8 @@ _INDEX_HTML = """<!doctype html>
     const timelineResetButton = document.querySelector("#timelineResetButton");
     const timelineScrubber = document.querySelector("#timelineScrubber");
     const timelineClock = document.querySelector("#timelineClock");
+    const timelineEventDetail = document.querySelector("#timelineEventDetail");
+    const timelineEventList = document.querySelector("#timelineEventList");
     const replayCanvas = document.querySelector("#replayCanvas");
     const replayPlayerStatus = document.querySelector("#replayPlayerStatus");
     const timelineShowPath = document.querySelector("#timelineShowPath");
@@ -1116,6 +1164,9 @@ _INDEX_HTML = """<!doctype html>
     let replayTimelineArtifacts = [];
     let activeTimeline = null;
     let activeTimelineArtifact = null;
+    let activeTimelineEvents = [];
+    let activeTimelineSelectedEventId = null;
+    let activeTimelineDetailKey = "";
     let activeTimelineDuration = 0;
     let activeTimelineTime = 0;
     let replayAnimationId = null;
@@ -1571,6 +1622,10 @@ _INDEX_HTML = """<!doctype html>
         pauseReplay();
         activeTimeline = null;
         activeTimelineArtifact = null;
+        activeTimelineEvents = [];
+        activeTimelineSelectedEventId = null;
+        renderTimelineEventList();
+        renderTimelineEventDetail(null);
         replayPlayerStatus.textContent = "timeline artifact가 없습니다.";
         drawEmptyReplayCanvas();
       }
@@ -1616,11 +1671,16 @@ _INDEX_HTML = """<!doctype html>
       });
       activeTimeline = payload;
       activeTimelineArtifact = artifact;
+      activeTimelineEvents = timelineEvents(payload);
+      activeTimelineSelectedEventId = null;
+      activeTimelineDetailKey = "";
       activeTimelineDuration = Math.max(1, timelineDuration(payload));
       activeTimelineTime = 0;
       timelineScrubber.max = String(activeTimelineDuration);
       timelineScrubber.value = "0";
       replayPlayerStatus.textContent = `${payload.player?.name || artifact.player_name || "unknown"} / ${payload.match?.map_name || "-"} / ${payload.match?.match_id || artifact.match_id}`;
+      renderTimelineEventList();
+      renderTimelineEventDetail(null);
       renderReplayFrame();
     }
 
@@ -1642,6 +1702,145 @@ _INDEX_HTML = """<!doctype html>
       return Number.isFinite(t) ? t : 0;
     }
 
+    function timelineEvents(timeline) {
+      const events = [];
+      let sequence = 0;
+      const add = (category, source, label, meta) => {
+        const time = eventTime(source);
+        if (!Number.isFinite(time)) return;
+        events.push({
+          id: `${category}-${sequence}-${source?.event_index ?? "x"}`,
+          sequence,
+          category,
+          time,
+          event_index: Number(source?.event_index ?? 0),
+          label,
+          meta,
+          source,
+        });
+        sequence += 1;
+      };
+
+      for (const event of timeline.landings || []) {
+        add("landing", event, "Landing", `${distanceM(event.distance_m)} from plane`);
+      }
+      for (const event of timeline.combat_events || []) {
+        const action = combatActionLabel(event.action);
+        const weapon = event.damage_causer_label || event.damage_causer_name || "-";
+        const suffix = event.is_headshot ? " / HS" : "";
+        add("combat", event, `${action}${suffix}`, `${weapon} / ${distanceM(event.distance_m)}`);
+      }
+      for (const event of timeline.care_packages || []) {
+        const label = event.event_type === "LogCarePackageLand" ? "Care package landed" : "Care package spawned";
+        add("care", event, label, `${event.item_count || 0} items`);
+      }
+
+      return events.sort((left, right) => (
+        left.time - right.time
+        || left.event_index - right.event_index
+        || left.sequence - right.sequence
+      ));
+    }
+
+    function combatActionLabel(action) {
+      const labels = {
+        dbno_caused: "DBNO caused",
+        dbno_taken: "DBNO taken",
+        kill: "Kill",
+        death: "Death",
+        finish: "Finish",
+        finished_taken: "Finished taken",
+      };
+      return labels[action] || action || "Combat";
+    }
+
+    function formatReplayTime(value) {
+      const seconds = Math.max(0, Number(value || 0));
+      const minutes = Math.floor(seconds / 60);
+      const rest = seconds - minutes * 60;
+      return `${minutes}:${rest.toFixed(1).padStart(4, "0")}`;
+    }
+
+    function renderTimelineEventList() {
+      if (!timelineEventList) return;
+      if (!activeTimelineEvents.length) {
+        timelineEventList.innerHTML = `<div class="status">표시할 timeline 이벤트가 없습니다.</div>`;
+        return;
+      }
+      timelineEventList.innerHTML = activeTimelineEvents.slice(0, 250).map((event) => `
+        <button class="timeline-event-row ${event.id === activeTimelineSelectedEventId ? "active" : ""}" type="button" data-timeline-event="${attr(event.id)}">
+          <span>${formatReplayTime(event.time)}</span>
+          <strong>${escapeHtml(event.label)}</strong>
+          <em>${escapeHtml(event.meta || "")}</em>
+        </button>
+      `).join("");
+    }
+
+    function renderTimelineEventDetail(event) {
+      if (!timelineEventDetail) return;
+      const selected = event || selectedTimelineEvent();
+      const nearest = selected || nearestTimelineEvent(activeTimelineTime, 2.5);
+      const key = nearest ? `${nearest.id}:${activeTimelineSelectedEventId || ""}:${activeTimelineTime.toFixed(1)}` : `empty:${activeTimelineEvents.length}`;
+      if (key === activeTimelineDetailKey) return;
+      activeTimelineDetailKey = key;
+
+      if (!nearest) {
+        timelineEventDetail.className = "timeline-event-detail status";
+        timelineEventDetail.innerHTML = activeTimelineEvents.length
+          ? `이벤트를 선택하거나 재생 시점이 이벤트에 가까워지면 상세가 표시됩니다.`
+          : `이 timeline에는 상세 이벤트가 없습니다.`;
+        return;
+      }
+
+      const source = nearest.source || {};
+      const detailLines = [
+        `<strong>${escapeHtml(nearest.label)}</strong>`,
+        `time ${formatReplayTime(nearest.time)} / index ${nearest.event_index || "-"}`,
+      ];
+      if (nearest.category === "combat") {
+        detailLines.push(`weapon ${escapeHtml(source.damage_causer_label || source.damage_causer_name || "-")}`);
+        detailLines.push(`reason ${escapeHtml(source.damage_reason || "-")} / distance ${distanceM(source.distance_m)}`);
+        if (source.related_account_id) detailLines.push(`related ${escapeHtml(source.related_account_id)}`);
+      } else if (nearest.category === "care") {
+        detailLines.push(`type ${escapeHtml(source.event_type || "-")} / items ${source.item_count || 0}`);
+        const itemCodes = (source.item_codes || []).slice(0, 8).join(", ");
+        if (itemCodes) detailLines.push(`items ${escapeHtml(itemCodes)}`);
+      } else if (nearest.category === "landing") {
+        detailLines.push(`landing distance ${distanceM(source.distance_m)}`);
+      }
+      if (source.event_at_kst) detailLines.push(`KST ${escapeHtml(source.event_at_kst)}`);
+      timelineEventDetail.className = "timeline-event-detail";
+      timelineEventDetail.innerHTML = detailLines.join("<br>");
+    }
+
+    function selectedTimelineEvent() {
+      return activeTimelineEvents.find((event) => event.id === activeTimelineSelectedEventId) || null;
+    }
+
+    function nearestTimelineEvent(time, windowSeconds) {
+      let best = null;
+      let bestDelta = Infinity;
+      for (const event of activeTimelineEvents) {
+        const delta = Math.abs(event.time - time);
+        if (delta <= windowSeconds && delta < bestDelta) {
+          best = event;
+          bestDelta = delta;
+        }
+      }
+      return best;
+    }
+
+    function seekTimelineEvent(eventId) {
+      const event = activeTimelineEvents.find((item) => item.id === eventId);
+      if (!event) return;
+      pauseReplay();
+      activeTimelineSelectedEventId = event.id;
+      activeTimelineTime = Math.max(0, Math.min(activeTimelineDuration, event.time));
+      renderTimelineEventList();
+      renderTimelineEventDetail(event);
+      renderReplayFrame();
+    }
+
     function renderReplayFrame() {
       if (!activeTimeline || !replayCtx) {
         drawEmptyReplayCanvas();
@@ -1658,8 +1857,10 @@ _INDEX_HTML = """<!doctype html>
       if (timelineShowPath.checked) drawReplayPath(activeTimeline.positions || []);
       drawReplayLandings(activeTimeline.landings || []);
       if (timelineShowCombat.checked) drawReplayCombatEvents(activeTimeline.combat_events || []);
+      drawReplaySelectedEvent();
       drawReplayPlayer(activeTimeline.positions || []);
       drawReplayOverlay();
+      renderTimelineEventDetail(null);
       timelineClock.textContent = `${activeTimelineTime.toFixed(1)}초`;
       timelineScrubber.value = String(activeTimelineTime);
     }
@@ -1758,6 +1959,23 @@ _INDEX_HTML = """<!doctype html>
           drawCircle(point, 9, "#202020", "#ef5350");
         }
       }
+    }
+
+    function drawReplaySelectedEvent() {
+      const selected = selectedTimelineEvent();
+      const mapPoint = selected?.source?.map;
+      if (!mapPoint) return;
+      const point = canvasPoint(mapPoint);
+      replayCtx.strokeStyle = "rgba(255,255,255,0.95)";
+      replayCtx.lineWidth = 3;
+      replayCtx.beginPath();
+      replayCtx.arc(point.x, point.y, 18, 0, Math.PI * 2);
+      replayCtx.stroke();
+      replayCtx.strokeStyle = "rgba(22,119,199,0.95)";
+      replayCtx.lineWidth = 2;
+      replayCtx.beginPath();
+      replayCtx.arc(point.x, point.y, 24, 0, Math.PI * 2);
+      replayCtx.stroke();
     }
 
     function drawReplayPlayer(samples) {
@@ -1866,6 +2084,9 @@ _INDEX_HTML = """<!doctype html>
     function resetReplay() {
       pauseReplay();
       activeTimelineTime = 0;
+      activeTimelineSelectedEventId = null;
+      renderTimelineEventList();
+      renderTimelineEventDetail(null);
       renderReplayFrame();
     }
 
@@ -2249,8 +2470,17 @@ _INDEX_HTML = """<!doctype html>
     timelinePlayButton.addEventListener("click", toggleReplayPlayback);
     timelineResetButton.addEventListener("click", resetReplay);
     timelineScrubber.addEventListener("input", () => {
+      activeTimelineSelectedEventId = null;
       activeTimelineTime = Number(timelineScrubber.value || 0);
+      renderTimelineEventList();
       renderReplayFrame();
+    });
+    timelineEventList.addEventListener("click", (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("button[data-timeline-event]")
+        : null;
+      if (!button) return;
+      seekTimelineEvent(button.dataset.timelineEvent || "");
     });
     for (const toggle of [timelineShowPath, timelineShowCombat, timelineShowCare, timelineShowPlane]) {
       toggle.addEventListener("change", renderReplayFrame);

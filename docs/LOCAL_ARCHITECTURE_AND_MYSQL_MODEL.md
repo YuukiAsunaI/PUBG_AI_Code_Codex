@@ -326,9 +326,10 @@ Completed slices:
     attachment state at kill, DBNO-caused, and finish moments.
 21. Recommendation evidence detail lookup in CLI and local web UI, showing the supporting kill, DBNO-caused, and
     finish snapshots behind one weapon+attachment recommendation.
+22. 2D replay event list and detail panel with click-to-seek behavior for landing, combat, and care-package events.
 
 Next slice:
 
-1. Richer 2D replay playback features such as team overlays, minimap assets, and event detail panels.
+1. Richer 2D replay playback features such as team overlays and minimap/map-image backgrounds in the canvas player.
 2. Add weapon+attachment evidence links from Discord recommendation responses where a local web URL can be shared
    safely.
