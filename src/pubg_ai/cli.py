@@ -513,6 +513,7 @@ def main(argv: list[str] | None = None) -> int:
         run_discord_bot(
             config=config,
             permission_checker=permission_checker,
+            scope_settings_store=settings_store,
             command_prefix=args.prefix,
         )
         return 0

@@ -35,7 +35,7 @@ class RegisterPlayerRequest(BaseModel):
     account_id: str | None = None
     shard: str = Field(default="steam", min_length=1)
     current_name: str = Field(min_length=1)
-    public_profile: bool = True
+    public_profile: bool | None = None
     discord_user_id: str | None = None
     guild_id: str | None = None
     channel_id: str | None = None
@@ -98,6 +98,11 @@ class DiscordPermissionGrantRequest(BaseModel):
 
 class DiscordGlobalAdminRequest(BaseModel):
     user_id: str = Field(min_length=1)
+
+
+class DiscordScopeSettingsRequest(BaseModel):
+    guild_ranking_scopes: dict[str, str] = Field(default_factory=dict)
+    public_profile_default: bool = True
 
 
 class WebSettingsRequest(BaseModel):
@@ -239,6 +244,24 @@ def create_app() -> Any:
             return permission_manager.remove_global_admin(request.user_id).to_record()
         except LocalSettingsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/discord/scopes")
+    def discord_scopes() -> dict[str, Any]:
+        try:
+            return {"discord_scopes": settings_store.load_discord_scope_settings().to_record()}
+        except LocalSettingsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/discord/scopes")
+    def save_discord_scopes(request: DiscordScopeSettingsRequest) -> dict[str, Any]:
+        try:
+            settings = settings_store.save_discord_scope_settings(
+                guild_ranking_scopes=request.guild_ranking_scopes,
+                public_profile_default=request.public_profile_default,
+            )
+        except LocalSettingsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"discord_scopes": settings.to_record()}
 
     @app.get("/database/status")
     def database_status() -> dict[str, Any]:
@@ -402,11 +425,12 @@ def create_app() -> Any:
     ) -> dict[str, Any]:
         connection = connect_mysql(config.database)
         try:
+            global_scope = _ranking_global_scope(settings_store, guild_id)
             ranking = PlayerRankingService(connection).get_player_ranking(
                 shard=shard,
                 metric=metric,
-                guild_id=guild_id,
-                global_scope=guild_id is None,
+                guild_id=None if global_scope else guild_id,
+                global_scope=global_scope,
                 active_only=active_only,
                 min_matches=min_matches,
                 limit=limit,
@@ -418,6 +442,11 @@ def create_app() -> Any:
     @app.post("/players/register")
     def register_player(request: RegisterPlayerRequest) -> dict[str, Any]:
         runtime_config = current_config()
+        public_profile = (
+            request.public_profile
+            if request.public_profile is not None
+            else _public_profile_default(settings_store)
+        )
         connection = connect_mysql(config.database)
         try:
             context = DiscordCommandContext(
@@ -431,7 +460,7 @@ def create_app() -> Any:
                     account_id=request.account_id,
                     shard=request.shard,
                     current_name=request.current_name,
-                    public_profile=request.public_profile,
+                    public_profile=public_profile,
                     context=context,
                 )
             else:
@@ -442,7 +471,7 @@ def create_app() -> Any:
                         pubg_client=PubgApiClient(runtime_config.secrets.pubg_api_key),
                         shard=request.shard,
                         player_name=request.current_name,
-                        public_profile=request.public_profile,
+                        public_profile=public_profile,
                         context=context,
                     )
                 except PubgApiError as exc:
@@ -741,6 +770,24 @@ def _settings_status_record(config: RuntimeConfig) -> dict[str, Any]:
     }
 
 
+def _ranking_global_scope(settings_store: LocalSettingsStore, guild_id: str | None) -> bool:
+    if guild_id is None:
+        return True
+    try:
+        settings = settings_store.load_discord_scope_settings()
+    except LocalSettingsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return settings.guild_ranking_scopes.get(guild_id) == "global"
+
+
+def _public_profile_default(settings_store: LocalSettingsStore) -> bool:
+    try:
+        settings = settings_store.load_discord_scope_settings()
+    except LocalSettingsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return settings.public_profile_default
+
+
 def _local_settings_store(base_dir: Path) -> LocalSettingsStore:
     values = load_dotenv_values(base_dir / ".env")
     merged = dict(values)
@@ -1003,6 +1050,40 @@ _INDEX_HTML = """<!doctype html>
           </tr>
         </thead>
         <tbody id="discordPermissionsBody"></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Discord Scope Settings</h2>
+      <form id="discordScopeForm">
+        <label>Guild ID
+          <input name="guild_id" autocomplete="off" required>
+        </label>
+        <label>Ranking scope
+          <select name="scope">
+            <option value="guild">guild</option>
+            <option value="global">global</option>
+          </select>
+        </label>
+        <button type="submit">Save</button>
+      </form>
+      <form id="publicProfileDefaultForm" style="margin-top: 10px;">
+        <label>Public profile default
+          <select name="public_profile_default">
+            <option value="true">public</option>
+            <option value="false">private</option>
+          </select>
+        </label>
+        <button type="submit">Save</button>
+      </form>
+      <table style="margin-top: 12px;">
+        <thead>
+          <tr>
+            <th>Guild ID</th>
+            <th>Ranking scope</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="discordScopesBody"></tbody>
       </table>
     </section>
     <section>
@@ -1331,6 +1412,10 @@ _INDEX_HTML = """<!doctype html>
     const replayArtifactsBody = document.querySelector("#replayArtifactsBody");
     const discordPermissionsBody = document.querySelector("#discordPermissionsBody");
     const discordPermissionGroup = document.querySelector("#discordPermissionGroup");
+    const discordScopeForm = document.querySelector("#discordScopeForm");
+    const publicProfileDefaultForm = document.querySelector("#publicProfileDefaultForm");
+    const discordScopesBody = document.querySelector("#discordScopesBody");
+    const registerForm = document.querySelector("#registerForm");
     const storageSettingsForm = document.querySelector("#storageSettingsForm");
     const storageSettingsStatus = document.querySelector("#storageSettingsStatus");
     const collectorSettingsForm = document.querySelector("#collectorSettingsForm");
@@ -1373,6 +1458,11 @@ _INDEX_HTML = """<!doctype html>
     let replayPlaying = false;
     let activeRecommendationTarget = "";
     let activeRecommendationShard = "steam";
+    let activeDiscordScopes = {
+      guild_ranking_scopes: {},
+      public_profile_default: true,
+      updated_at: null,
+    };
 
     function cell(label, value) {
       return `<div class="kv"><span>${label}</span><strong>${value}</strong></div>`;
@@ -1497,6 +1587,57 @@ _INDEX_HTML = """<!doctype html>
           </td>
         </tr>
       `).join("") || `<tr><td colspan="4">등록된 권한이 없습니다.</td></tr>`;
+    }
+
+    async function loadDiscordScopes() {
+      const payload = await fetch("/discord/scopes").then((r) => r.json());
+      activeDiscordScopes = payload.discord_scopes || {
+        guild_ranking_scopes: {},
+        public_profile_default: true,
+        updated_at: null,
+      };
+      if (!activeDiscordScopes.guild_ranking_scopes) {
+        activeDiscordScopes.guild_ranking_scopes = {};
+      }
+      renderDiscordScopes();
+      applyPublicProfileDefault();
+    }
+
+    function renderDiscordScopes() {
+      const entries = Object.entries(activeDiscordScopes.guild_ranking_scopes || {})
+        .sort(([left], [right]) => left.localeCompare(right));
+      discordScopesBody.innerHTML = entries.map(([guildId, scope]) => `
+        <tr>
+          <td>${escapeHtml(guildId)}</td>
+          <td>${escapeHtml(scope)}</td>
+          <td>
+            <div class="actions">
+              <button
+                class="danger"
+                type="button"
+                data-discord-scope-action="remove"
+                data-guild-id="${attr(guildId)}"
+              >Remove</button>
+            </div>
+          </td>
+        </tr>
+      `).join("") || `<tr><td colspan="3">No guild scope overrides.</td></tr>`;
+    }
+
+    function applyPublicProfileDefault() {
+      const value = String(activeDiscordScopes.public_profile_default !== false);
+      publicProfileDefaultForm.elements.public_profile_default.value = value;
+      registerForm.elements.public_profile.value = value;
+    }
+
+    async function saveDiscordScopes(nextScopes) {
+      const payload = await postJson("/discord/scopes", {
+        guild_ranking_scopes: nextScopes.guild_ranking_scopes || {},
+        public_profile_default: nextScopes.public_profile_default !== false,
+      });
+      activeDiscordScopes = payload.discord_scopes;
+      renderDiscordScopes();
+      applyPublicProfileDefault();
     }
 
     async function loadPlayers() {
@@ -2792,7 +2933,7 @@ _INDEX_HTML = """<!doctype html>
       await loadDiscordPermissions();
     }
 
-    document.querySelector("#registerForm").addEventListener("submit", async (event) => {
+    registerForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
       await fetch("/players/register", {
@@ -2806,6 +2947,7 @@ _INDEX_HTML = """<!doctype html>
         }),
       });
       event.currentTarget.reset();
+      applyPublicProfileDefault();
       await loadPlayers();
     });
 
@@ -2965,6 +3107,64 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
+    discordScopeForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const guildId = String(form.get("guild_id") || "").trim();
+      const scope = String(form.get("scope") || "guild");
+      if (!guildId) {
+        banner.textContent = "Guild ID is required.";
+        return;
+      }
+      try {
+        await saveDiscordScopes({
+          guild_ranking_scopes: {
+            ...(activeDiscordScopes.guild_ranking_scopes || {}),
+            [guildId]: scope,
+          },
+          public_profile_default: activeDiscordScopes.public_profile_default !== false,
+        });
+        event.currentTarget.reset();
+        banner.textContent = "Discord scope settings saved.";
+      } catch (error) {
+        banner.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    publicProfileDefaultForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      try {
+        await saveDiscordScopes({
+          guild_ranking_scopes: activeDiscordScopes.guild_ranking_scopes || {},
+          public_profile_default: form.get("public_profile_default") === "true",
+        });
+        banner.textContent = "Public profile default saved.";
+      } catch (error) {
+        banner.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    discordScopesBody.addEventListener("click", async (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("button[data-discord-scope-action]")
+        : null;
+      if (!button) return;
+
+      const guildId = button.dataset.guildId || "";
+      const nextGuildScopes = { ...(activeDiscordScopes.guild_ranking_scopes || {}) };
+      delete nextGuildScopes[guildId];
+      try {
+        await saveDiscordScopes({
+          guild_ranking_scopes: nextGuildScopes,
+          public_profile_default: activeDiscordScopes.public_profile_default !== false,
+        });
+        banner.textContent = "Discord scope removed.";
+      } catch (error) {
+        banner.textContent = `Error: ${error.message}`;
+      }
+    });
+
     discordPermissionsBody.addEventListener("click", async (event) => {
       const button = event.target instanceof Element
         ? event.target.closest("button[data-discord-action]")
@@ -3032,7 +3232,7 @@ _INDEX_HTML = """<!doctype html>
     timelineZoom.addEventListener("change", renderReplayFrame);
 
     drawEmptyReplayCanvas();
-    Promise.all([loadStatus(), loadDiscordPermissions(), loadPlayers(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
+    Promise.all([loadStatus(), loadDiscordPermissions(), loadDiscordScopes(), loadPlayers(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
       .then(() => { banner.textContent = "localhost 전용 관리 화면"; })
       .catch((error) => { banner.textContent = `오류: ${error.message}`; });
   </script>

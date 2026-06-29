@@ -98,6 +98,8 @@ The current local runtime can also refresh active registered players and queue u
 - The local web UI has a `최근 매치 수집` button and a `Match 수집 큐` table.
 - The local web settings panel can save the polling interval, per-cycle player limit, and player lookup chunk size
   used by collection refresh actions.
+- The local web settings panel can also save Discord guild ranking scopes and the default public/private profile
+  value used for new registrations.
 
 Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 match IDs were discovered and queued.
 

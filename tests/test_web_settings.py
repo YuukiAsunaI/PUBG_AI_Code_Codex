@@ -25,6 +25,10 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn("/settings/collector", body)
         self.assertIn("saveStorageSettings", body)
         self.assertIn("saveCollectorSettings", body)
+        self.assertIn('id="discordScopeForm"', body)
+        self.assertIn('id="publicProfileDefaultForm"', body)
+        self.assertIn('id="discordScopesBody"', body)
+        self.assertIn("/discord/scopes", body)
 
     def test_web_settings_endpoint_updates_local_settings_file(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -111,6 +115,57 @@ class WebSettingsTests(unittest.TestCase):
             self.assertEqual(status.json()["collector"]["poll_interval_seconds"], 90)
             self.assertEqual(status.json()["collector"]["cycle_player_limit"], 50)
             self.assertEqual(status.json()["collector"]["player_lookup_chunk_size"], 5)
+
+    def test_discord_scope_settings_endpoint_updates_local_settings_file(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            settings_file = Path(temp_dir) / "config" / "local_settings.json"
+            with patch.dict(os.environ, {"PUBG_LOCAL_SETTINGS_FILE": str(settings_file)}):
+                client = TestClient(create_app())
+                default_response = client.get("/discord/scopes")
+                response = client.post(
+                    "/discord/scopes",
+                    json={
+                        "guild_ranking_scopes": {
+                            "guild-1": "guild",
+                            "guild-2": "global",
+                        },
+                        "public_profile_default": False,
+                    },
+                )
+                loaded_response = client.get("/discord/scopes")
+
+            self.assertEqual(default_response.status_code, 200)
+            self.assertEqual(default_response.json()["discord_scopes"]["guild_ranking_scopes"], {})
+            self.assertTrue(default_response.json()["discord_scopes"]["public_profile_default"])
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()["discord_scopes"]
+            self.assertEqual(payload["guild_ranking_scopes"]["guild-1"], "guild")
+            self.assertEqual(payload["guild_ranking_scopes"]["guild-2"], "global")
+            self.assertFalse(payload["public_profile_default"])
+            self.assertEqual(loaded_response.json()["discord_scopes"], payload)
+
+            stored = json.loads(settings_file.read_text(encoding="utf-8"))
+            self.assertEqual(stored["discord_scopes"]["guild_ranking_scopes"]["guild-2"], "global")
+            self.assertFalse(stored["discord_scopes"]["public_profile_default"])
+            self.assertNotIn("PUBG_API_KEY", str(stored))
+            self.assertNotIn("DISCORD_BOT_TOKEN", str(stored))
+
+    def test_discord_scope_settings_endpoint_rejects_invalid_scope(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            settings_file = Path(temp_dir) / "config" / "local_settings.json"
+            with patch.dict(os.environ, {"PUBG_LOCAL_SETTINGS_FILE": str(settings_file)}):
+                client = TestClient(create_app())
+                response = client.post(
+                    "/discord/scopes",
+                    json={
+                        "guild_ranking_scopes": {"guild-1": "public"},
+                        "public_profile_default": True,
+                    },
+                )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(settings_file.exists())
 
 
 if __name__ == "__main__":

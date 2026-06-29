@@ -346,7 +346,10 @@ Completed slices:
     save, clear, and display it without touching `.env` secrets.
 31. Local manager can save raw/replay storage roots, raw compression, collector poll interval, collection-cycle player
     limit, and player lookup chunk size, with live storage write/free-space status in the settings panel.
+32. Local manager can save Discord guild ranking scope overrides and the default `public_profile` value for new
+    registrations, and ranking queries apply a guild's `global` override immediately.
 
 Next slice:
 
-1. Add local settings UI support for Discord guild ranking scopes and the public profile default.
+1. Add an automatic collector worker loop that uses the saved polling interval, cycle player limit, and lookup chunk
+   size without requiring manual UI button clicks.

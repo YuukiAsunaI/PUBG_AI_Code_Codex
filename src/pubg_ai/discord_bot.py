@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 from pubg_ai.config import RuntimeConfig
 from pubg_ai.database import connect_mysql
 from pubg_ai.discord_permissions import DiscordCommandIdentity, DiscordPermissionChecker
+from pubg_ai.local_settings import LocalSettingsError, LocalSettingsStore
 from pubg_ai.player_rankings import PlayerRanking, PlayerRankingService
 from pubg_ai.player_recommendations import PlayerRecommendationReport, PlayerRecommendationService
 from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry, RegisteredPlayer
@@ -241,6 +242,7 @@ def create_discord_bot(
     *,
     config: RuntimeConfig,
     permission_checker: DiscordPermissionChecker,
+    scope_settings_store: LocalSettingsStore | None = None,
     command_prefix: str = DEFAULT_DISCORD_PREFIX,
 ) -> Any:
     import discord
@@ -258,6 +260,25 @@ def create_discord_bot(
 
     def has_global_scope(ctx: Any) -> bool:
         return permission_checker.is_global_admin(identity_for(ctx))
+
+    def guild_ranking_scope(ctx: Any) -> str:
+        guild_id = guild_id_for(ctx)
+        if guild_id is None or scope_settings_store is None:
+            return "guild"
+        try:
+            settings = scope_settings_store.load_discord_scope_settings()
+        except LocalSettingsError:
+            return "guild"
+        return settings.guild_ranking_scopes.get(guild_id, "guild")
+
+    def public_profile_default() -> bool:
+        if scope_settings_store is None:
+            return True
+        try:
+            settings = scope_settings_store.load_discord_scope_settings()
+        except LocalSettingsError:
+            return True
+        return settings.public_profile_default
 
     async def require_permission(ctx: Any, command_group: str) -> bool:
         if permission_checker.is_allowed(identity_for(ctx), command_group):
@@ -499,7 +520,11 @@ def create_discord_bot(
             await ctx.reply("전체 랭킹은 글로벌 관리자만 조회할 수 있습니다.", mention_author=False)
             return
 
-        global_scope = global_requested or (guild_id is None and has_global_scope(ctx))
+        global_scope = (
+            global_requested
+            or (guild_id is None and has_global_scope(ctx))
+            or (guild_id is not None and guild_ranking_scope(ctx) == "global")
+        )
         ranking_guild_id = None if global_scope else guild_id
 
         connection = connect_mysql(config.database)
@@ -531,6 +556,7 @@ def create_discord_bot(
                     pubg_client=PubgApiClient(config.secrets.pubg_api_key),
                     shard=shard,
                     player_name=nickname,
+                    public_profile=public_profile_default(),
                     context=DiscordCommandContext(
                         user_id=str(ctx.author.id),
                         guild_id=str(ctx.guild.id) if ctx.guild else None,
@@ -627,6 +653,7 @@ def run_discord_bot(
     *,
     config: RuntimeConfig,
     permission_checker: DiscordPermissionChecker,
+    scope_settings_store: LocalSettingsStore | None = None,
     command_prefix: str = DEFAULT_DISCORD_PREFIX,
 ) -> None:
     if not config.secrets.discord_bot_token:
@@ -635,6 +662,7 @@ def run_discord_bot(
     bot = create_discord_bot(
         config=config,
         permission_checker=permission_checker,
+        scope_settings_store=scope_settings_store,
         command_prefix=command_prefix,
     )
     bot.run(config.secrets.discord_bot_token)

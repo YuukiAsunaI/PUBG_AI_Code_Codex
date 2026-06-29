@@ -97,13 +97,10 @@ The current settings screen provides:
 - Discord command group editor
 - Discord per-user permission grant editor
 - global admin editor
-- free disk space display for each path
-- warning when a configured drive is disconnected
-
-Still planned:
-
 - Discord guild-specific ranking scope editor
 - public profile default editor
+- free disk space display for each path
+- warning when a configured drive is disconnected
 
 Discord permission settings can also be changed from the CLI:
 

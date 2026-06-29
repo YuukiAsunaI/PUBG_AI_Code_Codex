@@ -70,8 +70,8 @@ The first executable slice is now available:
 - localhost-only FastAPI management app
 - browser UI for status, user registration, user lookup, collection stop/delete action, match job processing, and
   telemetry job/combat/item processing
-- browser UI for raw/replay storage paths, raw compression, collector limits, Discord permission grants, and local
-  evidence-link base URL settings
+- browser UI for raw/replay storage paths, raw compression, collector limits, Discord permission grants, guild ranking
+  scopes, public profile defaults, and local evidence-link base URL settings
 
 Install dependencies:
 
