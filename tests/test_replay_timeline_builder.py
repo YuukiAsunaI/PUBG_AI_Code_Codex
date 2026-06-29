@@ -162,6 +162,38 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
                         "is_self": 0,
                     },
                 ],
+                [
+                    {
+                        "event_index": 12,
+                        "event_at_kst": datetime(2026, 6, 28, 9, 14, 5),
+                        "common_is_game": 0.2,
+                        "elapsed_time_seconds": 48.0,
+                        "num_alive_players": 98,
+                        "x": 101000.0,
+                        "y": 201000.0,
+                        "z": 2800.0,
+                        "is_in_vehicle": 0,
+                        "is_in_blue_zone": 0,
+                        "is_in_red_zone": 0,
+                        "in_special_zone": None,
+                        "is_dbno": 0,
+                    },
+                    {
+                        "event_index": 22,
+                        "event_at_kst": datetime(2026, 6, 28, 9, 15, 5),
+                        "common_is_game": 1.0,
+                        "elapsed_time_seconds": 108.0,
+                        "num_alive_players": 96,
+                        "x": 121000.0,
+                        "y": 221000.0,
+                        "z": 0.0,
+                        "is_in_vehicle": 0,
+                        "is_in_blue_zone": 0,
+                        "is_in_red_zone": 0,
+                        "in_special_zone": None,
+                        "is_dbno": 0,
+                    },
+                ],
             ]
         )
 
@@ -184,11 +216,19 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
         self.assertEqual(payload["team"]["member_count"], 2)
         self.assertEqual(payload["team"]["registered_member_count"], 2)
         self.assertEqual(payload["team"]["registered_teammate_count"], 1)
+        self.assertEqual(payload["team"]["track_count"], 1)
+        self.assertEqual(payload["team"]["position_sample_count"], 4)
         self.assertTrue(payload["team"]["members"][0]["is_self"])
+        self.assertEqual(payload["team"]["members"][0]["position_sample_count"], 2)
         self.assertEqual(payload["team"]["members"][1]["name"], "TrackedMate")
+        self.assertEqual(payload["team"]["members"][1]["position_sample_count"], 2)
         self.assertEqual(payload["counts"]["positions"], 2)
+        self.assertEqual(payload["counts"]["team_tracks"], 1)
+        self.assertEqual(payload["counts"]["team_position_samples"], 2)
         self.assertEqual(payload["counts"]["combat_events"], 1)
         self.assertEqual(payload["positions"][0]["map"]["x_pct"], 100000.0 / 816000.0)
+        self.assertEqual(payload["team_tracks"][0]["name"], "TrackedMate")
+        self.assertEqual(payload["team_tracks"][0]["positions"][0]["map"]["x_pct"], 101000.0 / 816000.0)
         self.assertEqual(payload["combat_events"][0]["damage_causer_label"], "M416")
         self.assertEqual(payload["combat_events"][0]["related_name"], "EnemyRegistered")
         self.assertTrue(payload["combat_events"][0]["related_registered"])

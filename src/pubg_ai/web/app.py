@@ -1129,6 +1129,7 @@ _INDEX_HTML = """<!doctype html>
         <label><input type="checkbox" id="timelineShowCombat" checked>전투</label>
         <label><input type="checkbox" id="timelineShowCare" checked>보급</label>
         <label><input type="checkbox" id="timelineShowPlane" checked>비행기</label>
+        <label><input type="checkbox" id="timelineShowTeam" checked>팀원</label>
       </div>
       <div class="timeline-range">
         <input id="timelineScrubber" type="range" min="0" max="0" value="0" step="0.1">
@@ -1202,6 +1203,7 @@ _INDEX_HTML = """<!doctype html>
     const timelineShowCombat = document.querySelector("#timelineShowCombat");
     const timelineShowCare = document.querySelector("#timelineShowCare");
     const timelineShowPlane = document.querySelector("#timelineShowPlane");
+    const timelineShowTeam = document.querySelector("#timelineShowTeam");
     const replayCtx = replayCanvas.getContext("2d");
     let replayTimelineArtifacts = [];
     let activeTimeline = null;
@@ -1839,10 +1841,12 @@ _INDEX_HTML = """<!doctype html>
         if (member.is_self) badges.push("self");
         if (member.registered && !member.is_self) badges.push("registered");
         if (member.is_ai_or_bot) badges.push("bot");
+        if (member.position_sample_count > 0 && !member.is_self) badges.push("route");
         const stats = [
           `K ${Number(member.kills || 0)}`,
           `A ${Number(member.assists || 0)}`,
           `DMG ${Number(member.damage_dealt || 0).toFixed(0)}`,
+          member.position_sample_count > 0 ? `Route ${Number(member.position_sample_count || 0)}` : "",
           member.win_place ? `#${member.win_place}` : "",
         ].filter(Boolean).join(" / ");
         return `
@@ -1966,6 +1970,7 @@ _INDEX_HTML = """<!doctype html>
       if (timelineShowPlane.checked) drawReplayPlaneRoute(activeTimeline.plane_route);
       if (timelineShowCare.checked) drawReplayCarePackages(activeTimeline.care_packages || []);
       if (timelineShowPath.checked) drawReplayPath(activeTimeline.positions || []);
+      if (timelineShowTeam.checked) drawReplayTeamTracks(activeTimeline.team_tracks || []);
       drawReplayLandings(activeTimeline.landings || []);
       if (timelineShowCombat.checked) drawReplayCombatEvents(activeTimeline.combat_events || []);
       drawReplaySelectedEvent();
@@ -2036,6 +2041,34 @@ _INDEX_HTML = """<!doctype html>
         else replayCtx.lineTo(point.x, point.y);
       });
       replayCtx.stroke();
+    }
+
+    function drawReplayTeamTracks(tracks) {
+      tracks.forEach((track, index) => {
+        const samples = track.positions || [];
+        const visible = visiblePositionSamples(samples);
+        const color = teamTrackColor(index, Boolean(track.registered));
+        if (visible.length >= 2) {
+          replayCtx.strokeStyle = color;
+          replayCtx.lineWidth = track.registered ? 3 : 2;
+          replayCtx.setLineDash([9, 7]);
+          replayCtx.beginPath();
+          visible.forEach((sample, sampleIndex) => {
+            const point = canvasPoint(sample.map);
+            if (sampleIndex === 0) replayCtx.moveTo(point.x, point.y);
+            else replayCtx.lineTo(point.x, point.y);
+          });
+          replayCtx.stroke();
+          replayCtx.setLineDash([]);
+        }
+
+        const current = interpolatedPosition(samples, activeTimelineTime);
+        if (!current) return;
+        const point = canvasPoint(current);
+        drawCircle(point, track.registered ? 7 : 6, track.registered ? "#ffffff" : color, color);
+        drawReplayLabel(point, track.name || track.account_id || "team", color);
+      });
+      replayCtx.setLineDash([]);
     }
 
     function drawReplayLandings(events) {
@@ -2109,6 +2142,29 @@ _INDEX_HTML = """<!doctype html>
       replayCtx.fillText(activeTimelineArtifact?.match_id || activeTimeline?.match?.match_id || "-", 24, 36);
       replayCtx.fillStyle = "#c3ccd6";
       replayCtx.fillText(`${activeTimeline?.match?.map_name || "-"} / ${activeTimeline?.match?.game_mode || "-"} / ${activeTimelineTime.toFixed(1)}s`, 24, 60);
+    }
+
+    function drawReplayLabel(point, label, color) {
+      const text = String(label || "").slice(0, 18);
+      if (!text) return;
+      replayCtx.font = "12px Arial";
+      const width = Math.min(150, replayCtx.measureText(text).width + 12);
+      const x = Math.max(4, Math.min(replayCanvas.width - width - 4, point.x + 10));
+      const y = Math.max(18, Math.min(replayCanvas.height - 8, point.y - 8));
+      replayCtx.fillStyle = "rgba(17,24,32,0.78)";
+      replayCtx.fillRect(x, y - 14, width, 18);
+      replayCtx.strokeStyle = color;
+      replayCtx.lineWidth = 1;
+      replayCtx.strokeRect(x, y - 14, width, 18);
+      replayCtx.fillStyle = "#f5f7fa";
+      replayCtx.fillText(text, x + 6, y);
+    }
+
+    function teamTrackColor(index, registered) {
+      const registeredColors = ["#00bcd4", "#ffca28", "#ab47bc", "#26a69a"];
+      const defaultColors = ["#90a4ae", "#ffab91", "#b0bec5", "#a5d6a7"];
+      const colors = registered ? registeredColors : defaultColors;
+      return colors[index % colors.length];
     }
 
     function visiblePositionSamples(samples) {
@@ -2599,7 +2655,7 @@ _INDEX_HTML = """<!doctype html>
       if (!button) return;
       seekTimelineEvent(button.dataset.timelineEvent || "");
     });
-    for (const toggle of [timelineShowPath, timelineShowCombat, timelineShowCare, timelineShowPlane]) {
+    for (const toggle of [timelineShowPath, timelineShowCombat, timelineShowCare, timelineShowPlane, timelineShowTeam]) {
       toggle.addEventListener("change", renderReplayFrame);
     }
 

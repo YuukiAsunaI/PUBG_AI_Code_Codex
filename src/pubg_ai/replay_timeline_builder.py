@@ -161,6 +161,14 @@ class ReplayTimelineProcessor:
         care_packages = self._load_care_packages(match_id=match_id, world_size_cm=world_size_cm)
         plane_route = self._load_plane_route(match_id=match_id, world_size_cm=world_size_cm)
         team_members = self._load_team_members(match_id=match_id, account_id=account_id, shard=str(job["shard"]))
+        team_tracks = self._load_team_position_tracks(
+            match_id=match_id,
+            tracked_account_id=account_id,
+            team_members=team_members,
+            world_size_cm=world_size_cm,
+        )
+        _set_team_position_counts(team_members=team_members, tracked_account_id=account_id, positions=positions)
+        _set_team_track_counts(team_members=team_members, team_tracks=team_tracks)
 
         return {
             "schema_version": TIMELINE_RENDERER_VERSION,
@@ -185,10 +193,14 @@ class ReplayTimelineProcessor:
                 "registered_teammate_count": sum(
                     1 for member in team_members if member["registered"] and not member["is_self"]
                 ),
+                "track_count": len(team_tracks),
+                "position_sample_count": len(positions) + sum(track["sample_count"] for track in team_tracks),
                 "members": team_members,
             },
             "counts": {
                 "positions": len(positions),
+                "team_tracks": len(team_tracks),
+                "team_position_samples": sum(track["sample_count"] for track in team_tracks),
                 "landings": len(landings),
                 "combat_events": len(combat_events),
                 "care_packages": len(care_packages),
@@ -196,6 +208,7 @@ class ReplayTimelineProcessor:
             },
             "plane_route": plane_route,
             "positions": positions,
+            "team_tracks": team_tracks,
             "landings": landings,
             "combat_events": combat_events,
             "care_packages": care_packages,
@@ -246,6 +259,41 @@ class ReplayTimelineProcessor:
             }
             for row in rows
         ]
+
+    def _load_team_position_tracks(
+        self,
+        *,
+        match_id: str,
+        tracked_account_id: str,
+        team_members: list[dict[str, Any]],
+        world_size_cm: float,
+    ) -> list[dict[str, Any]]:
+        tracks: list[dict[str, Any]] = []
+        for member in team_members:
+            account_id = _optional_text(member.get("account_id"))
+            if account_id is None or account_id == tracked_account_id:
+                continue
+            positions = self._load_positions(
+                match_id=match_id,
+                account_id=account_id,
+                world_size_cm=world_size_cm,
+            )
+            if not positions:
+                continue
+            tracks.append(
+                {
+                    "account_id": account_id,
+                    "name": _optional_text(member.get("name")),
+                    "match_name": _optional_text(member.get("match_name")),
+                    "registered": bool(member.get("registered")),
+                    "registered_active": _optional_bool(member.get("registered_active")),
+                    "public_profile": _optional_bool(member.get("public_profile")),
+                    "is_ai_or_bot": bool(member.get("is_ai_or_bot")),
+                    "sample_count": len(positions),
+                    "positions": positions,
+                }
+            )
+        return tracks
 
     def _load_landings(self, *, match_id: str, account_id: str, world_size_cm: float) -> list[dict[str, Any]]:
         with self.connection.cursor() as cursor:
@@ -419,6 +467,7 @@ class ReplayTimelineProcessor:
                 "registered_active": _optional_bool(row.get("registered_active")),
                 "public_profile": _optional_bool(row.get("public_profile")),
                 "is_self": bool(row.get("is_self")),
+                "position_sample_count": 0,
             }
             for row in rows
         ]
@@ -584,6 +633,26 @@ def _damage_causer_label(value: Any) -> str | None:
     if text is None:
         return None
     return translate_code(text, "damage_causer")
+
+
+def _set_team_position_counts(
+    *,
+    team_members: list[dict[str, Any]],
+    tracked_account_id: str,
+    positions: list[dict[str, Any]],
+) -> None:
+    for member in team_members:
+        if member.get("account_id") == tracked_account_id:
+            member["position_sample_count"] = len(positions)
+            return
+
+
+def _set_team_track_counts(*, team_members: list[dict[str, Any]], team_tracks: list[dict[str, Any]]) -> None:
+    counts = {track["account_id"]: track["sample_count"] for track in team_tracks}
+    for member in team_members:
+        account_id = member.get("account_id")
+        if account_id in counts:
+            member["position_sample_count"] = counts[account_id]
 
 
 def _json_list(value: Any) -> list[Any]:

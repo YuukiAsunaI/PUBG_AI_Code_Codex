@@ -331,10 +331,11 @@ Completed slices:
     with grid fallback when an asset is unavailable.
 24. 2D replay timeline payloads and local player UI now include same-roster team lists, registered-teammate emphasis,
     and related-player display names/registration flags for combat events when available.
+25. 2D replay timeline payloads can include teammate `team_tracks` when same-roster teammates have parsed position
+    samples, and the local player can draw those routes through a teammate overlay toggle.
 
 Next slice:
 
-1. Richer 2D replay playback features such as teammate route overlays when enough teammate position samples are
-   available.
-2. Add weapon+attachment evidence links from Discord recommendation responses where a local web URL can be shared
+1. Add weapon+attachment evidence links from Discord recommendation responses where a local web URL can be shared
    safely.
+2. Add richer replay layers such as phase rings, revive markers, and follow-player viewport controls.

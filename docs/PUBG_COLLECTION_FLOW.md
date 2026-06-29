@@ -248,6 +248,9 @@ The current local runtime can generate post-match 2D route summary JPEG files fo
   landings, combat markers, care packages, and plane routes.
 - Timeline artifacts also include same-roster team members from `match_participants`, registered-player emphasis
   flags, and related-player names/registration flags for combat events when those records are available.
+- If same-roster teammates also have parsed `player_position_samples`, timeline artifacts include `team_tracks`
+  route payloads for those teammates. This is usually available for teammates that are also registered tracking
+  targets.
 - `GET /replay/artifacts?artifact_type=map_snapshot&limit=50` lists generated artifact metadata for local UI and
   future Discord command reuse.
 - `GET /replay/artifacts/{artifact_id}/file` serves a generated artifact file after resolving the DB relative path
@@ -262,6 +265,8 @@ The current local runtime can generate post-match 2D route summary JPEG files fo
   as weapon, damage reason, distance, related player, item count, and KST timestamp where available.
 - The 2D replay player shows the tracked player's team list beside the event panel and visually emphasizes
   registered teammates.
+- The 2D replay player has a teammate-route toggle. When `team_tracks` are present, it draws teammate paths as
+  labeled overlays while keeping the tracked player's route visually primary.
 
 Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 route snapshot JPEG files were generated
 under `D:\BackUP\replay`, recorded in `replay_artifacts`, and verified as readable JPEG images. Total generated
