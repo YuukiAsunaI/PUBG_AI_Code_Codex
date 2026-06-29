@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 from pubg_ai.config import RuntimeConfig, load_dotenv_values
@@ -114,6 +114,10 @@ def create_app() -> Any:
             "local_only": True,
             "bind_host": "127.0.0.1",
         }
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon() -> Response:
+        return Response(status_code=204)
 
     @app.get("/settings/status")
     def settings_status() -> dict[str, Any]:
@@ -634,9 +638,26 @@ _INDEX_HTML = """<!doctype html>
     td { overflow-wrap: anywhere; }
     .actions { display: flex; gap: 8px; justify-content: flex-end; }
     .status { color: var(--muted); font-size: 13px; }
+    .player-controls { display: grid; grid-template-columns: minmax(220px, 1fr) 110px auto auto; gap: 10px; align-items: end; }
+    .toggle-row { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; color: var(--muted); font-size: 13px; }
+    .toggle-row label { display: inline-flex; grid-template-columns: none; align-items: center; gap: 6px; }
+    .toggle-row input { width: auto; min-height: 0; }
+    .timeline-range { display: grid; grid-template-columns: 1fr 110px; gap: 12px; align-items: center; margin: 12px 0; }
+    #timelineScrubber { padding: 0; }
+    .replay-canvas-wrap {
+      width: 100%;
+      max-width: 960px;
+      aspect-ratio: 1 / 1;
+      border: 1px solid var(--line);
+      background: #111820;
+      overflow: hidden;
+    }
+    #replayCanvas { display: block; width: 100%; height: 100%; }
     @media (max-width: 900px) {
       .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       form { grid-template-columns: 1fr; }
+      .player-controls { grid-template-columns: 1fr; }
+      .timeline-range { grid-template-columns: 1fr; }
       header { align-items: flex-start; flex-direction: column; }
     }
   </style>
@@ -891,6 +912,39 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="timelineStatus">대기 중</div>
     </section>
     <section>
+      <h2>2D Replay Player</h2>
+      <div class="player-controls">
+        <label>Timeline
+          <select id="timelineSelect"></select>
+        </label>
+        <label>속도
+          <select id="timelineSpeed">
+            <option value="0.5">0.5x</option>
+            <option value="1" selected>1x</option>
+            <option value="2">2x</option>
+            <option value="4">4x</option>
+            <option value="8">8x</option>
+          </select>
+        </label>
+        <button type="button" id="timelinePlayButton">재생</button>
+        <button class="secondary" type="button" id="timelineResetButton">처음</button>
+      </div>
+      <div class="toggle-row">
+        <label><input type="checkbox" id="timelineShowPath" checked>이동</label>
+        <label><input type="checkbox" id="timelineShowCombat" checked>전투</label>
+        <label><input type="checkbox" id="timelineShowCare" checked>보급</label>
+        <label><input type="checkbox" id="timelineShowPlane" checked>비행기</label>
+      </div>
+      <div class="timeline-range">
+        <input id="timelineScrubber" type="range" min="0" max="0" value="0" step="0.1">
+        <div class="status" id="timelineClock">0.0초</div>
+      </div>
+      <div class="replay-canvas-wrap">
+        <canvas id="replayCanvas" width="960" height="960"></canvas>
+      </div>
+      <div class="status" id="replayPlayerStatus" style="margin-top: 12px;">대기 중</div>
+    </section>
+    <section>
       <h2>Replay Artifact 목록</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button class="secondary" type="button" onclick="loadReplayArtifacts()">새로고침</button>
@@ -929,6 +983,27 @@ _INDEX_HTML = """<!doctype html>
     const discordPermissionsBody = document.querySelector("#discordPermissionsBody");
     const discordPermissionGroup = document.querySelector("#discordPermissionGroup");
     const banner = document.querySelector("#banner");
+    const timelineSelect = document.querySelector("#timelineSelect");
+    const timelineSpeed = document.querySelector("#timelineSpeed");
+    const timelinePlayButton = document.querySelector("#timelinePlayButton");
+    const timelineResetButton = document.querySelector("#timelineResetButton");
+    const timelineScrubber = document.querySelector("#timelineScrubber");
+    const timelineClock = document.querySelector("#timelineClock");
+    const replayCanvas = document.querySelector("#replayCanvas");
+    const replayPlayerStatus = document.querySelector("#replayPlayerStatus");
+    const timelineShowPath = document.querySelector("#timelineShowPath");
+    const timelineShowCombat = document.querySelector("#timelineShowCombat");
+    const timelineShowCare = document.querySelector("#timelineShowCare");
+    const timelineShowPlane = document.querySelector("#timelineShowPlane");
+    const replayCtx = replayCanvas.getContext("2d");
+    let replayTimelineArtifacts = [];
+    let activeTimeline = null;
+    let activeTimelineArtifact = null;
+    let activeTimelineDuration = 0;
+    let activeTimelineTime = 0;
+    let replayAnimationId = null;
+    let replayLastFrameMs = 0;
+    let replayPlaying = false;
 
     function cell(label, value) {
       return `<div class="kv"><span>${label}</span><strong>${value}</strong></div>`;
@@ -1239,6 +1314,7 @@ _INDEX_HTML = """<!doctype html>
 
     async function loadReplayArtifacts() {
       const payload = await fetch("/replay/artifacts?artifact_type=&limit=50").then((r) => r.json());
+      updateTimelineOptions(payload.artifacts || []);
       replayArtifactsBody.innerHTML = payload.artifacts.map((artifact) => `
         <tr>
           <td>${artifact.generated_at_kst || ""}</td>
@@ -1249,11 +1325,40 @@ _INDEX_HTML = """<!doctype html>
           <td>${formatBytes(artifact.size_bytes || 0)}</td>
           <td>
             <div class="actions">
+              ${artifact.artifact_type === "timeline" ? `<button type="button" data-load-timeline="${artifact.id}">재생</button>` : ""}
               <a href="${artifact.view_url}" target="_blank" rel="noreferrer">열기</a>
             </div>
           </td>
         </tr>
       `).join("");
+      if (replayTimelineArtifacts.length && (!activeTimelineArtifact || String(activeTimelineArtifact.id) !== timelineSelect.value)) {
+        await loadSelectedTimeline();
+      }
+    }
+
+    function updateTimelineOptions(artifacts) {
+      const previous = timelineSelect.value;
+      replayTimelineArtifacts = artifacts.filter((artifact) => artifact.artifact_type === "timeline");
+      if (!replayTimelineArtifacts.length) {
+        pauseReplay();
+        activeTimeline = null;
+        activeTimelineArtifact = null;
+        replayPlayerStatus.textContent = "timeline artifact가 없습니다.";
+        drawEmptyReplayCanvas();
+      }
+      timelineSelect.innerHTML = replayTimelineArtifacts.map((artifact) => {
+        const label = [
+          artifact.player_name || "unknown",
+          artifact.map_name || "-",
+          artifact.game_mode || "-",
+          artifact.match_id ? artifact.match_id.slice(0, 8) : "-",
+        ].join(" / ");
+        return `<option value="${attr(artifact.id)}">${escapeHtml(label)}</option>`;
+      }).join("") || `<option value="">timeline 없음</option>`;
+
+      if (previous && replayTimelineArtifacts.some((artifact) => String(artifact.id) === previous)) {
+        timelineSelect.value = previous;
+      }
     }
 
     function formatBytes(value) {
@@ -1266,6 +1371,282 @@ _INDEX_HTML = """<!doctype html>
         unit += 1;
       }
       return `${size.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+    }
+
+    async function loadSelectedTimeline() {
+      const artifact = replayTimelineArtifacts.find((item) => String(item.id) === timelineSelect.value);
+      if (!artifact) {
+        replayPlayerStatus.textContent = "timeline artifact가 없습니다.";
+        drawEmptyReplayCanvas();
+        return;
+      }
+
+      pauseReplay();
+      const payload = await fetch(artifact.view_url).then((response) => {
+        if (!response.ok) throw new Error(response.statusText);
+        return response.json();
+      });
+      activeTimeline = payload;
+      activeTimelineArtifact = artifact;
+      activeTimelineDuration = Math.max(1, timelineDuration(payload));
+      activeTimelineTime = 0;
+      timelineScrubber.max = String(activeTimelineDuration);
+      timelineScrubber.value = "0";
+      replayPlayerStatus.textContent = `${payload.player?.name || artifact.player_name || "unknown"} / ${payload.match?.map_name || "-"} / ${payload.match?.match_id || artifact.match_id}`;
+      renderReplayFrame();
+    }
+
+    function timelineDuration(timeline) {
+      const times = [];
+      for (const sample of timeline.positions || []) times.push(eventTime(sample));
+      for (const event of timeline.landings || []) times.push(eventTime(event));
+      for (const event of timeline.combat_events || []) times.push(eventTime(event));
+      for (const event of timeline.care_packages || []) times.push(eventTime(event));
+      const matchDuration = Number(timeline.match?.duration_seconds || 0);
+      if (Number.isFinite(matchDuration) && matchDuration > 0) times.push(matchDuration);
+      return Math.max(0, ...times.filter((value) => Number.isFinite(value)));
+    }
+
+    function eventTime(event) {
+      const elapsed = Number(event?.elapsed_time_seconds);
+      if (Number.isFinite(elapsed)) return elapsed;
+      const t = Number(event?.t);
+      return Number.isFinite(t) ? t : 0;
+    }
+
+    function renderReplayFrame() {
+      if (!activeTimeline || !replayCtx) {
+        drawEmptyReplayCanvas();
+        return;
+      }
+
+      const width = replayCanvas.width;
+      const height = replayCanvas.height;
+      replayCtx.clearRect(0, 0, width, height);
+      drawReplayBackground(width, height);
+
+      if (timelineShowPlane.checked) drawReplayPlaneRoute(activeTimeline.plane_route);
+      if (timelineShowCare.checked) drawReplayCarePackages(activeTimeline.care_packages || []);
+      if (timelineShowPath.checked) drawReplayPath(activeTimeline.positions || []);
+      drawReplayLandings(activeTimeline.landings || []);
+      if (timelineShowCombat.checked) drawReplayCombatEvents(activeTimeline.combat_events || []);
+      drawReplayPlayer(activeTimeline.positions || []);
+      drawReplayOverlay();
+      timelineClock.textContent = `${activeTimelineTime.toFixed(1)}초`;
+      timelineScrubber.value = String(activeTimelineTime);
+    }
+
+    function drawReplayBackground(width, height) {
+      replayCtx.fillStyle = "#17212b";
+      replayCtx.fillRect(0, 0, width, height);
+      replayCtx.strokeStyle = "rgba(255,255,255,0.12)";
+      replayCtx.lineWidth = 1;
+      for (let index = 0; index <= 8; index += 1) {
+        const position = Math.round(width * index / 8);
+        replayCtx.beginPath();
+        replayCtx.moveTo(position, 0);
+        replayCtx.lineTo(position, height);
+        replayCtx.moveTo(0, position);
+        replayCtx.lineTo(width, position);
+        replayCtx.stroke();
+      }
+    }
+
+    function drawReplayPlaneRoute(route) {
+      if (!route?.start?.map || !route?.end?.map) return;
+      const start = canvasPoint(route.start.map);
+      const end = canvasPoint(route.end.map);
+      replayCtx.strokeStyle = "rgba(53,162,235,0.95)";
+      replayCtx.lineWidth = 4;
+      replayCtx.beginPath();
+      replayCtx.moveTo(start.x, start.y);
+      replayCtx.lineTo(end.x, end.y);
+      replayCtx.stroke();
+      drawCircle(start, 7, "#ffffff", "#1976d2");
+      drawCircle(end, 7, "#ffffff", "#1976d2");
+    }
+
+    function drawReplayCarePackages(events) {
+      for (const event of events) {
+        if (eventTime(event) > activeTimelineTime || !event.map) continue;
+        const point = canvasPoint(event.map);
+        replayCtx.fillStyle = event.event_type === "LogCarePackageLand" ? "rgba(211,47,47,0.85)" : "rgba(255,193,7,0.7)";
+        replayCtx.strokeStyle = "rgba(255,255,255,0.65)";
+        replayCtx.lineWidth = 1;
+        replayCtx.fillRect(point.x - 5, point.y - 5, 10, 10);
+        replayCtx.strokeRect(point.x - 5, point.y - 5, 10, 10);
+      }
+    }
+
+    function drawReplayPath(samples) {
+      const visible = visiblePositionSamples(samples);
+      if (visible.length < 2) return;
+      replayCtx.strokeStyle = "rgba(57,255,20,0.9)";
+      replayCtx.lineWidth = 4;
+      replayCtx.beginPath();
+      visible.forEach((sample, index) => {
+        const point = canvasPoint(sample.map);
+        if (index === 0) replayCtx.moveTo(point.x, point.y);
+        else replayCtx.lineTo(point.x, point.y);
+      });
+      replayCtx.stroke();
+    }
+
+    function drawReplayLandings(events) {
+      replayCtx.fillStyle = "rgba(255,235,59,0.95)";
+      replayCtx.strokeStyle = "rgba(20,20,20,0.8)";
+      replayCtx.lineWidth = 2;
+      for (const event of events) {
+        if (eventTime(event) > activeTimelineTime || !event.map) continue;
+        const point = canvasPoint(event.map);
+        replayCtx.beginPath();
+        replayCtx.moveTo(point.x, point.y - 12);
+        replayCtx.lineTo(point.x - 10, point.y + 8);
+        replayCtx.lineTo(point.x + 10, point.y + 8);
+        replayCtx.closePath();
+        replayCtx.fill();
+        replayCtx.stroke();
+      }
+    }
+
+    function drawReplayCombatEvents(events) {
+      for (const event of events) {
+        if (eventTime(event) > activeTimelineTime || !event.map) continue;
+        const point = canvasPoint(event.map);
+        if (event.related_map && ["dbno_caused", "kill", "finish"].includes(event.action)) {
+          const related = canvasPoint(event.related_map);
+          replayCtx.strokeStyle = "rgba(255,255,255,0.35)";
+          replayCtx.lineWidth = 1;
+          replayCtx.beginPath();
+          replayCtx.moveTo(point.x, point.y);
+          replayCtx.lineTo(related.x, related.y);
+          replayCtx.stroke();
+        }
+        if (["kill", "finish"].includes(event.action)) {
+          drawX(point, event.is_headshot ? "#ff1744" : "#ef5350");
+        } else if (event.action === "dbno_caused") {
+          drawCircle(point, 8, "#ff9800", "#202020");
+        } else if (["death", "finished_taken", "dbno_taken"].includes(event.action)) {
+          drawCircle(point, 9, "#202020", "#ef5350");
+        }
+      }
+    }
+
+    function drawReplayPlayer(samples) {
+      const current = interpolatedPosition(samples, activeTimelineTime);
+      if (!current) return;
+      drawCircle(canvasPoint(current), 8, "#ffffff", "#39ff14");
+    }
+
+    function drawReplayOverlay() {
+      replayCtx.fillStyle = "rgba(17,24,32,0.82)";
+      replayCtx.fillRect(12, 12, 340, 66);
+      replayCtx.fillStyle = "#f5f7fa";
+      replayCtx.font = "14px Arial";
+      replayCtx.fillText(activeTimelineArtifact?.match_id || activeTimeline?.match?.match_id || "-", 24, 36);
+      replayCtx.fillStyle = "#c3ccd6";
+      replayCtx.fillText(`${activeTimeline?.match?.map_name || "-"} / ${activeTimeline?.match?.game_mode || "-"} / ${activeTimelineTime.toFixed(1)}s`, 24, 60);
+    }
+
+    function visiblePositionSamples(samples) {
+      return samples
+        .filter((sample) => sample.map && eventTime(sample) <= activeTimelineTime)
+        .concat(interpolatedPosition(samples, activeTimelineTime) ? [{ map: interpolatedPosition(samples, activeTimelineTime), elapsed_time_seconds: activeTimelineTime }] : []);
+    }
+
+    function interpolatedPosition(samples, time) {
+      const valid = samples.filter((sample) => sample.map);
+      if (!valid.length) return null;
+      let previous = valid[0];
+      for (const sample of valid) {
+        const sampleTime = eventTime(sample);
+        if (sampleTime >= time) {
+          const prevTime = eventTime(previous);
+          const ratio = sampleTime === prevTime ? 0 : Math.max(0, Math.min(1, (time - prevTime) / (sampleTime - prevTime)));
+          return {
+            x_pct: previous.map.x_pct + (sample.map.x_pct - previous.map.x_pct) * ratio,
+            y_pct: previous.map.y_pct + (sample.map.y_pct - previous.map.y_pct) * ratio,
+          };
+        }
+        previous = sample;
+      }
+      return previous.map;
+    }
+
+    function canvasPoint(mapPoint) {
+      return {
+        x: Math.max(0, Math.min(1, Number(mapPoint.x_pct || 0))) * replayCanvas.width,
+        y: Math.max(0, Math.min(1, Number(mapPoint.y_pct || 0))) * replayCanvas.height,
+      };
+    }
+
+    function drawCircle(point, radius, fill, stroke) {
+      replayCtx.beginPath();
+      replayCtx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+      replayCtx.fillStyle = fill;
+      replayCtx.strokeStyle = stroke;
+      replayCtx.lineWidth = 2;
+      replayCtx.fill();
+      replayCtx.stroke();
+    }
+
+    function drawX(point, color) {
+      replayCtx.strokeStyle = color;
+      replayCtx.lineWidth = 5;
+      replayCtx.beginPath();
+      replayCtx.moveTo(point.x - 9, point.y - 9);
+      replayCtx.lineTo(point.x + 9, point.y + 9);
+      replayCtx.moveTo(point.x + 9, point.y - 9);
+      replayCtx.lineTo(point.x - 9, point.y + 9);
+      replayCtx.stroke();
+    }
+
+    function toggleReplayPlayback() {
+      if (!activeTimeline) return;
+      if (replayPlaying) pauseReplay();
+      else playReplay();
+    }
+
+    function playReplay() {
+      replayPlaying = true;
+      replayLastFrameMs = performance.now();
+      timelinePlayButton.textContent = "일시정지";
+      replayAnimationId = requestAnimationFrame(stepReplay);
+    }
+
+    function pauseReplay() {
+      replayPlaying = false;
+      timelinePlayButton.textContent = "재생";
+      if (replayAnimationId) cancelAnimationFrame(replayAnimationId);
+      replayAnimationId = null;
+    }
+
+    function stepReplay(frameMs) {
+      if (!replayPlaying) return;
+      const speed = Number(timelineSpeed.value || 1);
+      const deltaSeconds = Math.max(0, (frameMs - replayLastFrameMs) / 1000) * speed;
+      replayLastFrameMs = frameMs;
+      activeTimelineTime = Math.min(activeTimelineDuration, activeTimelineTime + deltaSeconds);
+      renderReplayFrame();
+      if (activeTimelineTime >= activeTimelineDuration) {
+        pauseReplay();
+        return;
+      }
+      replayAnimationId = requestAnimationFrame(stepReplay);
+    }
+
+    function resetReplay() {
+      pauseReplay();
+      activeTimelineTime = 0;
+      renderReplayFrame();
+    }
+
+    function drawEmptyReplayCanvas() {
+      if (!replayCtx) return;
+      drawReplayBackground(replayCanvas.width, replayCanvas.height);
+      replayCtx.fillStyle = "#c3ccd6";
+      replayCtx.font = "16px Arial";
+      replayCtx.fillText("No timeline", 24, 36);
     }
 
     async function refreshCollection() {
@@ -1565,6 +1946,41 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
+    replayArtifactsBody.addEventListener("click", async (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("button[data-load-timeline]")
+        : null;
+      if (!button) return;
+
+      timelineSelect.value = button.dataset.loadTimeline || "";
+      try {
+        await loadSelectedTimeline();
+        banner.textContent = "Replay timeline 로드 완료";
+      } catch (error) {
+        replayPlayerStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    timelineSelect.addEventListener("change", async () => {
+      try {
+        await loadSelectedTimeline();
+      } catch (error) {
+        replayPlayerStatus.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    timelinePlayButton.addEventListener("click", toggleReplayPlayback);
+    timelineResetButton.addEventListener("click", resetReplay);
+    timelineScrubber.addEventListener("input", () => {
+      activeTimelineTime = Number(timelineScrubber.value || 0);
+      renderReplayFrame();
+    });
+    for (const toggle of [timelineShowPath, timelineShowCombat, timelineShowCare, timelineShowPlane]) {
+      toggle.addEventListener("change", renderReplayFrame);
+    }
+
+    drawEmptyReplayCanvas();
     Promise.all([loadStatus(), loadDiscordPermissions(), loadPlayers(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
       .then(() => { banner.textContent = "localhost 전용 관리 화면"; })
       .catch((error) => { banner.textContent = `오류: ${error.message}`; });

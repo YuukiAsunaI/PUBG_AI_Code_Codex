@@ -316,8 +316,10 @@ Completed slices:
     accuracy, headshot rate, and DBNO ranking with `guild_id` scope.
 16. Replay timeline JSON artifact generation for future local 2D playback, using parsed movement, combat-location,
     care-package, landing, and plane-route tables.
+17. Local canvas-based 2D replay player that loads generated timeline JSON artifacts with play/pause, seek, speed,
+    route/combat/care-package/plane visibility controls, and artifact-list load buttons.
 
 Next slice:
 
-1. Local 2D replay playback UI for generated timeline JSON artifacts.
-2. Recommendation queries for weapons, attachments, maps, teammates, and drop locations.
+1. Recommendation queries for weapons, attachments, maps, teammates, and drop locations.
+2. Richer 2D replay playback features such as team overlays, minimap assets, and event detail panels.

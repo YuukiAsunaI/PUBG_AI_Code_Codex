@@ -231,6 +231,8 @@ The current local runtime can generate post-match 2D route summary JPEG files fo
   through `ReplayArtifactStore`, so path escape attempts are rejected by the storage layer.
 - The local web UI has JPEG and timeline JSON generate/regenerate buttons plus a recent artifact list with open-file
   links.
+- The local web UI also has a canvas-based 2D replay player that loads `timeline` artifacts and renders player route,
+  plane route, landing markers, combat markers, and care-package markers with play/pause, speed, and seek controls.
 
 Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 route snapshot JPEG files were generated
 under `D:\BackUP\replay`, recorded in `replay_artifacts`, and verified as readable JPEG images. Total generated

@@ -215,6 +215,9 @@ GET /replay/artifacts?artifact_type=&limit=50
 GET /replay/artifacts/{artifact_id}/file
 ```
 
+The local web app includes a 2D replay player that loads generated `timeline` JSON artifacts and renders movement,
+plane route, landing, combat, and care-package markers on a canvas.
+
 Run the Discord bot MVP:
 
 ```powershell
