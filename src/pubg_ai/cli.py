@@ -21,6 +21,7 @@ from pubg_ai.player_stats import PlayerStatsService
 from pubg_ai.pubg_client import PubgApiClient
 from pubg_ai.raw_storage import RawPayloadStore
 from pubg_ai.replay_storage import ReplayArtifactStore
+from pubg_ai.replay_timeline_builder import ReplayTimelineProcessor
 from pubg_ai.telemetry_combat_processor import TelemetryCombatProcessor
 from pubg_ai.telemetry_item_processor import TelemetryItemProcessor
 from pubg_ai.telemetry_job_processor import TelemetryJobProcessor
@@ -127,6 +128,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     map_snapshots_parser.add_argument("--limit", default=10, type=int)
     map_snapshots_parser.add_argument("--force", action="store_true", help="Regenerate existing map snapshot artifacts.")
+
+    replay_timelines_parser = subparsers.add_parser(
+        "generate-replay-timelines",
+        help="Generate registered-player 2D replay timeline JSON artifacts under PUBG_REPLAY_DATA_DIR.",
+    )
+    replay_timelines_parser.add_argument("--limit", default=10, type=int)
+    replay_timelines_parser.add_argument("--force", action="store_true", help="Regenerate existing timeline artifacts.")
 
     web_parser = subparsers.add_parser("run-web", help="Run the local management web app.")
     web_parser.add_argument("--host", default="127.0.0.1", help="Bind host. Defaults to localhost only.")
@@ -400,6 +408,18 @@ def main(argv: list[str] | None = None) -> int:
                 connection,
                 ReplayArtifactStore(config.app.replay_data_dir),
             ).generate_player_snapshots(limit=args.limit, force=args.force)
+            _print_json(result.to_record())
+        finally:
+            connection.close()
+        return 0
+
+    if args.command == "generate-replay-timelines":
+        connection = connect_mysql(config.database)
+        try:
+            result = ReplayTimelineProcessor(
+                connection,
+                ReplayArtifactStore(config.app.replay_data_dir),
+            ).generate_player_timelines(limit=args.limit, force=args.force)
             _print_json(result.to_record())
         finally:
             connection.close()

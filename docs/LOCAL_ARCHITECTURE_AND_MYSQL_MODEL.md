@@ -314,8 +314,10 @@ Completed slices:
     combat totals, weapon rows, movement/landing summary, and generated map snapshot status.
 15. Player ranking service and `랭킹` command for KDA, win rate, average damage, total damage, kills, matches,
     accuracy, headshot rate, and DBNO ranking with `guild_id` scope.
+16. Replay timeline JSON artifact generation for future local 2D playback, using parsed movement, combat-location,
+    care-package, landing, and plane-route tables.
 
 Next slice:
 
-1. 2D replay timeline artifact generation beyond static JPEG snapshots.
+1. Local 2D replay playback UI for generated timeline JSON artifacts.
 2. Recommendation queries for weapons, attachments, maps, teammates, and drop locations.

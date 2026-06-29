@@ -202,10 +202,16 @@ Regenerate existing route snapshots after renderer changes:
 python -m pubg_ai.cli generate-map-snapshots --limit 200 --force
 ```
 
+Generate registered-player 2D replay timeline JSON artifacts under `PUBG_REPLAY_DATA_DIR`:
+
+```powershell
+python -m pubg_ai.cli generate-replay-timelines --limit 10
+```
+
 The local web app also exposes generated replay artifacts:
 
 ```text
-GET /replay/artifacts?artifact_type=map_snapshot&limit=50
+GET /replay/artifacts?artifact_type=&limit=50
 GET /replay/artifacts/{artifact_id}/file
 ```
 

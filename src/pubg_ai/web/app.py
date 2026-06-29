@@ -22,6 +22,7 @@ from pubg_ai.pubg_client import PubgApiClient, PubgApiError
 from pubg_ai.raw_storage import RawPayloadStore
 from pubg_ai.replay_artifact_catalog import get_replay_artifact, list_replay_artifacts
 from pubg_ai.replay_storage import ReplayArtifactStore, ReplayStorageError
+from pubg_ai.replay_timeline_builder import ReplayTimelineProcessor
 from pubg_ai.telemetry_combat_processor import TelemetryCombatProcessor
 from pubg_ai.telemetry_item_processor import TelemetryItemProcessor
 from pubg_ai.telemetry_job_processor import TelemetryJobProcessor
@@ -73,6 +74,11 @@ class ParseTelemetryMovementRequest(BaseModel):
 
 
 class GenerateMapSnapshotsRequest(BaseModel):
+    limit: int = Field(default=10, ge=1, le=200)
+    force: bool = False
+
+
+class GenerateReplayTimelinesRequest(BaseModel):
     limit: int = Field(default=10, ge=1, le=200)
     force: bool = False
 
@@ -479,6 +485,18 @@ def create_app() -> Any:
         finally:
             connection.close()
 
+    @app.post("/replay/timelines/generate")
+    def generate_replay_timelines(request: GenerateReplayTimelinesRequest) -> dict[str, Any]:
+        connection = connect_mysql(config.database)
+        try:
+            result = ReplayTimelineProcessor(
+                connection,
+                ReplayArtifactStore(config.app.replay_data_dir),
+            ).generate_player_timelines(limit=request.limit, force=request.force)
+            return {"result": result.to_record()}
+        finally:
+            connection.close()
+
     @app.get("/replay/artifacts")
     def replay_artifacts(
         limit: int = 50,
@@ -865,7 +883,15 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="mapSnapshotStatus">대기 중</div>
     </section>
     <section>
-      <h2>Map Snapshot 목록</h2>
+      <h2>Replay Timeline 생성</h2>
+      <div class="actions" style="margin-bottom: 10px;">
+        <button type="button" onclick="generateReplayTimelines(false)">JSON 생성</button>
+        <button class="secondary" type="button" onclick="generateReplayTimelines(true)">재생성</button>
+      </div>
+      <div class="status" id="timelineStatus">대기 중</div>
+    </section>
+    <section>
+      <h2>Replay Artifact 목록</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button class="secondary" type="button" onclick="loadReplayArtifacts()">새로고침</button>
       </div>
@@ -873,6 +899,7 @@ _INDEX_HTML = """<!doctype html>
         <thead>
           <tr>
             <th>생성</th>
+            <th>타입</th>
             <th>맵</th>
             <th>모드</th>
             <th>Match ID</th>
@@ -897,6 +924,7 @@ _INDEX_HTML = """<!doctype html>
     const itemStatus = document.querySelector("#itemStatus");
     const movementStatus = document.querySelector("#movementStatus");
     const mapSnapshotStatus = document.querySelector("#mapSnapshotStatus");
+    const timelineStatus = document.querySelector("#timelineStatus");
     const replayArtifactsBody = document.querySelector("#replayArtifactsBody");
     const discordPermissionsBody = document.querySelector("#discordPermissionsBody");
     const discordPermissionGroup = document.querySelector("#discordPermissionGroup");
@@ -1210,10 +1238,11 @@ _INDEX_HTML = """<!doctype html>
     }
 
     async function loadReplayArtifacts() {
-      const payload = await fetch("/replay/artifacts?artifact_type=map_snapshot&limit=50").then((r) => r.json());
+      const payload = await fetch("/replay/artifacts?artifact_type=&limit=50").then((r) => r.json());
       replayArtifactsBody.innerHTML = payload.artifacts.map((artifact) => `
         <tr>
           <td>${artifact.generated_at_kst || ""}</td>
+          <td>${artifact.artifact_type || ""}</td>
           <td>${artifact.map_name || ""}</td>
           <td>${artifact.game_mode || ""}</td>
           <td>${artifact.match_id || ""}</td>
@@ -1350,6 +1379,23 @@ _INDEX_HTML = """<!doctype html>
       const payload = await response.json();
       mapSnapshotStatus.textContent = `생성 ${payload.result.generated_snapshots}개, 기존 ${payload.result.skipped_existing}개, 위치없음 ${payload.result.skipped_no_position}개, 실패 ${payload.result.failed_snapshots}개, artifact ${payload.result.artifacts.length}개`;
       banner.textContent = "JPEG 생성 완료";
+      await loadReplayArtifacts();
+    }
+
+    async function generateReplayTimelines(force) {
+      banner.textContent = force ? "Timeline 재생성 중" : "Timeline 생성 중";
+      const response = await fetch("/replay/timelines/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 10, force }),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const payload = await response.json();
+      timelineStatus.textContent = `생성 ${payload.result.generated_timelines}개, 기존 ${payload.result.skipped_existing}개, 위치없음 ${payload.result.skipped_no_position}개, 실패 ${payload.result.failed_timelines}개, artifact ${payload.result.artifacts.length}개`;
+      banner.textContent = "Timeline 생성 완료";
       await loadReplayArtifacts();
     }
 
