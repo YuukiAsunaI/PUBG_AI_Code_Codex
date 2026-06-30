@@ -346,4 +346,5 @@ local web server stops; use the CLI `run-collector` and `run-post-processing` co
 worker processes. Both worker entry points store recent cycle summaries in `worker_run_history`; the local manager
 shows those rows in `Worker Run History` so storage/API/parser failures remain visible after the in-memory status
 changes. The same page stores storage/worker alert records in `system_alert_history`, shows current unsuppressed
-alerts separately from recent history, and lets the admin acknowledge or temporarily hide noisy alerts.
+alerts separately from recent history, lets the admin acknowledge or temporarily hide noisy alerts, and can filter or
+page history by source/status when many old alerts have accumulated.

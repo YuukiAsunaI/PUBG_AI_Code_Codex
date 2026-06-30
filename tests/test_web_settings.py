@@ -25,7 +25,10 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn("/settings/collector", body)
         self.assertIn('id="alertSettingsForm"', body)
         self.assertIn('id="alertsBody"', body)
+        self.assertIn('id="alertHistoryFilterForm"', body)
         self.assertIn('id="alertHistoryBody"', body)
+        self.assertIn('id="alertHistoryPrev"', body)
+        self.assertIn('id="alertHistoryNext"', body)
         self.assertIn("/settings/alerts", body)
         self.assertIn("/alerts/status", body)
         self.assertIn("/alerts/history/", body)
@@ -218,6 +221,24 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn("acknowledged_at_kst", executed_sql)
         self.assertIn("snoozed_until_kst", executed_sql)
 
+    def test_alert_history_endpoint_filters_and_pages_history(self) -> None:
+        connection = FakeWorkerRunConnection(rows=[], latest_id=0, alert_rows=[_alert_history_row()])
+        with patch("pubg_ai.web.app.connect_mysql", return_value=connection):
+            client = TestClient(create_app())
+            response = client.get("/alerts/history?source=storage&state=resolved&limit=25&offset=50")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["alert_history_page"]["source"], "storage")
+        self.assertEqual(payload["alert_history_page"]["state"], "resolved")
+        self.assertEqual(payload["alert_history_page"]["limit"], 25)
+        self.assertEqual(payload["alert_history_page"]["offset"], 50)
+        self.assertEqual(payload["alert_history_page"]["total"], 1)
+        executed_sql = "\n".join(query for query, _ in connection.cursor_obj.executed)
+        self.assertIn("source = %s", executed_sql)
+        self.assertIn("resolved_at_kst IS NOT NULL", executed_sql)
+        self.assertIn("LIMIT %s OFFSET %s", executed_sql)
+
     def test_discord_scope_settings_endpoint_updates_local_settings_file(self) -> None:
         with TemporaryDirectory() as temp_dir:
             settings_file = Path(temp_dir) / "config" / "local_settings.json"
@@ -335,6 +356,8 @@ class FakeWorkerRunCursor:
         ]
 
     def fetchone(self) -> dict[str, object]:
+        if "COUNT(*) AS total" in self.query:
+            return {"total": len(self.alert_rows)}
         if "FROM system_alert_history" in self.query:
             return self.alert_rows[0] if self.alert_rows else {}
         return {"latest_id": self.latest_id}

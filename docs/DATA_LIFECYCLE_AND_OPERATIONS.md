@@ -61,6 +61,8 @@ Implemented behavior:
 - `minimum_free_bytes` controls the raw/replay free-space threshold. The default is 50 GiB.
 - `discord_channel_ids` controls where the Discord bot sends automatic alert messages.
 - `GET /alerts/status` returns current unsuppressed alerts and recent alert history for the management UI.
+- `GET /alerts/history?source=all|storage|worker&state=all|current|active|acknowledged|snoozed|resolved&limit=50&offset=0`
+  returns paged alert history with a total count for the management UI.
 - `POST /alerts/history/{alert_id}/acknowledge` marks a persisted alert as acknowledged.
 - `POST /alerts/history/{alert_id}/snooze` hides a persisted alert until the requested KST expiry, capped at 30 days.
 - The Discord bot sends active storage alerts once per bot process and sends newly persisted worker failures from

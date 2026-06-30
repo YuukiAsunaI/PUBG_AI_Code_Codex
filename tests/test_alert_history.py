@@ -6,6 +6,7 @@ from pubg_ai.alert_history import (
     AlertHistoryRecord,
     acknowledge_alert,
     alert_key_hash,
+    get_alert_history_page,
     snooze_alert,
     sync_alert_history,
     visible_alert_records,
@@ -48,6 +49,28 @@ class AlertHistoryTests(unittest.TestCase):
         self.assertIn("acknowledged_at_kst", executed_sql)
         self.assertIn("snoozed_until_kst", executed_sql)
 
+    def test_history_page_applies_source_state_limit_and_offset(self) -> None:
+        connection = FakeConnection(rows=[_alert_row()], total=12)
+
+        page = get_alert_history_page(
+            connection,
+            source="storage",
+            state="resolved",
+            limit=25,
+            offset=50,
+        )
+
+        self.assertEqual(page.total, 12)
+        self.assertEqual(page.limit, 25)
+        self.assertEqual(page.offset, 50)
+        self.assertEqual(page.source, "storage")
+        self.assertEqual(page.state, "resolved")
+        executed_sql = "\n".join(query for query, _ in connection.cursor_obj.executed)
+        self.assertIn("source = %s", executed_sql)
+        self.assertIn("resolved_at_kst IS NOT NULL", executed_sql)
+        self.assertIn("LIMIT %s OFFSET %s", executed_sql)
+        self.assertIn("COUNT(*) AS total", executed_sql)
+
     def test_visible_alert_records_filters_resolved_acknowledged_and_snoozed_records(self) -> None:
         active = _record(id=1)
         acknowledged = _record(id=2, acknowledged_at_kst="2026-06-30T10:00:00+09:00")
@@ -58,16 +81,18 @@ class AlertHistoryTests(unittest.TestCase):
 
 
 class FakeConnection:
-    def __init__(self, rows: list[dict[str, object]]) -> None:
-        self.cursor_obj = FakeCursor(rows)
+    def __init__(self, rows: list[dict[str, object]], total: int | None = None) -> None:
+        self.cursor_obj = FakeCursor(rows, total=total)
 
     def cursor(self) -> "FakeCursor":
         return self.cursor_obj
 
 
 class FakeCursor:
-    def __init__(self, rows: list[dict[str, object]]) -> None:
+    def __init__(self, rows: list[dict[str, object]], total: int | None = None) -> None:
         self.rows = rows
+        self.total = total if total is not None else len(rows)
+        self.query = ""
         self.executed: list[tuple[str, tuple[object, ...]]] = []
 
     def __enter__(self) -> "FakeCursor":
@@ -77,12 +102,15 @@ class FakeCursor:
         return None
 
     def execute(self, query: str, params: tuple[object, ...] = ()) -> None:
+        self.query = query
         self.executed.append((query, params))
 
     def fetchall(self) -> list[dict[str, object]]:
         return self.rows
 
     def fetchone(self) -> dict[str, object]:
+        if "COUNT(*) AS total" in self.query:
+            return {"total": self.total}
         return self.rows[0]
 
 

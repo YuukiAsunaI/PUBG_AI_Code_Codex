@@ -5,14 +5,14 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 from pubg_ai.alert_history import (
     AlertHistoryError,
     acknowledge_alert,
-    list_alert_history,
+    get_alert_history_page,
     snooze_alert,
     sync_alert_history,
     visible_alert_records,
@@ -261,6 +261,29 @@ def create_app() -> Any:
     @app.get("/alerts/status")
     def alerts_status() -> dict[str, Any]:
         return _alerts_status_record(settings_store, current_config())
+
+    @app.get("/alerts/history")
+    def alert_history(
+        source: str = "all",
+        state: str = "all",
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+    ) -> dict[str, Any]:
+        connection = connect_mysql(current_config().database)
+        try:
+            try:
+                page = get_alert_history_page(
+                    connection,
+                    source=source,
+                    state=state,
+                    limit=limit,
+                    offset=offset,
+                )
+            except AlertHistoryError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return _alert_history_page_record(page)
 
     @app.post("/settings/alerts")
     def save_alert_settings(request: AlertSettingsRequest) -> dict[str, Any]:
@@ -948,11 +971,12 @@ def _alerts_status_record(settings_store: LocalSettingsStore, config: RuntimeCon
             after_worker_run_id=None,
         )
         active_records = sync_alert_history(connection, report.alerts)
-        history_records = list_alert_history(connection, active_only=False, limit=50)
+        history_page = get_alert_history_page(connection, limit=50)
         current_alert_keys = {alert.key for alert in report.alerts}
     finally:
         connection.close()
 
+    history_record = _alert_history_page_record(history_page)
     return {
         "alert_settings": alert_settings.to_record(),
         "alerts": [
@@ -960,8 +984,17 @@ def _alerts_status_record(settings_store: LocalSettingsStore, config: RuntimeCon
             for record in visible_alert_records(active_records)
             if record.alert_key in current_alert_keys
         ],
-        "alert_history": [record.to_record() for record in history_records],
+        **history_record,
         "latest_worker_run_id": report.latest_worker_run_id,
+    }
+
+
+def _alert_history_page_record(page: Any) -> dict[str, Any]:
+    record = page.to_record()
+    records = record.pop("records")
+    return {
+        "alert_history": records,
+        "alert_history_page": record,
     }
 
 
@@ -1226,6 +1259,39 @@ _INDEX_HTML = """<!doctype html>
         <tbody id="alertsBody"></tbody>
       </table>
       <h3>Alert History</h3>
+      <form id="alertHistoryFilterForm">
+        <label>Source
+          <select name="source">
+            <option value="all">all</option>
+            <option value="storage">storage</option>
+            <option value="worker">worker</option>
+          </select>
+        </label>
+        <label>Status
+          <select name="state">
+            <option value="all">all</option>
+            <option value="current">current</option>
+            <option value="active">active</option>
+            <option value="acknowledged">acknowledged</option>
+            <option value="snoozed">snoozed</option>
+            <option value="resolved">resolved</option>
+          </select>
+        </label>
+        <label>Rows
+          <select name="limit">
+            <option value="25">25</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+            <option value="200">200</option>
+          </select>
+        </label>
+        <button type="submit">Apply</button>
+      </form>
+      <div class="actions" style="margin-top: 10px;">
+        <button class="secondary" type="button" id="alertHistoryPrev">Previous</button>
+        <button class="secondary" type="button" id="alertHistoryNext">Next</button>
+      </div>
+      <div class="status" id="alertHistoryStatus" style="margin-top: 8px;">Waiting</div>
       <table>
         <thead>
           <tr>
@@ -1737,7 +1803,11 @@ _INDEX_HTML = """<!doctype html>
     const alertSettingsForm = document.querySelector("#alertSettingsForm");
     const alertSettingsStatus = document.querySelector("#alertSettingsStatus");
     const alertsBody = document.querySelector("#alertsBody");
+    const alertHistoryFilterForm = document.querySelector("#alertHistoryFilterForm");
     const alertHistoryBody = document.querySelector("#alertHistoryBody");
+    const alertHistoryStatus = document.querySelector("#alertHistoryStatus");
+    const alertHistoryPrev = document.querySelector("#alertHistoryPrev");
+    const alertHistoryNext = document.querySelector("#alertHistoryNext");
     const collectorSettingsForm = document.querySelector("#collectorSettingsForm");
     const collectorSettingsStatus = document.querySelector("#collectorSettingsStatus");
     const collectorWorkerForm = document.querySelector("#collectorWorkerForm");
@@ -1784,6 +1854,15 @@ _INDEX_HTML = """<!doctype html>
     let replayPlaying = false;
     let activeRecommendationTarget = "";
     let activeRecommendationShard = "steam";
+    let alertHistoryPage = {
+      source: "all",
+      state: "all",
+      limit: 50,
+      offset: 0,
+      total: 0,
+      has_previous: false,
+      has_next: false,
+    };
     let activeDiscordScopes = {
       guild_ranking_scopes: {},
       public_profile_default: true,
@@ -1859,7 +1938,25 @@ _INDEX_HTML = """<!doctype html>
         alertSettingsStatus.textContent = `Error: ${error.message}`;
         alertsBody.innerHTML = `<tr><td colspan="5">Error: ${escapeHtml(error.message)}</td></tr>`;
         alertHistoryBody.innerHTML = `<tr><td colspan="5">Error: ${escapeHtml(error.message)}</td></tr>`;
+        alertHistoryStatus.textContent = `Error: ${error.message}`;
       }
+    }
+
+    async function loadAlertHistory(options = {}) {
+      const form = new FormData(alertHistoryFilterForm);
+      const source = options.source || String(form.get("source") || alertHistoryPage.source || "all");
+      const state = options.state || String(form.get("state") || alertHistoryPage.state || "all");
+      const limit = Number(options.limit || form.get("limit") || alertHistoryPage.limit || 50);
+      const offset = Math.max(0, Number(options.offset ?? alertHistoryPage.offset ?? 0));
+      const params = new URLSearchParams({
+        source,
+        state,
+        limit: String(limit),
+        offset: String(offset),
+      });
+      const payload = await fetch(`/alerts/history?${params.toString()}`).then((r) => r.json());
+      if (payload.detail) throw new Error(payload.detail);
+      renderAlertHistory(payload.alert_history || [], payload.alert_history_page || {}, true);
     }
 
     function renderAlertStatus(payload) {
@@ -1872,10 +1969,10 @@ _INDEX_HTML = """<!doctype html>
         `minimum ${formatBytes(Number(settings.minimum_free_bytes || 0))}`,
         `channels ${(settings.discord_channel_ids || []).length}`,
         `active alerts ${(payload.alerts || []).length}`,
-        `history ${(payload.alert_history || []).length}`,
+        `history ${payload.alert_history_page?.total ?? (payload.alert_history || []).length}`,
       ].join(" / ");
       renderAlerts(payload.alerts || []);
-      renderAlertHistory(payload.alert_history || []);
+      renderAlertHistory(payload.alert_history || [], payload.alert_history_page || {}, true);
     }
 
     function renderAlerts(alerts) {
@@ -1897,7 +1994,28 @@ _INDEX_HTML = """<!doctype html>
         : `<tr><td colspan="5">No active alerts</td></tr>`;
     }
 
-    function renderAlertHistory(history) {
+    function renderAlertHistory(history, page = {}, syncControls = false) {
+      alertHistoryPage = {
+        ...alertHistoryPage,
+        ...page,
+        limit: Number(page.limit || alertHistoryPage.limit || 50),
+        offset: Number(page.offset ?? alertHistoryPage.offset ?? 0),
+        total: Number(page.total ?? alertHistoryPage.total ?? history.length),
+      };
+      if (syncControls) {
+        alertHistoryFilterForm.elements.source.value = alertHistoryPage.source || "all";
+        alertHistoryFilterForm.elements.state.value = alertHistoryPage.state || "all";
+        alertHistoryFilterForm.elements.limit.value = String(alertHistoryPage.limit || 50);
+      }
+      const start = history.length ? alertHistoryPage.offset + 1 : 0;
+      const end = history.length ? alertHistoryPage.offset + history.length : 0;
+      alertHistoryStatus.textContent = [
+        `${start}-${end} of ${alertHistoryPage.total}`,
+        `source ${alertHistoryPage.source || "all"}`,
+        `status ${alertHistoryPage.state || "all"}`,
+      ].join(" / ");
+      alertHistoryPrev.disabled = !alertHistoryPage.has_previous;
+      alertHistoryNext.disabled = !alertHistoryPage.has_next;
       alertHistoryBody.innerHTML = history.length
         ? history.map((alert) => `
           <tr>
@@ -1931,13 +2049,17 @@ _INDEX_HTML = """<!doctype html>
     }
 
     async function acknowledgeAlert(alertId) {
-      const payload = await postJson(`/alerts/history/${encodeURIComponent(alertId)}/acknowledge`, {});
-      renderAlertStatus(payload);
+      const page = { ...alertHistoryPage };
+      await postJson(`/alerts/history/${encodeURIComponent(alertId)}/acknowledge`, {});
+      await loadAlerts();
+      await loadAlertHistory(page);
     }
 
     async function snoozeAlert(alertId, minutes = 60) {
-      const payload = await postJson(`/alerts/history/${encodeURIComponent(alertId)}/snooze`, { minutes });
-      renderAlertStatus(payload);
+      const page = { ...alertHistoryPage };
+      await postJson(`/alerts/history/${encodeURIComponent(alertId)}/snooze`, { minutes });
+      await loadAlerts();
+      await loadAlertHistory(page);
     }
 
     function parseIdList(value) {
@@ -3654,6 +3776,39 @@ _INDEX_HTML = """<!doctype html>
           banner.textContent = "Alert snoozed";
         }
       } catch (error) {
+        banner.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    alertHistoryFilterForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        await loadAlertHistory({ offset: 0 });
+        banner.textContent = "Alert history loaded";
+      } catch (error) {
+        alertHistoryStatus.textContent = `Error: ${error.message}`;
+        banner.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    alertHistoryPrev.addEventListener("click", async () => {
+      try {
+        await loadAlertHistory({
+          offset: Math.max(0, alertHistoryPage.offset - alertHistoryPage.limit),
+        });
+      } catch (error) {
+        alertHistoryStatus.textContent = `Error: ${error.message}`;
+        banner.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    alertHistoryNext.addEventListener("click", async () => {
+      try {
+        await loadAlertHistory({
+          offset: alertHistoryPage.offset + alertHistoryPage.limit,
+        });
+      } catch (error) {
+        alertHistoryStatus.textContent = `Error: ${error.message}`;
         banner.textContent = `Error: ${error.message}`;
       }
     });

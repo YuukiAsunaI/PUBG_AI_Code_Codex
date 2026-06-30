@@ -14,6 +14,10 @@ class AlertHistoryError(RuntimeError):
     """Raised when alert history cannot be updated or read."""
 
 
+ALERT_HISTORY_SOURCES = {"all", "storage", "worker"}
+ALERT_HISTORY_STATES = {"all", "active", "current", "acknowledged", "snoozed", "resolved"}
+
+
 @dataclass(frozen=True)
 class AlertHistoryRecord:
     id: int
@@ -49,6 +53,28 @@ class AlertHistoryRecord:
         record["is_snoozed"] = self.is_snoozed()
         record["is_suppressed"] = self.is_suppressed()
         return record
+
+
+@dataclass(frozen=True)
+class AlertHistoryPage:
+    records: list[AlertHistoryRecord]
+    total: int
+    limit: int
+    offset: int
+    source: str
+    state: str
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "records": [record.to_record() for record in self.records],
+            "total": self.total,
+            "limit": self.limit,
+            "offset": self.offset,
+            "source": self.source,
+            "state": self.state,
+            "has_previous": self.offset > 0,
+            "has_next": self.offset + len(self.records) < self.total,
+        }
 
 
 def sync_alert_history(connection: Any, alerts: list[SystemAlert]) -> list[AlertHistoryRecord]:
@@ -119,9 +145,13 @@ def list_alert_history(
     *,
     active_only: bool = False,
     limit: int = 50,
+    offset: int = 0,
+    source: str | None = None,
+    state: str = "all",
 ) -> list[AlertHistoryRecord]:
     bounded_limit = max(1, min(int(limit), 200))
-    where = "WHERE resolved_at_kst IS NULL" if active_only else ""
+    bounded_offset = max(0, int(offset))
+    _, _, where, params = _history_filter_clause(source=source, state=state, active_only=active_only)
     with connection.cursor() as cursor:
         cursor.execute(
             f"""
@@ -143,12 +173,66 @@ def list_alert_history(
             FROM system_alert_history
             {where}
             ORDER BY last_seen_at_kst DESC, id DESC
-            LIMIT %s
+            LIMIT %s OFFSET %s
             """,
-            (bounded_limit,),
+            tuple(params + [bounded_limit, bounded_offset]),
         )
         rows = cursor.fetchall()
     return [_row_to_record(row) for row in rows]
+
+
+def count_alert_history(
+    connection: Any,
+    *,
+    active_only: bool = False,
+    source: str | None = None,
+    state: str = "all",
+) -> int:
+    _, _, where, params = _history_filter_clause(source=source, state=state, active_only=active_only)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT COUNT(*) AS total
+            FROM system_alert_history
+            {where}
+            """,
+            tuple(params),
+        )
+        row = cursor.fetchone()
+    return int((row or {}).get("total") or 0)
+
+
+def get_alert_history_page(
+    connection: Any,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    source: str | None = None,
+    state: str = "all",
+) -> AlertHistoryPage:
+    normalized_source, normalized_state, _, _ = _history_filter_clause(
+        source=source,
+        state=state,
+        active_only=False,
+    )
+    bounded_limit = max(1, min(int(limit), 200))
+    bounded_offset = max(0, int(offset))
+    records = list_alert_history(
+        connection,
+        limit=bounded_limit,
+        offset=bounded_offset,
+        source=normalized_source,
+        state=normalized_state,
+    )
+    total = count_alert_history(connection, source=normalized_source, state=normalized_state)
+    return AlertHistoryPage(
+        records=records,
+        total=total,
+        limit=bounded_limit,
+        offset=bounded_offset,
+        source=normalized_source,
+        state=normalized_state,
+    )
 
 
 def acknowledge_alert(connection: Any, alert_id: int) -> AlertHistoryRecord:
@@ -240,6 +324,48 @@ def visible_alert_records(records: list[AlertHistoryRecord]) -> list[AlertHistor
 
 def alert_key_hash(alert_key: str) -> str:
     return hashlib.sha256(alert_key.encode("utf-8")).hexdigest()
+
+
+def _history_filter_clause(
+    *,
+    source: str | None,
+    state: str,
+    active_only: bool,
+) -> tuple[str, str, str, list[Any]]:
+    normalized_source = (source or "all").strip().lower() or "all"
+    if normalized_source not in ALERT_HISTORY_SOURCES:
+        raise AlertHistoryError(f"invalid alert source filter: {source}")
+
+    normalized_state = (state or "all").strip().lower() or "all"
+    if active_only and normalized_state == "all":
+        normalized_state = "active"
+    if normalized_state not in ALERT_HISTORY_STATES:
+        raise AlertHistoryError(f"invalid alert state filter: {state}")
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if normalized_source != "all":
+        clauses.append("source = %s")
+        params.append(normalized_source)
+
+    if normalized_state == "active":
+        clauses.append("resolved_at_kst IS NULL")
+    elif normalized_state == "current":
+        clauses.append("resolved_at_kst IS NULL")
+        clauses.append("acknowledged_at_kst IS NULL")
+        clauses.append("(snoozed_until_kst IS NULL OR snoozed_until_kst <= %s)")
+        params.append(_mysql_datetime(now_kst()))
+    elif normalized_state == "acknowledged":
+        clauses.append("acknowledged_at_kst IS NOT NULL")
+    elif normalized_state == "snoozed":
+        clauses.append("snoozed_until_kst IS NOT NULL")
+        clauses.append("snoozed_until_kst > %s")
+        params.append(_mysql_datetime(now_kst()))
+    elif normalized_state == "resolved":
+        clauses.append("resolved_at_kst IS NOT NULL")
+
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    return normalized_source, normalized_state, where, params
 
 
 def _resolve_missing_storage_alerts(connection: Any, active_hashes: list[str], timestamp: datetime) -> None:

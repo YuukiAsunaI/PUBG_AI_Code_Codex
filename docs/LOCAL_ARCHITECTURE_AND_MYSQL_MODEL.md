@@ -362,8 +362,9 @@ Completed slices:
     currently snoozed alert records.
 38. Discord admins can use `pubg-alert-ack alert_id` and `pubg-alert-snooze alert_id [minutes]` to update persisted
     alert history without opening the local manager. Alert reports and automatic messages include alert IDs.
+39. The local manager can filter and page alert history by source and status, so old resolved or suppressed alerts can
+    be inspected without loading the whole `system_alert_history` table into the main page.
 
 Next slice:
 
-1. Add local alert-history filtering/pagination so long-running installations can inspect old resolved alerts without
-   overloading the main manager page.
+1. Add alert-history CSV export for admin review and long-term local incident notes.
