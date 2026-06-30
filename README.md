@@ -302,6 +302,8 @@ Discord's message content intent to be enabled for the bot application. Initial 
 !pubg-alert-note alert_id note
 !pubg-alert-resolution alert_id resolution
 !pubg-alert-notes alert_id [limit]
+!pubg-alert-history [current-errors|worker-failures|storage-pressure|all-history]
+!pubg-alert-history source=storage state=current severity=error search="drive" limit=5
 !유저삭제 steam 닉네임또는accountId
 ```
 
@@ -330,7 +332,8 @@ alert record. Admins can also run `pubg-alert-ack alert_id` or `pubg-alert-snooz
 Discord after reading the ID from `pubg-alerts` or an automatic alert message. Admins can attach incident notes with
 `pubg-alert-note alert_id note` and resolution comments with `pubg-alert-resolution alert_id resolution`; those entries
 are stored in the same MySQL `system_alert_notes` table shown by the local manager. Use
-`pubg-alert-notes alert_id [limit]` to review the newest notes from Discord.
+`pubg-alert-notes alert_id [limit]` to review the newest notes from Discord. Use `pubg-alert-history` with quick
+presets or `source`/`state`/`severity`/`search` filters to review persisted alert history from Discord.
 
 Run the local management app:
 

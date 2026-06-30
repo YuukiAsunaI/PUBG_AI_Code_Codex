@@ -390,7 +390,9 @@ Completed slices:
     search filter used by the paged history table.
 51. Alert history APIs and the local manager support severity filtering, and the local manager has quick presets for
     current errors, worker failures, storage pressure, and full-history review.
+52. Discord admins can use `pubg-alert-history` to review persisted alert history with the same source, status,
+    severity, search, sort, limit, offset, and quick-preset filters without opening the local manager.
 
 Next slice:
 
-1. Add a Discord alert-history lookup command with source/status/severity/search filters for admins.
+1. Add local-manager alert detail links to Discord alert-history responses when `PUBG_LOCAL_WEB_BASE_URL` is set.

@@ -154,6 +154,8 @@ DEFAULT_COMMAND_GROUPS["admin"] = sorted(
             "pubg-alert-note-list",
             "pubg-alert-resolution",
             "pubg-alert-resolve",
+            "pubg-alert-history",
+            "pubg-alert-log",
         ]
     )
 )

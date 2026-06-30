@@ -125,6 +125,8 @@ class DiscordCommandDefaultsTests(unittest.TestCase):
         self.assertIn("pubg-alert-notes", DEFAULT_COMMAND_GROUPS["admin"])
         self.assertIn("pubg-alert-note-list", DEFAULT_COMMAND_GROUPS["admin"])
         self.assertIn("pubg-alert-resolution", DEFAULT_COMMAND_GROUPS["admin"])
+        self.assertIn("pubg-alert-history", DEFAULT_COMMAND_GROUPS["admin"])
+        self.assertIn("pubg-alert-log", DEFAULT_COMMAND_GROUPS["admin"])
 
 
 if __name__ == "__main__":

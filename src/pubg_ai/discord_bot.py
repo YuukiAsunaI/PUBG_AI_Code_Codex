@@ -2,15 +2,22 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import shlex
 from typing import Any
 from urllib.parse import urlencode
 
 from pubg_ai.alert_history import (
+    ALERT_HISTORY_SEVERITIES,
+    ALERT_HISTORY_SORTS,
+    ALERT_HISTORY_SOURCES,
+    ALERT_HISTORY_STATES,
     AlertHistoryError,
     AlertHistoryNote,
+    AlertHistoryPage,
     AlertHistoryRecord,
     acknowledge_alert,
     add_alert_note,
+    get_alert_history_page,
     get_alert_history_record,
     list_alert_notes,
     mark_alert_notified,
@@ -34,6 +41,36 @@ from pubg_ai.worker_run_history import get_latest_worker_run_id
 
 
 DEFAULT_DISCORD_PREFIX = "!"
+ALERT_HISTORY_PRESETS: dict[str, dict[str, str]] = {
+    "current-errors": {
+        "source": "all",
+        "state": "current",
+        "severity": "error",
+        "sort": "severity",
+        "search": "",
+    },
+    "worker-failures": {
+        "source": "worker",
+        "state": "all",
+        "severity": "error",
+        "sort": "newest",
+        "search": "",
+    },
+    "storage-pressure": {
+        "source": "storage",
+        "state": "all",
+        "severity": "all",
+        "sort": "severity",
+        "search": "",
+    },
+    "all-history": {
+        "source": "all",
+        "state": "all",
+        "severity": "all",
+        "sort": "newest",
+        "search": "",
+    },
+}
 
 
 def format_player_list(players: list[RegisteredPlayer]) -> str:
@@ -111,6 +148,31 @@ def format_alert_notes_result(record: AlertHistoryRecord, notes: list[AlertHisto
         created_by = note.created_by or "-"
         text = _discord_single_line(note.note_text, 180)
         lines.append(f"- #{note.id} {note.note_type} {created_at} by {created_by}: {text}")
+    return "\n".join(lines)
+
+
+def format_alert_history_result(page: AlertHistoryPage) -> str:
+    lines = [
+        "PUBG AI alert history",
+        (
+            f"- filters: source={page.source} state={page.state} severity={page.severity} "
+            f"sort={page.sort} search={page.search or '-'}"
+        ),
+        f"- shown/total: {len(page.records)}/{page.total} offset={page.offset} limit={page.limit}",
+    ]
+    if not page.records:
+        lines.append("- no alert history rows")
+        return "\n".join(lines)
+
+    for record in page.records:
+        state = _alert_history_record_state(record)
+        title = _discord_single_line(record.title, 80)
+        message = _discord_single_line(record.message, 100)
+        last_seen = record.last_seen_at_kst or "-"
+        lines.append(
+            f"- #{record.id} [{record.source}/{record.severity}/{state}] {last_seen} "
+            f"{title}: {message}"
+        )
     return "\n".join(lines)
 
 
@@ -475,6 +537,7 @@ def create_discord_bot(
                     f"- `{command_prefix}pubg-alert-note alert_id note`",
                     f"- `{command_prefix}pubg-alert-resolution alert_id resolution`",
                     f"- `{command_prefix}pubg-alert-notes alert_id [limit]`",
+                    f"- `{command_prefix}pubg-alert-history [preset|filters]`",
                     f"- `{command_prefix}유저삭제 steam 닉네임또는accountId`",
                 ]
             ),
@@ -994,6 +1057,43 @@ def create_discord_bot(
 
         await ctx.reply(format_alert_notes_result(record, notes), mention_author=False)
 
+    @bot.command(name="pubg-alert-history", aliases=["pubg-alert-log"])
+    async def alert_history_command(ctx: Any, *, filters: str | None = None) -> None:
+        if not await require_permission(ctx, "admin"):
+            return
+        try:
+            parsed = _parse_alert_history_filters(filters)
+        except ValueError as exc:
+            await ctx.reply(
+                f"Usage: `{command_prefix}pubg-alert-history [current-errors|worker-failures|storage-pressure|all-history] "
+                "source=all|storage|worker state=all|current|active|acknowledged|snoozed|resolved "
+                "severity=all|error|warning|info|ok search=text limit=5`"
+                f"\nError: {exc}",
+                mention_author=False,
+            )
+            return
+
+        connection = connect_mysql(config.database)
+        try:
+            try:
+                page = get_alert_history_page(
+                    connection,
+                    source=str(parsed["source"]),
+                    state=str(parsed["state"]),
+                    severity=str(parsed["severity"]),
+                    sort=str(parsed["sort"]),
+                    search=str(parsed["search"]),
+                    limit=int(parsed["limit"]),
+                    offset=int(parsed["offset"]),
+                )
+            except AlertHistoryError as exc:
+                await ctx.reply(f"PUBG AI alert history error: {exc}", mention_author=False)
+                return
+        finally:
+            connection.close()
+
+        await ctx.reply(format_alert_history_result(page), mention_author=False)
+
     return bot
 
 
@@ -1155,6 +1255,117 @@ def _positive_int(value: str | int | None) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed > 0 else None
+
+
+def _parse_alert_history_filters(raw: str | None) -> dict[str, str | int]:
+    filters: dict[str, str | int] = {
+        "source": "all",
+        "state": "all",
+        "severity": "all",
+        "sort": "newest",
+        "search": "",
+        "limit": 5,
+        "offset": 0,
+    }
+    if not raw or not raw.strip():
+        return filters
+
+    try:
+        tokens = shlex.split(raw)
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
+
+    search_terms: list[str] = []
+    for token in tokens:
+        normalized_token = token.strip()
+        if not normalized_token:
+            continue
+
+        if "=" in normalized_token:
+            key, value = normalized_token.split("=", 1)
+            _apply_alert_history_filter(filters, key.strip().lower(), value.strip())
+            continue
+
+        lowered = normalized_token.lower()
+        if lowered in ALERT_HISTORY_PRESETS:
+            filters.update(ALERT_HISTORY_PRESETS[lowered])
+        elif lowered in ALERT_HISTORY_SOURCES:
+            filters["source"] = lowered
+        elif lowered in ALERT_HISTORY_STATES:
+            filters["state"] = lowered
+        elif lowered in ALERT_HISTORY_SEVERITIES:
+            filters["severity"] = lowered
+        elif lowered in ALERT_HISTORY_SORTS:
+            filters["sort"] = lowered
+        elif _is_int_token(lowered):
+            filters["limit"] = _alert_history_limit(lowered)
+        else:
+            search_terms.append(normalized_token)
+
+    if search_terms:
+        existing_search = str(filters["search"]).strip()
+        terms = " ".join(search_terms).strip()
+        filters["search"] = f"{existing_search} {terms}".strip() if existing_search else terms
+    return filters
+
+
+def _apply_alert_history_filter(filters: dict[str, str | int], key: str, value: str) -> None:
+    lowered = value.strip().lower()
+    if key in {"source", "src"}:
+        if lowered not in ALERT_HISTORY_SOURCES:
+            raise ValueError(f"invalid source: {value}")
+        filters["source"] = lowered
+    elif key in {"state", "status"}:
+        if lowered not in ALERT_HISTORY_STATES:
+            raise ValueError(f"invalid state: {value}")
+        filters["state"] = lowered
+    elif key in {"severity", "sev"}:
+        if lowered not in ALERT_HISTORY_SEVERITIES:
+            raise ValueError(f"invalid severity: {value}")
+        filters["severity"] = lowered
+    elif key == "sort":
+        if lowered in {"severity-first", "severity_first"}:
+            lowered = "severity"
+        if lowered not in ALERT_HISTORY_SORTS:
+            raise ValueError(f"invalid sort: {value}")
+        filters["sort"] = lowered
+    elif key in {"search", "q"}:
+        filters["search"] = value.strip()
+    elif key == "limit":
+        filters["limit"] = _alert_history_limit(value)
+    elif key == "offset":
+        filters["offset"] = _alert_history_offset(value)
+    elif key == "preset":
+        if lowered not in ALERT_HISTORY_PRESETS:
+            raise ValueError(f"invalid preset: {value}")
+        filters.update(ALERT_HISTORY_PRESETS[lowered])
+    else:
+        raise ValueError(f"unknown filter: {key}")
+
+
+def _alert_history_limit(value: str | int) -> int:
+    parsed = _positive_int(value)
+    if parsed is None:
+        raise ValueError(f"invalid limit: {value}")
+    return max(1, min(parsed, 10))
+
+
+def _alert_history_offset(value: str | int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid offset: {value}") from exc
+    return max(0, parsed)
+
+
+def _alert_history_record_state(record: AlertHistoryRecord) -> str:
+    if record.resolved_at_kst:
+        return "resolved"
+    if record.is_acknowledged():
+        return "acknowledged"
+    if record.is_snoozed():
+        return "snoozed"
+    return "current"
 
 
 def _top_parts(parts: dict[str, int]) -> str:

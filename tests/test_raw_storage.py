@@ -293,6 +293,8 @@ class LocalSettingsStoreTests(unittest.TestCase):
             self.assertIn("pubg-alert-notes", loaded.command_groups["admin"])
             self.assertIn("pubg-alert-note-list", loaded.command_groups["admin"])
             self.assertIn("pubg-alert-resolution", loaded.command_groups["admin"])
+            self.assertIn("pubg-alert-history", loaded.command_groups["admin"])
+            self.assertIn("pubg-alert-log", loaded.command_groups["admin"])
             self.assertIn("pubg-register", loaded.command_groups["register"])
 
     def test_discord_permission_settings_reject_unknown_groups(self) -> None:

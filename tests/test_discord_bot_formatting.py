@@ -4,8 +4,10 @@ from datetime import datetime
 import unittest
 
 from pubg_ai.discord_bot import (
+    _parse_alert_history_filters,
     _player_visible_to_scope,
     format_alert_action_result,
+    format_alert_history_result,
     format_alert_note_result,
     format_alert_notes_result,
     format_player_list,
@@ -15,7 +17,7 @@ from pubg_ai.discord_bot import (
     format_player_weapon_detail,
     format_replay_artifact_summary,
 )
-from pubg_ai.alert_history import AlertHistoryNote, AlertHistoryRecord
+from pubg_ai.alert_history import AlertHistoryNote, AlertHistoryPage, AlertHistoryRecord
 from pubg_ai.player_rankings import PlayerRanking, PlayerRankingRow
 from pubg_ai.player_registry import RegisteredPlayer
 from pubg_ai.player_stats import (
@@ -113,6 +115,66 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("- shown/total: 1/2", body)
         self.assertIn("#12 resolution 2026-06-30T10:05:00+09:00", body)
         self.assertIn("raw drive expanded worker restarted", body)
+
+    def test_alert_history_result_formats_filters_and_rows(self) -> None:
+        record = AlertHistoryRecord(
+            id=7,
+            alert_key="worker:7",
+            source="worker",
+            severity="error",
+            title="collector worker failed",
+            message="raw drive disconnected during match collection",
+            metadata={},
+            first_seen_at_kst="2026-06-30T10:00:00+09:00",
+            last_seen_at_kst="2026-06-30T10:01:00+09:00",
+            last_notified_at_kst=None,
+            acknowledged_at_kst=None,
+            snoozed_until_kst=None,
+            resolved_at_kst=None,
+            updated_at_kst="2026-06-30T10:02:00+09:00",
+        )
+        page = AlertHistoryPage(
+            records=[record],
+            total=3,
+            limit=5,
+            offset=0,
+            source="worker",
+            state="current",
+            severity="error",
+            sort="severity",
+            search="raw drive",
+        )
+
+        body = format_alert_history_result(page)
+
+        self.assertIn("PUBG AI alert history", body)
+        self.assertIn("source=worker state=current severity=error sort=severity search=raw drive", body)
+        self.assertIn("shown/total: 1/3", body)
+        self.assertIn("#7 [worker/error/current]", body)
+        self.assertIn("collector worker failed", body)
+
+    def test_alert_history_filter_parser_supports_presets_and_search_terms(self) -> None:
+        filters = _parse_alert_history_filters("current-errors limit=7 raw drive")
+
+        self.assertEqual(filters["source"], "all")
+        self.assertEqual(filters["state"], "current")
+        self.assertEqual(filters["severity"], "error")
+        self.assertEqual(filters["sort"], "severity")
+        self.assertEqual(filters["limit"], 7)
+        self.assertEqual(filters["search"], "raw drive")
+
+    def test_alert_history_filter_parser_supports_key_value_filters(self) -> None:
+        filters = _parse_alert_history_filters(
+            'source=storage status=resolved severity=warning sort=oldest q="disk full" offset=10 limit=99'
+        )
+
+        self.assertEqual(filters["source"], "storage")
+        self.assertEqual(filters["state"], "resolved")
+        self.assertEqual(filters["severity"], "warning")
+        self.assertEqual(filters["sort"], "oldest")
+        self.assertEqual(filters["search"], "disk full")
+        self.assertEqual(filters["offset"], 10)
+        self.assertEqual(filters["limit"], 10)
 
     def test_player_list_formats_status_and_short_account_id(self) -> None:
         players = [
