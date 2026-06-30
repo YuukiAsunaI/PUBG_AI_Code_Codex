@@ -386,7 +386,9 @@ Completed slices:
     scanned before opening a detail panel.
 49. Alert history APIs and the local manager support `newest`, `oldest`, and `severity` sort modes, including CSV
     export and paged history review.
+50. Alert history APIs and the local manager support title/message text search, and CSV export preserves the same
+    search filter used by the paged history table.
 
 Next slice:
 
-1. Add alert-history text search for titles/messages so old incidents can be found without exporting CSV.
+1. Add quick alert-history filter presets for current errors, worker failures, and storage pressure reviews.

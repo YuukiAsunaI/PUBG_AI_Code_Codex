@@ -72,6 +72,7 @@ class AlertHistoryPage:
     source: str
     state: str
     sort: str = "newest"
+    search: str = ""
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -82,6 +83,7 @@ class AlertHistoryPage:
             "source": self.source,
             "state": self.state,
             "sort": self.sort,
+            "search": self.search,
             "has_previous": self.offset > 0,
             "has_next": self.offset + len(self.records) < self.total,
         }
@@ -173,10 +175,16 @@ def list_alert_history(
     source: str | None = None,
     state: str = "all",
     sort: str = "newest",
+    search: str | None = None,
 ) -> list[AlertHistoryRecord]:
     bounded_limit = _bounded_limit(limit, max_limit=max_limit)
     bounded_offset = max(0, int(offset))
-    _, _, where, params = _history_filter_clause(source=source, state=state, active_only=active_only)
+    _, _, _, where, params = _history_filter_clause(
+        source=source,
+        state=state,
+        active_only=active_only,
+        search=search,
+    )
     order_by = _history_order_by(sort)
     with connection.cursor() as cursor:
         cursor.execute(
@@ -239,8 +247,14 @@ def count_alert_history(
     active_only: bool = False,
     source: str | None = None,
     state: str = "all",
+    search: str | None = None,
 ) -> int:
-    _, _, where, params = _history_filter_clause(source=source, state=state, active_only=active_only)
+    _, _, _, where, params = _history_filter_clause(
+        source=source,
+        state=state,
+        active_only=active_only,
+        search=search,
+    )
     with connection.cursor() as cursor:
         cursor.execute(
             f"""
@@ -262,11 +276,13 @@ def get_alert_history_page(
     source: str | None = None,
     state: str = "all",
     sort: str = "newest",
+    search: str | None = None,
 ) -> AlertHistoryPage:
-    normalized_source, normalized_state, _, _ = _history_filter_clause(
+    normalized_source, normalized_state, normalized_search, _, _ = _history_filter_clause(
         source=source,
         state=state,
         active_only=False,
+        search=search,
     )
     normalized_sort = _normalize_history_sort(sort)
     bounded_limit = _bounded_limit(limit, max_limit=ALERT_HISTORY_PAGE_LIMIT)
@@ -279,8 +295,14 @@ def get_alert_history_page(
         source=normalized_source,
         state=normalized_state,
         sort=normalized_sort,
+        search=normalized_search,
     )
-    total = count_alert_history(connection, source=normalized_source, state=normalized_state)
+    total = count_alert_history(
+        connection,
+        source=normalized_source,
+        state=normalized_state,
+        search=normalized_search,
+    )
     return AlertHistoryPage(
         records=records,
         total=total,
@@ -289,6 +311,7 @@ def get_alert_history_page(
         source=normalized_source,
         state=normalized_state,
         sort=normalized_sort,
+        search=normalized_search,
     )
 
 
@@ -523,6 +546,11 @@ def _normalize_history_sort(sort: str) -> str:
     return normalized
 
 
+def _normalize_history_search(search: str | None) -> str:
+    normalized = search.strip() if isinstance(search, str) else ""
+    return normalized[:200]
+
+
 def _history_order_by(sort: str) -> str:
     normalized = _normalize_history_sort(sort)
     if normalized == "oldest":
@@ -544,7 +572,8 @@ def _history_filter_clause(
     source: str | None,
     state: str,
     active_only: bool,
-) -> tuple[str, str, str, list[Any]]:
+    search: str | None = None,
+) -> tuple[str, str, str, str, list[Any]]:
     normalized_source = (source or "all").strip().lower() or "all"
     if normalized_source not in ALERT_HISTORY_SOURCES:
         raise AlertHistoryError(f"invalid alert source filter: {source}")
@@ -555,6 +584,7 @@ def _history_filter_clause(
     if normalized_state not in ALERT_HISTORY_STATES:
         raise AlertHistoryError(f"invalid alert state filter: {state}")
 
+    normalized_search = _normalize_history_search(search)
     clauses: list[str] = []
     params: list[Any] = []
     if normalized_source != "all":
@@ -577,8 +607,13 @@ def _history_filter_clause(
     elif normalized_state == "resolved":
         clauses.append("resolved_at_kst IS NOT NULL")
 
+    if normalized_search:
+        clauses.append("(title LIKE %s OR message LIKE %s)")
+        pattern = f"%{normalized_search}%"
+        params.extend([pattern, pattern])
+
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    return normalized_source, normalized_state, where, params
+    return normalized_source, normalized_state, normalized_search, where, params
 
 
 def _resolve_missing_storage_alerts(connection: Any, active_hashes: list[str], timestamp: datetime) -> None:

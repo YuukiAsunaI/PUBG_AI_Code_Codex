@@ -312,11 +312,11 @@ The current local runtime can automate the analysis and replay-artifact side aft
 - The alert layer reads `worker_run_history` and storage capacity checks so the local UI and Discord bot can show the
   same storage/worker failure report. Persisted alert history in `system_alert_history` stores first/last seen,
   notification, acknowledgement, snooze, and resolved timestamps so repeated alerts can be suppressed without losing
-  evidence. The local manager reads that history through source/status filters, newest/oldest/severity-first sorting,
-  state/severity badges, and offset pagination, and can export the filtered rows to CSV for local review notes. Admin
-  notes and resolution comments are stored separately in `system_alert_notes` so the incident trail stays attached to
-  the alert record, and the local manager can open a per-alert detail panel for state review, acknowledge/snooze
-  actions, note history, and inline note/resolution entry.
+  evidence. The local manager reads that history through source/status filters, title/message search,
+  newest/oldest/severity-first sorting, state/severity badges, and offset pagination, and can export the filtered
+  rows to CSV for local review notes. Admin notes and resolution comments are stored separately in
+  `system_alert_notes` so the incident trail stays attached to the alert record, and the local manager can open a
+  per-alert detail panel for state review, acknowledge/snooze actions, note history, and inline note/resolution entry.
 
 ## Implemented Discord Bot MVP Slice
 

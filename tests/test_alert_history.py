@@ -61,6 +61,7 @@ class AlertHistoryTests(unittest.TestCase):
             source="storage",
             state="resolved",
             sort="oldest",
+            search="raw_data",
             limit=25,
             offset=50,
         )
@@ -71,13 +72,18 @@ class AlertHistoryTests(unittest.TestCase):
         self.assertEqual(page.source, "storage")
         self.assertEqual(page.state, "resolved")
         self.assertEqual(page.sort, "oldest")
+        self.assertEqual(page.search, "raw_data")
         self.assertEqual(page.to_record()["sort"], "oldest")
+        self.assertEqual(page.to_record()["search"], "raw_data")
         executed_sql = "\n".join(query for query, _ in connection.cursor_obj.executed)
         self.assertIn("source = %s", executed_sql)
         self.assertIn("resolved_at_kst IS NOT NULL", executed_sql)
+        self.assertIn("(title LIKE %s OR message LIKE %s)", executed_sql)
         self.assertIn("ORDER BY last_seen_at_kst ASC, id ASC", executed_sql)
         self.assertIn("LIMIT %s OFFSET %s", executed_sql)
         self.assertIn("COUNT(*) AS total", executed_sql)
+        self.assertIn("%raw_data%", connection.cursor_obj.executed[0][1])
+        self.assertIn("%raw_data%", connection.cursor_obj.executed[-1][1])
 
     def test_history_sort_supports_severity_first(self) -> None:
         connection = FakeConnection(rows=[_alert_row()])

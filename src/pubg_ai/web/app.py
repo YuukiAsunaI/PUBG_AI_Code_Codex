@@ -281,6 +281,7 @@ def create_app() -> Any:
         source: str = "all",
         state: str = "all",
         sort: str = "newest",
+        search: str = "",
         limit: int = Query(default=50, ge=1, le=200),
         offset: int = Query(default=0, ge=0),
     ) -> dict[str, Any]:
@@ -292,6 +293,7 @@ def create_app() -> Any:
                     source=source,
                     state=state,
                     sort=sort,
+                    search=search,
                     limit=limit,
                     offset=offset,
                 )
@@ -306,6 +308,7 @@ def create_app() -> Any:
         source: str = "all",
         state: str = "all",
         sort: str = "newest",
+        search: str = "",
         limit: int = Query(default=ALERT_HISTORY_EXPORT_LIMIT, ge=1, le=ALERT_HISTORY_EXPORT_LIMIT),
         offset: int = Query(default=0, ge=0),
     ) -> Response:
@@ -317,6 +320,7 @@ def create_app() -> Any:
                     source=source,
                     state=state,
                     sort=sort,
+                    search=search,
                     limit=limit,
                     max_limit=ALERT_HISTORY_EXPORT_LIMIT,
                     offset=offset,
@@ -1211,6 +1215,7 @@ _INDEX_HTML = """<!doctype html>
     .kv span { display: block; color: var(--muted); font-size: 12px; }
     .kv strong { display: block; margin-top: 4px; font-size: 14px; overflow-wrap: anywhere; }
     form { display: grid; grid-template-columns: 120px 1fr 1fr 150px auto; gap: 10px; align-items: end; }
+    .alert-history-filter { grid-template-columns: 120px 140px 100px 150px minmax(180px, 1fr) auto; }
     label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
     input, select, textarea {
       width: 100%;
@@ -1369,6 +1374,7 @@ _INDEX_HTML = """<!doctype html>
     @media (max-width: 900px) {
       .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       form { grid-template-columns: 1fr; }
+      .alert-history-filter { grid-template-columns: 1fr; }
       .player-controls { grid-template-columns: 1fr; }
       .timeline-range { grid-template-columns: 1fr; }
       .replay-detail-layout { grid-template-columns: 1fr; }
@@ -1442,7 +1448,7 @@ _INDEX_HTML = """<!doctype html>
         <tbody id="alertsBody"></tbody>
       </table>
       <h3>Alert History</h3>
-      <form id="alertHistoryFilterForm">
+      <form id="alertHistoryFilterForm" class="alert-history-filter">
         <label>Source
           <select name="source">
             <option value="all">all</option>
@@ -1474,6 +1480,9 @@ _INDEX_HTML = """<!doctype html>
             <option value="oldest">oldest</option>
             <option value="severity">severity-first</option>
           </select>
+        </label>
+        <label>Search
+          <input name="search" placeholder="title or message">
         </label>
         <button type="submit">Apply</button>
       </form>
@@ -2059,6 +2068,7 @@ _INDEX_HTML = """<!doctype html>
       offset: 0,
       total: 0,
       sort: "newest",
+      search: "",
       has_previous: false,
       has_next: false,
     };
@@ -2150,12 +2160,14 @@ _INDEX_HTML = """<!doctype html>
       const source = options.source || String(form.get("source") || alertHistoryPage.source || "all");
       const state = options.state || String(form.get("state") || alertHistoryPage.state || "all");
       const sort = options.sort || String(form.get("sort") || alertHistoryPage.sort || "newest");
+      const search = options.search ?? String(form.get("search") ?? alertHistoryPage.search ?? "");
       const limit = Number(options.limit || form.get("limit") || alertHistoryPage.limit || 50);
       const offset = Math.max(0, Number(options.offset ?? alertHistoryPage.offset ?? 0));
       const params = new URLSearchParams({
         source,
         state,
         sort,
+        search,
         limit: String(limit),
         offset: String(offset),
       });
@@ -2170,6 +2182,7 @@ _INDEX_HTML = """<!doctype html>
         source: String(form.get("source") || alertHistoryPage.source || "all"),
         state: String(form.get("state") || alertHistoryPage.state || "all"),
         sort: String(form.get("sort") || alertHistoryPage.sort || "newest"),
+        search: String(form.get("search") ?? alertHistoryPage.search ?? ""),
         limit: "5000",
         offset: "0",
       });
@@ -2219,11 +2232,13 @@ _INDEX_HTML = """<!doctype html>
         limit: Number(page.limit || alertHistoryPage.limit || 50),
         offset: Number(page.offset ?? alertHistoryPage.offset ?? 0),
         total: Number(page.total ?? alertHistoryPage.total ?? history.length),
+        search: String(page.search ?? ""),
       };
       if (syncControls) {
         alertHistoryFilterForm.elements.source.value = alertHistoryPage.source || "all";
         alertHistoryFilterForm.elements.state.value = alertHistoryPage.state || "all";
         alertHistoryFilterForm.elements.sort.value = alertHistoryPage.sort || "newest";
+        alertHistoryFilterForm.elements.search.value = alertHistoryPage.search || "";
         alertHistoryFilterForm.elements.limit.value = String(alertHistoryPage.limit || 50);
       }
       const start = history.length ? alertHistoryPage.offset + 1 : 0;
@@ -2233,6 +2248,7 @@ _INDEX_HTML = """<!doctype html>
         `source ${alertHistoryPage.source || "all"}`,
         `status ${alertHistoryPage.state || "all"}`,
         `sort ${alertHistoryPage.sort || "newest"}`,
+        `search ${alertHistoryPage.search ? `"${alertHistoryPage.search}"` : "-"}`,
       ].join(" / ");
       alertHistoryPrev.disabled = !alertHistoryPage.has_previous;
       alertHistoryNext.disabled = !alertHistoryPage.has_next;

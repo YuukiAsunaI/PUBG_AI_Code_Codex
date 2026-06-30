@@ -114,9 +114,9 @@ The current settings screen provides:
 - public profile default editor
 - alert settings for minimum free storage and Discord alert channel IDs
 - current storage/worker alert table with acknowledge and one-hour snooze actions
-- persisted storage/worker alert history with source/status filters, newest/oldest/severity-first sorting,
-  previous/next pagination, CSV export, state/severity badges, note/resolution comment actions, and a per-alert detail
-  panel with acknowledge/snooze controls and inline note entry
+- persisted storage/worker alert history with source/status filters, title/message search,
+  newest/oldest/severity-first sorting, previous/next pagination, CSV export, state/severity badges,
+  note/resolution comment actions, and a per-alert detail panel with acknowledge/snooze controls and inline note entry
 - Discord admin alert note/resolution commands, controlled by the same `admin` permission group
 - free disk space display for each path
 - warning when a configured drive is disconnected
