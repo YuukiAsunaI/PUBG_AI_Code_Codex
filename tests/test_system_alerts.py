@@ -4,6 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
+from pubg_ai.alert_history import AlertHistoryRecord
 from pubg_ai.config import AppConfig, DatabaseConfig, RuntimeConfig, SecretConfig
 from pubg_ai.local_settings import AlertSettings
 from pubg_ai.system_alerts import collect_system_alerts, format_alert_report, format_discord_alert, worker_run_alert
@@ -71,6 +72,27 @@ class SystemAlertsTests(unittest.TestCase):
 
     def test_empty_alert_report_message(self) -> None:
         self.assertEqual(format_alert_report([]), "PUBG AI alerts: no active alerts.")
+
+    def test_alert_history_records_include_id_in_discord_messages(self) -> None:
+        record = AlertHistoryRecord(
+            id=7,
+            alert_key="worker:7",
+            source="worker",
+            severity="error",
+            title="collector worker failed",
+            message="drive missing",
+            metadata={},
+            first_seen_at_kst="2026-06-30T10:00:00+09:00",
+            last_seen_at_kst="2026-06-30T10:01:00+09:00",
+            last_notified_at_kst=None,
+            acknowledged_at_kst=None,
+            snoozed_until_kst=None,
+            resolved_at_kst=None,
+            updated_at_kst="2026-06-30T10:01:00+09:00",
+        )
+
+        self.assertIn("- alert_id: 7", format_discord_alert(record))
+        self.assertIn("#7 collector worker failed", format_alert_report([record]))
 
 
 def _runtime_config(raw_data_dir: Path, replay_data_dir: Path) -> RuntimeConfig:

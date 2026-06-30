@@ -86,7 +86,8 @@ Recommended JSON shape:
 
 Runtime priority:
 
-The current built-in `admin` command group also includes `pubg-alerts` for alert report lookup.
+The current built-in `admin` command group also includes `pubg-alerts`, `pubg-alert-ack`, and
+`pubg-alert-snooze` for alert report lookup and Discord-side alert suppression.
 
 1. Built-in defaults: `./data/raw`, `./data/replays`
 2. `.env` values: `PUBG_RAW_DATA_DIR`, `PUBG_REPLAY_DATA_DIR`

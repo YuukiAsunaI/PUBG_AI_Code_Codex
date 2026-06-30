@@ -344,7 +344,8 @@ The current Discord bot slice is intentionally small and reuses the same local M
 - `!pubg-alerts` returns current storage and worker alerts for admins. When alert channel IDs are configured in the
   local manager, the running bot also sends new worker failures and active storage-capacity alerts automatically.
   Alert records acknowledged or snoozed in the local manager are skipped by both automatic alert delivery and the
-  current alert report.
+  current alert report. The current report and automatic messages include alert IDs so admins can run
+  `!pubg-alert-ack alert_id` or `!pubg-alert-snooze alert_id [minutes]` directly from Discord.
 - Command access is checked through local Discord permission settings. Global admins can manage every guild, while
   guild-specific grants stay scoped by `guild_id`.
 - The local web UI and CLI can now add/revoke user command-group grants and add/remove global Discord admins without

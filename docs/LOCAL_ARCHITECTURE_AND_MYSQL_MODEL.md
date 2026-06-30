@@ -360,8 +360,10 @@ Completed slices:
 37. Storage/worker alerts are persisted to `system_alert_history`; the local manager separates current alerts from
     recent history and can acknowledge or one-hour-snooze repeated alerts. The Discord bot skips acknowledged or
     currently snoozed alert records.
+38. Discord admins can use `pubg-alert-ack alert_id` and `pubg-alert-snooze alert_id [minutes]` to update persisted
+    alert history without opening the local manager. Alert reports and automatic messages include alert IDs.
 
 Next slice:
 
-1. Add Discord-side alert acknowledgement/snooze commands by alert ID for admins who are not sitting at the local
-   manager.
+1. Add local alert-history filtering/pagination so long-running installations can inspect old resolved alerts without
+   overloading the main manager page.

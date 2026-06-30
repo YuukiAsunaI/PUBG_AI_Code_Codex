@@ -142,7 +142,17 @@ def worker_run_alert(run: WorkerRunRecord) -> SystemAlert:
 
 
 def format_discord_alert(alert: SystemAlert) -> str:
-    return f"[PUBG AI Alert] {alert.title}\n- severity: {alert.severity}\n- {alert.message}"
+    lines = [f"[PUBG AI Alert] {alert.title}"]
+    alert_id = getattr(alert, "id", None)
+    if alert_id is not None:
+        lines.append(f"- alert_id: {alert_id}")
+    lines.extend(
+        [
+            f"- severity: {alert.severity}",
+            f"- {alert.message}",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def format_alert_report(alerts: list[SystemAlert], *, limit: int = 5) -> str:
@@ -151,7 +161,9 @@ def format_alert_report(alerts: list[SystemAlert], *, limit: int = 5) -> str:
     selected = alerts[: max(1, limit)]
     lines: list[str] = [f"PUBG AI alerts ({len(alerts)})"]
     for alert in selected:
-        lines.append(f"- {alert.title}: {alert.message}")
+        alert_id = getattr(alert, "id", None)
+        prefix = f"#{alert_id} " if alert_id is not None else ""
+        lines.append(f"- {prefix}{alert.title}: {alert.message}")
     if len(alerts) > len(selected):
         lines.append(f"- ...and {len(alerts) - len(selected)} more")
     return "\n".join(lines)

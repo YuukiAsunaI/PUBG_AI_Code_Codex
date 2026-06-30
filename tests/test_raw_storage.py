@@ -264,6 +264,33 @@ class LocalSettingsStoreTests(unittest.TestCase):
             self.assertEqual(loaded.user_grants["discord-user-1"], ["profile_read", "ranking_read"])
             self.assertIn("pubg-register", loaded.command_groups["register"])
 
+    def test_discord_permission_settings_merge_new_default_commands(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            settings_file = Path(temp_dir) / "config" / "local_settings.json"
+            settings_file.parent.mkdir(parents=True)
+            settings_file.write_text(
+                json.dumps(
+                    {
+                        "discord_permissions": {
+                            "command_groups": {
+                                "admin": ["유저삭제", "pubg-alerts"],
+                            },
+                            "user_grants": {},
+                            "guild_user_grants": {},
+                            "global_admin_user_ids": [],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            store = LocalSettingsStore(settings_file)
+
+            loaded = store.load_discord_permission_settings()
+
+            self.assertIn("pubg-alert-ack", loaded.command_groups["admin"])
+            self.assertIn("pubg-alert-snooze", loaded.command_groups["admin"])
+            self.assertIn("pubg-register", loaded.command_groups["register"])
+
     def test_discord_permission_settings_reject_unknown_groups(self) -> None:
         with TemporaryDirectory() as temp_dir:
             store = LocalSettingsStore(Path(temp_dir) / "config" / "local_settings.json")

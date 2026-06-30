@@ -5,7 +5,15 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
-from pubg_ai.alert_history import mark_alert_notified, sync_alert_history, visible_alert_records
+from pubg_ai.alert_history import (
+    AlertHistoryError,
+    AlertHistoryRecord,
+    acknowledge_alert,
+    mark_alert_notified,
+    snooze_alert,
+    sync_alert_history,
+    visible_alert_records,
+)
 from pubg_ai.config import RuntimeConfig
 from pubg_ai.database import connect_mysql
 from pubg_ai.discord_permissions import DiscordCommandIdentity, DiscordPermissionChecker
@@ -50,6 +58,21 @@ def format_replay_artifact_summary(artifact: ReplayArtifactRecord) -> str:
         f"- map/mode: {map_name} / {mode}\n"
         f"- size: {size_kb:.1f} KB"
     )
+
+
+def format_alert_action_result(record: AlertHistoryRecord, action: str) -> str:
+    status = "acknowledged" if action == "acknowledged" else "snoozed"
+    lines = [
+        f"PUBG AI alert {status}",
+        f"- id: {record.id}",
+        f"- title: {record.title}",
+        f"- source/severity: {record.source}/{record.severity}",
+    ]
+    if action == "snoozed" and record.snoozed_until_kst:
+        lines.append(f"- snoozed_until_kst: {record.snoozed_until_kst}")
+    if action == "acknowledged" and record.acknowledged_at_kst:
+        lines.append(f"- acknowledged_at_kst: {record.acknowledged_at_kst}")
+    return "\n".join(lines)
 
 
 def format_player_profile_stats(profile: PlayerProfileStats) -> str:
@@ -403,6 +426,9 @@ def create_discord_bot(
                     f"- `{command_prefix}매치 match_id [닉네임|accountId] [shard]`",
                     f"- `{command_prefix}랭킹 [지표] [shard] [limit] [전체]`",
                     f"- `{command_prefix}최근스냅샷 [match_id]`",
+                    f"- `{command_prefix}pubg-alerts`",
+                    f"- `{command_prefix}pubg-alert-ack alert_id`",
+                    f"- `{command_prefix}pubg-alert-snooze alert_id [minutes]`",
                     f"- `{command_prefix}유저삭제 steam 닉네임또는accountId`",
                 ]
             ),
@@ -772,6 +798,56 @@ def create_discord_bot(
 
         await ctx.reply(format_alert_report(visible_records), mention_author=False)
 
+    @bot.command(name="pubg-alert-ack", aliases=["pubg-alert-acknowledge"])
+    async def alert_acknowledge_command(ctx: Any, alert_id: str | None = None) -> None:
+        if not await require_permission(ctx, "admin"):
+            return
+        parsed_alert_id = _positive_int(alert_id)
+        if parsed_alert_id is None:
+            await ctx.reply(f"Usage: `{command_prefix}pubg-alert-ack alert_id`", mention_author=False)
+            return
+
+        connection = connect_mysql(config.database)
+        try:
+            try:
+                record = acknowledge_alert(connection, parsed_alert_id)
+            except AlertHistoryError as exc:
+                await ctx.reply(f"PUBG AI alert not found: {exc}", mention_author=False)
+                return
+        finally:
+            connection.close()
+
+        await ctx.reply(format_alert_action_result(record, "acknowledged"), mention_author=False)
+
+    @bot.command(name="pubg-alert-snooze")
+    async def alert_snooze_command(
+        ctx: Any,
+        alert_id: str | None = None,
+        minutes: str = "60",
+    ) -> None:
+        if not await require_permission(ctx, "admin"):
+            return
+        parsed_alert_id = _positive_int(alert_id)
+        parsed_minutes = _positive_int(minutes)
+        if parsed_alert_id is None or parsed_minutes is None:
+            await ctx.reply(
+                f"Usage: `{command_prefix}pubg-alert-snooze alert_id [minutes]`",
+                mention_author=False,
+            )
+            return
+
+        connection = connect_mysql(config.database)
+        try:
+            try:
+                record = snooze_alert(connection, parsed_alert_id, parsed_minutes)
+            except AlertHistoryError as exc:
+                await ctx.reply(f"PUBG AI alert not found: {exc}", mention_author=False)
+                return
+        finally:
+            connection.close()
+
+        await ctx.reply(format_alert_action_result(record, "snoozed"), mention_author=False)
+
     return bot
 
 
@@ -916,6 +992,16 @@ def _is_int_token(value: str) -> bool:
 
 def _ranking_limit(value: str) -> int:
     return max(1, min(int(value), 20))
+
+
+def _positive_int(value: str | int | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _top_parts(parts: dict[str, int]) -> str:

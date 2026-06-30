@@ -5,6 +5,7 @@ import unittest
 
 from pubg_ai.discord_bot import (
     _player_visible_to_scope,
+    format_alert_action_result,
     format_player_list,
     format_player_match_detail,
     format_player_profile_stats,
@@ -12,6 +13,7 @@ from pubg_ai.discord_bot import (
     format_player_weapon_detail,
     format_replay_artifact_summary,
 )
+from pubg_ai.alert_history import AlertHistoryRecord
 from pubg_ai.player_rankings import PlayerRanking, PlayerRankingRow
 from pubg_ai.player_registry import RegisteredPlayer
 from pubg_ai.player_stats import (
@@ -29,6 +31,31 @@ from pubg_ai.replay_artifact_catalog import ReplayArtifactRecord
 
 
 class DiscordBotFormattingTests(unittest.TestCase):
+    def test_alert_action_result_formats_discord_admin_response(self) -> None:
+        record = AlertHistoryRecord(
+            id=7,
+            alert_key="worker:7",
+            source="worker",
+            severity="error",
+            title="collector worker failed",
+            message="drive missing",
+            metadata={},
+            first_seen_at_kst="2026-06-30T10:00:00+09:00",
+            last_seen_at_kst="2026-06-30T10:01:00+09:00",
+            last_notified_at_kst=None,
+            acknowledged_at_kst="2026-06-30T10:02:00+09:00",
+            snoozed_until_kst=None,
+            resolved_at_kst=None,
+            updated_at_kst="2026-06-30T10:02:00+09:00",
+        )
+
+        body = format_alert_action_result(record, "acknowledged")
+
+        self.assertIn("PUBG AI alert acknowledged", body)
+        self.assertIn("- id: 7", body)
+        self.assertIn("collector worker failed", body)
+        self.assertIn("acknowledged_at_kst", body)
+
     def test_player_list_formats_status_and_short_account_id(self) -> None:
         players = [
             RegisteredPlayer(

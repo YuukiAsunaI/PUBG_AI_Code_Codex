@@ -141,7 +141,12 @@ DEFAULT_COMMAND_GROUPS: dict[str, list[str]] = {
     "settings_write": ["pubg-settings"],
     "admin": ["유저삭제", "pubg-permission", "pubg-unregister", "pubg-delete-data"],
 }
-DEFAULT_COMMAND_GROUPS["admin"] = sorted(set(DEFAULT_COMMAND_GROUPS["admin"] + ["pubg-alerts"]))
+DEFAULT_COMMAND_GROUPS["admin"] = sorted(
+    set(
+        DEFAULT_COMMAND_GROUPS["admin"]
+        + ["pubg-alerts", "pubg-alert-ack", "pubg-alert-acknowledge", "pubg-alert-snooze"]
+    )
+)
 
 FORBIDDEN_LOCAL_SETTING_KEYS = {
     "PUBG_API_KEY",
@@ -518,8 +523,11 @@ def _validate_collector_settings(settings: CollectorSettings) -> None:
 def _discord_permissions_from_record(record: dict[str, Any]) -> DiscordPermissionSettings:
     command_groups = record.get("command_groups")
     user_grants = record.get("user_grants")
+    normalized_command_groups = _normalize_groups(
+        command_groups if isinstance(command_groups, dict) else DEFAULT_COMMAND_GROUPS
+    )
     settings = DiscordPermissionSettings(
-        command_groups=_normalize_groups(command_groups if isinstance(command_groups, dict) else DEFAULT_COMMAND_GROUPS),
+        command_groups=_merge_default_command_groups(normalized_command_groups),
         user_grants=_normalize_groups(user_grants if isinstance(user_grants, dict) else {}),
         guild_user_grants=_normalize_guild_grants(
             record.get("guild_user_grants") if isinstance(record.get("guild_user_grants"), dict) else {}
@@ -574,6 +582,13 @@ def _normalize_groups(value: dict[str, Any]) -> dict[str, list[str]]:
 
         normalized[key] = sorted(set(normalized_values))
     return normalized
+
+
+def _merge_default_command_groups(groups: dict[str, list[str]]) -> dict[str, list[str]]:
+    merged = _copy_groups(groups)
+    for group, default_values in DEFAULT_COMMAND_GROUPS.items():
+        merged[group] = sorted(set(merged.get(group, []) + default_values))
+    return merged
 
 
 def _copy_groups(groups: dict[str, list[str]]) -> dict[str, list[str]]:

@@ -297,6 +297,8 @@ Discord's message content intent to be enabled for the bot application. Initial 
 !랭킹 [지표] [shard] [limit] [전체]
 !최근스냅샷 [match_id]
 !pubg-alerts
+!pubg-alert-ack alert_id
+!pubg-alert-snooze alert_id [minutes]
 !유저삭제 steam 닉네임또는accountId
 ```
 
@@ -321,7 +323,8 @@ The `admin` group includes `pubg-alerts`, which returns current storage and work
 IDs are configured from the local manager, the running Discord bot also sends new worker failures and active storage
 capacity alerts to those channels. Alerts are persisted in MySQL so the local manager can show alert history; using
 the local manager's acknowledge or one-hour snooze action suppresses repeated local/Discord notifications for that
-alert record.
+alert record. Admins can also run `pubg-alert-ack alert_id` or `pubg-alert-snooze alert_id [minutes]` directly in
+Discord after reading the ID from `pubg-alerts` or an automatic alert message.
 
 Run the local management app:
 

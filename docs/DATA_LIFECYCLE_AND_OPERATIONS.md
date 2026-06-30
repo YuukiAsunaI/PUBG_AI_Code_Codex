@@ -65,7 +65,9 @@ Implemented behavior:
 - `POST /alerts/history/{alert_id}/snooze` hides a persisted alert until the requested KST expiry, capped at 30 days.
 - The Discord bot sends active storage alerts once per bot process and sends newly persisted worker failures from
   `worker_run_history`; acknowledged and currently snoozed alert records are skipped.
-- The admin-only `pubg-alerts` Discord command returns the current alert report on demand.
+- The admin-only `pubg-alerts` Discord command returns the current alert report on demand, including alert IDs.
+- The admin-only `pubg-alert-ack alert_id` and `pubg-alert-snooze alert_id [minutes]` commands update the same
+  persisted alert history from Discord.
 
 ## Duplicate Match Handling
 
