@@ -93,6 +93,7 @@ Use a two-layer storage model:
 | `replay_artifacts` | Generated 2D replay timeline, map snapshot, thumbnail, GIF, video, and cache metadata |
 | `parse_runs` | Parser version, status, error, and row counts |
 | `system_alert_history` | Persisted storage/worker alert records with notification, acknowledgement, snooze, and resolved timestamps |
+| `system_alert_notes` | Admin notes and resolution comments attached to alert history records |
 
 ### Match Facts
 
@@ -366,7 +367,9 @@ Completed slices:
     be inspected without loading the whole `system_alert_history` table into the main page.
 40. The local manager can export filtered alert history to CSV, capped at 5,000 rows per request, for admin review or
     external incident notes.
+41. Alert history records can store persistent admin notes and resolution comments in `system_alert_notes`; the local
+    manager shows the latest note/count and can add note or resolution entries from each history row.
 
 Next slice:
 
-1. Add persistent admin notes/resolution comments to alert history records.
+1. Add Discord-side alert note/resolution commands so admins can annotate alert history from Discord.

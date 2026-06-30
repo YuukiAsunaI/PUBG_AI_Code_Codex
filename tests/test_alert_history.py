@@ -5,10 +5,12 @@ import unittest
 from pubg_ai.alert_history import (
     ALERT_HISTORY_EXPORT_LIMIT,
     AlertHistoryRecord,
+    add_alert_note,
     acknowledge_alert,
     alert_key_hash,
     get_alert_history_page,
     list_alert_history,
+    list_alert_notes,
     snooze_alert,
     sync_alert_history,
     visible_alert_records,
@@ -80,6 +82,25 @@ class AlertHistoryTests(unittest.TestCase):
 
         self.assertEqual(connection.cursor_obj.executed[-1][1][-2:], (ALERT_HISTORY_EXPORT_LIMIT, 0))
 
+    def test_alert_notes_can_be_added_and_listed(self) -> None:
+        connection = FakeConnection(rows=[_alert_row()], note_rows=[_note_row()])
+
+        note = add_alert_note(
+            connection,
+            7,
+            "Checked drive and cleared old generated artifacts.",
+            note_type="resolution",
+            created_by="admin",
+        )
+        notes = list_alert_notes(connection, 7)
+
+        self.assertEqual(note.note_type, "resolution")
+        self.assertEqual(note.created_by, "admin")
+        self.assertEqual(notes[0].note_text, "Checked drive and cleared old generated artifacts.")
+        executed_sql = "\n".join(query for query, _ in connection.cursor_obj.executed)
+        self.assertIn("INSERT INTO system_alert_notes", executed_sql)
+        self.assertIn("FROM system_alert_notes", executed_sql)
+
     def test_visible_alert_records_filters_resolved_acknowledged_and_snoozed_records(self) -> None:
         active = _record(id=1)
         acknowledged = _record(id=2, acknowledged_at_kst="2026-06-30T10:00:00+09:00")
@@ -90,18 +111,30 @@ class AlertHistoryTests(unittest.TestCase):
 
 
 class FakeConnection:
-    def __init__(self, rows: list[dict[str, object]], total: int | None = None) -> None:
-        self.cursor_obj = FakeCursor(rows, total=total)
+    def __init__(
+        self,
+        rows: list[dict[str, object]],
+        total: int | None = None,
+        note_rows: list[dict[str, object]] | None = None,
+    ) -> None:
+        self.cursor_obj = FakeCursor(rows, total=total, note_rows=note_rows)
 
     def cursor(self) -> "FakeCursor":
         return self.cursor_obj
 
 
 class FakeCursor:
-    def __init__(self, rows: list[dict[str, object]], total: int | None = None) -> None:
+    def __init__(
+        self,
+        rows: list[dict[str, object]],
+        total: int | None = None,
+        note_rows: list[dict[str, object]] | None = None,
+    ) -> None:
         self.rows = rows
+        self.note_rows = note_rows or []
         self.total = total if total is not None else len(rows)
         self.query = ""
+        self.lastrowid = 21
         self.executed: list[tuple[str, tuple[object, ...]]] = []
 
     def __enter__(self) -> "FakeCursor":
@@ -115,11 +148,15 @@ class FakeCursor:
         self.executed.append((query, params))
 
     def fetchall(self) -> list[dict[str, object]]:
+        if "FROM system_alert_notes" in self.query and "FROM system_alert_history" not in self.query:
+            return self.note_rows
         return self.rows
 
     def fetchone(self) -> dict[str, object]:
         if "COUNT(*) AS total" in self.query:
             return {"total": self.total}
+        if "FROM system_alert_notes" in self.query and "FROM system_alert_history" not in self.query:
+            return self.note_rows[0] if self.note_rows else {}
         return self.rows[0]
 
 
@@ -139,6 +176,17 @@ def _alert_row() -> dict[str, object]:
         "snoozed_until_kst": None,
         "resolved_at_kst": None,
         "updated_at_kst": "2026-06-30T10:01:00+09:00",
+    }
+
+
+def _note_row() -> dict[str, object]:
+    return {
+        "id": 21,
+        "alert_history_id": 7,
+        "note_type": "resolution",
+        "note_text": "Checked drive and cleared old generated artifacts.",
+        "created_by": "admin",
+        "created_at_kst": "2026-06-30T10:05:00+09:00",
     }
 
 

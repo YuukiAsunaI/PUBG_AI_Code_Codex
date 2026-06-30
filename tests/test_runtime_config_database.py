@@ -76,6 +76,7 @@ class DatabaseSchemaTests(unittest.TestCase):
             "api_fetch_jobs",
             "worker_run_history",
             "system_alert_history",
+            "system_alert_notes",
             "matches",
             "raw_match_payloads",
             "raw_telemetry_payloads",
@@ -95,7 +96,7 @@ class DatabaseSchemaTests(unittest.TestCase):
         ]:
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table_name}", schema)
 
-        self.assertEqual(SCHEMA_VERSION, 8)
+        self.assertEqual(SCHEMA_VERSION, 9)
 
     def test_schema_tracks_official_rate_limit_headers(self) -> None:
         schema = "\n".join(schema_statements())

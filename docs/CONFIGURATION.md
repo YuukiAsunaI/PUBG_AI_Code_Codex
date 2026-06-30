@@ -113,7 +113,8 @@ The current settings screen provides:
 - public profile default editor
 - alert settings for minimum free storage and Discord alert channel IDs
 - current storage/worker alert table with acknowledge and one-hour snooze actions
-- persisted storage/worker alert history with source/status filters, previous/next pagination, and CSV export
+- persisted storage/worker alert history with source/status filters, previous/next pagination, CSV export, and
+  note/resolution comment actions
 - free disk space display for each path
 - warning when a configured drive is disconnected
 

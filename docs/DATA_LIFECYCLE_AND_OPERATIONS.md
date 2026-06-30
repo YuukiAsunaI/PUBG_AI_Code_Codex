@@ -64,6 +64,8 @@ Implemented behavior:
 - `GET /alerts/history?source=all|storage|worker&state=all|current|active|acknowledged|snoozed|resolved&limit=50&offset=0`
   returns paged alert history with a total count for the management UI.
 - `GET /alerts/history/export.csv` exports the same filtered history to CSV, bounded to 5,000 rows per request.
+- `GET /alerts/history/{alert_id}/notes` returns persisted admin notes and resolution comments for one alert.
+- `POST /alerts/history/{alert_id}/notes` stores a `note` or `resolution` comment for one alert.
 - `POST /alerts/history/{alert_id}/acknowledge` marks a persisted alert as acknowledged.
 - `POST /alerts/history/{alert_id}/snooze` hides a persisted alert until the requested KST expiry, capped at 30 days.
 - The Discord bot sends active storage alerts once per bot process and sends newly persisted worker failures from

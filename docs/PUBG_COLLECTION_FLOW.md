@@ -313,7 +313,8 @@ The current local runtime can automate the analysis and replay-artifact side aft
   same storage/worker failure report. Persisted alert history in `system_alert_history` stores first/last seen,
   notification, acknowledgement, snooze, and resolved timestamps so repeated alerts can be suppressed without losing
   evidence. The local manager reads that history through source/status filters and offset pagination, and can export
-  the filtered rows to CSV for local review notes.
+  the filtered rows to CSV for local review notes. Admin notes and resolution comments are stored separately in
+  `system_alert_notes` so the incident trail stays attached to the alert record.
 
 ## Implemented Discord Bot MVP Slice
 

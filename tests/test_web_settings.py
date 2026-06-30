@@ -34,6 +34,8 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn("/alerts/status", body)
         self.assertIn("/alerts/history/", body)
         self.assertIn("/alerts/history/export.csv", body)
+        self.assertIn("data-alert-note-type", body)
+        self.assertIn("/notes", body)
         self.assertIn("saveStorageSettings", body)
         self.assertIn("saveCollectorSettings", body)
         self.assertIn('id="collectorWorkerForm"', body)
@@ -256,6 +258,33 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn("source = %s", executed_sql)
         self.assertIn("LIMIT %s OFFSET %s", executed_sql)
 
+    def test_alert_history_note_endpoints_create_and_list_notes(self) -> None:
+        connection = FakeWorkerRunConnection(
+            rows=[],
+            latest_id=0,
+            alert_rows=[_alert_history_row()],
+            note_rows=[_alert_note_row()],
+        )
+        with patch("pubg_ai.web.app.connect_mysql", return_value=connection):
+            client = TestClient(create_app())
+            create_response = client.post(
+                "/alerts/history/7/notes",
+                json={
+                    "note_text": "Checked D drive and left the raw path unchanged.",
+                    "note_type": "resolution",
+                    "created_by": "local-admin",
+                },
+            )
+            list_response = client.get("/alerts/history/7/notes")
+
+        self.assertEqual(create_response.status_code, 200)
+        self.assertEqual(create_response.json()["note"]["note_type"], "resolution")
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(list_response.json()["notes"][0]["created_by"], "local-admin")
+        executed_sql = "\n".join(query for query, _ in connection.cursor_obj.executed)
+        self.assertIn("INSERT INTO system_alert_notes", executed_sql)
+        self.assertIn("FROM system_alert_notes", executed_sql)
+
     def test_discord_scope_settings_endpoint_updates_local_settings_file(self) -> None:
         with TemporaryDirectory() as temp_dir:
             settings_file = Path(temp_dir) / "config" / "local_settings.json"
@@ -314,9 +343,15 @@ class FakeWorkerRunConnection:
         rows: list[dict[str, object]] | None = None,
         latest_id: int = 1,
         alert_rows: list[dict[str, object]] | None = None,
+        note_rows: list[dict[str, object]] | None = None,
     ) -> None:
         self.closed = False
-        self.cursor_obj = FakeWorkerRunCursor(rows=rows, latest_id=latest_id, alert_rows=alert_rows)
+        self.cursor_obj = FakeWorkerRunCursor(
+            rows=rows,
+            latest_id=latest_id,
+            alert_rows=alert_rows,
+            note_rows=note_rows,
+        )
 
     def cursor(self) -> "FakeWorkerRunCursor":
         return self.cursor_obj
@@ -331,12 +366,15 @@ class FakeWorkerRunCursor:
         rows: list[dict[str, object]] | None = None,
         latest_id: int = 1,
         alert_rows: list[dict[str, object]] | None = None,
+        note_rows: list[dict[str, object]] | None = None,
     ) -> None:
         self.rows = rows
         self.latest_id = latest_id
         self.alert_rows = alert_rows or []
+        self.note_rows = note_rows or []
         self.query = ""
         self.params: tuple[object, ...] = ()
+        self.lastrowid = 21
         self.executed: list[tuple[str, tuple[object, ...]]] = []
 
     def __enter__(self) -> "FakeWorkerRunCursor":
@@ -351,6 +389,8 @@ class FakeWorkerRunCursor:
         self.executed.append((query, params))
 
     def fetchall(self) -> list[dict[str, object]]:
+        if "FROM system_alert_notes" in self.query and "FROM system_alert_history" not in self.query:
+            return self.note_rows
         if "FROM system_alert_history" in self.query:
             return self.alert_rows
         if "FROM worker_run_history" not in self.query and self.rows is None:
@@ -375,6 +415,8 @@ class FakeWorkerRunCursor:
     def fetchone(self) -> dict[str, object]:
         if "COUNT(*) AS total" in self.query:
             return {"total": len(self.alert_rows)}
+        if "FROM system_alert_notes" in self.query and "FROM system_alert_history" not in self.query:
+            return self.note_rows[0] if self.note_rows else {}
         if "FROM system_alert_history" in self.query:
             return self.alert_rows[0] if self.alert_rows else {}
         return {"latest_id": self.latest_id}
@@ -396,6 +438,17 @@ def _alert_history_row() -> dict[str, object]:
         "snoozed_until_kst": None,
         "resolved_at_kst": None,
         "updated_at_kst": "2026-06-30T10:01:00+09:00",
+    }
+
+
+def _alert_note_row() -> dict[str, object]:
+    return {
+        "id": 21,
+        "alert_history_id": 7,
+        "note_type": "resolution",
+        "note_text": "Checked D drive and left the raw path unchanged.",
+        "created_by": "local-admin",
+        "created_at_kst": "2026-06-30T10:05:00+09:00",
     }
 
 

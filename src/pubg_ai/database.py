@@ -8,7 +8,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 class DatabaseError(RuntimeError):
@@ -76,7 +76,7 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 VALUES (%s, %s, NOW(6))
                 ON DUPLICATE KEY UPDATE description = VALUES(description)
                 """,
-                (SCHEMA_VERSION, "system alert history schema"),
+                (SCHEMA_VERSION, "system alert notes schema"),
             )
             applied += 1
     finally:
@@ -226,6 +226,20 @@ def schema_statements() -> list[str]:
             KEY idx_system_alert_history_source_time (source, last_seen_at_kst),
             KEY idx_system_alert_history_resolved_time (resolved_at_kst, last_seen_at_kst),
             KEY idx_system_alert_history_snooze (snoozed_until_kst)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS system_alert_notes (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            alert_history_id BIGINT UNSIGNED NOT NULL,
+            note_type ENUM('note', 'resolution') NOT NULL DEFAULT 'note',
+            note_text TEXT NOT NULL,
+            created_by VARCHAR(191) NULL,
+            created_at_kst DATETIME(6) NOT NULL,
+            KEY idx_system_alert_notes_alert_time (alert_history_id, created_at_kst),
+            CONSTRAINT fk_system_alert_notes_alert_history
+                FOREIGN KEY (alert_history_id) REFERENCES system_alert_history(id)
+                ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """,
         """

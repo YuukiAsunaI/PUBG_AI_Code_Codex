@@ -16,9 +16,11 @@ from pubg_ai.alert_history import (
     ALERT_HISTORY_EXPORT_LIMIT,
     AlertHistoryError,
     AlertHistoryRecord,
+    add_alert_note,
     acknowledge_alert,
     get_alert_history_page,
     list_alert_history,
+    list_alert_notes,
     snooze_alert,
     sync_alert_history,
     visible_alert_records,
@@ -153,6 +155,12 @@ class AlertSettingsRequest(BaseModel):
 
 class AlertSnoozeRequest(BaseModel):
     minutes: int = Field(default=60, ge=1, le=43200)
+
+
+class AlertNoteRequest(BaseModel):
+    note_text: str = Field(min_length=1, max_length=5000)
+    note_type: str = Field(default="note", max_length=32)
+    created_by: str | None = Field(default="local-manager", max_length=191)
 
 
 class CollectorWorkerStartRequest(BaseModel):
@@ -314,6 +322,38 @@ def create_app() -> Any:
         finally:
             connection.close()
         return _alert_history_csv_response(records)
+
+    @app.get("/alerts/history/{alert_id}/notes")
+    def alert_history_notes(alert_id: int) -> dict[str, Any]:
+        connection = connect_mysql(current_config().database)
+        try:
+            notes = list_alert_notes(connection, alert_id, limit=100)
+        finally:
+            connection.close()
+        return {"notes": [note.to_record() for note in notes]}
+
+    @app.post("/alerts/history/{alert_id}/notes")
+    def add_alert_history_note(alert_id: int, request: AlertNoteRequest) -> dict[str, Any]:
+        connection = connect_mysql(current_config().database)
+        try:
+            try:
+                note = add_alert_note(
+                    connection,
+                    alert_id,
+                    request.note_text,
+                    note_type=request.note_type,
+                    created_by=request.created_by,
+                )
+                notes = list_alert_notes(connection, alert_id, limit=100)
+            except AlertHistoryError as exc:
+                status_code = 404 if "not found" in str(exc) else 400
+                raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {
+            "note": note.to_record(),
+            "notes": [record.to_record() for record in notes],
+        }
 
     @app.post("/settings/alerts")
     def save_alert_settings(request: AlertSettingsRequest) -> dict[str, Any]:
@@ -1045,6 +1085,10 @@ def _alert_history_csv_response(records: list[AlertHistoryRecord]) -> Response:
             "acknowledged_at_kst",
             "snoozed_until_kst",
             "resolved_at_kst",
+            "note_count",
+            "latest_note_type",
+            "latest_note",
+            "latest_note_at_kst",
             "alert_key",
             "metadata_json",
         ],
@@ -1065,6 +1109,10 @@ def _alert_history_csv_response(records: list[AlertHistoryRecord]) -> Response:
                 "acknowledged_at_kst": record.acknowledged_at_kst or "",
                 "snoozed_until_kst": record.snoozed_until_kst or "",
                 "resolved_at_kst": record.resolved_at_kst or "",
+                "note_count": record.note_count,
+                "latest_note_type": record.latest_note_type or "",
+                "latest_note": record.latest_note or "",
+                "latest_note_at_kst": record.latest_note_at_kst or "",
                 "alert_key": record.alert_key,
                 "metadata_json": _json_dumps_compact(record.metadata),
             }
@@ -1392,7 +1440,9 @@ _INDEX_HTML = """<!doctype html>
             <th>Source</th>
             <th>Title</th>
             <th>Status</th>
+            <th>Notes</th>
             <th>Message</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody id="alertHistoryBody"></tbody>
@@ -2031,7 +2081,7 @@ _INDEX_HTML = """<!doctype html>
       } catch (error) {
         alertSettingsStatus.textContent = `Error: ${error.message}`;
         alertsBody.innerHTML = `<tr><td colspan="5">Error: ${escapeHtml(error.message)}</td></tr>`;
-        alertHistoryBody.innerHTML = `<tr><td colspan="5">Error: ${escapeHtml(error.message)}</td></tr>`;
+        alertHistoryBody.innerHTML = `<tr><td colspan="7">Error: ${escapeHtml(error.message)}</td></tr>`;
         alertHistoryStatus.textContent = `Error: ${error.message}`;
       }
     }
@@ -2128,10 +2178,17 @@ _INDEX_HTML = """<!doctype html>
             <td>${escapeHtml(alert.source || "")}</td>
             <td>${escapeHtml(alert.title || "")}</td>
             <td>${escapeHtml(alertHistoryStatus(alert))}</td>
+            <td>${escapeHtml(alertHistoryNoteSummary(alert))}</td>
             <td>${escapeHtml(alert.message || "")}</td>
+            <td>
+              <div class="actions">
+                <button type="button" data-alert-note-type="note" data-alert-id="${attr(alert.id)}">Note</button>
+                <button class="secondary" type="button" data-alert-note-type="resolution" data-alert-id="${attr(alert.id)}">Resolution</button>
+              </div>
+            </td>
           </tr>
         `).join("")
-        : `<tr><td colspan="5">No alert history</td></tr>`;
+        : `<tr><td colspan="7">No alert history</td></tr>`;
     }
 
     function alertHistoryStatus(alert) {
@@ -2139,6 +2196,14 @@ _INDEX_HTML = """<!doctype html>
       if (alert.is_acknowledged) return `acknowledged ${alert.acknowledged_at_kst || ""}`;
       if (alert.is_snoozed) return `snoozed until ${alert.snoozed_until_kst || ""}`;
       return "active";
+    }
+
+    function alertHistoryNoteSummary(alert) {
+      const count = Number(alert.note_count || 0);
+      if (!count) return "-";
+      const note = alert.latest_note ? `: ${alert.latest_note}` : "";
+      const type = alert.latest_note_type || "note";
+      return `${count} ${type}${note}`;
     }
 
     async function saveAlertSettings(event) {
@@ -2163,6 +2228,20 @@ _INDEX_HTML = """<!doctype html>
     async function snoozeAlert(alertId, minutes = 60) {
       const page = { ...alertHistoryPage };
       await postJson(`/alerts/history/${encodeURIComponent(alertId)}/snooze`, { minutes });
+      await loadAlerts();
+      await loadAlertHistory(page);
+    }
+
+    async function addAlertHistoryNote(alertId, noteType) {
+      const page = { ...alertHistoryPage };
+      const label = noteType === "resolution" ? "Resolution comment" : "Alert note";
+      const noteText = window.prompt(label);
+      if (!noteText || !noteText.trim()) return;
+      await postJson(`/alerts/history/${encodeURIComponent(alertId)}/notes`, {
+        note_text: noteText.trim(),
+        note_type: noteType,
+        created_by: "local-manager",
+      });
       await loadAlerts();
       await loadAlertHistory(page);
     }
@@ -3898,6 +3977,21 @@ _INDEX_HTML = """<!doctype html>
 
     alertHistoryExport.addEventListener("click", () => {
       exportAlertHistoryCsv();
+    });
+
+    alertHistoryBody.addEventListener("click", async (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("button[data-alert-note-type]")
+        : null;
+      if (!button) return;
+
+      try {
+        await addAlertHistoryNote(button.dataset.alertId || "", button.dataset.alertNoteType || "note");
+        banner.textContent = "Alert note saved";
+      } catch (error) {
+        alertHistoryStatus.textContent = `Error: ${error.message}`;
+        banner.textContent = `Error: ${error.message}`;
+      }
     });
 
     alertHistoryPrev.addEventListener("click", async () => {
