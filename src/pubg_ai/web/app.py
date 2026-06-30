@@ -9,6 +9,14 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field
 
+from pubg_ai.alert_history import (
+    AlertHistoryError,
+    acknowledge_alert,
+    list_alert_history,
+    snooze_alert,
+    sync_alert_history,
+    visible_alert_records,
+)
 from pubg_ai.collector_worker import CollectorWorkerController, CollectorWorkerError, CollectorWorkerOptions
 from pubg_ai.config import RuntimeConfig, load_dotenv_values
 from pubg_ai.database import connect_mysql, count_tables
@@ -137,6 +145,10 @@ class AlertSettingsRequest(BaseModel):
     worker_error_alerts_enabled: bool = True
 
 
+class AlertSnoozeRequest(BaseModel):
+    minutes: int = Field(default=60, ge=1, le=43200)
+
+
 class CollectorWorkerStartRequest(BaseModel):
     shard: str | None = None
     match_job_limit: int = Field(default=10, ge=1, le=500)
@@ -262,6 +274,34 @@ def create_app() -> Any:
         except LocalSettingsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _alerts_status_record(settings_store, current_config())
+
+    @app.post("/alerts/history/{alert_id}/acknowledge")
+    def acknowledge_alert_history(alert_id: int) -> dict[str, Any]:
+        connection = connect_mysql(current_config().database)
+        try:
+            record = acknowledge_alert(connection, alert_id)
+        except AlertHistoryError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {
+            "alert": record.to_record(),
+            **_alerts_status_record(settings_store, current_config()),
+        }
+
+    @app.post("/alerts/history/{alert_id}/snooze")
+    def snooze_alert_history(alert_id: int, request: AlertSnoozeRequest) -> dict[str, Any]:
+        connection = connect_mysql(current_config().database)
+        try:
+            record = snooze_alert(connection, alert_id, request.minutes)
+        except AlertHistoryError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {
+            "alert": record.to_record(),
+            **_alerts_status_record(settings_store, current_config()),
+        }
 
     @app.get("/collector/worker/status")
     def collector_worker_status() -> dict[str, Any]:
@@ -907,12 +947,21 @@ def _alerts_status_record(settings_store: LocalSettingsStore, config: RuntimeCon
             settings=alert_settings,
             after_worker_run_id=None,
         )
+        active_records = sync_alert_history(connection, report.alerts)
+        history_records = list_alert_history(connection, active_only=False, limit=50)
+        current_alert_keys = {alert.key for alert in report.alerts}
     finally:
         connection.close()
 
     return {
         "alert_settings": alert_settings.to_record(),
-        **report.to_record(),
+        "alerts": [
+            record.to_record()
+            for record in visible_alert_records(active_records)
+            if record.alert_key in current_alert_keys
+        ],
+        "alert_history": [record.to_record() for record in history_records],
+        "latest_worker_run_id": report.latest_worker_run_id,
     }
 
 
@@ -1171,9 +1220,23 @@ _INDEX_HTML = """<!doctype html>
             <th>Severity</th>
             <th>Title</th>
             <th>Message</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody id="alertsBody"></tbody>
+      </table>
+      <h3>Alert History</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Last seen</th>
+            <th>Source</th>
+            <th>Title</th>
+            <th>Status</th>
+            <th>Message</th>
+          </tr>
+        </thead>
+        <tbody id="alertHistoryBody"></tbody>
       </table>
     </section>
     <section>
@@ -1674,6 +1737,7 @@ _INDEX_HTML = """<!doctype html>
     const alertSettingsForm = document.querySelector("#alertSettingsForm");
     const alertSettingsStatus = document.querySelector("#alertSettingsStatus");
     const alertsBody = document.querySelector("#alertsBody");
+    const alertHistoryBody = document.querySelector("#alertHistoryBody");
     const collectorSettingsForm = document.querySelector("#collectorSettingsForm");
     const collectorSettingsStatus = document.querySelector("#collectorSettingsStatus");
     const collectorWorkerForm = document.querySelector("#collectorWorkerForm");
@@ -1793,7 +1857,8 @@ _INDEX_HTML = """<!doctype html>
         renderAlertStatus(payload);
       } catch (error) {
         alertSettingsStatus.textContent = `Error: ${error.message}`;
-        alertsBody.innerHTML = `<tr><td colspan="4">Error: ${escapeHtml(error.message)}</td></tr>`;
+        alertsBody.innerHTML = `<tr><td colspan="5">Error: ${escapeHtml(error.message)}</td></tr>`;
+        alertHistoryBody.innerHTML = `<tr><td colspan="5">Error: ${escapeHtml(error.message)}</td></tr>`;
       }
     }
 
@@ -1807,8 +1872,10 @@ _INDEX_HTML = """<!doctype html>
         `minimum ${formatBytes(Number(settings.minimum_free_bytes || 0))}`,
         `channels ${(settings.discord_channel_ids || []).length}`,
         `active alerts ${(payload.alerts || []).length}`,
+        `history ${(payload.alert_history || []).length}`,
       ].join(" / ");
       renderAlerts(payload.alerts || []);
+      renderAlertHistory(payload.alert_history || []);
     }
 
     function renderAlerts(alerts) {
@@ -1819,9 +1886,36 @@ _INDEX_HTML = """<!doctype html>
             <td>${escapeHtml(alert.severity || "")}</td>
             <td>${escapeHtml(alert.title || "")}</td>
             <td>${escapeHtml(alert.message || "")}</td>
+            <td>
+              <div class="actions">
+                <button type="button" data-alert-action="acknowledge" data-alert-id="${attr(alert.id)}">Acknowledge</button>
+                <button class="secondary" type="button" data-alert-action="snooze" data-alert-id="${attr(alert.id)}">Snooze 1h</button>
+              </div>
+            </td>
           </tr>
         `).join("")
-        : `<tr><td colspan="4">No active alerts</td></tr>`;
+        : `<tr><td colspan="5">No active alerts</td></tr>`;
+    }
+
+    function renderAlertHistory(history) {
+      alertHistoryBody.innerHTML = history.length
+        ? history.map((alert) => `
+          <tr>
+            <td>${escapeHtml(alert.last_seen_at_kst || "")}</td>
+            <td>${escapeHtml(alert.source || "")}</td>
+            <td>${escapeHtml(alert.title || "")}</td>
+            <td>${escapeHtml(alertHistoryStatus(alert))}</td>
+            <td>${escapeHtml(alert.message || "")}</td>
+          </tr>
+        `).join("")
+        : `<tr><td colspan="5">No alert history</td></tr>`;
+    }
+
+    function alertHistoryStatus(alert) {
+      if (alert.resolved_at_kst) return `resolved ${alert.resolved_at_kst}`;
+      if (alert.is_acknowledged) return `acknowledged ${alert.acknowledged_at_kst || ""}`;
+      if (alert.is_snoozed) return `snoozed until ${alert.snoozed_until_kst || ""}`;
+      return "active";
     }
 
     async function saveAlertSettings(event) {
@@ -1833,6 +1927,16 @@ _INDEX_HTML = """<!doctype html>
         storage_alerts_enabled: form.get("storage_alerts_enabled") !== "false",
         worker_error_alerts_enabled: form.get("worker_error_alerts_enabled") !== "false",
       });
+      renderAlertStatus(payload);
+    }
+
+    async function acknowledgeAlert(alertId) {
+      const payload = await postJson(`/alerts/history/${encodeURIComponent(alertId)}/acknowledge`, {});
+      renderAlertStatus(payload);
+    }
+
+    async function snoozeAlert(alertId, minutes = 60) {
+      const payload = await postJson(`/alerts/history/${encodeURIComponent(alertId)}/snooze`, { minutes });
       renderAlertStatus(payload);
     }
 
@@ -3531,6 +3635,25 @@ _INDEX_HTML = """<!doctype html>
       } catch (error) {
         event.preventDefault();
         alertSettingsStatus.textContent = `Error: ${error.message}`;
+        banner.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    alertsBody.addEventListener("click", async (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("button[data-alert-action]")
+        : null;
+      if (!button) return;
+
+      try {
+        if (button.dataset.alertAction === "acknowledge") {
+          await acknowledgeAlert(button.dataset.alertId || "");
+          banner.textContent = "Alert acknowledged";
+        } else if (button.dataset.alertAction === "snooze") {
+          await snoozeAlert(button.dataset.alertId || "", 60);
+          banner.textContent = "Alert snoozed";
+        }
+      } catch (error) {
         banner.textContent = `Error: ${error.message}`;
       }
     });

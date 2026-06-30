@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
+from pubg_ai.alert_history import mark_alert_notified, sync_alert_history, visible_alert_records
 from pubg_ai.config import RuntimeConfig
 from pubg_ai.database import connect_mysql
 from pubg_ai.discord_permissions import DiscordCommandIdentity, DiscordPermissionChecker
@@ -339,26 +340,34 @@ def create_discord_bot(
                 settings=alert_settings,
                 after_worker_run_id=alert_last_worker_run_id,
             )
+            active_records = sync_alert_history(connection, report.alerts)
+            current_alert_keys = {alert.key for alert in report.alerts}
+            visible_records = [
+                record
+                for record in visible_alert_records(active_records)
+                if record.alert_key in current_alert_keys
+            ]
+
+            sent_worker_alert = False
+            worker_alert_count = 0
+            for alert in visible_records:
+                if alert.source == "storage" and alert.alert_key in sent_storage_alert_keys:
+                    continue
+                if alert.source == "worker":
+                    worker_alert_count += 1
+
+                sent_alert = False
+                for channel_id in alert_settings.discord_channel_ids or []:
+                    sent_alert = await send_alert_to_channel(channel_id, format_discord_alert(alert)) or sent_alert
+
+                if sent_alert:
+                    mark_alert_notified(connection, alert.id)
+                    if alert.source == "storage":
+                        sent_storage_alert_keys.add(alert.alert_key)
+                    if alert.source == "worker":
+                        sent_worker_alert = True
         finally:
             connection.close()
-
-        sent_worker_alert = False
-        worker_alert_count = 0
-        for alert in report.alerts:
-            if alert.source == "storage" and alert.key in sent_storage_alert_keys:
-                continue
-            if alert.source == "worker":
-                worker_alert_count += 1
-
-            sent_alert = False
-            for channel_id in alert_settings.discord_channel_ids or []:
-                sent_alert = await send_alert_to_channel(channel_id, format_discord_alert(alert)) or sent_alert
-
-            if sent_alert:
-                if alert.source == "storage":
-                    sent_storage_alert_keys.add(alert.key)
-                if alert.source == "worker":
-                    sent_worker_alert = True
 
         if worker_alert_count == 0 or sent_worker_alert:
             alert_last_worker_run_id = report.latest_worker_run_id
@@ -751,10 +760,17 @@ def create_discord_bot(
                 settings=alert_settings,
                 after_worker_run_id=None,
             )
+            active_records = sync_alert_history(connection, report.alerts)
+            current_alert_keys = {alert.key for alert in report.alerts}
+            visible_records = [
+                record
+                for record in visible_alert_records(active_records)
+                if record.alert_key in current_alert_keys
+            ]
         finally:
             connection.close()
 
-        await ctx.reply(format_alert_report(report.alerts), mention_author=False)
+        await ctx.reply(format_alert_report(visible_records), mention_author=False)
 
     return bot
 

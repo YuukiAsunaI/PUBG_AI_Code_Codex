@@ -79,7 +79,8 @@ The first executable slice is now available:
 - persistent worker run history in MySQL with a local manager table for recent collector/post-processing cycles and
   their last errors
 - local and Discord alert settings for storage pressure and worker failures, including configurable Discord alert
-  channel IDs without storing bot tokens outside `.env`
+  channel IDs, alert acknowledgement/snooze controls, and persisted alert history without storing bot tokens outside
+  `.env`
 
 Install dependencies:
 
@@ -318,7 +319,9 @@ Permission groups currently include `register`, `profile_read`, `ranking_read`, 
 `admin`.
 The `admin` group includes `pubg-alerts`, which returns current storage and worker alerts. When Discord alert channel
 IDs are configured from the local manager, the running Discord bot also sends new worker failures and active storage
-capacity alerts to those channels.
+capacity alerts to those channels. Alerts are persisted in MySQL so the local manager can show alert history; using
+the local manager's acknowledge or one-hour snooze action suppresses repeated local/Discord notifications for that
+alert record.
 
 Run the local management app:
 
@@ -339,4 +342,5 @@ The local manager can start or stop the in-process automatic collector and post-
 local web server stops; use the CLI `run-collector` and `run-post-processing` commands for separate long-running
 worker processes. Both worker entry points store recent cycle summaries in `worker_run_history`; the local manager
 shows those rows in `Worker Run History` so storage/API/parser failures remain visible after the in-memory status
-changes.
+changes. The same page stores storage/worker alert records in `system_alert_history`, shows current unsuppressed
+alerts separately from recent history, and lets the admin acknowledge or temporarily hide noisy alerts.

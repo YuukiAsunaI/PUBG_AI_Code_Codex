@@ -111,7 +111,8 @@ The current settings screen provides:
 - Discord guild-specific ranking scope editor
 - public profile default editor
 - alert settings for minimum free storage and Discord alert channel IDs
-- current storage/worker alert table
+- current storage/worker alert table with acknowledge and one-hour snooze actions
+- persisted storage/worker alert history
 - free disk space display for each path
 - warning when a configured drive is disconnected
 

@@ -92,6 +92,7 @@ Use a two-layer storage model:
 | `raw_telemetry_payloads` | Raw telemetry JSON file metadata by `match_id`, asset URL, and local file path |
 | `replay_artifacts` | Generated 2D replay timeline, map snapshot, thumbnail, GIF, video, and cache metadata |
 | `parse_runs` | Parser version, status, error, and row counts |
+| `system_alert_history` | Persisted storage/worker alert records with notification, acknowledgement, snooze, and resolved timestamps |
 
 ### Match Facts
 
@@ -356,7 +357,11 @@ Completed slices:
     runs with success/failure status, duration, summary counts, and the last error.
 36. Local manager and Discord bot can surface storage/worker alerts. Alert settings store minimum free bytes and
     Discord alert channel IDs locally, while `pubg-alerts` and the bot alert loop reuse `worker_run_history`.
+37. Storage/worker alerts are persisted to `system_alert_history`; the local manager separates current alerts from
+    recent history and can acknowledge or one-hour-snooze repeated alerts. The Discord bot skips acknowledged or
+    currently snoozed alert records.
 
 Next slice:
 
-1. Add acknowledgement/snooze controls for repeated alerts and expose alert history in the local manager.
+1. Add Discord-side alert acknowledgement/snooze commands by alert ID for admins who are not sitting at the local
+   manager.

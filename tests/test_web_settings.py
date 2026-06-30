@@ -25,8 +25,10 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn("/settings/collector", body)
         self.assertIn('id="alertSettingsForm"', body)
         self.assertIn('id="alertsBody"', body)
+        self.assertIn('id="alertHistoryBody"', body)
         self.assertIn("/settings/alerts", body)
         self.assertIn("/alerts/status", body)
+        self.assertIn("/alerts/history/", body)
         self.assertIn("saveStorageSettings", body)
         self.assertIn("saveCollectorSettings", body)
         self.assertIn('id="collectorWorkerForm"', body)
@@ -202,6 +204,20 @@ class WebSettingsTests(unittest.TestCase):
             self.assertEqual(stored["alerts"]["discord_channel_ids"], ["111", "222"])
             self.assertNotIn("DISCORD_BOT_TOKEN", str(stored))
 
+    def test_alert_history_endpoint_acknowledges_and_snoozes_alerts(self) -> None:
+        connection = FakeWorkerRunConnection(rows=[], latest_id=0, alert_rows=[_alert_history_row()])
+        with patch("pubg_ai.web.app.connect_mysql", return_value=connection):
+            client = TestClient(create_app())
+            acknowledge_response = client.post("/alerts/history/7/acknowledge", json={})
+            snooze_response = client.post("/alerts/history/7/snooze", json={"minutes": 60})
+
+        self.assertEqual(acknowledge_response.status_code, 200)
+        self.assertEqual(acknowledge_response.json()["alert"]["id"], 7)
+        self.assertEqual(snooze_response.status_code, 200)
+        executed_sql = "\n".join(query for query, _ in connection.cursor_obj.executed)
+        self.assertIn("acknowledged_at_kst", executed_sql)
+        self.assertIn("snoozed_until_kst", executed_sql)
+
     def test_discord_scope_settings_endpoint_updates_local_settings_file(self) -> None:
         with TemporaryDirectory() as temp_dir:
             settings_file = Path(temp_dir) / "config" / "local_settings.json"
@@ -255,9 +271,14 @@ class WebSettingsTests(unittest.TestCase):
 
 
 class FakeWorkerRunConnection:
-    def __init__(self, rows: list[dict[str, object]] | None = None, latest_id: int = 1) -> None:
+    def __init__(
+        self,
+        rows: list[dict[str, object]] | None = None,
+        latest_id: int = 1,
+        alert_rows: list[dict[str, object]] | None = None,
+    ) -> None:
         self.closed = False
-        self.cursor_obj = FakeWorkerRunCursor(rows=rows, latest_id=latest_id)
+        self.cursor_obj = FakeWorkerRunCursor(rows=rows, latest_id=latest_id, alert_rows=alert_rows)
 
     def cursor(self) -> "FakeWorkerRunCursor":
         return self.cursor_obj
@@ -267,9 +288,18 @@ class FakeWorkerRunConnection:
 
 
 class FakeWorkerRunCursor:
-    def __init__(self, rows: list[dict[str, object]] | None = None, latest_id: int = 1) -> None:
+    def __init__(
+        self,
+        rows: list[dict[str, object]] | None = None,
+        latest_id: int = 1,
+        alert_rows: list[dict[str, object]] | None = None,
+    ) -> None:
         self.rows = rows
         self.latest_id = latest_id
+        self.alert_rows = alert_rows or []
+        self.query = ""
+        self.params: tuple[object, ...] = ()
+        self.executed: list[tuple[str, tuple[object, ...]]] = []
 
     def __enter__(self) -> "FakeWorkerRunCursor":
         return self
@@ -280,8 +310,13 @@ class FakeWorkerRunCursor:
     def execute(self, query: str, params: tuple[object, ...] = ()) -> None:
         self.query = query
         self.params = params
+        self.executed.append((query, params))
 
     def fetchall(self) -> list[dict[str, object]]:
+        if "FROM system_alert_history" in self.query:
+            return self.alert_rows
+        if "FROM worker_run_history" not in self.query and self.rows is None:
+            return []
         if self.rows is not None:
             return self.rows
         return [
@@ -300,7 +335,28 @@ class FakeWorkerRunCursor:
         ]
 
     def fetchone(self) -> dict[str, object]:
+        if "FROM system_alert_history" in self.query:
+            return self.alert_rows[0] if self.alert_rows else {}
         return {"latest_id": self.latest_id}
+
+
+def _alert_history_row() -> dict[str, object]:
+    return {
+        "id": 7,
+        "alert_key": "storage:raw_data_dir:D:/BackUP/raw:missing",
+        "source": "storage",
+        "severity": "error",
+        "title": "raw_data_dir storage alert",
+        "message": "path missing",
+        "metadata_json": '{"role":"raw_data_dir"}',
+        "first_seen_at_kst": "2026-06-30T10:00:00+09:00",
+        "last_seen_at_kst": "2026-06-30T10:01:00+09:00",
+        "last_notified_at_kst": None,
+        "acknowledged_at_kst": None,
+        "snoozed_until_kst": None,
+        "resolved_at_kst": None,
+        "updated_at_kst": "2026-06-30T10:01:00+09:00",
+    }
 
 
 if __name__ == "__main__":

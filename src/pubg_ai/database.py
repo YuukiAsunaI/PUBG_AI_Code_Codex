@@ -8,7 +8,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 class DatabaseError(RuntimeError):
@@ -76,7 +76,7 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 VALUES (%s, %s, NOW(6))
                 ON DUPLICATE KEY UPDATE description = VALUES(description)
                 """,
-                (SCHEMA_VERSION, "worker run history schema"),
+                (SCHEMA_VERSION, "system alert history schema"),
             )
             applied += 1
     finally:
@@ -203,6 +203,29 @@ def schema_statements() -> list[str]:
             created_at_kst DATETIME(6) NOT NULL,
             KEY idx_worker_run_history_worker_time (worker_name, created_at_kst),
             KEY idx_worker_run_history_status_time (status, created_at_kst)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS system_alert_history (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            alert_key_hash CHAR(64) NOT NULL,
+            alert_key TEXT NOT NULL,
+            source VARCHAR(32) NOT NULL,
+            severity VARCHAR(32) NOT NULL,
+            title VARCHAR(191) NOT NULL,
+            message TEXT NOT NULL,
+            metadata_json JSON NOT NULL,
+            first_seen_at_kst DATETIME(6) NOT NULL,
+            last_seen_at_kst DATETIME(6) NOT NULL,
+            last_notified_at_kst DATETIME(6) NULL,
+            acknowledged_at_kst DATETIME(6) NULL,
+            snoozed_until_kst DATETIME(6) NULL,
+            resolved_at_kst DATETIME(6) NULL,
+            updated_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_system_alert_history_key_hash (alert_key_hash),
+            KEY idx_system_alert_history_source_time (source, last_seen_at_kst),
+            KEY idx_system_alert_history_resolved_time (resolved_at_kst, last_seen_at_kst),
+            KEY idx_system_alert_history_snooze (snoozed_until_kst)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """,
         """

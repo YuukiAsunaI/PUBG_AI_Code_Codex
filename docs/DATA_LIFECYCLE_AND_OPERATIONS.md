@@ -60,9 +60,11 @@ Implemented behavior:
 - The local manager stores alert settings in `config/local_settings.json` under `alerts`.
 - `minimum_free_bytes` controls the raw/replay free-space threshold. The default is 50 GiB.
 - `discord_channel_ids` controls where the Discord bot sends automatic alert messages.
-- `GET /alerts/status` returns current local alerts for the management UI.
+- `GET /alerts/status` returns current unsuppressed alerts and recent alert history for the management UI.
+- `POST /alerts/history/{alert_id}/acknowledge` marks a persisted alert as acknowledged.
+- `POST /alerts/history/{alert_id}/snooze` hides a persisted alert until the requested KST expiry, capped at 30 days.
 - The Discord bot sends active storage alerts once per bot process and sends newly persisted worker failures from
-  `worker_run_history`.
+  `worker_run_history`; acknowledged and currently snoozed alert records are skipped.
 - The admin-only `pubg-alerts` Discord command returns the current alert report on demand.
 
 ## Duplicate Match Handling
