@@ -37,7 +37,12 @@ from pubg_ai.pubg_client import PubgApiClient, PubgApiError
 from pubg_ai.replay_artifact_catalog import ReplayArtifactRecord, list_replay_artifacts
 from pubg_ai.replay_storage import ReplayArtifactStore, ReplayStorageError
 from pubg_ai.system_alerts import collect_system_alerts, format_alert_report, format_discord_alert
-from pubg_ai.worker_run_history import get_latest_worker_run_id
+from pubg_ai.worker_run_history import (
+    WorkerRunHistoryError,
+    WorkerRunRecord,
+    get_latest_worker_run_id,
+    list_worker_runs,
+)
 
 
 DEFAULT_DISCORD_PREFIX = "!"
@@ -179,6 +184,32 @@ def format_alert_history_result(
             f"{title}: {message}{_alert_history_detail_link(record, detail_base_url)}"
         )
     lines.extend(_alert_history_navigation_hints(page, command_prefix=command_prefix))
+    return "\n".join(lines)
+
+
+def format_worker_run_history_result(
+    runs: list[WorkerRunRecord],
+    *,
+    worker_name: str | None = None,
+    limit: int = 5,
+) -> str:
+    lines = [
+        "PUBG AI worker run history",
+        f"- filters: worker={worker_name or 'all'} limit={limit}",
+        f"- shown: {len(runs)}",
+    ]
+    if not runs:
+        lines.append("- no worker runs yet")
+        return "\n".join(lines)
+
+    for run in runs:
+        created_at = run.created_at_kst or run.finished_at_kst or run.started_at_kst or "-"
+        duration = _optional_duration_seconds(run.duration_seconds)
+        last_error = _discord_single_line(run.last_error or "-", 120)
+        lines.append(
+            f"- #{run.id} [{run.worker_name}/{run.status}] {created_at} "
+            f"duration={duration} errors={run.error_count} last_error={last_error}"
+        )
     return "\n".join(lines)
 
 
@@ -544,6 +575,7 @@ def create_discord_bot(
                     f"- `{command_prefix}pubg-alert-resolution alert_id resolution`",
                     f"- `{command_prefix}pubg-alert-notes alert_id [limit]`",
                     f"- `{command_prefix}pubg-alert-history [preset|filters]`",
+                    f"- `{command_prefix}pubg-worker-runs [collector|post_processing|all] [limit]`",
                     f"- `{command_prefix}유저삭제 steam 닉네임또는accountId`",
                 ]
             ),
@@ -1107,6 +1139,45 @@ def create_discord_bot(
             mention_author=False,
         )
 
+    @bot.command(name="pubg-worker-runs", aliases=["pubg-worker-history", "pubg-worker-log"])
+    async def worker_runs_command(ctx: Any, *, filters: str | None = None) -> None:
+        if not await require_permission(ctx, "admin"):
+            return
+        try:
+            parsed = _parse_worker_run_filters(filters)
+        except ValueError as exc:
+            await ctx.reply(
+                f"Usage: `{command_prefix}pubg-worker-runs [collector|post_processing|all] [limit]`"
+                f"\nError: {exc}",
+                mention_author=False,
+            )
+            return
+        worker_name = str(parsed["worker_name"]) if parsed["worker_name"] is not None else None
+        limit = int(parsed["limit"])
+
+        connection = connect_mysql(config.database)
+        try:
+            try:
+                runs = list_worker_runs(
+                    connection,
+                    worker_name=worker_name,
+                    limit=limit,
+                )
+            except WorkerRunHistoryError as exc:
+                await ctx.reply(f"PUBG AI worker run history error: {exc}", mention_author=False)
+                return
+        finally:
+            connection.close()
+
+        await ctx.reply(
+            format_worker_run_history_result(
+                runs,
+                worker_name=worker_name,
+                limit=limit,
+            ),
+            mention_author=False,
+        )
+
     return bot
 
 
@@ -1197,6 +1268,10 @@ def _alert_history_command_for_page(page: AlertHistoryPage, *, offset: int, comm
 
 def _alert_history_filter_arg(key: str, value: str) -> str:
     return f"{key}={shlex.quote(str(value))}"
+
+
+def _optional_duration_seconds(value: float | None) -> str:
+    return f"{value:.1f}s" if value is not None else "-"
 
 
 def _short_match_id(match_id: str) -> str:
@@ -1423,6 +1498,68 @@ def _alert_history_record_state(record: AlertHistoryRecord) -> str:
     if record.is_snoozed():
         return "snoozed"
     return "current"
+
+
+def _parse_worker_run_filters(raw: str | None) -> dict[str, str | int | None]:
+    filters: dict[str, str | int | None] = {"worker_name": None, "limit": 5}
+    if not raw or not raw.strip():
+        return filters
+
+    try:
+        tokens = shlex.split(raw)
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
+
+    for token in tokens:
+        normalized_token = token.strip()
+        if not normalized_token:
+            continue
+
+        if "=" in normalized_token:
+            key, value = normalized_token.split("=", 1)
+            _apply_worker_run_filter(filters, key.strip().lower(), value.strip())
+            continue
+
+        lowered = normalized_token.lower()
+        if _is_int_token(lowered):
+            filters["limit"] = _worker_run_limit(lowered)
+        else:
+            filters["worker_name"] = _worker_run_name(lowered)
+
+    return filters
+
+
+def _apply_worker_run_filter(filters: dict[str, str | int | None], key: str, value: str) -> None:
+    if key in {"worker", "worker_name", "name"}:
+        filters["worker_name"] = _worker_run_name(value)
+    elif key == "limit":
+        filters["limit"] = _worker_run_limit(value)
+    else:
+        raise ValueError(f"unknown filter: {key}")
+
+
+def _worker_run_name(value: str) -> str | None:
+    normalized = value.strip().lower().replace("-", "_")
+    aliases = {
+        "all": None,
+        "any": None,
+        "collector": "collector",
+        "collect": "collector",
+        "post": "post_processing",
+        "processing": "post_processing",
+        "postprocessing": "post_processing",
+        "post_processing": "post_processing",
+    }
+    if normalized not in aliases:
+        raise ValueError(f"invalid worker: {value}")
+    return aliases[normalized]
+
+
+def _worker_run_limit(value: str | int) -> int:
+    parsed = _positive_int(value)
+    if parsed is None:
+        raise ValueError(f"invalid limit: {value}")
+    return max(1, min(parsed, 10))
 
 
 def _top_parts(parts: dict[str, int]) -> str:

@@ -5,6 +5,7 @@ import unittest
 
 from pubg_ai.discord_bot import (
     _parse_alert_history_filters,
+    _parse_worker_run_filters,
     _player_visible_to_scope,
     format_alert_action_result,
     format_alert_history_result,
@@ -16,6 +17,7 @@ from pubg_ai.discord_bot import (
     format_player_ranking,
     format_player_weapon_detail,
     format_replay_artifact_summary,
+    format_worker_run_history_result,
 )
 from pubg_ai.alert_history import AlertHistoryNote, AlertHistoryPage, AlertHistoryRecord
 from pubg_ai.player_rankings import PlayerRanking, PlayerRankingRow
@@ -32,6 +34,7 @@ from pubg_ai.player_stats import (
     PlayerWeaponStats,
 )
 from pubg_ai.replay_artifact_catalog import ReplayArtifactRecord
+from pubg_ai.worker_run_history import WorkerRunRecord
 
 
 class DiscordBotFormattingTests(unittest.TestCase):
@@ -225,6 +228,63 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertEqual(filters["search"], "disk full")
         self.assertEqual(filters["offset"], 10)
         self.assertEqual(filters["limit"], 10)
+
+    def test_worker_run_history_result_formats_recent_runs(self) -> None:
+        runs = [
+            WorkerRunRecord(
+                id=12,
+                worker_name="collector",
+                status="failed",
+                started_at_kst="2026-07-01T10:00:00+09:00",
+                finished_at_kst="2026-07-01T10:00:03+09:00",
+                duration_seconds=3.2,
+                error_count=1,
+                last_error="match_jobs: RuntimeError: raw drive disconnected",
+                summary={},
+                created_at_kst="2026-07-01T10:00:03+09:00",
+            ),
+            WorkerRunRecord(
+                id=11,
+                worker_name="post_processing",
+                status="succeeded",
+                started_at_kst="2026-07-01T09:55:00+09:00",
+                finished_at_kst="2026-07-01T09:55:05+09:00",
+                duration_seconds=5,
+                error_count=0,
+                last_error=None,
+                summary={},
+                created_at_kst="2026-07-01T09:55:05+09:00",
+            ),
+        ]
+
+        body = format_worker_run_history_result(runs, worker_name=None, limit=5)
+
+        self.assertIn("PUBG AI worker run history", body)
+        self.assertIn("worker=all limit=5", body)
+        self.assertIn("#12 [collector/failed]", body)
+        self.assertIn("duration=3.2s errors=1", body)
+        self.assertIn("raw drive disconnected", body)
+        self.assertIn("#11 [post_processing/succeeded]", body)
+        self.assertIn("duration=5.0s errors=0 last_error=-", body)
+
+    def test_worker_run_history_result_formats_empty_state(self) -> None:
+        body = format_worker_run_history_result([], worker_name="collector", limit=3)
+
+        self.assertIn("worker=collector limit=3", body)
+        self.assertIn("no worker runs yet", body)
+
+    def test_worker_run_filter_parser_supports_worker_aliases_and_limit(self) -> None:
+        filters = _parse_worker_run_filters("post-processing 99")
+
+        self.assertEqual(filters["worker_name"], "post_processing")
+        self.assertEqual(filters["limit"], 10)
+
+        keyed = _parse_worker_run_filters("worker=collector limit=4")
+        self.assertEqual(keyed["worker_name"], "collector")
+        self.assertEqual(keyed["limit"], 4)
+
+        all_workers = _parse_worker_run_filters("all")
+        self.assertIsNone(all_workers["worker_name"])
 
     def test_player_list_formats_status_and_short_account_id(self) -> None:
         players = [

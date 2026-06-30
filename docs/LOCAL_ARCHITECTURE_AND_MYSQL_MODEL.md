@@ -395,7 +395,9 @@ Completed slices:
 53. Discord alert-history responses include local alert-detail links when `PUBG_LOCAL_WEB_BASE_URL` is configured,
     and the local manager can open `?alert_id=...` directly into the alert detail panel.
 54. Discord alert-history responses include copyable previous/next `offset` commands when more rows are available.
+55. Discord admins can use `pubg-worker-runs` to review recent collector/post-processing worker cycles with status,
+    duration, error count, and last error.
 
 Next slice:
 
-1. Add a Discord admin command for recent worker-run history with status, duration, error count, and last error.
+1. Add a Discord admin command for one worker-run detail record with summary metrics and full error list.

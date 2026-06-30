@@ -304,6 +304,7 @@ Discord's message content intent to be enabled for the bot application. Initial 
 !pubg-alert-notes alert_id [limit]
 !pubg-alert-history [current-errors|worker-failures|storage-pressure|all-history]
 !pubg-alert-history source=storage state=current severity=error search="drive" limit=5
+!pubg-worker-runs [collector|post_processing|all] [limit]
 !유저삭제 steam 닉네임또는accountId
 ```
 
@@ -336,7 +337,8 @@ are stored in the same MySQL `system_alert_notes` table shown by the local manag
 `pubg-alert-notes alert_id [limit]` to review the newest notes from Discord. Use `pubg-alert-history` with quick
 presets or `source`/`state`/`severity`/`search` filters to review persisted alert history from Discord; when
 `PUBG_LOCAL_WEB_BASE_URL` is set, each row includes a local detail link. When more history rows are available, the
-response includes copyable previous/next `offset` commands.
+response includes copyable previous/next `offset` commands. Use `pubg-worker-runs` to review recent collector and
+post-processing cycle status, duration, error count, and last error directly from Discord.
 
 Run the local management app:
 
@@ -356,7 +358,8 @@ remote-access mode is intentionally added.
 The local manager can start or stop the in-process automatic collector and post-processing workers. They stop when the
 local web server stops; use the CLI `run-collector` and `run-post-processing` commands for separate long-running
 worker processes. Both worker entry points store recent cycle summaries in `worker_run_history`; the local manager
-shows those rows in `Worker Run History` so storage/API/parser failures remain visible after the in-memory status
+shows those rows in `Worker Run History`, and admins can query them with `pubg-worker-runs`, so storage/API/parser
+failures remain visible after the in-memory status
 changes. The same page stores storage/worker alert records in `system_alert_history`, shows current unsuppressed
 alerts separately from recent history, lets the admin acknowledge or temporarily hide noisy alerts, and can filter or
 page history by source/status/severity, search title/message text, and sort it by newest, oldest, or severity-first
