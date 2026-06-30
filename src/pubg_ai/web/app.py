@@ -1208,7 +1208,7 @@ _INDEX_HTML = """<!doctype html>
     .kv strong { display: block; margin-top: 4px; font-size: 14px; overflow-wrap: anywhere; }
     form { display: grid; grid-template-columns: 120px 1fr 1fr 150px auto; gap: 10px; align-items: end; }
     label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
-    input, select {
+    input, select, textarea {
       width: 100%;
       min-height: 38px;
       border: 1px solid var(--line);
@@ -1217,6 +1217,7 @@ _INDEX_HTML = """<!doctype html>
       font-size: 14px;
       background: #fff;
     }
+    textarea { min-height: 76px; resize: vertical; font-family: inherit; }
     button {
       min-height: 38px;
       border: 0;
@@ -1248,6 +1249,11 @@ _INDEX_HTML = """<!doctype html>
       padding: 10px 12px;
       border-left: 3px solid var(--accent);
       background: #f8fafc;
+    }
+    .detail-note-form {
+      margin-top: 10px;
+      grid-template-columns: 140px minmax(0, 1fr) auto;
+      align-items: end;
     }
     .detail-table { margin-top: 8px; table-layout: auto; }
     .detail-table th, .detail-table td { font-size: 12px; padding: 7px; vertical-align: top; }
@@ -2013,6 +2019,7 @@ _INDEX_HTML = """<!doctype html>
     };
     let activeAlertHistoryDetailId = null;
     let activeAlertHistoryDetailAlert = null;
+    let activeAlertHistoryNoteType = "note";
     let alertHistoryRecords = [];
     let activeDiscordScopes = {
       guild_ranking_scopes: {},
@@ -2185,7 +2192,7 @@ _INDEX_HTML = """<!doctype html>
             <td>${escapeHtml(alert.last_seen_at_kst || "")}</td>
             <td>${escapeHtml(alert.source || "")}</td>
             <td>${escapeHtml(alert.title || "")}</td>
-            <td>${escapeHtml(alertHistoryStatus(alert))}</td>
+            <td>${escapeHtml(formatAlertHistoryStatus(alert))}</td>
             <td>${escapeHtml(alertHistoryNoteSummary(alert))}</td>
             <td>${escapeHtml(alert.message || "")}</td>
             <td>
@@ -2204,7 +2211,7 @@ _INDEX_HTML = """<!doctype html>
       }
     }
 
-    function alertHistoryStatus(alert) {
+    function formatAlertHistoryStatus(alert) {
       if (alert.resolved_at_kst) return `resolved ${alert.resolved_at_kst}`;
       if (alert.is_acknowledged) return `acknowledged ${alert.acknowledged_at_kst || ""}`;
       if (alert.is_snoozed) return `snoozed until ${alert.snoozed_until_kst || ""}`;
@@ -2219,16 +2226,22 @@ _INDEX_HTML = """<!doctype html>
       return `${count} ${type}${note}`;
     }
 
-    async function loadAlertHistoryDetail(alert) {
+    async function loadAlertHistoryDetail(alert, noteType = activeAlertHistoryNoteType, focusEditor = false) {
       activeAlertHistoryDetailId = alert.id;
       activeAlertHistoryDetailAlert = alert;
+      activeAlertHistoryNoteType = noteType === "resolution" ? "resolution" : "note";
       alertHistoryDetail.innerHTML = `<div class="status">Loading alert #${escapeHtml(alert.id)} notes...</div>`;
       const payload = await fetch(`/alerts/history/${encodeURIComponent(alert.id)}/notes`).then((r) => r.json());
       if (payload.detail) throw new Error(payload.detail);
       renderAlertHistoryDetail(alert, payload.notes || []);
+      if (focusEditor) {
+        const input = alertHistoryDetail.querySelector("textarea[name='note_text']");
+        if (input) input.focus();
+      }
     }
 
     function renderAlertHistoryDetail(alert, notes) {
+      const selectedNote = activeAlertHistoryNoteType === "resolution" ? "resolution" : "note";
       const noteRows = notes.length
         ? notes.map((note) => `
           <tr>
@@ -2247,9 +2260,21 @@ _INDEX_HTML = """<!doctype html>
         <div class="grid" style="margin-top: 10px;">
           ${cell("Source", escapeHtml(alert.source || ""))}
           ${cell("Severity", escapeHtml(alert.severity || ""))}
-          ${cell("Status", escapeHtml(alertHistoryStatus(alert)))}
+          ${cell("Status", escapeHtml(formatAlertHistoryStatus(alert)))}
           ${cell("Last seen", escapeHtml(alert.last_seen_at_kst || ""))}
         </div>
+        <form class="detail-note-form" data-alert-note-form data-alert-id="${attr(alert.id)}">
+          <label>Type
+            <select name="note_type">
+              <option value="note"${selectedNote === "note" ? " selected" : ""}>note</option>
+              <option value="resolution"${selectedNote === "resolution" ? " selected" : ""}>resolution</option>
+            </select>
+          </label>
+          <label>Comment
+            <textarea name="note_text" required placeholder="Write an alert note or resolution comment"></textarea>
+          </label>
+          <button type="submit">Save</button>
+        </form>
         <table class="detail-table">
           <tbody>
             <tr><th>Title</th><td>${escapeHtml(alert.title || "")}</td></tr>
@@ -2302,10 +2327,12 @@ _INDEX_HTML = """<!doctype html>
       }
     }
 
-    async function addAlertHistoryNote(alertId, noteType) {
+    async function saveAlertHistoryNoteForm(form) {
       const page = { ...alertHistoryPage };
-      const label = noteType === "resolution" ? "Resolution comment" : "Alert note";
-      const noteText = window.prompt(label);
+      const alertId = form.dataset.alertId || "";
+      const data = new FormData(form);
+      const noteType = String(data.get("note_type") || "note");
+      const noteText = String(data.get("note_text") || "");
       if (!noteText || !noteText.trim()) return;
       await postJson(`/alerts/history/${encodeURIComponent(alertId)}/notes`, {
         note_text: noteText.trim(),
@@ -2314,8 +2341,10 @@ _INDEX_HTML = """<!doctype html>
       });
       await loadAlerts();
       await loadAlertHistory(page);
-      if (String(activeAlertHistoryDetailId) === String(alertId) && activeAlertHistoryDetailAlert) {
-        await loadAlertHistoryDetail(activeAlertHistoryDetailAlert);
+      const updatedAlert = alertHistoryRecords.find((record) => String(record.id) === String(alertId))
+        || activeAlertHistoryDetailAlert;
+      if (updatedAlert) {
+        await loadAlertHistoryDetail(updatedAlert, noteType, true);
       }
     }
 
@@ -4077,7 +4106,26 @@ _INDEX_HTML = """<!doctype html>
       if (!button) return;
 
       try {
-        await addAlertHistoryNote(button.dataset.alertId || "", button.dataset.alertNoteType || "note");
+        const alert = alertHistoryRecords.find((record) => (
+          String(record.id) === String(button.dataset.alertId || "")
+        ));
+        if (!alert) throw new Error("alert history row is not loaded");
+        await loadAlertHistoryDetail(alert, button.dataset.alertNoteType || "note", true);
+        banner.textContent = "Alert detail loaded";
+      } catch (error) {
+        alertHistoryStatus.textContent = `Error: ${error.message}`;
+        banner.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    alertHistoryDetail.addEventListener("submit", async (event) => {
+      const form = event.target instanceof Element
+        ? event.target.closest("form[data-alert-note-form]")
+        : null;
+      if (!form) return;
+      event.preventDefault();
+      try {
+        await saveAlertHistoryNoteForm(form);
         banner.textContent = "Alert note saved";
       } catch (error) {
         alertHistoryStatus.textContent = `Error: ${error.message}`;

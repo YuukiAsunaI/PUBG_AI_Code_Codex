@@ -376,7 +376,10 @@ Completed slices:
     without opening the local manager.
 44. The local manager alert history table has a per-alert detail panel that loads the selected alert's note and
     resolution history from `system_alert_notes`.
+45. The local manager alert detail panel can add `note` and `resolution` comments inline, replacing the old
+    prompt-based entry flow.
 
 Next slice:
 
-1. Replace prompt-based local alert note entry with inline note/resolution forms inside the alert detail panel.
+1. Add acknowledge/snooze controls inside the alert detail panel so the full alert workflow can be handled from one
+   focused view.
