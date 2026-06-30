@@ -392,7 +392,9 @@ Completed slices:
     current errors, worker failures, storage pressure, and full-history review.
 52. Discord admins can use `pubg-alert-history` to review persisted alert history with the same source, status,
     severity, search, sort, limit, offset, and quick-preset filters without opening the local manager.
+53. Discord alert-history responses include local alert-detail links when `PUBG_LOCAL_WEB_BASE_URL` is configured,
+    and the local manager can open `?alert_id=...` directly into the alert detail panel.
 
 Next slice:
 
-1. Add local-manager alert detail links to Discord alert-history responses when `PUBG_LOCAL_WEB_BASE_URL` is set.
+1. Add next/previous offset hints to Discord alert-history responses when more rows are available.

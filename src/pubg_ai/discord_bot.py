@@ -151,7 +151,7 @@ def format_alert_notes_result(record: AlertHistoryRecord, notes: list[AlertHisto
     return "\n".join(lines)
 
 
-def format_alert_history_result(page: AlertHistoryPage) -> str:
+def format_alert_history_result(page: AlertHistoryPage, *, detail_base_url: str | None = None) -> str:
     lines = [
         "PUBG AI alert history",
         (
@@ -171,7 +171,7 @@ def format_alert_history_result(page: AlertHistoryPage) -> str:
         last_seen = record.last_seen_at_kst or "-"
         lines.append(
             f"- #{record.id} [{record.source}/{record.severity}/{state}] {last_seen} "
-            f"{title}: {message}"
+            f"{title}: {message}{_alert_history_detail_link(record, detail_base_url)}"
         )
     return "\n".join(lines)
 
@@ -1092,7 +1092,10 @@ def create_discord_bot(
         finally:
             connection.close()
 
-        await ctx.reply(format_alert_history_result(page), mention_author=False)
+        await ctx.reply(
+            format_alert_history_result(page, detail_base_url=config.app.local_web_base_url),
+            mention_author=False,
+        )
 
     return bot
 
@@ -1140,6 +1143,12 @@ def _recommendation_evidence_link(
         }
     )
     return f" [evidence]({base_url.rstrip('/')}/players/recommendations/weapon-attachment-evidence?{query})"
+
+
+def _alert_history_detail_link(record: AlertHistoryRecord, base_url: str | None) -> str:
+    if not base_url:
+        return ""
+    return f" [detail]({base_url.rstrip('/')}/?{urlencode({'alert_id': record.id})})"
 
 
 def _short_match_id(match_id: str) -> str:

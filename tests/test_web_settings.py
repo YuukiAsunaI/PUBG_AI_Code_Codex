@@ -66,6 +66,10 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn('form.get("search") ?? alertHistoryPage.search', body)
         self.assertIn("Snoozed until", body)
         self.assertIn("loadAlertHistoryDetail", body)
+        self.assertIn("loadAlertHistoryDetailById", body)
+        self.assertIn("loadInitialAlertDetailFromUrl", body)
+        self.assertIn('params.get("alert_id")', body)
+        self.assertIn("/alerts/history/${encodeURIComponent(alertId)}", body)
         self.assertIn("formatAlertHistoryStatus", body)
         self.assertNotIn("function alertHistoryStatus", body)
         self.assertNotIn("window.prompt", body)
@@ -332,6 +336,25 @@ class WebSettingsTests(unittest.TestCase):
         self.assertEqual(list_response.json()["notes"][0]["created_by"], "local-admin")
         executed_sql = "\n".join(query for query, _ in connection.cursor_obj.executed)
         self.assertIn("INSERT INTO system_alert_notes", executed_sql)
+        self.assertIn("FROM system_alert_notes", executed_sql)
+
+    def test_alert_history_record_endpoint_returns_alert_and_notes(self) -> None:
+        connection = FakeWorkerRunConnection(
+            rows=[],
+            latest_id=0,
+            alert_rows=[_alert_history_row()],
+            note_rows=[_alert_note_row()],
+        )
+        with patch("pubg_ai.web.app.connect_mysql", return_value=connection):
+            client = TestClient(create_app())
+            response = client.get("/alerts/history/7")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["alert"]["id"], 7)
+        self.assertEqual(payload["notes"][0]["id"], 21)
+        executed_sql = "\n".join(query for query, _ in connection.cursor_obj.executed)
+        self.assertIn("WHERE id = %s", executed_sql)
         self.assertIn("FROM system_alert_notes", executed_sql)
 
     def test_discord_scope_settings_endpoint_updates_local_settings_file(self) -> None:

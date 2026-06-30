@@ -19,6 +19,7 @@ from pubg_ai.alert_history import (
     add_alert_note,
     acknowledge_alert,
     get_alert_history_page,
+    get_alert_history_record,
     list_alert_history,
     list_alert_notes,
     snooze_alert,
@@ -334,6 +335,22 @@ def create_app() -> Any:
         finally:
             connection.close()
         return _alert_history_csv_response(records)
+
+    @app.get("/alerts/history/{alert_id}")
+    def alert_history_record(alert_id: int) -> dict[str, Any]:
+        connection = connect_mysql(current_config().database)
+        try:
+            try:
+                record = get_alert_history_record(connection, alert_id)
+                notes = list_alert_notes(connection, alert_id, limit=100)
+            except AlertHistoryError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {
+            "alert": record.to_record(),
+            "notes": [note.to_record() for note in notes],
+        }
 
     @app.get("/alerts/history/{alert_id}/notes")
     def alert_history_notes(alert_id: int) -> dict[str, Any]:
@@ -2431,6 +2448,31 @@ _INDEX_HTML = """<!doctype html>
         const input = alertHistoryDetail.querySelector("textarea[name='note_text']");
         if (input) input.focus();
       }
+    }
+
+    async function loadAlertHistoryDetailById(alertId, noteType = activeAlertHistoryNoteType, focusEditor = false) {
+      activeAlertHistoryDetailId = alertId;
+      activeAlertHistoryNoteType = noteType === "resolution" ? "resolution" : "note";
+      alertHistoryDetail.innerHTML = `<div class="status">Loading alert #${escapeHtml(alertId)} detail...</div>`;
+      const payload = await fetch(`/alerts/history/${encodeURIComponent(alertId)}`).then((r) => r.json());
+      if (payload.detail) throw new Error(payload.detail);
+      const alert = payload.alert;
+      if (!alert) throw new Error("alert history row was not returned");
+      activeAlertHistoryDetailId = alert.id;
+      activeAlertHistoryDetailAlert = alert;
+      renderAlertHistoryDetail(alert, payload.notes || []);
+      if (focusEditor) {
+        const input = alertHistoryDetail.querySelector("textarea[name='note_text']");
+        if (input) input.focus();
+      }
+    }
+
+    async function loadInitialAlertDetailFromUrl() {
+      const params = new URLSearchParams(window.location.search);
+      const alertId = params.get("alert_id") || params.get("alert");
+      if (!alertId) return;
+      await loadAlertHistoryDetailById(alertId);
+      alertHistoryDetail.scrollIntoView({ block: "start" });
     }
 
     function renderAlertHistoryDetail(alert, notes) {
@@ -4610,6 +4652,7 @@ _INDEX_HTML = """<!doctype html>
 
     drawEmptyReplayCanvas();
     Promise.all([loadStatus(), loadAlerts(), loadDiscordPermissions(), loadDiscordScopes(), loadCollectorWorkerStatus(), loadPostProcessingWorkerStatus(), loadWorkerRuns(), loadPlayers(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
+      .then(() => loadInitialAlertDetailFromUrl())
       .then(() => { banner.textContent = "localhost 전용 관리 화면"; })
       .catch((error) => { banner.textContent = `오류: ${error.message}`; });
     setInterval(loadCollectorWorkerStatus, 10000);

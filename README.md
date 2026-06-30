@@ -310,8 +310,9 @@ Discord's message content intent to be enabled for the bot application. Initial 
 Command access is checked through local Discord permission settings in `config/local_settings.json`.
 Recommendation lookup is available through `!추천 닉네임 [shard]` and `!pubg-recommend nickname [shard]`.
 If `PUBG_LOCAL_WEB_BASE_URL` is set, weapon+attachment recommendation rows include local web evidence links for
-supporting combat snapshots. This can be set from the local manager's `Local Web Link` section or through `.env`.
-Leave it unset when Discord readers cannot reach the local web app.
+supporting combat snapshots, and `pubg-alert-history` rows include local alert-detail links. This can be set from the
+local manager's `Local Web Link` section or through `.env`. Leave it unset when Discord readers cannot reach the
+local web app.
 
 Manage Discord command permissions from the local program or CLI. For first boot, add yourself as a global admin or
 grant a command group to a Discord user ID:
@@ -333,7 +334,8 @@ Discord after reading the ID from `pubg-alerts` or an automatic alert message. A
 `pubg-alert-note alert_id note` and resolution comments with `pubg-alert-resolution alert_id resolution`; those entries
 are stored in the same MySQL `system_alert_notes` table shown by the local manager. Use
 `pubg-alert-notes alert_id [limit]` to review the newest notes from Discord. Use `pubg-alert-history` with quick
-presets or `source`/`state`/`severity`/`search` filters to review persisted alert history from Discord.
+presets or `source`/`state`/`severity`/`search` filters to review persisted alert history from Discord; when
+`PUBG_LOCAL_WEB_BASE_URL` is set, each row includes a local detail link.
 
 Run the local management app:
 

@@ -152,6 +152,10 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("shown/total: 1/3", body)
         self.assertIn("#7 [worker/error/current]", body)
         self.assertIn("collector worker failed", body)
+        self.assertNotIn("[detail]", body)
+
+        linked = format_alert_history_result(page, detail_base_url="http://127.0.0.1:8000/")
+        self.assertIn("[detail](http://127.0.0.1:8000/?alert_id=7)", linked)
 
     def test_alert_history_filter_parser_supports_presets_and_search_terms(self) -> None:
         filters = _parse_alert_history_filters("current-errors limit=7 raw drive")

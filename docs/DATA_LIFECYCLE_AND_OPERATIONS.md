@@ -85,7 +85,8 @@ Implemented behavior:
 - The admin-only `pubg-alert-notes alert_id [limit]` command lists recent notes and resolution comments for one alert
   without opening the local manager.
 - The admin-only `pubg-alert-history` command lists persisted alert history from Discord with quick presets or
-  `source`/`state`/`severity`/`search`/`limit` filters.
+  `source`/`state`/`severity`/`search`/`limit` filters. When `PUBG_LOCAL_WEB_BASE_URL` is set, those rows include
+  local detail links that open the management UI with `alert_id` selected.
 
 ## Duplicate Match Handling
 
