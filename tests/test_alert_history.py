@@ -60,6 +60,7 @@ class AlertHistoryTests(unittest.TestCase):
             connection,
             source="storage",
             state="resolved",
+            severity="error",
             sort="oldest",
             search="raw_data",
             limit=25,
@@ -71,12 +72,15 @@ class AlertHistoryTests(unittest.TestCase):
         self.assertEqual(page.offset, 50)
         self.assertEqual(page.source, "storage")
         self.assertEqual(page.state, "resolved")
+        self.assertEqual(page.severity, "error")
         self.assertEqual(page.sort, "oldest")
         self.assertEqual(page.search, "raw_data")
+        self.assertEqual(page.to_record()["severity"], "error")
         self.assertEqual(page.to_record()["sort"], "oldest")
         self.assertEqual(page.to_record()["search"], "raw_data")
         executed_sql = "\n".join(query for query, _ in connection.cursor_obj.executed)
         self.assertIn("source = %s", executed_sql)
+        self.assertIn("severity = %s", executed_sql)
         self.assertIn("resolved_at_kst IS NOT NULL", executed_sql)
         self.assertIn("(title LIKE %s OR message LIKE %s)", executed_sql)
         self.assertIn("ORDER BY last_seen_at_kst ASC, id ASC", executed_sql)

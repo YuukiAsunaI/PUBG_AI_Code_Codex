@@ -17,6 +17,7 @@ class AlertHistoryError(RuntimeError):
 ALERT_HISTORY_SOURCES = {"all", "storage", "worker"}
 ALERT_HISTORY_STATES = {"all", "active", "current", "acknowledged", "snoozed", "resolved"}
 ALERT_HISTORY_SORTS = {"newest", "oldest", "severity"}
+ALERT_HISTORY_SEVERITIES = {"all", "error", "warning", "info", "ok"}
 ALERT_HISTORY_PAGE_LIMIT = 200
 ALERT_HISTORY_EXPORT_LIMIT = 5000
 ALERT_NOTE_TYPES = {"note", "resolution"}
@@ -71,6 +72,7 @@ class AlertHistoryPage:
     offset: int
     source: str
     state: str
+    severity: str = "all"
     sort: str = "newest"
     search: str = ""
 
@@ -82,6 +84,7 @@ class AlertHistoryPage:
             "offset": self.offset,
             "source": self.source,
             "state": self.state,
+            "severity": self.severity,
             "sort": self.sort,
             "search": self.search,
             "has_previous": self.offset > 0,
@@ -174,14 +177,16 @@ def list_alert_history(
     offset: int = 0,
     source: str | None = None,
     state: str = "all",
+    severity: str = "all",
     sort: str = "newest",
     search: str | None = None,
 ) -> list[AlertHistoryRecord]:
     bounded_limit = _bounded_limit(limit, max_limit=max_limit)
     bounded_offset = max(0, int(offset))
-    _, _, _, where, params = _history_filter_clause(
+    _, _, _, _, where, params = _history_filter_clause(
         source=source,
         state=state,
+        severity=severity,
         active_only=active_only,
         search=search,
     )
@@ -247,11 +252,13 @@ def count_alert_history(
     active_only: bool = False,
     source: str | None = None,
     state: str = "all",
+    severity: str = "all",
     search: str | None = None,
 ) -> int:
-    _, _, _, where, params = _history_filter_clause(
+    _, _, _, _, where, params = _history_filter_clause(
         source=source,
         state=state,
+        severity=severity,
         active_only=active_only,
         search=search,
     )
@@ -275,12 +282,14 @@ def get_alert_history_page(
     offset: int = 0,
     source: str | None = None,
     state: str = "all",
+    severity: str = "all",
     sort: str = "newest",
     search: str | None = None,
 ) -> AlertHistoryPage:
-    normalized_source, normalized_state, normalized_search, _, _ = _history_filter_clause(
+    normalized_source, normalized_state, normalized_severity, normalized_search, _, _ = _history_filter_clause(
         source=source,
         state=state,
+        severity=severity,
         active_only=False,
         search=search,
     )
@@ -294,6 +303,7 @@ def get_alert_history_page(
         offset=bounded_offset,
         source=normalized_source,
         state=normalized_state,
+        severity=normalized_severity,
         sort=normalized_sort,
         search=normalized_search,
     )
@@ -301,6 +311,7 @@ def get_alert_history_page(
         connection,
         source=normalized_source,
         state=normalized_state,
+        severity=normalized_severity,
         search=normalized_search,
     )
     return AlertHistoryPage(
@@ -310,6 +321,7 @@ def get_alert_history_page(
         offset=bounded_offset,
         source=normalized_source,
         state=normalized_state,
+        severity=normalized_severity,
         sort=normalized_sort,
         search=normalized_search,
     )
@@ -571,9 +583,10 @@ def _history_filter_clause(
     *,
     source: str | None,
     state: str,
+    severity: str = "all",
     active_only: bool,
     search: str | None = None,
-) -> tuple[str, str, str, str, list[Any]]:
+) -> tuple[str, str, str, str, str, list[Any]]:
     normalized_source = (source or "all").strip().lower() or "all"
     if normalized_source not in ALERT_HISTORY_SOURCES:
         raise AlertHistoryError(f"invalid alert source filter: {source}")
@@ -584,12 +597,19 @@ def _history_filter_clause(
     if normalized_state not in ALERT_HISTORY_STATES:
         raise AlertHistoryError(f"invalid alert state filter: {state}")
 
+    normalized_severity = (severity or "all").strip().lower() or "all"
+    if normalized_severity not in ALERT_HISTORY_SEVERITIES:
+        raise AlertHistoryError(f"invalid alert severity filter: {severity}")
+
     normalized_search = _normalize_history_search(search)
     clauses: list[str] = []
     params: list[Any] = []
     if normalized_source != "all":
         clauses.append("source = %s")
         params.append(normalized_source)
+    if normalized_severity != "all":
+        clauses.append("severity = %s")
+        params.append(normalized_severity)
 
     if normalized_state == "active":
         clauses.append("resolved_at_kst IS NULL")
@@ -613,7 +633,7 @@ def _history_filter_clause(
         params.extend([pattern, pattern])
 
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    return normalized_source, normalized_state, normalized_search, where, params
+    return normalized_source, normalized_state, normalized_severity, normalized_search, where, params
 
 
 def _resolve_missing_storage_alerts(connection: Any, active_hashes: list[str], timestamp: datetime) -> None:

@@ -280,6 +280,7 @@ def create_app() -> Any:
     def alert_history(
         source: str = "all",
         state: str = "all",
+        severity: str = "all",
         sort: str = "newest",
         search: str = "",
         limit: int = Query(default=50, ge=1, le=200),
@@ -292,6 +293,7 @@ def create_app() -> Any:
                     connection,
                     source=source,
                     state=state,
+                    severity=severity,
                     sort=sort,
                     search=search,
                     limit=limit,
@@ -307,6 +309,7 @@ def create_app() -> Any:
     def export_alert_history(
         source: str = "all",
         state: str = "all",
+        severity: str = "all",
         sort: str = "newest",
         search: str = "",
         limit: int = Query(default=ALERT_HISTORY_EXPORT_LIMIT, ge=1, le=ALERT_HISTORY_EXPORT_LIMIT),
@@ -319,6 +322,7 @@ def create_app() -> Any:
                     connection,
                     source=source,
                     state=state,
+                    severity=severity,
                     sort=sort,
                     search=search,
                     limit=limit,
@@ -1215,7 +1219,9 @@ _INDEX_HTML = """<!doctype html>
     .kv span { display: block; color: var(--muted); font-size: 12px; }
     .kv strong { display: block; margin-top: 4px; font-size: 14px; overflow-wrap: anywhere; }
     form { display: grid; grid-template-columns: 120px 1fr 1fr 150px auto; gap: 10px; align-items: end; }
-    .alert-history-filter { grid-template-columns: 120px 140px 100px 150px minmax(180px, 1fr) auto; }
+    .alert-history-filter {
+      grid-template-columns: 110px 130px 110px 90px 145px minmax(160px, 1fr) auto;
+    }
     label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
     input, select, textarea {
       width: 100%;
@@ -1466,6 +1472,15 @@ _INDEX_HTML = """<!doctype html>
             <option value="resolved">resolved</option>
           </select>
         </label>
+        <label>Severity
+          <select name="severity">
+            <option value="all">all</option>
+            <option value="error">error</option>
+            <option value="warning">warning</option>
+            <option value="info">info</option>
+            <option value="ok">ok</option>
+          </select>
+        </label>
         <label>Rows
           <select name="limit">
             <option value="25">25</option>
@@ -1487,6 +1502,10 @@ _INDEX_HTML = """<!doctype html>
         <button type="submit">Apply</button>
       </form>
       <div class="actions" style="margin-top: 10px;">
+        <button class="secondary" type="button" data-alert-history-preset="current-errors">Current errors</button>
+        <button class="secondary" type="button" data-alert-history-preset="worker-failures">Worker failures</button>
+        <button class="secondary" type="button" data-alert-history-preset="storage-pressure">Storage pressure</button>
+        <button class="secondary" type="button" data-alert-history-preset="all-history">All history</button>
         <button class="secondary" type="button" id="alertHistoryExport">Export CSV</button>
         <button class="secondary" type="button" id="alertHistoryPrev">Previous</button>
         <button class="secondary" type="button" id="alertHistoryNext">Next</button>
@@ -2014,6 +2033,7 @@ _INDEX_HTML = """<!doctype html>
     const alertHistoryExport = document.querySelector("#alertHistoryExport");
     const alertHistoryPrev = document.querySelector("#alertHistoryPrev");
     const alertHistoryNext = document.querySelector("#alertHistoryNext");
+    const alertHistoryPresetButtons = document.querySelectorAll("[data-alert-history-preset]");
     const alertHistoryDetail = document.querySelector("#alertHistoryDetail");
     const collectorSettingsForm = document.querySelector("#collectorSettingsForm");
     const collectorSettingsStatus = document.querySelector("#collectorSettingsStatus");
@@ -2064,6 +2084,7 @@ _INDEX_HTML = """<!doctype html>
     let alertHistoryPage = {
       source: "all",
       state: "all",
+      severity: "all",
       limit: 50,
       offset: 0,
       total: 0,
@@ -2159,6 +2180,7 @@ _INDEX_HTML = """<!doctype html>
       const form = new FormData(alertHistoryFilterForm);
       const source = options.source || String(form.get("source") || alertHistoryPage.source || "all");
       const state = options.state || String(form.get("state") || alertHistoryPage.state || "all");
+      const severity = options.severity || String(form.get("severity") || alertHistoryPage.severity || "all");
       const sort = options.sort || String(form.get("sort") || alertHistoryPage.sort || "newest");
       const search = options.search ?? String(form.get("search") ?? alertHistoryPage.search ?? "");
       const limit = Number(options.limit || form.get("limit") || alertHistoryPage.limit || 50);
@@ -2166,6 +2188,7 @@ _INDEX_HTML = """<!doctype html>
       const params = new URLSearchParams({
         source,
         state,
+        severity,
         sort,
         search,
         limit: String(limit),
@@ -2181,12 +2204,54 @@ _INDEX_HTML = """<!doctype html>
       const params = new URLSearchParams({
         source: String(form.get("source") || alertHistoryPage.source || "all"),
         state: String(form.get("state") || alertHistoryPage.state || "all"),
+        severity: String(form.get("severity") || alertHistoryPage.severity || "all"),
         sort: String(form.get("sort") || alertHistoryPage.sort || "newest"),
         search: String(form.get("search") ?? alertHistoryPage.search ?? ""),
         limit: "5000",
         offset: "0",
       });
       window.location.href = `/alerts/history/export.csv?${params.toString()}`;
+    }
+
+    async function applyAlertHistoryPreset(preset) {
+      const presets = {
+        "current-errors": {
+          source: "all",
+          state: "current",
+          severity: "error",
+          sort: "severity",
+          search: "",
+        },
+        "worker-failures": {
+          source: "worker",
+          state: "all",
+          severity: "error",
+          sort: "newest",
+          search: "",
+        },
+        "storage-pressure": {
+          source: "storage",
+          state: "all",
+          severity: "all",
+          sort: "severity",
+          search: "",
+        },
+        "all-history": {
+          source: "all",
+          state: "all",
+          severity: "all",
+          sort: "newest",
+          search: "",
+        },
+      };
+      const filters = presets[preset];
+      if (!filters) throw new Error(`unknown alert history preset: ${preset}`);
+      alertHistoryFilterForm.elements.source.value = filters.source;
+      alertHistoryFilterForm.elements.state.value = filters.state;
+      alertHistoryFilterForm.elements.severity.value = filters.severity;
+      alertHistoryFilterForm.elements.sort.value = filters.sort;
+      alertHistoryFilterForm.elements.search.value = filters.search;
+      await loadAlertHistory({ ...filters, offset: 0 });
     }
 
     function renderAlertStatus(payload) {
@@ -2237,6 +2302,7 @@ _INDEX_HTML = """<!doctype html>
       if (syncControls) {
         alertHistoryFilterForm.elements.source.value = alertHistoryPage.source || "all";
         alertHistoryFilterForm.elements.state.value = alertHistoryPage.state || "all";
+        alertHistoryFilterForm.elements.severity.value = alertHistoryPage.severity || "all";
         alertHistoryFilterForm.elements.sort.value = alertHistoryPage.sort || "newest";
         alertHistoryFilterForm.elements.search.value = alertHistoryPage.search || "";
         alertHistoryFilterForm.elements.limit.value = String(alertHistoryPage.limit || 50);
@@ -2247,6 +2313,7 @@ _INDEX_HTML = """<!doctype html>
         `${start}-${end} of ${alertHistoryPage.total}`,
         `source ${alertHistoryPage.source || "all"}`,
         `status ${alertHistoryPage.state || "all"}`,
+        `severity ${alertHistoryPage.severity || "all"}`,
         `sort ${alertHistoryPage.sort || "newest"}`,
         `search ${alertHistoryPage.search ? `"${alertHistoryPage.search}"` : "-"}`,
       ].join(" / ");
@@ -4216,6 +4283,18 @@ _INDEX_HTML = """<!doctype html>
     alertHistoryExport.addEventListener("click", () => {
       exportAlertHistoryCsv();
     });
+
+    for (const button of alertHistoryPresetButtons) {
+      button.addEventListener("click", async () => {
+        try {
+          await applyAlertHistoryPreset(button.dataset.alertHistoryPreset || "");
+          banner.textContent = "Alert history preset loaded";
+        } catch (error) {
+          alertHistoryStatus.textContent = `Error: ${error.message}`;
+          banner.textContent = `Error: ${error.message}`;
+        }
+      });
+    }
 
     alertHistoryBody.addEventListener("click", async (event) => {
       const detailButton = event.target instanceof Element

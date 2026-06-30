@@ -388,7 +388,9 @@ Completed slices:
     export and paged history review.
 50. Alert history APIs and the local manager support title/message text search, and CSV export preserves the same
     search filter used by the paged history table.
+51. Alert history APIs and the local manager support severity filtering, and the local manager has quick presets for
+    current errors, worker failures, storage pressure, and full-history review.
 
 Next slice:
 
-1. Add quick alert-history filter presets for current errors, worker failures, and storage pressure reviews.
+1. Add a Discord alert-history lookup command with source/status/severity/search filters for admins.

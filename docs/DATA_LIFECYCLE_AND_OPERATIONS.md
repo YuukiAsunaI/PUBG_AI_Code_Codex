@@ -61,7 +61,7 @@ Implemented behavior:
 - `minimum_free_bytes` controls the raw/replay free-space threshold. The default is 50 GiB.
 - `discord_channel_ids` controls where the Discord bot sends automatic alert messages.
 - `GET /alerts/status` returns current unsuppressed alerts and recent alert history for the management UI.
-- `GET /alerts/history?source=all|storage|worker&state=all|current|active|acknowledged|snoozed|resolved&sort=newest|oldest|severity&search=drive&limit=50&offset=0`
+- `GET /alerts/history?source=all|storage|worker&state=all|current|active|acknowledged|snoozed|resolved&severity=all|error|warning|info|ok&sort=newest|oldest|severity&search=drive&limit=50&offset=0`
   returns paged alert history with a total count for the management UI. `search` matches alert titles and messages.
 - `GET /alerts/history/export.csv` exports the same filtered, searched, and sorted history to CSV, bounded to 5,000
   rows per request.
@@ -70,7 +70,8 @@ Implemented behavior:
 - `POST /alerts/history/{alert_id}/acknowledge` marks a persisted alert as acknowledged.
 - `POST /alerts/history/{alert_id}/snooze` hides a persisted alert until the requested KST expiry, capped at 30 days.
 - The current-alert and alert-history tables show severity/state badges so admins can scan alert lists before opening
-  a detail row.
+  a detail row. Quick preset buttons set common alert-history filters for current errors, worker failures, storage
+  pressure, and the full history.
 - The local manager alert history table can open a detail panel that shows the selected alert and its full recent note
   history without reading the raw JSON API response, shows a state badge for active/acknowledged/snoozed/resolved, and
   can acknowledge, snooze, or add `note` and `resolution` comments.
