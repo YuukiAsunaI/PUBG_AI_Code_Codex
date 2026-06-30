@@ -55,6 +55,16 @@ The notification should include:
 
 The system should not silently switch to another path and should not delete raw files automatically.
 
+Implemented behavior:
+
+- The local manager stores alert settings in `config/local_settings.json` under `alerts`.
+- `minimum_free_bytes` controls the raw/replay free-space threshold. The default is 50 GiB.
+- `discord_channel_ids` controls where the Discord bot sends automatic alert messages.
+- `GET /alerts/status` returns current local alerts for the management UI.
+- The Discord bot sends active storage alerts once per bot process and sends newly persisted worker failures from
+  `worker_run_history`.
+- The admin-only `pubg-alerts` Discord command returns the current alert report on demand.
+
 ## Duplicate Match Handling
 
 The same match can be discovered from multiple registered players. The raw layer stores one match JSON and one

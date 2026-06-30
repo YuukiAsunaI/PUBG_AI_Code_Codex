@@ -309,6 +309,8 @@ The current local runtime can automate the analysis and replay-artifact side aft
   not store or display API keys or Discord tokens.
 - Post-processing cycles are also written to `worker_run_history`, making replay storage failures, parser failures,
   and artifact-generation errors visible after the worker moves on to later cycles.
+- The alert layer reads `worker_run_history` and storage capacity checks so the local UI and Discord bot can show the
+  same storage/worker failure report.
 
 ## Implemented Discord Bot MVP Slice
 
@@ -337,6 +339,8 @@ The current Discord bot slice is intentionally small and reuses the same local M
 - `!유저삭제 steam 닉네임또는accountId` stops future collection by setting the registered target inactive.
 - `!최근스냅샷 [match_id]` sends the latest generated `map_snapshot` JPEG artifact, or the latest snapshot for the
   requested match ID.
+- `!pubg-alerts` returns current storage and worker alerts for admins. When alert channel IDs are configured in the
+  local manager, the running bot also sends new worker failures and active storage-capacity alerts automatically.
 - Command access is checked through local Discord permission settings. Global admins can manage every guild, while
   guild-specific grants stay scoped by `guild_id`.
 - The local web UI and CLI can now add/revoke user command-group grants and add/remove global Discord admins without

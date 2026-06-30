@@ -36,6 +36,7 @@ from pubg_ai.telemetry_combat_processor import TelemetryCombatProcessor
 from pubg_ai.telemetry_item_processor import TelemetryItemProcessor
 from pubg_ai.telemetry_job_processor import TelemetryJobProcessor
 from pubg_ai.telemetry_movement_processor import TelemetryMovementProcessor
+from pubg_ai.system_alerts import collect_system_alerts
 from pubg_ai.worker_run_history import WorkerRunHistoryError, list_worker_runs
 
 
@@ -127,6 +128,13 @@ class CollectorSettingsRequest(BaseModel):
     poll_interval_seconds: int = Field(ge=60, le=300)
     cycle_player_limit: int = Field(ge=1, le=100)
     player_lookup_chunk_size: int = Field(ge=1, le=10)
+
+
+class AlertSettingsRequest(BaseModel):
+    minimum_free_bytes: int = Field(ge=0)
+    discord_channel_ids: list[str] = Field(default_factory=list)
+    storage_alerts_enabled: bool = True
+    worker_error_alerts_enabled: bool = True
 
 
 class CollectorWorkerStartRequest(BaseModel):
@@ -237,6 +245,23 @@ def create_app() -> Any:
             "collector": collector_settings.to_record(),
             "settings": _settings_status_record(current_config()),
         }
+
+    @app.get("/alerts/status")
+    def alerts_status() -> dict[str, Any]:
+        return _alerts_status_record(settings_store, current_config())
+
+    @app.post("/settings/alerts")
+    def save_alert_settings(request: AlertSettingsRequest) -> dict[str, Any]:
+        try:
+            settings_store.save_alert_settings(
+                minimum_free_bytes=request.minimum_free_bytes,
+                discord_channel_ids=request.discord_channel_ids,
+                storage_alerts_enabled=request.storage_alerts_enabled,
+                worker_error_alerts_enabled=request.worker_error_alerts_enabled,
+            )
+        except LocalSettingsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _alerts_status_record(settings_store, current_config())
 
     @app.get("/collector/worker/status")
     def collector_worker_status() -> dict[str, Any]:
@@ -868,6 +893,29 @@ def _settings_status_record(config: RuntimeConfig) -> dict[str, Any]:
     }
 
 
+def _alerts_status_record(settings_store: LocalSettingsStore, config: RuntimeConfig) -> dict[str, Any]:
+    try:
+        alert_settings = settings_store.load_alert_settings()
+    except LocalSettingsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    connection = connect_mysql(config.database)
+    try:
+        report = collect_system_alerts(
+            config=config,
+            connection=connection,
+            settings=alert_settings,
+            after_worker_run_id=None,
+        )
+    finally:
+        connection.close()
+
+    return {
+        "alert_settings": alert_settings.to_record(),
+        **report.to_record(),
+    }
+
+
 def _ranking_global_scope(settings_store: LocalSettingsStore, guild_id: str | None) -> bool:
     if guild_id is None:
         return True
@@ -1091,6 +1139,42 @@ _INDEX_HTML = """<!doctype html>
         <button type="submit">Save</button>
       </form>
       <div class="status" id="storageSettingsStatus" style="margin-top: 12px;">Waiting</div>
+    </section>
+    <section>
+      <h2>Alert Settings</h2>
+      <form id="alertSettingsForm">
+        <label>Minimum free GB
+          <input name="minimum_free_gb" type="number" min="0" step="0.1" value="50" required>
+        </label>
+        <label>Discord channel IDs
+          <input name="discord_channel_ids" autocomplete="off" placeholder="123456789012345678, 987654321098765432">
+        </label>
+        <label>Storage alerts
+          <select name="storage_alerts_enabled">
+            <option value="true">enabled</option>
+            <option value="false">disabled</option>
+          </select>
+        </label>
+        <label>Worker alerts
+          <select name="worker_error_alerts_enabled">
+            <option value="true">enabled</option>
+            <option value="false">disabled</option>
+          </select>
+        </label>
+        <button type="submit">Save</button>
+      </form>
+      <div class="status" id="alertSettingsStatus" style="margin-top: 12px;">Waiting</div>
+      <table style="margin-top: 12px;">
+        <thead>
+          <tr>
+            <th>Source</th>
+            <th>Severity</th>
+            <th>Title</th>
+            <th>Message</th>
+          </tr>
+        </thead>
+        <tbody id="alertsBody"></tbody>
+      </table>
     </section>
     <section>
       <h2>Collector Settings</h2>
@@ -1587,6 +1671,9 @@ _INDEX_HTML = """<!doctype html>
     const registerForm = document.querySelector("#registerForm");
     const storageSettingsForm = document.querySelector("#storageSettingsForm");
     const storageSettingsStatus = document.querySelector("#storageSettingsStatus");
+    const alertSettingsForm = document.querySelector("#alertSettingsForm");
+    const alertSettingsStatus = document.querySelector("#alertSettingsStatus");
+    const alertsBody = document.querySelector("#alertsBody");
     const collectorSettingsForm = document.querySelector("#collectorSettingsForm");
     const collectorSettingsStatus = document.querySelector("#collectorSettingsStatus");
     const collectorWorkerForm = document.querySelector("#collectorWorkerForm");
@@ -1698,6 +1785,66 @@ _INDEX_HTML = """<!doctype html>
       if (!status.is_dir) return "not directory";
       if (!status.writable) return `not writable${status.error ? `: ${status.error}` : ""}`;
       return `ok / free ${formatBytes(Number(status.free_bytes || 0))}`;
+    }
+
+    async function loadAlerts() {
+      try {
+        const payload = await fetch("/alerts/status").then((r) => r.json());
+        renderAlertStatus(payload);
+      } catch (error) {
+        alertSettingsStatus.textContent = `Error: ${error.message}`;
+        alertsBody.innerHTML = `<tr><td colspan="4">Error: ${escapeHtml(error.message)}</td></tr>`;
+      }
+    }
+
+    function renderAlertStatus(payload) {
+      const settings = payload.alert_settings || {};
+      alertSettingsForm.elements.minimum_free_gb.value = bytesToGiB(settings.minimum_free_bytes ?? 0).toFixed(1);
+      alertSettingsForm.elements.discord_channel_ids.value = (settings.discord_channel_ids || []).join(", ");
+      alertSettingsForm.elements.storage_alerts_enabled.value = settings.storage_alerts_enabled === false ? "false" : "true";
+      alertSettingsForm.elements.worker_error_alerts_enabled.value = settings.worker_error_alerts_enabled === false ? "false" : "true";
+      alertSettingsStatus.textContent = [
+        `minimum ${formatBytes(Number(settings.minimum_free_bytes || 0))}`,
+        `channels ${(settings.discord_channel_ids || []).length}`,
+        `active alerts ${(payload.alerts || []).length}`,
+      ].join(" / ");
+      renderAlerts(payload.alerts || []);
+    }
+
+    function renderAlerts(alerts) {
+      alertsBody.innerHTML = alerts.length
+        ? alerts.map((alert) => `
+          <tr>
+            <td>${escapeHtml(alert.source || "")}</td>
+            <td>${escapeHtml(alert.severity || "")}</td>
+            <td>${escapeHtml(alert.title || "")}</td>
+            <td>${escapeHtml(alert.message || "")}</td>
+          </tr>
+        `).join("")
+        : `<tr><td colspan="4">No active alerts</td></tr>`;
+    }
+
+    async function saveAlertSettings(event) {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const payload = await postJson("/settings/alerts", {
+        minimum_free_bytes: Math.round(Number(form.get("minimum_free_gb") || 0) * 1024 * 1024 * 1024),
+        discord_channel_ids: parseIdList(String(form.get("discord_channel_ids") || "")),
+        storage_alerts_enabled: form.get("storage_alerts_enabled") !== "false",
+        worker_error_alerts_enabled: form.get("worker_error_alerts_enabled") !== "false",
+      });
+      renderAlertStatus(payload);
+    }
+
+    function parseIdList(value) {
+      return value
+        .split(/[,\\s]+/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+
+    function bytesToGiB(value) {
+      return Number(value || 0) / 1024 / 1024 / 1024;
     }
 
     async function loadDiscordPermissions() {
@@ -3104,6 +3251,7 @@ _INDEX_HTML = """<!doctype html>
         `Replay ${formatStoragePathStatus(payload.storage_status?.replay_data_dir)}`,
       ].join(" / ");
       await loadStatus();
+      await loadAlerts();
     }
 
     async function saveCollectorSettings(event) {
@@ -3376,6 +3524,17 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
+    alertSettingsForm.addEventListener("submit", async (event) => {
+      try {
+        await saveAlertSettings(event);
+        banner.textContent = "Alert settings saved";
+      } catch (error) {
+        event.preventDefault();
+        alertSettingsStatus.textContent = `Error: ${error.message}`;
+        banner.textContent = `Error: ${error.message}`;
+      }
+    });
+
     collectorSettingsForm.addEventListener("submit", async (event) => {
       try {
         await saveCollectorSettings(event);
@@ -3595,12 +3754,13 @@ _INDEX_HTML = """<!doctype html>
     timelineZoom.addEventListener("change", renderReplayFrame);
 
     drawEmptyReplayCanvas();
-    Promise.all([loadStatus(), loadDiscordPermissions(), loadDiscordScopes(), loadCollectorWorkerStatus(), loadPostProcessingWorkerStatus(), loadWorkerRuns(), loadPlayers(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
+    Promise.all([loadStatus(), loadAlerts(), loadDiscordPermissions(), loadDiscordScopes(), loadCollectorWorkerStatus(), loadPostProcessingWorkerStatus(), loadWorkerRuns(), loadPlayers(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
       .then(() => { banner.textContent = "localhost 전용 관리 화면"; })
       .catch((error) => { banner.textContent = `오류: ${error.message}`; });
     setInterval(loadCollectorWorkerStatus, 10000);
     setInterval(loadPostProcessingWorkerStatus, 10000);
     setInterval(loadWorkerRuns, 30000);
+    setInterval(loadAlerts, 30000);
   </script>
 </body>
 </html>

@@ -73,11 +73,20 @@ Recommended JSON shape:
     },
     "public_profile_default": true,
     "updated_at": "2026-06-27T21:00:00+09:00"
+  },
+  "alerts": {
+    "minimum_free_bytes": 53687091200,
+    "discord_channel_ids": ["discord-alert-channel-id"],
+    "storage_alerts_enabled": true,
+    "worker_error_alerts_enabled": true,
+    "updated_at": "2026-06-27T21:00:00+09:00"
   }
 }
 ```
 
 Runtime priority:
+
+The current built-in `admin` command group also includes `pubg-alerts` for alert report lookup.
 
 1. Built-in defaults: `./data/raw`, `./data/replays`
 2. `.env` values: `PUBG_RAW_DATA_DIR`, `PUBG_REPLAY_DATA_DIR`
@@ -101,6 +110,8 @@ The current settings screen provides:
 - global admin editor
 - Discord guild-specific ranking scope editor
 - public profile default editor
+- alert settings for minimum free storage and Discord alert channel IDs
+- current storage/worker alert table
 - free disk space display for each path
 - warning when a configured drive is disconnected
 

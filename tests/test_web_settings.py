@@ -23,6 +23,10 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn('id="collectorSettingsForm"', body)
         self.assertIn("/settings/storage", body)
         self.assertIn("/settings/collector", body)
+        self.assertIn('id="alertSettingsForm"', body)
+        self.assertIn('id="alertsBody"', body)
+        self.assertIn("/settings/alerts", body)
+        self.assertIn("/alerts/status", body)
         self.assertIn("saveStorageSettings", body)
         self.assertIn("saveCollectorSettings", body)
         self.assertIn('id="collectorWorkerForm"', body)
@@ -171,6 +175,33 @@ class WebSettingsTests(unittest.TestCase):
         self.assertEqual(runs[0]["summary"]["collection"]["queued_match_jobs"], 2)
         self.assertTrue(connection.closed)
 
+    def test_alert_settings_endpoint_updates_local_settings_file(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            settings_file = Path(temp_dir) / "config" / "local_settings.json"
+            connection = FakeWorkerRunConnection(rows=[], latest_id=0)
+            with patch.dict(os.environ, {"PUBG_LOCAL_SETTINGS_FILE": str(settings_file)}):
+                with patch("pubg_ai.web.app.connect_mysql", return_value=connection):
+                    client = TestClient(create_app())
+                    response = client.post(
+                        "/settings/alerts",
+                        json={
+                            "minimum_free_bytes": 123456,
+                            "discord_channel_ids": ["111", "222"],
+                            "storage_alerts_enabled": True,
+                            "worker_error_alerts_enabled": False,
+                        },
+                    )
+                    loaded = client.get("/alerts/status")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["alert_settings"]["minimum_free_bytes"], 123456)
+            self.assertEqual(response.json()["alert_settings"]["discord_channel_ids"], ["111", "222"])
+            self.assertFalse(response.json()["alert_settings"]["worker_error_alerts_enabled"])
+            self.assertEqual(loaded.json()["alert_settings"]["minimum_free_bytes"], 123456)
+            stored = json.loads(settings_file.read_text(encoding="utf-8"))
+            self.assertEqual(stored["alerts"]["discord_channel_ids"], ["111", "222"])
+            self.assertNotIn("DISCORD_BOT_TOKEN", str(stored))
+
     def test_discord_scope_settings_endpoint_updates_local_settings_file(self) -> None:
         with TemporaryDirectory() as temp_dir:
             settings_file = Path(temp_dir) / "config" / "local_settings.json"
@@ -224,9 +255,9 @@ class WebSettingsTests(unittest.TestCase):
 
 
 class FakeWorkerRunConnection:
-    def __init__(self) -> None:
+    def __init__(self, rows: list[dict[str, object]] | None = None, latest_id: int = 1) -> None:
         self.closed = False
-        self.cursor_obj = FakeWorkerRunCursor()
+        self.cursor_obj = FakeWorkerRunCursor(rows=rows, latest_id=latest_id)
 
     def cursor(self) -> "FakeWorkerRunCursor":
         return self.cursor_obj
@@ -236,17 +267,23 @@ class FakeWorkerRunConnection:
 
 
 class FakeWorkerRunCursor:
+    def __init__(self, rows: list[dict[str, object]] | None = None, latest_id: int = 1) -> None:
+        self.rows = rows
+        self.latest_id = latest_id
+
     def __enter__(self) -> "FakeWorkerRunCursor":
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
         return None
 
-    def execute(self, query: str, params: tuple[object, ...]) -> None:
+    def execute(self, query: str, params: tuple[object, ...] = ()) -> None:
         self.query = query
         self.params = params
 
     def fetchall(self) -> list[dict[str, object]]:
+        if self.rows is not None:
+            return self.rows
         return [
             {
                 "id": 1,
@@ -261,6 +298,9 @@ class FakeWorkerRunCursor:
                 "created_at_kst": "2026-06-30T10:00:01+09:00",
             }
         ]
+
+    def fetchone(self) -> dict[str, object]:
+        return {"latest_id": self.latest_id}
 
 
 if __name__ == "__main__":

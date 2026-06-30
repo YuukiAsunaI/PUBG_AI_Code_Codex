@@ -78,6 +78,8 @@ The first executable slice is now available:
   map JPEG snapshots, and replay timelines
 - persistent worker run history in MySQL with a local manager table for recent collector/post-processing cycles and
   their last errors
+- local and Discord alert settings for storage pressure and worker failures, including configurable Discord alert
+  channel IDs without storing bot tokens outside `.env`
 
 Install dependencies:
 
@@ -293,6 +295,7 @@ Discord's message content intent to be enabled for the bot application. Initial 
 !매치 match_id [닉네임|accountId] [shard]
 !랭킹 [지표] [shard] [limit] [전체]
 !최근스냅샷 [match_id]
+!pubg-alerts
 !유저삭제 steam 닉네임또는accountId
 ```
 
@@ -313,6 +316,9 @@ python -m pubg_ai.cli discord-permissions
 
 Permission groups currently include `register`, `profile_read`, `ranking_read`, `replay_read`, `settings_write`, and
 `admin`.
+The `admin` group includes `pubg-alerts`, which returns current storage and worker alerts. When Discord alert channel
+IDs are configured from the local manager, the running Discord bot also sends new worker failures and active storage
+capacity alerts to those channels.
 
 Run the local management app:
 

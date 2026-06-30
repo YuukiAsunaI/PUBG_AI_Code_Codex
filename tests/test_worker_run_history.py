@@ -4,7 +4,13 @@ from datetime import datetime
 import json
 import unittest
 
-from pubg_ai.worker_run_history import WorkerRunHistoryError, list_worker_runs, record_worker_cycle
+from pubg_ai.worker_run_history import (
+    WorkerRunHistoryError,
+    get_latest_worker_run_id,
+    list_failed_worker_runs,
+    list_worker_runs,
+    record_worker_cycle,
+)
 
 
 class WorkerRunHistoryTests(unittest.TestCase):
@@ -66,18 +72,51 @@ class WorkerRunHistoryTests(unittest.TestCase):
         with self.assertRaises(WorkerRunHistoryError):
             list_worker_runs(FakeConnection(), worker_name="other")
 
+    def test_lists_failed_worker_runs_after_id(self) -> None:
+        connection = FakeConnection(
+            rows=[
+                {
+                    "id": 8,
+                    "worker_name": "collector",
+                    "status": "failed",
+                    "started_at_kst": "2026-06-30T10:00:00+09:00",
+                    "finished_at_kst": "2026-06-30T10:00:01+09:00",
+                    "duration_seconds": 1,
+                    "error_count": 1,
+                    "last_error": "boom",
+                    "summary_json": '{"errors":["boom"]}',
+                    "created_at_kst": "2026-06-30T10:00:01+09:00",
+                }
+            ]
+        )
+
+        runs = list_failed_worker_runs(connection, after_id=7, limit=10, ascending=True)
+
+        self.assertEqual(runs[0].id, 8)
+        query, params = connection.cursor_obj.executed[0]
+        self.assertIn("status = 'failed'", query)
+        self.assertIn("id > %s", query)
+        self.assertIn("ORDER BY id ASC", query)
+        self.assertEqual(params, (7, 10))
+
+    def test_get_latest_worker_run_id(self) -> None:
+        connection = FakeConnection(latest_id=55)
+
+        self.assertEqual(get_latest_worker_run_id(connection), 55)
+
 
 class FakeConnection:
-    def __init__(self, rows: list[dict[str, object]] | None = None) -> None:
-        self.cursor_obj = FakeCursor(rows or [])
+    def __init__(self, rows: list[dict[str, object]] | None = None, latest_id: int = 0) -> None:
+        self.cursor_obj = FakeCursor(rows or [], latest_id=latest_id)
 
     def cursor(self) -> "FakeCursor":
         return self.cursor_obj
 
 
 class FakeCursor:
-    def __init__(self, rows: list[dict[str, object]]) -> None:
+    def __init__(self, rows: list[dict[str, object]], latest_id: int = 0) -> None:
         self.rows = rows
+        self.latest_id = latest_id
         self.executed: list[tuple[str, tuple[object, ...]]] = []
         self.lastrowid = 123
 
@@ -92,6 +131,9 @@ class FakeCursor:
 
     def fetchall(self) -> list[dict[str, object]]:
         return self.rows
+
+    def fetchone(self) -> dict[str, object]:
+        return {"latest_id": self.latest_id}
 
 
 if __name__ == "__main__":

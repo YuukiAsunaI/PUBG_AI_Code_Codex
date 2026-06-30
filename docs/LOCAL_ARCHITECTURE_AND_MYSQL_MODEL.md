@@ -354,7 +354,9 @@ Completed slices:
     snapshot JPEGs, and replay timeline generation from the CLI or local manager.
 35. Worker cycles are persisted to `worker_run_history` and the local manager shows recent collector/post-processing
     runs with success/failure status, duration, summary counts, and the last error.
+36. Local manager and Discord bot can surface storage/worker alerts. Alert settings store minimum free bytes and
+    Discord alert channel IDs locally, while `pubg-alerts` and the bot alert loop reuse `worker_run_history`.
 
 Next slice:
 
-1. Add Discord-side alert delivery for worker errors and storage pressure using the persisted worker run history.
+1. Add acknowledgement/snooze controls for repeated alerts and expose alert history in the local manager.

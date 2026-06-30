@@ -131,6 +131,55 @@ def list_worker_runs(
     return [_row_to_record(row) for row in rows]
 
 
+def list_failed_worker_runs(
+    connection: Any,
+    *,
+    after_id: int | None = None,
+    limit: int = 20,
+    ascending: bool = False,
+) -> list[WorkerRunRecord]:
+    bounded_limit = max(1, min(int(limit), 200))
+    params: list[Any] = []
+    where = "WHERE status = 'failed'"
+    if after_id is not None:
+        where += " AND id > %s"
+        params.append(max(0, int(after_id)))
+    order = "id ASC" if ascending else "created_at_kst DESC, id DESC"
+    params.append(bounded_limit)
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT
+                id,
+                worker_name,
+                status,
+                started_at_kst,
+                finished_at_kst,
+                duration_seconds,
+                error_count,
+                last_error,
+                summary_json,
+                created_at_kst
+            FROM worker_run_history
+            {where}
+            ORDER BY {order}
+            LIMIT %s
+            """,
+            tuple(params),
+        )
+        rows = cursor.fetchall()
+
+    return [_row_to_record(row) for row in rows]
+
+
+def get_latest_worker_run_id(connection: Any) -> int:
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT COALESCE(MAX(id), 0) AS latest_id FROM worker_run_history")
+        row = cursor.fetchone()
+    return int((row or {}).get("latest_id") or 0)
+
+
 def _row_to_record(row: Mapping[str, Any]) -> WorkerRunRecord:
     summary = _json_object(row.get("summary_json"))
     return WorkerRunRecord(

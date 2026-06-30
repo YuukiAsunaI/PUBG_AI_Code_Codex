@@ -116,6 +116,8 @@ class DiscordCommandDefaultsTests(unittest.TestCase):
         self.assertIn("랭킹", DEFAULT_COMMAND_GROUPS["ranking_read"])
         self.assertIn("유저삭제", DEFAULT_COMMAND_GROUPS["admin"])
 
+        self.assertIn("pubg-alerts", DEFAULT_COMMAND_GROUPS["admin"])
+
 
 if __name__ == "__main__":
     unittest.main()

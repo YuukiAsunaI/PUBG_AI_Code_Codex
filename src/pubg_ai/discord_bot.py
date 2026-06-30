@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -15,6 +16,8 @@ from pubg_ai.player_stats import PlayerMatchDetail, PlayerProfileStats, PlayerSt
 from pubg_ai.pubg_client import PubgApiClient, PubgApiError
 from pubg_ai.replay_artifact_catalog import ReplayArtifactRecord, list_replay_artifacts
 from pubg_ai.replay_storage import ReplayArtifactStore, ReplayStorageError
+from pubg_ai.system_alerts import collect_system_alerts, format_alert_report, format_discord_alert
+from pubg_ai.worker_run_history import get_latest_worker_run_id
 
 
 DEFAULT_DISCORD_PREFIX = "!"
@@ -251,6 +254,9 @@ def create_discord_bot(
     intents = discord.Intents.default()
     intents.message_content = True
     bot = commands.Bot(command_prefix=command_prefix, intents=intents)
+    alert_task_started = False
+    alert_last_worker_run_id: int | None = None
+    sent_storage_alert_keys: set[str] = set()
 
     def guild_id_for(ctx: Any) -> str | None:
         return str(ctx.guild.id) if ctx.guild else None
@@ -293,9 +299,86 @@ def create_discord_bot(
         await ctx.reply("이 명령어는 디스코드 서버 채널에서 사용해 주세요.", mention_author=False)
         return None
 
+    async def send_alert_to_channel(channel_id: str, message: str) -> bool:
+        try:
+            numeric_channel_id = int(channel_id)
+        except ValueError:
+            return False
+
+        try:
+            channel = bot.get_channel(numeric_channel_id)
+            if channel is None:
+                channel = await bot.fetch_channel(numeric_channel_id)
+            await channel.send(message)
+            return True
+        except Exception as exc:
+            print(f"failed to send PUBG AI alert to Discord channel {channel_id}: {exc}")
+            return False
+
+    async def dispatch_alerts_once() -> None:
+        nonlocal alert_last_worker_run_id
+        if scope_settings_store is None:
+            return
+
+        try:
+            alert_settings = scope_settings_store.load_alert_settings()
+        except LocalSettingsError as exc:
+            print(f"failed to load PUBG AI alert settings: {exc}")
+            return
+
+        if not alert_settings.discord_channel_ids:
+            return
+
+        connection = connect_mysql(config.database)
+        try:
+            if alert_last_worker_run_id is None:
+                alert_last_worker_run_id = get_latest_worker_run_id(connection)
+            report = collect_system_alerts(
+                config=config,
+                connection=connection,
+                settings=alert_settings,
+                after_worker_run_id=alert_last_worker_run_id,
+            )
+        finally:
+            connection.close()
+
+        sent_worker_alert = False
+        worker_alert_count = 0
+        for alert in report.alerts:
+            if alert.source == "storage" and alert.key in sent_storage_alert_keys:
+                continue
+            if alert.source == "worker":
+                worker_alert_count += 1
+
+            sent_alert = False
+            for channel_id in alert_settings.discord_channel_ids or []:
+                sent_alert = await send_alert_to_channel(channel_id, format_discord_alert(alert)) or sent_alert
+
+            if sent_alert:
+                if alert.source == "storage":
+                    sent_storage_alert_keys.add(alert.key)
+                if alert.source == "worker":
+                    sent_worker_alert = True
+
+        if worker_alert_count == 0 or sent_worker_alert:
+            alert_last_worker_run_id = report.latest_worker_run_id
+
+    async def alert_loop() -> None:
+        await bot.wait_until_ready()
+        while not bot.is_closed():
+            try:
+                await dispatch_alerts_once()
+            except Exception as exc:
+                print(f"PUBG AI alert loop failed: {exc}")
+            await asyncio.sleep(60)
+
     @bot.event
     async def on_ready() -> None:
+        nonlocal alert_task_started
         print(f"PUBG AI Discord bot logged in as {bot.user}")
+        if scope_settings_store is not None and not alert_task_started:
+            alert_task_started = True
+            bot.loop.create_task(alert_loop())
 
     @bot.command(name="배그도움말", aliases=["pubg-help", "pubg-ai"])
     async def help_command(ctx: Any) -> None:
@@ -645,6 +728,33 @@ def create_discord_bot(
             file=discord.File(Path(path), filename=path.name),
             mention_author=False,
         )
+
+    @bot.command(name="pubg-alerts")
+    async def alerts_command(ctx: Any) -> None:
+        if not await require_permission(ctx, "admin"):
+            return
+        if scope_settings_store is None:
+            await ctx.reply("PUBG AI alert settings are unavailable.", mention_author=False)
+            return
+
+        try:
+            alert_settings = scope_settings_store.load_alert_settings()
+        except LocalSettingsError as exc:
+            await ctx.reply(f"PUBG AI alert settings error: {exc}", mention_author=False)
+            return
+
+        connection = connect_mysql(config.database)
+        try:
+            report = collect_system_alerts(
+                config=config,
+                connection=connection,
+                settings=alert_settings,
+                after_worker_run_id=None,
+            )
+        finally:
+            connection.close()
+
+        await ctx.reply(format_alert_report(report.alerts), mention_author=False)
 
     return bot
 

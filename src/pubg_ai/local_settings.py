@@ -8,6 +8,7 @@ import os
 import shutil
 import tempfile
 
+from pubg_ai.storage_alerts import DEFAULT_MINIMUM_FREE_BYTES
 from pubg_ai.time_utils import isoformat_kst
 
 
@@ -104,6 +105,24 @@ class WebSettings:
         }
 
 
+@dataclass(frozen=True)
+class AlertSettings:
+    minimum_free_bytes: int = DEFAULT_MINIMUM_FREE_BYTES
+    discord_channel_ids: list[str] | None = None
+    storage_alerts_enabled: bool = True
+    worker_error_alerts_enabled: bool = True
+    updated_at: str | None = None
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "minimum_free_bytes": self.minimum_free_bytes,
+            "discord_channel_ids": list(self.discord_channel_ids or []),
+            "storage_alerts_enabled": self.storage_alerts_enabled,
+            "worker_error_alerts_enabled": self.worker_error_alerts_enabled,
+            "updated_at": self.updated_at,
+        }
+
+
 DEFAULT_COMMAND_GROUPS: dict[str, list[str]] = {
     "register": ["유저등록", "pubg-register"],
     "profile_read": [
@@ -122,6 +141,7 @@ DEFAULT_COMMAND_GROUPS: dict[str, list[str]] = {
     "settings_write": ["pubg-settings"],
     "admin": ["유저삭제", "pubg-permission", "pubg-unregister", "pubg-delete-data"],
 }
+DEFAULT_COMMAND_GROUPS["admin"] = sorted(set(DEFAULT_COMMAND_GROUPS["admin"] + ["pubg-alerts"]))
 
 FORBIDDEN_LOCAL_SETTING_KEYS = {
     "PUBG_API_KEY",
@@ -204,6 +224,14 @@ class LocalSettingsStore:
             return None
 
         return _web_settings_from_record(web)
+
+    def load_alert_settings(self) -> AlertSettings:
+        payload = self._read_settings() or {}
+        alerts = payload.get("alerts")
+        if not isinstance(alerts, dict):
+            return AlertSettings(discord_channel_ids=[])
+
+        return _alert_settings_from_record(alerts)
 
     def save_storage_settings(
         self,
@@ -304,6 +332,26 @@ class LocalSettingsStore:
         )
         payload = self._read_settings() or {}
         payload["web"] = settings.to_record()
+        self._write_settings(payload)
+        return settings
+
+    def save_alert_settings(
+        self,
+        minimum_free_bytes: int,
+        discord_channel_ids: list[str] | None = None,
+        storage_alerts_enabled: bool = True,
+        worker_error_alerts_enabled: bool = True,
+    ) -> AlertSettings:
+        settings = AlertSettings(
+            minimum_free_bytes=int(minimum_free_bytes),
+            discord_channel_ids=_normalize_id_list(discord_channel_ids or []),
+            storage_alerts_enabled=bool(storage_alerts_enabled),
+            worker_error_alerts_enabled=bool(worker_error_alerts_enabled),
+            updated_at=isoformat_kst(),
+        )
+        _validate_alert_settings(settings)
+        payload = self._read_settings() or {}
+        payload["alerts"] = settings.to_record()
         self._write_settings(payload)
         return settings
 
@@ -583,6 +631,25 @@ def _web_settings_from_record(record: dict[str, Any]) -> WebSettings:
         local_web_base_url=_normalize_optional_url(record.get("local_web_base_url")),
         updated_at=_optional_str(record.get("updated_at")),
     )
+
+
+def _alert_settings_from_record(record: dict[str, Any]) -> AlertSettings:
+    settings = AlertSettings(
+        minimum_free_bytes=_int_value(record.get("minimum_free_bytes"), DEFAULT_MINIMUM_FREE_BYTES),
+        discord_channel_ids=_normalize_id_list(
+            record.get("discord_channel_ids") if isinstance(record.get("discord_channel_ids"), list) else []
+        ),
+        storage_alerts_enabled=record.get("storage_alerts_enabled") is not False,
+        worker_error_alerts_enabled=record.get("worker_error_alerts_enabled") is not False,
+        updated_at=_optional_str(record.get("updated_at")),
+    )
+    _validate_alert_settings(settings)
+    return settings
+
+
+def _validate_alert_settings(settings: AlertSettings) -> None:
+    if settings.minimum_free_bytes < 0:
+        raise LocalSettingsError("minimum_free_bytes must be 0 or greater.")
 
 
 def _normalize_optional_url(value: Any) -> str | None:
