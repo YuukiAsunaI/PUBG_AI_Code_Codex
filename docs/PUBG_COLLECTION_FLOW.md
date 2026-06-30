@@ -292,6 +292,20 @@ Live test also regenerated one `timeline` artifact for match `751d1def-d222-4d3e
 included a four-member squad list, 13 combat-location events with related-player display names where available, and
 171 phase-circle events.
 
+## Implemented Automatic Post-processing Worker Slice
+
+The current local runtime can automate the analysis and replay-artifact side after raw telemetry has been stored:
+
+- `python -m pubg_ai.cli run-post-processing` repeatedly runs combat, item, and movement telemetry parsers.
+- The same cycle then generates combat loadout snapshots, route JPEG map snapshots, and replay timeline JSON
+  artifacts.
+- The local web UI can start or stop the in-process post-processing worker and shows cycle count, next run time, last
+  cycle summary, and the last error when a stage fails.
+- Each stage keeps its own limit and errors are captured per stage, so one parser failure does not stop later stages
+  from attempting work in the same cycle.
+- The worker uses the configured raw and replay storage paths from `.env` or `config/local_settings.json`; it does
+  not store or display API keys or Discord tokens.
+
 ## Implemented Discord Bot MVP Slice
 
 The current Discord bot slice is intentionally small and reuses the same local MySQL and file stores:

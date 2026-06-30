@@ -95,6 +95,7 @@ The current settings screen provides:
 - collection cycle player limit selector up to 100
 - player lookup chunk size selector up to the official player lookup limit
 - in-process automatic collector start/stop/status controls
+- in-process automatic post-processing start/stop/status controls
 - Discord command group editor
 - Discord per-user permission grant editor
 - global admin editor

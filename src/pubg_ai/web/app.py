@@ -20,6 +20,11 @@ from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.match_job_processor import MatchJobProcessor
 from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry
 from pubg_ai.player_rankings import PlayerRankingService
+from pubg_ai.post_processing_worker import (
+    PostProcessingWorkerController,
+    PostProcessingWorkerError,
+    PostProcessingWorkerOptions,
+)
 from pubg_ai.player_recommendations import PlayerRecommendationService
 from pubg_ai.player_stats import PlayerStatsService
 from pubg_ai.pubg_client import PubgApiClient, PubgApiError
@@ -129,6 +134,16 @@ class CollectorWorkerStartRequest(BaseModel):
     telemetry_job_limit: int = Field(default=5, ge=1, le=200)
 
 
+class PostProcessingWorkerStartRequest(BaseModel):
+    combat_limit: int = Field(default=10, ge=1, le=200)
+    item_limit: int = Field(default=10, ge=1, le=200)
+    movement_limit: int = Field(default=10, ge=1, le=200)
+    loadout_limit: int = Field(default=50, ge=1, le=500)
+    map_snapshot_limit: int = Field(default=10, ge=1, le=200)
+    timeline_limit: int = Field(default=10, ge=1, le=200)
+    force: bool = False
+
+
 def create_app() -> Any:
     base_dir = Path.cwd()
     config = RuntimeConfig.from_sources(base_dir=base_dir)
@@ -138,6 +153,7 @@ def create_app() -> Any:
     def current_config() -> RuntimeConfig:
         return RuntimeConfig.from_sources(base_dir=base_dir)
     collector_worker = CollectorWorkerController(config_loader=current_config)
+    post_processing_worker = PostProcessingWorkerController(config_loader=current_config)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> Any:
@@ -145,6 +161,7 @@ def create_app() -> Any:
             yield
         finally:
             collector_worker.stop()
+            post_processing_worker.stop()
 
     app = FastAPI(
         title="PUBG AI Local Manager",
@@ -244,6 +261,32 @@ def create_app() -> Any:
     @app.post("/collector/worker/stop")
     def stop_collector_worker() -> dict[str, Any]:
         return {"worker": collector_worker.stop().to_record()}
+
+    @app.get("/post-processing/worker/status")
+    def post_processing_worker_status() -> dict[str, Any]:
+        return {"worker": post_processing_worker.status().to_record()}
+
+    @app.post("/post-processing/worker/start")
+    def start_post_processing_worker(request: PostProcessingWorkerStartRequest) -> dict[str, Any]:
+        try:
+            state = post_processing_worker.start(
+                PostProcessingWorkerOptions(
+                    combat_limit=request.combat_limit,
+                    item_limit=request.item_limit,
+                    movement_limit=request.movement_limit,
+                    loadout_limit=request.loadout_limit,
+                    map_snapshot_limit=request.map_snapshot_limit,
+                    timeline_limit=request.timeline_limit,
+                    force=request.force,
+                )
+            )
+        except PostProcessingWorkerError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"worker": state.to_record()}
+
+    @app.post("/post-processing/worker/stop")
+    def stop_post_processing_worker() -> dict[str, Any]:
+        return {"worker": post_processing_worker.stop().to_record()}
 
     @app.get("/discord/permissions")
     def discord_permissions() -> dict[str, Any]:
@@ -1336,6 +1379,38 @@ _INDEX_HTML = """<!doctype html>
       </table>
     </section>
     <section>
+      <h2>Post-processing Worker</h2>
+      <form id="postProcessingWorkerForm">
+        <label>Combat
+          <input name="combat_limit" type="number" min="1" max="200" value="10" required>
+        </label>
+        <label>Items
+          <input name="item_limit" type="number" min="1" max="200" value="10" required>
+        </label>
+        <label>Movement
+          <input name="movement_limit" type="number" min="1" max="200" value="10" required>
+        </label>
+        <label>Loadout
+          <input name="loadout_limit" type="number" min="1" max="500" value="50" required>
+        </label>
+        <label>Map JPEG
+          <input name="map_snapshot_limit" type="number" min="1" max="200" value="10" required>
+        </label>
+        <label>Timeline
+          <input name="timeline_limit" type="number" min="1" max="200" value="10" required>
+        </label>
+        <label>Mode
+          <select name="force">
+            <option value="false">skip existing</option>
+            <option value="true">force</option>
+          </select>
+        </label>
+        <button type="submit">Start auto</button>
+        <button class="secondary" type="button" id="postProcessingWorkerStop">Stop</button>
+      </form>
+      <div class="status" id="postProcessingWorkerStatus" style="margin-top: 12px;">Post-processing stopped</div>
+    </section>
+    <section>
       <h2>Combat 파싱</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="parseTelemetryCombat(false)">전투 파싱</button>
@@ -1486,6 +1561,9 @@ _INDEX_HTML = """<!doctype html>
     const collectorWorkerForm = document.querySelector("#collectorWorkerForm");
     const collectorWorkerStop = document.querySelector("#collectorWorkerStop");
     const collectorWorkerStatus = document.querySelector("#collectorWorkerStatus");
+    const postProcessingWorkerForm = document.querySelector("#postProcessingWorkerForm");
+    const postProcessingWorkerStop = document.querySelector("#postProcessingWorkerStop");
+    const postProcessingWorkerStatus = document.querySelector("#postProcessingWorkerStatus");
     const webSettingsForm = document.querySelector("#webSettingsForm");
     const webSettingsStatus = document.querySelector("#webSettingsStatus");
     const banner = document.querySelector("#banner");
@@ -3019,6 +3097,60 @@ _INDEX_HTML = """<!doctype html>
       renderCollectorWorkerStatus(payload.worker);
     }
 
+    async function loadPostProcessingWorkerStatus() {
+      const payload = await fetch("/post-processing/worker/status").then((r) => r.json());
+      renderPostProcessingWorkerStatus(payload.worker);
+    }
+
+    function renderPostProcessingWorkerStatus(worker) {
+      if (!worker) {
+        postProcessingWorkerStatus.textContent = "Post-processing status unavailable";
+        return;
+      }
+      const state = worker.running
+        ? (worker.stop_requested ? "stopping" : "running")
+        : "stopped";
+      const lastCycle = worker.last_cycle;
+      const lastSummary = lastCycle
+        ? [
+            `last ${escapeHtml(lastCycle.finished_at_kst || "-")}`,
+            `combat ${lastCycle.combat?.parsed_payloads ?? "-"}`,
+            `items ${lastCycle.items?.parsed_payloads ?? "-"}`,
+            `movement ${lastCycle.movement?.parsed_payloads ?? "-"}`,
+            `loadout ${lastCycle.loadout_snapshots?.generated_snapshots ?? "-"}`,
+            `maps ${lastCycle.map_snapshots?.generated_snapshots ?? "-"}`,
+            `timelines ${lastCycle.replay_timelines?.generated_timelines ?? "-"}`,
+          ].join(" / ")
+        : "no cycle yet";
+      postProcessingWorkerStatus.textContent = [
+        `Post-processing ${state}`,
+        `cycles ${worker.cycle_count || 0}`,
+        worker.next_run_at_kst ? `next ${worker.next_run_at_kst}` : null,
+        worker.last_error ? `error ${worker.last_error}` : null,
+        lastSummary,
+      ].filter(Boolean).join(" / ");
+    }
+
+    async function startPostProcessingWorker(event) {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const payload = await postJson("/post-processing/worker/start", {
+        combat_limit: Number(form.get("combat_limit") || 10),
+        item_limit: Number(form.get("item_limit") || 10),
+        movement_limit: Number(form.get("movement_limit") || 10),
+        loadout_limit: Number(form.get("loadout_limit") || 50),
+        map_snapshot_limit: Number(form.get("map_snapshot_limit") || 10),
+        timeline_limit: Number(form.get("timeline_limit") || 10),
+        force: form.get("force") === "true",
+      });
+      renderPostProcessingWorkerStatus(payload.worker);
+    }
+
+    async function stopPostProcessingWorker() {
+      const payload = await postJson("/post-processing/worker/stop", {});
+      renderPostProcessingWorkerStatus(payload.worker);
+    }
+
     async function saveWebSettings(event) {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
@@ -3200,6 +3332,27 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
+    postProcessingWorkerForm.addEventListener("submit", async (event) => {
+      try {
+        await startPostProcessingWorker(event);
+        banner.textContent = "Post-processing worker started";
+      } catch (error) {
+        event.preventDefault();
+        postProcessingWorkerStatus.textContent = `Error: ${error.message}`;
+        banner.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    postProcessingWorkerStop.addEventListener("click", async () => {
+      try {
+        await stopPostProcessingWorker();
+        banner.textContent = "Post-processing stop requested";
+      } catch (error) {
+        postProcessingWorkerStatus.textContent = `Error: ${error.message}`;
+        banner.textContent = `Error: ${error.message}`;
+      }
+    });
+
     webSettingsForm.addEventListener("submit", async (event) => {
       try {
         await saveWebSettings(event);
@@ -3366,10 +3519,11 @@ _INDEX_HTML = """<!doctype html>
     timelineZoom.addEventListener("change", renderReplayFrame);
 
     drawEmptyReplayCanvas();
-    Promise.all([loadStatus(), loadDiscordPermissions(), loadDiscordScopes(), loadCollectorWorkerStatus(), loadPlayers(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
+    Promise.all([loadStatus(), loadDiscordPermissions(), loadDiscordScopes(), loadCollectorWorkerStatus(), loadPostProcessingWorkerStatus(), loadPlayers(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
       .then(() => { banner.textContent = "localhost 전용 관리 화면"; })
       .catch((error) => { banner.textContent = `오류: ${error.message}`; });
     setInterval(loadCollectorWorkerStatus, 10000);
+    setInterval(loadPostProcessingWorkerStatus, 10000);
   </script>
 </body>
 </html>

@@ -350,8 +350,9 @@ Completed slices:
     registrations, and ranking queries apply a guild's `global` override immediately.
 33. Automatic collector worker can run player refresh, queued match-detail storage, and queued telemetry download
     cycles from the CLI or local manager, using the saved polling interval, player limit, and lookup chunk size.
+34. Automatic post-processing worker can run combat, item, and movement telemetry parsing plus loadout snapshots, map
+    snapshot JPEGs, and replay timeline generation from the CLI or local manager.
 
 Next slice:
 
-1. Extend automation past raw collection by adding a post-processing worker for telemetry combat/item/movement parsing,
-   loadout snapshots, map snapshots, and replay timeline generation.
+1. Add persistent worker run history and Discord/local alerts for worker errors and storage pressure.

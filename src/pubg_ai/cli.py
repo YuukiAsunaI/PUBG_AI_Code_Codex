@@ -16,6 +16,7 @@ from pubg_ai.discord_permissions import DiscordPermissionChecker
 from pubg_ai.local_settings import LocalSettingsError, LocalSettingsStore
 from pubg_ai.loadout_snapshot_processor import LoadoutSnapshotProcessor
 from pubg_ai.map_snapshot_renderer import MapSnapshotProcessor
+from pubg_ai.post_processing_worker import PostProcessingWorkerOptions, run_post_processing_cycle
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.match_job_processor import MatchJobProcessor
 from pubg_ai.player_rankings import PlayerRankingService
@@ -178,6 +179,19 @@ def main(argv: list[str] | None = None) -> int:
     collector_parser.add_argument("--match-job-limit", default=10, type=int)
     collector_parser.add_argument("--telemetry-job-limit", default=5, type=int)
     collector_parser.add_argument("--once", action="store_true", help="Run one collector cycle and exit.")
+
+    post_process_parser = subparsers.add_parser(
+        "run-post-processing",
+        help="Run the automatic telemetry parser and replay artifact worker loop.",
+    )
+    post_process_parser.add_argument("--combat-limit", default=10, type=int)
+    post_process_parser.add_argument("--item-limit", default=10, type=int)
+    post_process_parser.add_argument("--movement-limit", default=10, type=int)
+    post_process_parser.add_argument("--loadout-limit", default=50, type=int)
+    post_process_parser.add_argument("--map-snapshot-limit", default=10, type=int)
+    post_process_parser.add_argument("--timeline-limit", default=10, type=int)
+    post_process_parser.add_argument("--force", action="store_true")
+    post_process_parser.add_argument("--once", action="store_true", help="Run one post-processing cycle and exit.")
 
     discord_parser = subparsers.add_parser("run-discord-bot", help="Run the Discord bot.")
     discord_parser.add_argument("--prefix", default=DEFAULT_DISCORD_PREFIX, help="Text command prefix.")
@@ -523,6 +537,27 @@ def main(argv: list[str] | None = None) -> int:
         while True:
             current = RuntimeConfig.from_sources(base_dir=base_dir, env_file=args.env_file)
             result = run_collector_cycle(current, options=options)
+            _print_json({"cycle": result.to_record()})
+            if args.once:
+                return 0
+            try:
+                sleep(max(60, min(current.app.collector_poll_interval_seconds, 300)))
+            except KeyboardInterrupt:
+                return 0
+
+    if args.command == "run-post-processing":
+        options = PostProcessingWorkerOptions(
+            combat_limit=args.combat_limit,
+            item_limit=args.item_limit,
+            movement_limit=args.movement_limit,
+            loadout_limit=args.loadout_limit,
+            map_snapshot_limit=args.map_snapshot_limit,
+            timeline_limit=args.timeline_limit,
+            force=args.force,
+        )
+        while True:
+            current = RuntimeConfig.from_sources(base_dir=base_dir, env_file=args.env_file)
+            result = run_post_processing_cycle(current, options=options)
             _print_json({"cycle": result.to_record()})
             if args.once:
                 return 0

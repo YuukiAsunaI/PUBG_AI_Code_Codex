@@ -74,6 +74,8 @@ The first executable slice is now available:
   scopes, public profile defaults, and local evidence-link base URL settings
 - automatic collector loop from CLI or the local manager for player refresh, match-detail storage, and telemetry
   download cycles
+- automatic post-processing loop from CLI or the local manager for combat/item/movement parsing, loadout snapshots,
+  map JPEG snapshots, and replay timelines
 
 Install dependencies:
 
@@ -180,6 +182,13 @@ using the saved polling interval, cycle player limit, and player lookup chunk si
 
 ```powershell
 python -m pubg_ai.cli run-collector --shard steam --match-job-limit 10 --telemetry-job-limit 5
+```
+
+Run the post-processing loop. This repeatedly parses stored telemetry and generates replay artifacts without pressing
+the individual processing buttons:
+
+```powershell
+python -m pubg_ai.cli run-post-processing --combat-limit 10 --item-limit 10 --movement-limit 10 --loadout-limit 50 --map-snapshot-limit 10 --timeline-limit 10
 ```
 
 Parse raw telemetry into registered-player combat summaries and weapon stats:
@@ -318,5 +327,6 @@ http://127.0.0.1:8000
 The web app refuses non-localhost bind hosts by default. Do not run it with `0.0.0.0` unless a future authenticated
 remote-access mode is intentionally added.
 
-The local manager's `Collector Settings` section can also start or stop the in-process automatic collector. It stops
-when the local web server stops; use the CLI `run-collector` command for a separate long-running collector process.
+The local manager can start or stop the in-process automatic collector and post-processing workers. They stop when the
+local web server stops; use the CLI `run-collector` and `run-post-processing` commands for separate long-running
+worker processes.

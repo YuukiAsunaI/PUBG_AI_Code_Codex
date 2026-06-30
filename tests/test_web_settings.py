@@ -28,6 +28,9 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn('id="collectorWorkerForm"', body)
         self.assertIn("/collector/worker/start", body)
         self.assertIn("/collector/worker/status", body)
+        self.assertIn('id="postProcessingWorkerForm"', body)
+        self.assertIn("/post-processing/worker/start", body)
+        self.assertIn("/post-processing/worker/status", body)
         self.assertIn('id="discordScopeForm"', body)
         self.assertIn('id="publicProfileDefaultForm"', body)
         self.assertIn('id="discordScopesBody"', body)
@@ -141,6 +144,16 @@ class WebSettingsTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.json()["detail"], "PUBG_API_KEY is not configured.")
+
+    def test_post_processing_worker_status_defaults_to_stopped(self) -> None:
+        client = TestClient(create_app())
+        response = client.get("/post-processing/worker/status")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["worker"]
+        self.assertFalse(payload["running"])
+        self.assertFalse(payload["stop_requested"])
+        self.assertEqual(payload["cycle_count"], 0)
 
     def test_discord_scope_settings_endpoint_updates_local_settings_file(self) -> None:
         with TemporaryDirectory() as temp_dir:
