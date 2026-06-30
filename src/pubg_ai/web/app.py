@@ -1447,6 +1447,9 @@ _INDEX_HTML = """<!doctype html>
         </thead>
         <tbody id="alertHistoryBody"></tbody>
       </table>
+      <div class="detail-panel" id="alertHistoryDetail">
+        Select an alert history row.
+      </div>
     </section>
     <section>
       <h2>Collector Settings</h2>
@@ -1952,6 +1955,7 @@ _INDEX_HTML = """<!doctype html>
     const alertHistoryExport = document.querySelector("#alertHistoryExport");
     const alertHistoryPrev = document.querySelector("#alertHistoryPrev");
     const alertHistoryNext = document.querySelector("#alertHistoryNext");
+    const alertHistoryDetail = document.querySelector("#alertHistoryDetail");
     const collectorSettingsForm = document.querySelector("#collectorSettingsForm");
     const collectorSettingsStatus = document.querySelector("#collectorSettingsStatus");
     const collectorWorkerForm = document.querySelector("#collectorWorkerForm");
@@ -2007,6 +2011,9 @@ _INDEX_HTML = """<!doctype html>
       has_previous: false,
       has_next: false,
     };
+    let activeAlertHistoryDetailId = null;
+    let activeAlertHistoryDetailAlert = null;
+    let alertHistoryRecords = [];
     let activeDiscordScopes = {
       guild_ranking_scopes: {},
       public_profile_default: true,
@@ -2150,6 +2157,7 @@ _INDEX_HTML = """<!doctype html>
     }
 
     function renderAlertHistory(history, page = {}, syncControls = false) {
+      alertHistoryRecords = history;
       alertHistoryPage = {
         ...alertHistoryPage,
         ...page,
@@ -2182,6 +2190,7 @@ _INDEX_HTML = """<!doctype html>
             <td>${escapeHtml(alert.message || "")}</td>
             <td>
               <div class="actions">
+                <button class="secondary" type="button" data-alert-detail-id="${attr(alert.id)}">Details</button>
                 <button type="button" data-alert-note-type="note" data-alert-id="${attr(alert.id)}">Note</button>
                 <button class="secondary" type="button" data-alert-note-type="resolution" data-alert-id="${attr(alert.id)}">Resolution</button>
               </div>
@@ -2189,6 +2198,10 @@ _INDEX_HTML = """<!doctype html>
           </tr>
         `).join("")
         : `<tr><td colspan="7">No alert history</td></tr>`;
+      if (activeAlertHistoryDetailId) {
+        const selected = history.find((alert) => String(alert.id) === String(activeAlertHistoryDetailId));
+        if (selected) activeAlertHistoryDetailAlert = selected;
+      }
     }
 
     function alertHistoryStatus(alert) {
@@ -2204,6 +2217,57 @@ _INDEX_HTML = """<!doctype html>
       const note = alert.latest_note ? `: ${alert.latest_note}` : "";
       const type = alert.latest_note_type || "note";
       return `${count} ${type}${note}`;
+    }
+
+    async function loadAlertHistoryDetail(alert) {
+      activeAlertHistoryDetailId = alert.id;
+      activeAlertHistoryDetailAlert = alert;
+      alertHistoryDetail.innerHTML = `<div class="status">Loading alert #${escapeHtml(alert.id)} notes...</div>`;
+      const payload = await fetch(`/alerts/history/${encodeURIComponent(alert.id)}/notes`).then((r) => r.json());
+      if (payload.detail) throw new Error(payload.detail);
+      renderAlertHistoryDetail(alert, payload.notes || []);
+    }
+
+    function renderAlertHistoryDetail(alert, notes) {
+      const noteRows = notes.length
+        ? notes.map((note) => `
+          <tr>
+            <td>${escapeHtml(note.created_at_kst || "")}</td>
+            <td>${escapeHtml(note.note_type || "")}</td>
+            <td>${escapeHtml(note.created_by || "")}</td>
+            <td>${escapeHtml(note.note_text || "")}</td>
+          </tr>
+        `).join("")
+        : `<tr><td colspan="4">No notes or resolution comments</td></tr>`;
+      alertHistoryDetail.innerHTML = `
+        <div class="recommendation-line">
+          <strong>Alert #${escapeHtml(alert.id)} detail</strong>
+          <span class="status">${notes.length} notes shown</span>
+        </div>
+        <div class="grid" style="margin-top: 10px;">
+          ${cell("Source", escapeHtml(alert.source || ""))}
+          ${cell("Severity", escapeHtml(alert.severity || ""))}
+          ${cell("Status", escapeHtml(alertHistoryStatus(alert)))}
+          ${cell("Last seen", escapeHtml(alert.last_seen_at_kst || ""))}
+        </div>
+        <table class="detail-table">
+          <tbody>
+            <tr><th>Title</th><td>${escapeHtml(alert.title || "")}</td></tr>
+            <tr><th>Message</th><td>${escapeHtml(alert.message || "")}</td></tr>
+          </tbody>
+        </table>
+        <table class="detail-table">
+          <thead>
+            <tr>
+              <th>Created</th>
+              <th>Type</th>
+              <th>Created by</th>
+              <th>Text</th>
+            </tr>
+          </thead>
+          <tbody>${noteRows}</tbody>
+        </table>
+      `;
     }
 
     async function saveAlertSettings(event) {
@@ -2223,6 +2287,9 @@ _INDEX_HTML = """<!doctype html>
       await postJson(`/alerts/history/${encodeURIComponent(alertId)}/acknowledge`, {});
       await loadAlerts();
       await loadAlertHistory(page);
+      if (String(activeAlertHistoryDetailId) === String(alertId) && activeAlertHistoryDetailAlert) {
+        await loadAlertHistoryDetail(activeAlertHistoryDetailAlert);
+      }
     }
 
     async function snoozeAlert(alertId, minutes = 60) {
@@ -2230,6 +2297,9 @@ _INDEX_HTML = """<!doctype html>
       await postJson(`/alerts/history/${encodeURIComponent(alertId)}/snooze`, { minutes });
       await loadAlerts();
       await loadAlertHistory(page);
+      if (String(activeAlertHistoryDetailId) === String(alertId) && activeAlertHistoryDetailAlert) {
+        await loadAlertHistoryDetail(activeAlertHistoryDetailAlert);
+      }
     }
 
     async function addAlertHistoryNote(alertId, noteType) {
@@ -2244,6 +2314,9 @@ _INDEX_HTML = """<!doctype html>
       });
       await loadAlerts();
       await loadAlertHistory(page);
+      if (String(activeAlertHistoryDetailId) === String(alertId) && activeAlertHistoryDetailAlert) {
+        await loadAlertHistoryDetail(activeAlertHistoryDetailAlert);
+      }
     }
 
     function parseIdList(value) {
@@ -3980,6 +4053,24 @@ _INDEX_HTML = """<!doctype html>
     });
 
     alertHistoryBody.addEventListener("click", async (event) => {
+      const detailButton = event.target instanceof Element
+        ? event.target.closest("button[data-alert-detail-id]")
+        : null;
+      if (detailButton) {
+        try {
+          const alert = alertHistoryRecords.find((record) => (
+            String(record.id) === String(detailButton.dataset.alertDetailId || "")
+          ));
+          if (!alert) throw new Error("alert history row is not loaded");
+          await loadAlertHistoryDetail(alert);
+          banner.textContent = "Alert detail loaded";
+        } catch (error) {
+          alertHistoryStatus.textContent = `Error: ${error.message}`;
+          banner.textContent = `Error: ${error.message}`;
+        }
+        return;
+      }
+
       const button = event.target instanceof Element
         ? event.target.closest("button[data-alert-note-type]")
         : null;

@@ -374,8 +374,9 @@ Completed slices:
     marker.
 43. Discord admins can review recent alert notes and resolution comments with `pubg-alert-notes alert_id [limit]`
     without opening the local manager.
+44. The local manager alert history table has a per-alert detail panel that loads the selected alert's note and
+    resolution history from `system_alert_notes`.
 
 Next slice:
 
-1. Add a local manager alert-note detail view so admins can inspect the full note history for one alert without using
-   the raw API response.
+1. Replace prompt-based local alert note entry with inline note/resolution forms inside the alert detail panel.

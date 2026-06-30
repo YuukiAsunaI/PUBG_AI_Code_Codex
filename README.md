@@ -354,4 +354,5 @@ shows those rows in `Worker Run History` so storage/API/parser failures remain v
 changes. The same page stores storage/worker alert records in `system_alert_history`, shows current unsuppressed
 alerts separately from recent history, lets the admin acknowledge or temporarily hide noisy alerts, and can filter or
 page history by source/status when many old alerts have accumulated. The filtered history can also be exported as CSV
-from the local manager. Each alert history row can also store persistent admin notes and resolution comments.
+from the local manager. Each alert history row can also store persistent admin notes and resolution comments, and the
+local manager can open a detail panel with the full note history for one alert.

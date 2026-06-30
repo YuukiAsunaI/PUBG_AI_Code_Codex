@@ -314,7 +314,8 @@ The current local runtime can automate the analysis and replay-artifact side aft
   notification, acknowledgement, snooze, and resolved timestamps so repeated alerts can be suppressed without losing
   evidence. The local manager reads that history through source/status filters and offset pagination, and can export
   the filtered rows to CSV for local review notes. Admin notes and resolution comments are stored separately in
-  `system_alert_notes` so the incident trail stays attached to the alert record.
+  `system_alert_notes` so the incident trail stays attached to the alert record, and the local manager can open a
+  per-alert detail panel for the note history.
 
 ## Implemented Discord Bot MVP Slice
 
