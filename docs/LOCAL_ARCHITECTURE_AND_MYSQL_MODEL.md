@@ -380,8 +380,10 @@ Completed slices:
     prompt-based entry flow.
 46. The local manager alert detail panel also includes acknowledge and one-hour snooze controls, so note review,
     suppression, and follow-up comments can be handled from one focused view.
+47. The local manager alert detail panel shows active, acknowledged, snoozed, and resolved states with visual badges,
+    state-specific timestamps, and short helper text.
 
 Next slice:
 
-1. Improve alert status presentation in the detail panel so acknowledged, snoozed, resolved, and active states are
-   easier to scan at a glance.
+1. Add state/severity badges to the current-alert and alert-history tables so alert lists are easier to scan before
+   opening the detail panel.

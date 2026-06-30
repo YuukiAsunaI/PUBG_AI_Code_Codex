@@ -1255,6 +1255,22 @@ _INDEX_HTML = """<!doctype html>
       grid-template-columns: 140px minmax(0, 1fr) auto;
       align-items: end;
     }
+    .alert-state-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
+    .alert-state-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      border-radius: 6px;
+      padding: 3px 8px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0;
+      border: 1px solid transparent;
+    }
+    .alert-state-active { background: #e6f4ea; color: #0f5132; border-color: #b7dfc6; }
+    .alert-state-acknowledged { background: #edf2f7; color: #344054; border-color: #cbd5e1; }
+    .alert-state-snoozed { background: #fff4d6; color: #7a4b00; border-color: #f5cf70; }
+    .alert-state-resolved { background: #e8f0fe; color: #174ea6; border-color: #adc7ff; }
     .detail-table { margin-top: 8px; table-layout: auto; }
     .detail-table th, .detail-table td { font-size: 12px; padding: 7px; vertical-align: top; }
     .player-controls { display: grid; grid-template-columns: minmax(220px, 1fr) 110px auto auto; gap: 10px; align-items: end; }
@@ -2211,11 +2227,46 @@ _INDEX_HTML = """<!doctype html>
       }
     }
 
+    function alertHistoryState(alert) {
+      if (alert.resolved_at_kst) {
+        return {
+          state: "resolved",
+          label: "Resolved",
+          timeLabel: "Resolved at",
+          timeValue: alert.resolved_at_kst || "",
+          helper: "The alert is no longer present in the current storage or worker checks.",
+        };
+      }
+      if (alert.is_acknowledged) {
+        return {
+          state: "acknowledged",
+          label: "Acknowledged",
+          timeLabel: "Acknowledged at",
+          timeValue: alert.acknowledged_at_kst || "",
+          helper: "Repeated notifications are suppressed until this alert is seen as resolved and reappears.",
+        };
+      }
+      if (alert.is_snoozed) {
+        return {
+          state: "snoozed",
+          label: "Snoozed",
+          timeLabel: "Snoozed until",
+          timeValue: alert.snoozed_until_kst || "",
+          helper: "Notifications are temporarily hidden until the snooze time expires.",
+        };
+      }
+      return {
+        state: "active",
+        label: "Active",
+        timeLabel: "Last seen",
+        timeValue: alert.last_seen_at_kst || "",
+        helper: "This alert is currently visible and can still notify admins.",
+      };
+    }
+
     function formatAlertHistoryStatus(alert) {
-      if (alert.resolved_at_kst) return `resolved ${alert.resolved_at_kst}`;
-      if (alert.is_acknowledged) return `acknowledged ${alert.acknowledged_at_kst || ""}`;
-      if (alert.is_snoozed) return `snoozed until ${alert.snoozed_until_kst || ""}`;
-      return "active";
+      const state = alertHistoryState(alert);
+      return state.timeValue ? `${state.label.toLowerCase()} ${state.timeValue}` : state.label.toLowerCase();
     }
 
     function alertHistoryNoteSummary(alert) {
@@ -2242,6 +2293,7 @@ _INDEX_HTML = """<!doctype html>
 
     function renderAlertHistoryDetail(alert, notes) {
       const selectedNote = activeAlertHistoryNoteType === "resolution" ? "resolution" : "note";
+      const state = alertHistoryState(alert);
       const noteRows = notes.length
         ? notes.map((note) => `
           <tr>
@@ -2261,10 +2313,15 @@ _INDEX_HTML = """<!doctype html>
           </div>
         </div>
         <div class="status" style="margin-top: 6px;">${notes.length} notes shown</div>
+        <div class="alert-state-row">
+          <span class="alert-state-badge alert-state-${attr(state.state)}">${escapeHtml(state.label)}</span>
+          <span class="status">${escapeHtml(state.timeLabel)}${state.timeValue ? `: ${escapeHtml(state.timeValue)}` : ""}</span>
+        </div>
+        <div class="status" style="margin-top: 4px;">${escapeHtml(state.helper)}</div>
         <div class="grid" style="margin-top: 10px;">
           ${cell("Source", escapeHtml(alert.source || ""))}
           ${cell("Severity", escapeHtml(alert.severity || ""))}
-          ${cell("Status", escapeHtml(formatAlertHistoryStatus(alert)))}
+          ${cell("Status", escapeHtml(state.label))}
           ${cell("Last seen", escapeHtml(alert.last_seen_at_kst || ""))}
         </div>
         <form class="detail-note-form" data-alert-note-form data-alert-id="${attr(alert.id)}">
