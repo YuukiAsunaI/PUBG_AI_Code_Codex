@@ -312,7 +312,8 @@ The current local runtime can automate the analysis and replay-artifact side aft
 - The alert layer reads `worker_run_history` and storage capacity checks so the local UI and Discord bot can show the
   same storage/worker failure report. Persisted alert history in `system_alert_history` stores first/last seen,
   notification, acknowledgement, snooze, and resolved timestamps so repeated alerts can be suppressed without losing
-  evidence. The local manager reads that history through source/status filters and offset pagination.
+  evidence. The local manager reads that history through source/status filters and offset pagination, and can export
+  the filtered rows to CSV for local review notes.
 
 ## Implemented Discord Bot MVP Slice
 

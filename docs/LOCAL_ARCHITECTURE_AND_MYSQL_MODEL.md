@@ -364,7 +364,9 @@ Completed slices:
     alert history without opening the local manager. Alert reports and automatic messages include alert IDs.
 39. The local manager can filter and page alert history by source and status, so old resolved or suppressed alerts can
     be inspected without loading the whole `system_alert_history` table into the main page.
+40. The local manager can export filtered alert history to CSV, capped at 5,000 rows per request, for admin review or
+    external incident notes.
 
 Next slice:
 
-1. Add alert-history CSV export for admin review and long-term local incident notes.
+1. Add persistent admin notes/resolution comments to alert history records.

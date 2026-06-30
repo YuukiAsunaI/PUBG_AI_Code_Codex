@@ -3,10 +3,12 @@ from __future__ import annotations
 import unittest
 
 from pubg_ai.alert_history import (
+    ALERT_HISTORY_EXPORT_LIMIT,
     AlertHistoryRecord,
     acknowledge_alert,
     alert_key_hash,
     get_alert_history_page,
+    list_alert_history,
     snooze_alert,
     sync_alert_history,
     visible_alert_records,
@@ -70,6 +72,13 @@ class AlertHistoryTests(unittest.TestCase):
         self.assertIn("resolved_at_kst IS NOT NULL", executed_sql)
         self.assertIn("LIMIT %s OFFSET %s", executed_sql)
         self.assertIn("COUNT(*) AS total", executed_sql)
+
+    def test_export_limit_can_request_more_than_page_limit(self) -> None:
+        connection = FakeConnection(rows=[_alert_row()])
+
+        list_alert_history(connection, limit=ALERT_HISTORY_EXPORT_LIMIT, max_limit=ALERT_HISTORY_EXPORT_LIMIT)
+
+        self.assertEqual(connection.cursor_obj.executed[-1][1][-2:], (ALERT_HISTORY_EXPORT_LIMIT, 0))
 
     def test_visible_alert_records_filters_resolved_acknowledged_and_snoozed_records(self) -> None:
         active = _record(id=1)

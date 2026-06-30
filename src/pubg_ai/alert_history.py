@@ -16,6 +16,8 @@ class AlertHistoryError(RuntimeError):
 
 ALERT_HISTORY_SOURCES = {"all", "storage", "worker"}
 ALERT_HISTORY_STATES = {"all", "active", "current", "acknowledged", "snoozed", "resolved"}
+ALERT_HISTORY_PAGE_LIMIT = 200
+ALERT_HISTORY_EXPORT_LIMIT = 5000
 
 
 @dataclass(frozen=True)
@@ -145,11 +147,12 @@ def list_alert_history(
     *,
     active_only: bool = False,
     limit: int = 50,
+    max_limit: int = ALERT_HISTORY_PAGE_LIMIT,
     offset: int = 0,
     source: str | None = None,
     state: str = "all",
 ) -> list[AlertHistoryRecord]:
-    bounded_limit = max(1, min(int(limit), 200))
+    bounded_limit = _bounded_limit(limit, max_limit=max_limit)
     bounded_offset = max(0, int(offset))
     _, _, where, params = _history_filter_clause(source=source, state=state, active_only=active_only)
     with connection.cursor() as cursor:
@@ -215,11 +218,12 @@ def get_alert_history_page(
         state=state,
         active_only=False,
     )
-    bounded_limit = max(1, min(int(limit), 200))
+    bounded_limit = _bounded_limit(limit, max_limit=ALERT_HISTORY_PAGE_LIMIT)
     bounded_offset = max(0, int(offset))
     records = list_alert_history(
         connection,
         limit=bounded_limit,
+        max_limit=ALERT_HISTORY_PAGE_LIMIT,
         offset=bounded_offset,
         source=normalized_source,
         state=normalized_state,
@@ -324,6 +328,10 @@ def visible_alert_records(records: list[AlertHistoryRecord]) -> list[AlertHistor
 
 def alert_key_hash(alert_key: str) -> str:
     return hashlib.sha256(alert_key.encode("utf-8")).hexdigest()
+
+
+def _bounded_limit(limit: int, *, max_limit: int) -> int:
+    return max(1, min(int(limit), max(1, int(max_limit))))
 
 
 def _history_filter_clause(

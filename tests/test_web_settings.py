@@ -27,11 +27,13 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn('id="alertsBody"', body)
         self.assertIn('id="alertHistoryFilterForm"', body)
         self.assertIn('id="alertHistoryBody"', body)
+        self.assertIn('id="alertHistoryExport"', body)
         self.assertIn('id="alertHistoryPrev"', body)
         self.assertIn('id="alertHistoryNext"', body)
         self.assertIn("/settings/alerts", body)
         self.assertIn("/alerts/status", body)
         self.assertIn("/alerts/history/", body)
+        self.assertIn("/alerts/history/export.csv", body)
         self.assertIn("saveStorageSettings", body)
         self.assertIn("saveCollectorSettings", body)
         self.assertIn('id="collectorWorkerForm"', body)
@@ -237,6 +239,21 @@ class WebSettingsTests(unittest.TestCase):
         executed_sql = "\n".join(query for query, _ in connection.cursor_obj.executed)
         self.assertIn("source = %s", executed_sql)
         self.assertIn("resolved_at_kst IS NOT NULL", executed_sql)
+        self.assertIn("LIMIT %s OFFSET %s", executed_sql)
+
+    def test_alert_history_export_endpoint_returns_csv(self) -> None:
+        connection = FakeWorkerRunConnection(rows=[], latest_id=0, alert_rows=[_alert_history_row()])
+        with patch("pubg_ai.web.app.connect_mysql", return_value=connection):
+            client = TestClient(create_app())
+            response = client.get("/alerts/history/export.csv?source=storage&state=all&limit=5000&offset=0")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/csv", response.headers["content-type"])
+        self.assertIn("pubg-ai-alert-history.csv", response.headers["content-disposition"])
+        self.assertIn("id,source,severity,state,title,message", response.text)
+        self.assertIn("raw_data_dir storage alert", response.text)
+        executed_sql = "\n".join(query for query, _ in connection.cursor_obj.executed)
+        self.assertIn("source = %s", executed_sql)
         self.assertIn("LIMIT %s OFFSET %s", executed_sql)
 
     def test_discord_scope_settings_endpoint_updates_local_settings_file(self) -> None:

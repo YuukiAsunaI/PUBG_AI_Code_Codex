@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import csv
+import io
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -10,9 +13,12 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 from pubg_ai.alert_history import (
+    ALERT_HISTORY_EXPORT_LIMIT,
     AlertHistoryError,
+    AlertHistoryRecord,
     acknowledge_alert,
     get_alert_history_page,
+    list_alert_history,
     snooze_alert,
     sync_alert_history,
     visible_alert_records,
@@ -284,6 +290,30 @@ def create_app() -> Any:
         finally:
             connection.close()
         return _alert_history_page_record(page)
+
+    @app.get("/alerts/history/export.csv")
+    def export_alert_history(
+        source: str = "all",
+        state: str = "all",
+        limit: int = Query(default=ALERT_HISTORY_EXPORT_LIMIT, ge=1, le=ALERT_HISTORY_EXPORT_LIMIT),
+        offset: int = Query(default=0, ge=0),
+    ) -> Response:
+        connection = connect_mysql(current_config().database)
+        try:
+            try:
+                records = list_alert_history(
+                    connection,
+                    source=source,
+                    state=state,
+                    limit=limit,
+                    max_limit=ALERT_HISTORY_EXPORT_LIMIT,
+                    offset=offset,
+                )
+            except AlertHistoryError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return _alert_history_csv_response(records)
 
     @app.post("/settings/alerts")
     def save_alert_settings(request: AlertSettingsRequest) -> dict[str, Any]:
@@ -998,6 +1028,68 @@ def _alert_history_page_record(page: Any) -> dict[str, Any]:
     }
 
 
+def _alert_history_csv_response(records: list[AlertHistoryRecord]) -> Response:
+    output = io.StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "id",
+            "source",
+            "severity",
+            "state",
+            "title",
+            "message",
+            "first_seen_at_kst",
+            "last_seen_at_kst",
+            "last_notified_at_kst",
+            "acknowledged_at_kst",
+            "snoozed_until_kst",
+            "resolved_at_kst",
+            "alert_key",
+            "metadata_json",
+        ],
+    )
+    writer.writeheader()
+    for record in records:
+        writer.writerow(
+            {
+                "id": record.id,
+                "source": record.source,
+                "severity": record.severity,
+                "state": _alert_history_record_state(record),
+                "title": record.title,
+                "message": record.message,
+                "first_seen_at_kst": record.first_seen_at_kst or "",
+                "last_seen_at_kst": record.last_seen_at_kst or "",
+                "last_notified_at_kst": record.last_notified_at_kst or "",
+                "acknowledged_at_kst": record.acknowledged_at_kst or "",
+                "snoozed_until_kst": record.snoozed_until_kst or "",
+                "resolved_at_kst": record.resolved_at_kst or "",
+                "alert_key": record.alert_key,
+                "metadata_json": _json_dumps_compact(record.metadata),
+            }
+        )
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="pubg-ai-alert-history.csv"'},
+    )
+
+
+def _alert_history_record_state(record: AlertHistoryRecord) -> str:
+    if record.resolved_at_kst:
+        return "resolved"
+    if record.is_acknowledged():
+        return "acknowledged"
+    if record.is_snoozed():
+        return "snoozed"
+    return "current"
+
+
+def _json_dumps_compact(value: Any) -> str:
+    return json.dumps(value or {}, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
 def _ranking_global_scope(settings_store: LocalSettingsStore, guild_id: str | None) -> bool:
     if guild_id is None:
         return True
@@ -1288,6 +1380,7 @@ _INDEX_HTML = """<!doctype html>
         <button type="submit">Apply</button>
       </form>
       <div class="actions" style="margin-top: 10px;">
+        <button class="secondary" type="button" id="alertHistoryExport">Export CSV</button>
         <button class="secondary" type="button" id="alertHistoryPrev">Previous</button>
         <button class="secondary" type="button" id="alertHistoryNext">Next</button>
       </div>
@@ -1806,6 +1899,7 @@ _INDEX_HTML = """<!doctype html>
     const alertHistoryFilterForm = document.querySelector("#alertHistoryFilterForm");
     const alertHistoryBody = document.querySelector("#alertHistoryBody");
     const alertHistoryStatus = document.querySelector("#alertHistoryStatus");
+    const alertHistoryExport = document.querySelector("#alertHistoryExport");
     const alertHistoryPrev = document.querySelector("#alertHistoryPrev");
     const alertHistoryNext = document.querySelector("#alertHistoryNext");
     const collectorSettingsForm = document.querySelector("#collectorSettingsForm");
@@ -1957,6 +2051,17 @@ _INDEX_HTML = """<!doctype html>
       const payload = await fetch(`/alerts/history?${params.toString()}`).then((r) => r.json());
       if (payload.detail) throw new Error(payload.detail);
       renderAlertHistory(payload.alert_history || [], payload.alert_history_page || {}, true);
+    }
+
+    function exportAlertHistoryCsv() {
+      const form = new FormData(alertHistoryFilterForm);
+      const params = new URLSearchParams({
+        source: String(form.get("source") || alertHistoryPage.source || "all"),
+        state: String(form.get("state") || alertHistoryPage.state || "all"),
+        limit: "5000",
+        offset: "0",
+      });
+      window.location.href = `/alerts/history/export.csv?${params.toString()}`;
     }
 
     function renderAlertStatus(payload) {
@@ -3789,6 +3894,10 @@ _INDEX_HTML = """<!doctype html>
         alertHistoryStatus.textContent = `Error: ${error.message}`;
         banner.textContent = `Error: ${error.message}`;
       }
+    });
+
+    alertHistoryExport.addEventListener("click", () => {
+      exportAlertHistoryCsv();
     });
 
     alertHistoryPrev.addEventListener("click", async () => {
