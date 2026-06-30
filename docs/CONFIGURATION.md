@@ -115,7 +115,7 @@ The current settings screen provides:
 - alert settings for minimum free storage and Discord alert channel IDs
 - current storage/worker alert table with acknowledge and one-hour snooze actions
 - persisted storage/worker alert history with source/status filters, previous/next pagination, CSV export, and
-  note/resolution comment actions plus a per-alert note detail panel with inline note entry
+  note/resolution comment actions plus a per-alert detail panel with acknowledge/snooze controls and inline note entry
 - Discord admin alert note/resolution commands, controlled by the same `admin` permission group
 - free disk space display for each path
 - warning when a configured drive is disconnected

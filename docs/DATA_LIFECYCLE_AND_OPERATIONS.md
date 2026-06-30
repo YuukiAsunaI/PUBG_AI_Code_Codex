@@ -69,7 +69,8 @@ Implemented behavior:
 - `POST /alerts/history/{alert_id}/acknowledge` marks a persisted alert as acknowledged.
 - `POST /alerts/history/{alert_id}/snooze` hides a persisted alert until the requested KST expiry, capped at 30 days.
 - The local manager alert history table can open a detail panel that shows the selected alert and its full recent note
-  history without reading the raw JSON API response, and the same panel can add `note` or `resolution` comments.
+  history without reading the raw JSON API response, and the same panel can acknowledge, snooze, or add `note` and
+  `resolution` comments.
 - The Discord bot sends active storage alerts once per bot process and sends newly persisted worker failures from
   `worker_run_history`; acknowledged and currently snoozed alert records are skipped.
 - The admin-only `pubg-alerts` Discord command returns the current alert report on demand, including alert IDs.

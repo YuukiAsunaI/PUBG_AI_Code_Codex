@@ -2255,8 +2255,12 @@ _INDEX_HTML = """<!doctype html>
       alertHistoryDetail.innerHTML = `
         <div class="recommendation-line">
           <strong>Alert #${escapeHtml(alert.id)} detail</strong>
-          <span class="status">${notes.length} notes shown</span>
+          <div class="actions">
+            <button type="button" data-alert-detail-action="acknowledge" data-alert-id="${attr(alert.id)}">Acknowledge</button>
+            <button class="secondary" type="button" data-alert-detail-action="snooze" data-alert-id="${attr(alert.id)}">Snooze 1h</button>
+          </div>
         </div>
+        <div class="status" style="margin-top: 6px;">${notes.length} notes shown</div>
         <div class="grid" style="margin-top: 10px;">
           ${cell("Source", escapeHtml(alert.source || ""))}
           ${cell("Severity", escapeHtml(alert.severity || ""))}
@@ -4127,6 +4131,26 @@ _INDEX_HTML = """<!doctype html>
       try {
         await saveAlertHistoryNoteForm(form);
         banner.textContent = "Alert note saved";
+      } catch (error) {
+        alertHistoryStatus.textContent = `Error: ${error.message}`;
+        banner.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    alertHistoryDetail.addEventListener("click", async (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("button[data-alert-detail-action]")
+        : null;
+      if (!button) return;
+
+      try {
+        if (button.dataset.alertDetailAction === "acknowledge") {
+          await acknowledgeAlert(button.dataset.alertId || "");
+          banner.textContent = "Alert acknowledged";
+        } else if (button.dataset.alertDetailAction === "snooze") {
+          await snoozeAlert(button.dataset.alertId || "", 60);
+          banner.textContent = "Alert snoozed";
+        }
       } catch (error) {
         alertHistoryStatus.textContent = `Error: ${error.message}`;
         banner.textContent = `Error: ${error.message}`;

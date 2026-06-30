@@ -378,8 +378,10 @@ Completed slices:
     resolution history from `system_alert_notes`.
 45. The local manager alert detail panel can add `note` and `resolution` comments inline, replacing the old
     prompt-based entry flow.
+46. The local manager alert detail panel also includes acknowledge and one-hour snooze controls, so note review,
+    suppression, and follow-up comments can be handled from one focused view.
 
 Next slice:
 
-1. Add acknowledge/snooze controls inside the alert detail panel so the full alert workflow can be handled from one
-   focused view.
+1. Improve alert status presentation in the detail panel so acknowledged, snoozed, resolved, and active states are
+   easier to scan at a glance.
