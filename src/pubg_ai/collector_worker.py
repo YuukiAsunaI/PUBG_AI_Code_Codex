@@ -14,6 +14,7 @@ from pubg_ai.pubg_client import PubgApiClient
 from pubg_ai.raw_storage import RawPayloadStore
 from pubg_ai.telemetry_job_processor import TelemetryJobProcessor
 from pubg_ai.time_utils import isoformat_kst, now_kst
+from pubg_ai.worker_run_history import record_worker_cycle
 
 
 class CollectorWorkerError(RuntimeError):
@@ -73,6 +74,11 @@ RawStoreFactory = Callable[..., RawPayloadStore]
 CollectorFactory = Callable[..., Any]
 MatchProcessorFactory = Callable[..., Any]
 TelemetryProcessorFactory = Callable[..., Any]
+HistoryRecorder = Callable[[Any, str, dict[str, Any]], Any]
+
+
+def _record_worker_history(connection: Any, worker_name: str, cycle: dict[str, Any]) -> None:
+    record_worker_cycle(connection, worker_name=worker_name, cycle=cycle)
 
 
 def run_collector_cycle(
@@ -85,6 +91,7 @@ def run_collector_cycle(
     collector_factory: CollectorFactory = RegisteredPlayerMatchCollector,
     match_processor_factory: MatchProcessorFactory = MatchJobProcessor,
     telemetry_processor_factory: TelemetryProcessorFactory = TelemetryJobProcessor,
+    history_recorder: HistoryRecorder = _record_worker_history,
 ) -> CollectorCycleResult:
     worker_options = options or CollectorWorkerOptions()
     _validate_options(worker_options)
@@ -94,16 +101,46 @@ def run_collector_cycle(
     match_jobs: dict[str, Any] | None = None
     telemetry_jobs: dict[str, Any] | None = None
 
+    def build_result(finished: datetime) -> CollectorCycleResult:
+        return CollectorCycleResult(
+            started_at_kst=started.isoformat(),
+            finished_at_kst=finished.isoformat(),
+            duration_seconds=(finished - started).total_seconds(),
+            poll_interval_seconds=config.app.collector_poll_interval_seconds,
+            cycle_player_limit=config.app.collector_cycle_player_limit,
+            player_lookup_chunk_size=config.app.player_lookup_chunk_size,
+            shard=worker_options.shard,
+            match_job_limit=worker_options.match_job_limit,
+            telemetry_job_limit=worker_options.telemetry_job_limit,
+            collection=collection,
+            match_jobs=match_jobs,
+            telemetry_jobs=telemetry_jobs,
+            errors=list(errors),
+        )
+
+    def finish_cycle() -> CollectorCycleResult:
+        result = build_result(now_kst())
+        try:
+            history_recorder(connection, "collector", result.to_record())
+        except Exception as exc:
+            errors.append(_safe_error("worker_run_history", exc))
+            result = build_result(now_kst())
+        return result
+
     if not config.secrets.pubg_api_key:
         raise CollectorWorkerError("PUBG_API_KEY is not configured.")
 
     pubg_client = pubg_client_factory(config.secrets.pubg_api_key)
     connection = connection_factory(config.database)
     try:
-        raw_store = raw_store_factory(
-            config.app.raw_data_dir,
-            compression=config.app.raw_compression,  # type: ignore[arg-type]
-        )
+        try:
+            raw_store = raw_store_factory(
+                config.app.raw_data_dir,
+                compression=config.app.raw_compression,  # type: ignore[arg-type]
+            )
+        except Exception as exc:
+            errors.append(_safe_error("raw_store", exc))
+            return finish_cycle()
 
         try:
             collection = collector_factory(
@@ -133,25 +170,10 @@ def run_collector_cycle(
             ).process_queued_telemetry(limit=worker_options.telemetry_job_limit).to_record()
         except Exception as exc:
             errors.append(_safe_error("telemetry_jobs", exc))
+
+        return finish_cycle()
     finally:
         connection.close()
-
-    finished = now_kst()
-    return CollectorCycleResult(
-        started_at_kst=started.isoformat(),
-        finished_at_kst=finished.isoformat(),
-        duration_seconds=(finished - started).total_seconds(),
-        poll_interval_seconds=config.app.collector_poll_interval_seconds,
-        cycle_player_limit=config.app.collector_cycle_player_limit,
-        player_lookup_chunk_size=config.app.player_lookup_chunk_size,
-        shard=worker_options.shard,
-        match_job_limit=worker_options.match_job_limit,
-        telemetry_job_limit=worker_options.telemetry_job_limit,
-        collection=collection,
-        match_jobs=match_jobs,
-        telemetry_jobs=telemetry_jobs,
-        errors=errors,
-    )
 
 
 class CollectorWorkerController:
@@ -165,6 +187,7 @@ class CollectorWorkerController:
         collector_factory: CollectorFactory = RegisteredPlayerMatchCollector,
         match_processor_factory: MatchProcessorFactory = MatchJobProcessor,
         telemetry_processor_factory: TelemetryProcessorFactory = TelemetryJobProcessor,
+        history_recorder: HistoryRecorder = _record_worker_history,
     ) -> None:
         self._config_loader = config_loader
         self._connection_factory = connection_factory
@@ -173,6 +196,7 @@ class CollectorWorkerController:
         self._collector_factory = collector_factory
         self._match_processor_factory = match_processor_factory
         self._telemetry_processor_factory = telemetry_processor_factory
+        self._history_recorder = history_recorder
         self._lock = Lock()
         self._stop_event = Event()
         self._thread: Thread | None = None
@@ -251,6 +275,7 @@ class CollectorWorkerController:
                         collector_factory=self._collector_factory,
                         match_processor_factory=self._match_processor_factory,
                         telemetry_processor_factory=self._telemetry_processor_factory,
+                        history_recorder=self._history_recorder,
                     )
                     self._record_cycle(cycle)
                 except Exception as exc:

@@ -76,6 +76,8 @@ The first executable slice is now available:
   download cycles
 - automatic post-processing loop from CLI or the local manager for combat/item/movement parsing, loadout snapshots,
   map JPEG snapshots, and replay timelines
+- persistent worker run history in MySQL with a local manager table for recent collector/post-processing cycles and
+  their last errors
 
 Install dependencies:
 
@@ -329,4 +331,6 @@ remote-access mode is intentionally added.
 
 The local manager can start or stop the in-process automatic collector and post-processing workers. They stop when the
 local web server stops; use the CLI `run-collector` and `run-post-processing` commands for separate long-running
-worker processes.
+worker processes. Both worker entry points store recent cycle summaries in `worker_run_history`; the local manager
+shows those rows in `Worker Run History` so storage/API/parser failures remain visible after the in-memory status
+changes.

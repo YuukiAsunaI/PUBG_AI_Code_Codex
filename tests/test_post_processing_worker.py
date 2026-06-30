@@ -14,6 +14,7 @@ from pubg_ai.post_processing_worker import (
 class PostProcessingWorkerTests(unittest.TestCase):
     def test_run_post_processing_cycle_uses_limits_and_force(self) -> None:
         calls: list[tuple[str, object]] = []
+        history: list[tuple[FakeConnection, str, dict[str, object]]] = []
         connection = FakeConnection()
 
         def connection_factory(database: DatabaseConfig) -> FakeConnection:
@@ -41,6 +42,7 @@ class PostProcessingWorkerTests(unittest.TestCase):
             loadout_processor_factory=lambda *args, **kwargs: FakeLoadoutProcessor(*args, calls=calls),
             map_snapshot_processor_factory=lambda *args, **kwargs: FakeReplayProcessor("map_snapshots", *args, calls=calls),
             timeline_processor_factory=lambda *args, **kwargs: FakeReplayProcessor("replay_timelines", *args, calls=calls),
+            history_recorder=lambda conn, worker_name, cycle: history.append((conn, worker_name, cycle)),
         )
 
         self.assertEqual(result.poll_interval_seconds, 120)
@@ -61,6 +63,10 @@ class PostProcessingWorkerTests(unittest.TestCase):
         self.assertIn(("loadout", (6, True)), calls)
         self.assertIn(("map_snapshots", (7, True)), calls)
         self.assertIn(("replay_timelines", (8, True)), calls)
+        self.assertEqual(len(history), 1)
+        self.assertIs(history[0][0], connection)
+        self.assertEqual(history[0][1], "post_processing")
+        self.assertEqual(history[0][2]["map_snapshots"], {"generated_snapshots": 7, "failed_snapshots": 0, "artifacts": []})
 
     def test_run_post_processing_cycle_records_stage_errors_and_continues(self) -> None:
         result = run_post_processing_cycle(
@@ -75,12 +81,32 @@ class PostProcessingWorkerTests(unittest.TestCase):
             loadout_processor_factory=lambda *args, **kwargs: FakeLoadoutProcessor(*args, calls=[]),
             map_snapshot_processor_factory=lambda *args, **kwargs: FakeReplayProcessor("map_snapshots", *args, calls=[]),
             timeline_processor_factory=lambda *args, **kwargs: FakeReplayProcessor("replay_timelines", *args, calls=[]),
+            history_recorder=lambda conn, worker_name, cycle: None,
         )
 
         self.assertIsNone(result.combat)
         self.assertEqual(len(result.errors), 1)
         self.assertIn("combat: RuntimeError: boom", result.errors[0])
         self.assertEqual(result.items, {"parsed_payloads": 10, "failed_payloads": 0})
+
+    def test_run_post_processing_cycle_records_replay_store_errors(self) -> None:
+        history: list[tuple[FakeConnection, str, dict[str, object]]] = []
+        connection = FakeConnection()
+
+        result = run_post_processing_cycle(
+            _runtime_config(),
+            connection_factory=lambda database: connection,
+            raw_store_factory=lambda root, compression: FakeRawStore(root, compression, []),
+            replay_store_factory=lambda root: (_ for _ in ()).throw(RuntimeError("drive missing")),
+            history_recorder=lambda conn, worker_name, cycle: history.append((conn, worker_name, cycle)),
+        )
+
+        self.assertIsNone(result.combat)
+        self.assertEqual(len(result.errors), 1)
+        self.assertIn("replay_store: RuntimeError: drive missing", result.errors[0])
+        self.assertTrue(connection.closed)
+        self.assertEqual(history[0][1], "post_processing")
+        self.assertEqual(history[0][2]["errors"], result.errors)
 
     def test_run_post_processing_cycle_validates_limits(self) -> None:
         with self.assertRaises(PostProcessingWorkerError):

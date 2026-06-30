@@ -36,6 +36,7 @@ from pubg_ai.telemetry_combat_processor import TelemetryCombatProcessor
 from pubg_ai.telemetry_item_processor import TelemetryItemProcessor
 from pubg_ai.telemetry_job_processor import TelemetryJobProcessor
 from pubg_ai.telemetry_movement_processor import TelemetryMovementProcessor
+from pubg_ai.worker_run_history import WorkerRunHistoryError, list_worker_runs
 
 
 class RegisterPlayerRequest(BaseModel):
@@ -287,6 +288,17 @@ def create_app() -> Any:
     @app.post("/post-processing/worker/stop")
     def stop_post_processing_worker() -> dict[str, Any]:
         return {"worker": post_processing_worker.stop().to_record()}
+
+    @app.get("/workers/runs")
+    def worker_runs(worker_name: str | None = None, limit: int = 50) -> dict[str, Any]:
+        connection = connect_mysql(current_config().database)
+        try:
+            runs = list_worker_runs(connection, worker_name=worker_name, limit=limit)
+        except WorkerRunHistoryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {"runs": [run.to_record() for run in runs]}
 
     @app.get("/discord/permissions")
     def discord_permissions() -> dict[str, Any]:
@@ -1411,6 +1423,24 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="postProcessingWorkerStatus" style="margin-top: 12px;">Post-processing stopped</div>
     </section>
     <section>
+      <h2>Worker Run History</h2>
+      <div class="actions" style="margin-bottom: 10px;">
+        <button class="secondary" type="button" onclick="loadWorkerRuns()">새로고침</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Worker</th>
+            <th>Status</th>
+            <th>Finished</th>
+            <th>Duration</th>
+            <th>Summary</th>
+          </tr>
+        </thead>
+        <tbody id="workerRunsBody"></tbody>
+      </table>
+    </section>
+    <section>
       <h2>Combat 파싱</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="parseTelemetryCombat(false)">전투 파싱</button>
@@ -1541,6 +1571,7 @@ _INDEX_HTML = """<!doctype html>
     const rankingBody = document.querySelector("#rankingBody");
     const jobsBody = document.querySelector("#jobsBody");
     const telemetryJobsBody = document.querySelector("#telemetryJobsBody");
+    const workerRunsBody = document.querySelector("#workerRunsBody");
     const combatStatus = document.querySelector("#combatStatus");
     const itemStatus = document.querySelector("#itemStatus");
     const movementStatus = document.querySelector("#movementStatus");
@@ -2100,6 +2131,47 @@ _INDEX_HTML = """<!doctype html>
           <td>${job.created_at_kst || ""}</td>
         </tr>
       `).join("");
+    }
+
+    async function loadWorkerRuns() {
+      try {
+        const payload = await fetch("/workers/runs?limit=50").then((r) => r.json());
+        const runs = payload.runs || [];
+        workerRunsBody.innerHTML = runs.length
+          ? runs.map((run) => `
+            <tr>
+              <td>${escapeHtml(run.worker_name || "")}</td>
+              <td>${escapeHtml(run.status || "")}${run.error_count ? ` (${run.error_count})` : ""}</td>
+              <td>${escapeHtml(run.finished_at_kst || run.created_at_kst || "")}</td>
+              <td>${run.duration_seconds === null || run.duration_seconds === undefined ? "-" : `${Number(run.duration_seconds).toFixed(2)}s`}</td>
+              <td>${workerRunSummary(run)}</td>
+            </tr>
+          `).join("")
+          : `<tr><td colspan="5">No worker runs yet</td></tr>`;
+      } catch (error) {
+        workerRunsBody.innerHTML = `<tr><td colspan="5">Error: ${escapeHtml(error.message)}</td></tr>`;
+      }
+    }
+
+    function workerRunSummary(run) {
+      if (run.last_error) {
+        return escapeHtml(run.last_error);
+      }
+      const summary = run.summary || {};
+      if (run.worker_name === "collector") {
+        return escapeHtml([
+          `matches ${summary.collection?.queued_match_jobs ?? "-"}`,
+          `stored ${summary.match_jobs?.stored_matches ?? "-"}`,
+          `telemetry ${summary.telemetry_jobs?.stored_telemetry ?? "-"}`,
+        ].join(" / "));
+      }
+      return escapeHtml([
+        `combat ${summary.combat?.parsed_payloads ?? "-"}`,
+        `items ${summary.items?.parsed_payloads ?? "-"}`,
+        `movement ${summary.movement?.parsed_payloads ?? "-"}`,
+        `maps ${summary.map_snapshots?.generated_snapshots ?? "-"}`,
+        `timelines ${summary.replay_timelines?.generated_timelines ?? "-"}`,
+      ].join(" / "));
     }
 
     async function loadReplayArtifacts() {
@@ -3090,11 +3162,13 @@ _INDEX_HTML = """<!doctype html>
         telemetry_job_limit: Number(form.get("telemetry_job_limit") || 5),
       });
       renderCollectorWorkerStatus(payload.worker);
+      await loadWorkerRuns();
     }
 
     async function stopCollectorWorker() {
       const payload = await postJson("/collector/worker/stop", {});
       renderCollectorWorkerStatus(payload.worker);
+      await loadWorkerRuns();
     }
 
     async function loadPostProcessingWorkerStatus() {
@@ -3144,11 +3218,13 @@ _INDEX_HTML = """<!doctype html>
         force: form.get("force") === "true",
       });
       renderPostProcessingWorkerStatus(payload.worker);
+      await loadWorkerRuns();
     }
 
     async function stopPostProcessingWorker() {
       const payload = await postJson("/post-processing/worker/stop", {});
       renderPostProcessingWorkerStatus(payload.worker);
+      await loadWorkerRuns();
     }
 
     async function saveWebSettings(event) {
@@ -3519,11 +3595,12 @@ _INDEX_HTML = """<!doctype html>
     timelineZoom.addEventListener("change", renderReplayFrame);
 
     drawEmptyReplayCanvas();
-    Promise.all([loadStatus(), loadDiscordPermissions(), loadDiscordScopes(), loadCollectorWorkerStatus(), loadPostProcessingWorkerStatus(), loadPlayers(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
+    Promise.all([loadStatus(), loadDiscordPermissions(), loadDiscordScopes(), loadCollectorWorkerStatus(), loadPostProcessingWorkerStatus(), loadWorkerRuns(), loadPlayers(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
       .then(() => { banner.textContent = "localhost 전용 관리 화면"; })
       .catch((error) => { banner.textContent = `오류: ${error.message}`; });
     setInterval(loadCollectorWorkerStatus, 10000);
     setInterval(loadPostProcessingWorkerStatus, 10000);
+    setInterval(loadWorkerRuns, 30000);
   </script>
 </body>
 </html>

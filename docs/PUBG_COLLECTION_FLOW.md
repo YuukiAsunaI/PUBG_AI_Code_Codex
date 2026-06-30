@@ -104,6 +104,8 @@ The current local runtime can also refresh active registered players and queue u
   registered players, processes queued match-detail jobs, and downloads queued telemetry files.
 - The local web UI can start or stop the same collector loop inside the local web process and shows cycle count,
   next run time, and the last cycle summary.
+- Collector cycles are persisted in `worker_run_history` with the full cycle JSON, success/failure status, error
+  count, and last error. The local web UI exposes the recent rows through `Worker Run History`.
 
 Live test completed with the registered Steam player `Yuuki_Asuna---`; 146 match IDs were discovered and queued.
 
@@ -305,6 +307,8 @@ The current local runtime can automate the analysis and replay-artifact side aft
   from attempting work in the same cycle.
 - The worker uses the configured raw and replay storage paths from `.env` or `config/local_settings.json`; it does
   not store or display API keys or Discord tokens.
+- Post-processing cycles are also written to `worker_run_history`, making replay storage failures, parser failures,
+  and artifact-generation errors visible after the worker moves on to later cycles.
 
 ## Implemented Discord Bot MVP Slice
 

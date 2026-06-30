@@ -8,7 +8,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 class DatabaseError(RuntimeError):
@@ -76,7 +76,7 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 VALUES (%s, %s, NOW(6))
                 ON DUPLICATE KEY UPDATE description = VALUES(description)
                 """,
-                (SCHEMA_VERSION, "match phase event schema"),
+                (SCHEMA_VERSION, "worker run history schema"),
             )
             applied += 1
     finally:
@@ -187,6 +187,22 @@ def schema_statements() -> list[str]:
             updated_at_kst DATETIME(6) NOT NULL,
             KEY idx_api_fetch_jobs_status_next_run (status, next_run_at_kst),
             KEY idx_api_fetch_jobs_target (job_type, shard, target_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS worker_run_history (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            worker_name VARCHAR(64) NOT NULL,
+            status ENUM('succeeded', 'failed') NOT NULL,
+            started_at_kst DATETIME(6) NULL,
+            finished_at_kst DATETIME(6) NULL,
+            duration_seconds FLOAT NULL,
+            error_count INT UNSIGNED NOT NULL DEFAULT 0,
+            last_error TEXT NULL,
+            summary_json JSON NOT NULL,
+            created_at_kst DATETIME(6) NOT NULL,
+            KEY idx_worker_run_history_worker_time (worker_name, created_at_kst),
+            KEY idx_worker_run_history_status_time (status, created_at_kst)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """,
         """

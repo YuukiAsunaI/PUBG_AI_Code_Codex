@@ -352,7 +352,9 @@ Completed slices:
     cycles from the CLI or local manager, using the saved polling interval, player limit, and lookup chunk size.
 34. Automatic post-processing worker can run combat, item, and movement telemetry parsing plus loadout snapshots, map
     snapshot JPEGs, and replay timeline generation from the CLI or local manager.
+35. Worker cycles are persisted to `worker_run_history` and the local manager shows recent collector/post-processing
+    runs with success/failure status, duration, summary counts, and the last error.
 
 Next slice:
 
-1. Add persistent worker run history and Discord/local alerts for worker errors and storage pressure.
+1. Add Discord-side alert delivery for worker errors and storage pressure using the persisted worker run history.

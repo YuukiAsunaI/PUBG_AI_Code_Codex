@@ -10,6 +10,7 @@ from pubg_ai.config import AppConfig, DatabaseConfig, RuntimeConfig, SecretConfi
 class CollectorWorkerTests(unittest.TestCase):
     def test_run_collector_cycle_uses_runtime_settings_and_limits(self) -> None:
         calls: list[tuple[str, object]] = []
+        history: list[tuple[FakeConnection, str, dict[str, object]]] = []
         connection = FakeConnection()
 
         def connection_factory(database: DatabaseConfig) -> FakeConnection:
@@ -25,6 +26,7 @@ class CollectorWorkerTests(unittest.TestCase):
             collector_factory=lambda *args, **kwargs: FakeCollector(*args, calls=calls, **kwargs),
             match_processor_factory=lambda *args, **kwargs: FakeMatchProcessor(*args, calls=calls, **kwargs),
             telemetry_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor(*args, calls=calls, **kwargs),
+            history_recorder=lambda conn, worker_name, cycle: history.append((conn, worker_name, cycle)),
         )
 
         self.assertEqual(result.cycle_player_limit, 75)
@@ -44,12 +46,35 @@ class CollectorWorkerTests(unittest.TestCase):
         self.assertIn(("collect", ("steam", 75)), calls)
         self.assertIn(("match_jobs", 11), calls)
         self.assertIn(("telemetry_jobs", 6), calls)
+        self.assertEqual(len(history), 1)
+        self.assertIs(history[0][0], connection)
+        self.assertEqual(history[0][1], "collector")
+        self.assertEqual(history[0][2]["collection"], {"queued_match_jobs": 2, "existing_match_jobs": 1})
 
     def test_run_collector_cycle_requires_pubg_key(self) -> None:
         config = _runtime_config(pubg_api_key=None)
 
         with self.assertRaises(CollectorWorkerError):
             run_collector_cycle(config)
+
+    def test_run_collector_cycle_records_raw_store_errors(self) -> None:
+        history: list[tuple[FakeConnection, str, dict[str, object]]] = []
+        connection = FakeConnection()
+
+        result = run_collector_cycle(
+            _runtime_config(),
+            connection_factory=lambda database: connection,
+            pubg_client_factory=lambda key: FakePubgClient(key, []),
+            raw_store_factory=lambda root, compression: (_ for _ in ()).throw(RuntimeError("drive full")),
+            history_recorder=lambda conn, worker_name, cycle: history.append((conn, worker_name, cycle)),
+        )
+
+        self.assertIsNone(result.collection)
+        self.assertEqual(len(result.errors), 1)
+        self.assertIn("raw_store: RuntimeError: drive full", result.errors[0])
+        self.assertTrue(connection.closed)
+        self.assertEqual(history[0][1], "collector")
+        self.assertEqual(history[0][2]["errors"], result.errors)
 
 
 def _runtime_config(pubg_api_key: str | None = "pubg-key") -> RuntimeConfig:

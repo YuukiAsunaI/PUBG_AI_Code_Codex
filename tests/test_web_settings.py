@@ -31,6 +31,9 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn('id="postProcessingWorkerForm"', body)
         self.assertIn("/post-processing/worker/start", body)
         self.assertIn("/post-processing/worker/status", body)
+        self.assertIn('id="workerRunsBody"', body)
+        self.assertIn("/workers/runs", body)
+        self.assertIn("loadWorkerRuns", body)
         self.assertIn('id="discordScopeForm"', body)
         self.assertIn('id="publicProfileDefaultForm"', body)
         self.assertIn('id="discordScopesBody"', body)
@@ -155,6 +158,19 @@ class WebSettingsTests(unittest.TestCase):
         self.assertFalse(payload["stop_requested"])
         self.assertEqual(payload["cycle_count"], 0)
 
+    def test_worker_runs_endpoint_returns_recent_history(self) -> None:
+        connection = FakeWorkerRunConnection()
+        with patch("pubg_ai.web.app.connect_mysql", return_value=connection):
+            client = TestClient(create_app())
+            response = client.get("/workers/runs?worker_name=collector&limit=5")
+
+        self.assertEqual(response.status_code, 200)
+        runs = response.json()["runs"]
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0]["worker_name"], "collector")
+        self.assertEqual(runs[0]["summary"]["collection"]["queued_match_jobs"], 2)
+        self.assertTrue(connection.closed)
+
     def test_discord_scope_settings_endpoint_updates_local_settings_file(self) -> None:
         with TemporaryDirectory() as temp_dir:
             settings_file = Path(temp_dir) / "config" / "local_settings.json"
@@ -205,6 +221,46 @@ class WebSettingsTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertFalse(settings_file.exists())
+
+
+class FakeWorkerRunConnection:
+    def __init__(self) -> None:
+        self.closed = False
+        self.cursor_obj = FakeWorkerRunCursor()
+
+    def cursor(self) -> "FakeWorkerRunCursor":
+        return self.cursor_obj
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeWorkerRunCursor:
+    def __enter__(self) -> "FakeWorkerRunCursor":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        return None
+
+    def execute(self, query: str, params: tuple[object, ...]) -> None:
+        self.query = query
+        self.params = params
+
+    def fetchall(self) -> list[dict[str, object]]:
+        return [
+            {
+                "id": 1,
+                "worker_name": "collector",
+                "status": "succeeded",
+                "started_at_kst": "2026-06-30T10:00:00+09:00",
+                "finished_at_kst": "2026-06-30T10:00:01+09:00",
+                "duration_seconds": 1.0,
+                "error_count": 0,
+                "last_error": None,
+                "summary_json": '{"errors":[],"collection":{"queued_match_jobs":2}}',
+                "created_at_kst": "2026-06-30T10:00:01+09:00",
+            }
+        ]
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ from pubg_ai.telemetry_combat_processor import TelemetryCombatProcessor
 from pubg_ai.telemetry_item_processor import TelemetryItemProcessor
 from pubg_ai.telemetry_movement_processor import TelemetryMovementProcessor
 from pubg_ai.time_utils import isoformat_kst, now_kst
+from pubg_ai.worker_run_history import record_worker_cycle
 
 
 class PostProcessingWorkerError(RuntimeError):
@@ -77,6 +78,11 @@ ConnectionFactory = Callable[[Any], Any]
 RawStoreFactory = Callable[..., RawPayloadStore]
 ReplayStoreFactory = Callable[..., ReplayArtifactStore]
 ProcessorFactory = Callable[..., Any]
+HistoryRecorder = Callable[[Any, str, dict[str, Any]], Any]
+
+
+def _record_worker_history(connection: Any, worker_name: str, cycle: dict[str, Any]) -> None:
+    record_worker_cycle(connection, worker_name=worker_name, cycle=cycle)
 
 
 def run_post_processing_cycle(
@@ -92,6 +98,7 @@ def run_post_processing_cycle(
     loadout_processor_factory: ProcessorFactory = LoadoutSnapshotProcessor,
     map_snapshot_processor_factory: ProcessorFactory = MapSnapshotProcessor,
     timeline_processor_factory: ProcessorFactory = ReplayTimelineProcessor,
+    history_recorder: HistoryRecorder = _record_worker_history,
 ) -> PostProcessingCycleResult:
     worker_options = options or PostProcessingWorkerOptions()
     _validate_options(worker_options)
@@ -104,13 +111,47 @@ def run_post_processing_cycle(
     map_snapshots: dict[str, Any] | None = None
     replay_timelines: dict[str, Any] | None = None
 
+    def build_result(finished: datetime) -> PostProcessingCycleResult:
+        return PostProcessingCycleResult(
+            started_at_kst=started.isoformat(),
+            finished_at_kst=finished.isoformat(),
+            duration_seconds=(finished - started).total_seconds(),
+            poll_interval_seconds=config.app.collector_poll_interval_seconds,
+            combat=combat,
+            items=items,
+            movement=movement,
+            loadout_snapshots=loadout_snapshots,
+            map_snapshots=map_snapshots,
+            replay_timelines=replay_timelines,
+            errors=list(errors),
+            options=worker_options.to_record(),
+        )
+
+    def finish_cycle() -> PostProcessingCycleResult:
+        result = build_result(now_kst())
+        try:
+            history_recorder(connection, "post_processing", result.to_record())
+        except Exception as exc:
+            errors.append(_safe_error("worker_run_history", exc))
+            result = build_result(now_kst())
+        return result
+
     connection = connection_factory(config.database)
     try:
-        raw_store = raw_store_factory(
-            config.app.raw_data_dir,
-            compression=config.app.raw_compression,  # type: ignore[arg-type]
-        )
-        replay_store = replay_store_factory(config.app.replay_data_dir)
+        try:
+            raw_store = raw_store_factory(
+                config.app.raw_data_dir,
+                compression=config.app.raw_compression,  # type: ignore[arg-type]
+            )
+        except Exception as exc:
+            errors.append(_safe_error("raw_store", exc))
+            return finish_cycle()
+
+        try:
+            replay_store = replay_store_factory(config.app.replay_data_dir)
+        except Exception as exc:
+            errors.append(_safe_error("replay_store", exc))
+            return finish_cycle()
 
         try:
             combat = combat_processor_factory(connection, raw_store).process_raw_telemetry(
@@ -159,24 +200,10 @@ def run_post_processing_cycle(
             ).to_record()
         except Exception as exc:
             errors.append(_safe_error("replay_timelines", exc))
+
+        return finish_cycle()
     finally:
         connection.close()
-
-    finished = now_kst()
-    return PostProcessingCycleResult(
-        started_at_kst=started.isoformat(),
-        finished_at_kst=finished.isoformat(),
-        duration_seconds=(finished - started).total_seconds(),
-        poll_interval_seconds=config.app.collector_poll_interval_seconds,
-        combat=combat,
-        items=items,
-        movement=movement,
-        loadout_snapshots=loadout_snapshots,
-        map_snapshots=map_snapshots,
-        replay_timelines=replay_timelines,
-        errors=errors,
-        options=worker_options.to_record(),
-    )
 
 
 class PostProcessingWorkerController:
@@ -193,6 +220,7 @@ class PostProcessingWorkerController:
         loadout_processor_factory: ProcessorFactory = LoadoutSnapshotProcessor,
         map_snapshot_processor_factory: ProcessorFactory = MapSnapshotProcessor,
         timeline_processor_factory: ProcessorFactory = ReplayTimelineProcessor,
+        history_recorder: HistoryRecorder = _record_worker_history,
     ) -> None:
         self._config_loader = config_loader
         self._connection_factory = connection_factory
@@ -204,6 +232,7 @@ class PostProcessingWorkerController:
         self._loadout_processor_factory = loadout_processor_factory
         self._map_snapshot_processor_factory = map_snapshot_processor_factory
         self._timeline_processor_factory = timeline_processor_factory
+        self._history_recorder = history_recorder
         self._lock = Lock()
         self._stop_event = Event()
         self._thread: Thread | None = None
@@ -285,6 +314,7 @@ class PostProcessingWorkerController:
                         loadout_processor_factory=self._loadout_processor_factory,
                         map_snapshot_processor_factory=self._map_snapshot_processor_factory,
                         timeline_processor_factory=self._timeline_processor_factory,
+                        history_recorder=self._history_recorder,
                     )
                     self._record_cycle(cycle)
                 except Exception as exc:
