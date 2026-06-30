@@ -299,6 +299,8 @@ Discord's message content intent to be enabled for the bot application. Initial 
 !pubg-alerts
 !pubg-alert-ack alert_id
 !pubg-alert-snooze alert_id [minutes]
+!pubg-alert-note alert_id note
+!pubg-alert-resolution alert_id resolution
 !유저삭제 steam 닉네임또는accountId
 ```
 
@@ -324,7 +326,9 @@ IDs are configured from the local manager, the running Discord bot also sends ne
 capacity alerts to those channels. Alerts are persisted in MySQL so the local manager can show alert history; using
 the local manager's acknowledge or one-hour snooze action suppresses repeated local/Discord notifications for that
 alert record. Admins can also run `pubg-alert-ack alert_id` or `pubg-alert-snooze alert_id [minutes]` directly in
-Discord after reading the ID from `pubg-alerts` or an automatic alert message.
+Discord after reading the ID from `pubg-alerts` or an automatic alert message. Admins can attach incident notes with
+`pubg-alert-note alert_id note` and resolution comments with `pubg-alert-resolution alert_id resolution`; those entries
+are stored in the same MySQL `system_alert_notes` table shown by the local manager.
 
 Run the local management app:
 

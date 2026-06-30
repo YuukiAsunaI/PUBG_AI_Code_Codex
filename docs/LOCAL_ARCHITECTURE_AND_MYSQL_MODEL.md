@@ -369,7 +369,11 @@ Completed slices:
     external incident notes.
 41. Alert history records can store persistent admin notes and resolution comments in `system_alert_notes`; the local
     manager shows the latest note/count and can add note or resolution entries from each history row.
+42. Discord admins can add alert notes and resolution comments with `pubg-alert-note alert_id note` and
+    `pubg-alert-resolution alert_id resolution`; both commands write to `system_alert_notes` with a Discord creator
+    marker.
 
 Next slice:
 
-1. Add Discord-side alert note/resolution commands so admins can annotate alert history from Discord.
+1. Add a Discord-side alert notes listing command so admins can review existing notes without opening the local
+   manager.

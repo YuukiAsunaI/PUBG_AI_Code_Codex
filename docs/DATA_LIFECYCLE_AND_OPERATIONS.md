@@ -73,6 +73,8 @@ Implemented behavior:
 - The admin-only `pubg-alerts` Discord command returns the current alert report on demand, including alert IDs.
 - The admin-only `pubg-alert-ack alert_id` and `pubg-alert-snooze alert_id [minutes]` commands update the same
   persisted alert history from Discord.
+- The admin-only `pubg-alert-note alert_id note` and `pubg-alert-resolution alert_id resolution` commands append
+  `note` and `resolution` rows to the same persisted alert history from Discord.
 
 ## Duplicate Match Handling
 

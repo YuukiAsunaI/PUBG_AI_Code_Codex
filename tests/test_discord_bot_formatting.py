@@ -6,6 +6,7 @@ import unittest
 from pubg_ai.discord_bot import (
     _player_visible_to_scope,
     format_alert_action_result,
+    format_alert_note_result,
     format_player_list,
     format_player_match_detail,
     format_player_profile_stats,
@@ -13,7 +14,7 @@ from pubg_ai.discord_bot import (
     format_player_weapon_detail,
     format_replay_artifact_summary,
 )
-from pubg_ai.alert_history import AlertHistoryRecord
+from pubg_ai.alert_history import AlertHistoryNote, AlertHistoryRecord
 from pubg_ai.player_rankings import PlayerRanking, PlayerRankingRow
 from pubg_ai.player_registry import RegisteredPlayer
 from pubg_ai.player_stats import (
@@ -55,6 +56,25 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("- id: 7", body)
         self.assertIn("collector worker failed", body)
         self.assertIn("acknowledged_at_kst", body)
+
+    def test_alert_note_result_formats_discord_admin_response(self) -> None:
+        note = AlertHistoryNote(
+            id=12,
+            alert_history_id=7,
+            note_type="resolution",
+            note_text="raw drive expanded and worker restarted",
+            created_by="discord:987654321:123456789",
+            created_at_kst="2026-06-30T10:05:00+09:00",
+        )
+
+        body = format_alert_note_result(note)
+
+        self.assertIn("PUBG AI alert resolution saved", body)
+        self.assertIn("- alert_id: 7", body)
+        self.assertIn("- note_id: 12", body)
+        self.assertIn("- type: resolution", body)
+        self.assertIn("discord:987654321:123456789", body)
+        self.assertIn("raw drive expanded and worker restarted", body)
 
     def test_player_list_formats_status_and_short_account_id(self) -> None:
         players = [

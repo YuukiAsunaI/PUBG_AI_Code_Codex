@@ -144,7 +144,15 @@ DEFAULT_COMMAND_GROUPS: dict[str, list[str]] = {
 DEFAULT_COMMAND_GROUPS["admin"] = sorted(
     set(
         DEFAULT_COMMAND_GROUPS["admin"]
-        + ["pubg-alerts", "pubg-alert-ack", "pubg-alert-acknowledge", "pubg-alert-snooze"]
+        + [
+            "pubg-alerts",
+            "pubg-alert-ack",
+            "pubg-alert-acknowledge",
+            "pubg-alert-snooze",
+            "pubg-alert-note",
+            "pubg-alert-resolution",
+            "pubg-alert-resolve",
+        ]
     )
 )
 

@@ -7,8 +7,10 @@ from urllib.parse import urlencode
 
 from pubg_ai.alert_history import (
     AlertHistoryError,
+    AlertHistoryNote,
     AlertHistoryRecord,
     acknowledge_alert,
+    add_alert_note,
     mark_alert_notified,
     snooze_alert,
     sync_alert_history,
@@ -72,6 +74,22 @@ def format_alert_action_result(record: AlertHistoryRecord, action: str) -> str:
         lines.append(f"- snoozed_until_kst: {record.snoozed_until_kst}")
     if action == "acknowledged" and record.acknowledged_at_kst:
         lines.append(f"- acknowledged_at_kst: {record.acknowledged_at_kst}")
+    return "\n".join(lines)
+
+
+def format_alert_note_result(note: AlertHistoryNote) -> str:
+    label = "resolution" if note.note_type == "resolution" else "note"
+    lines = [
+        f"PUBG AI alert {label} saved",
+        f"- alert_id: {note.alert_history_id}",
+        f"- note_id: {note.id}",
+        f"- type: {note.note_type}",
+    ]
+    if note.created_by:
+        lines.append(f"- created_by: {note.created_by}")
+    if note.created_at_kst:
+        lines.append(f"- created_at_kst: {note.created_at_kst}")
+    lines.append(f"- text: {note.note_text}")
     return "\n".join(lines)
 
 
@@ -288,6 +306,10 @@ def create_discord_bot(
     def identity_for(ctx: Any) -> DiscordCommandIdentity:
         return DiscordCommandIdentity(user_id=str(ctx.author.id), guild_id=guild_id_for(ctx))
 
+    def alert_note_creator_for(ctx: Any) -> str:
+        guild_id = guild_id_for(ctx) or "dm"
+        return f"discord:{guild_id}:{ctx.author.id}"
+
     def has_global_scope(ctx: Any) -> bool:
         return permission_checker.is_global_admin(identity_for(ctx))
 
@@ -429,6 +451,8 @@ def create_discord_bot(
                     f"- `{command_prefix}pubg-alerts`",
                     f"- `{command_prefix}pubg-alert-ack alert_id`",
                     f"- `{command_prefix}pubg-alert-snooze alert_id [minutes]`",
+                    f"- `{command_prefix}pubg-alert-note alert_id note`",
+                    f"- `{command_prefix}pubg-alert-resolution alert_id resolution`",
                     f"- `{command_prefix}유저삭제 steam 닉네임또는accountId`",
                 ]
             ),
@@ -847,6 +871,76 @@ def create_discord_bot(
             connection.close()
 
         await ctx.reply(format_alert_action_result(record, "snoozed"), mention_author=False)
+
+    @bot.command(name="pubg-alert-note")
+    async def alert_note_command(
+        ctx: Any,
+        alert_id: str | None = None,
+        *,
+        note_text: str | None = None,
+    ) -> None:
+        if not await require_permission(ctx, "admin"):
+            return
+        parsed_alert_id = _positive_int(alert_id)
+        if parsed_alert_id is None or not note_text or not note_text.strip():
+            await ctx.reply(
+                f"Usage: `{command_prefix}pubg-alert-note alert_id note`",
+                mention_author=False,
+            )
+            return
+
+        connection = connect_mysql(config.database)
+        try:
+            try:
+                note = add_alert_note(
+                    connection,
+                    parsed_alert_id,
+                    note_text,
+                    note_type="note",
+                    created_by=alert_note_creator_for(ctx),
+                )
+            except AlertHistoryError as exc:
+                await ctx.reply(f"PUBG AI alert note error: {exc}", mention_author=False)
+                return
+        finally:
+            connection.close()
+
+        await ctx.reply(format_alert_note_result(note), mention_author=False)
+
+    @bot.command(name="pubg-alert-resolution", aliases=["pubg-alert-resolve"])
+    async def alert_resolution_command(
+        ctx: Any,
+        alert_id: str | None = None,
+        *,
+        note_text: str | None = None,
+    ) -> None:
+        if not await require_permission(ctx, "admin"):
+            return
+        parsed_alert_id = _positive_int(alert_id)
+        if parsed_alert_id is None or not note_text or not note_text.strip():
+            await ctx.reply(
+                f"Usage: `{command_prefix}pubg-alert-resolution alert_id resolution`",
+                mention_author=False,
+            )
+            return
+
+        connection = connect_mysql(config.database)
+        try:
+            try:
+                note = add_alert_note(
+                    connection,
+                    parsed_alert_id,
+                    note_text,
+                    note_type="resolution",
+                    created_by=alert_note_creator_for(ctx),
+                )
+            except AlertHistoryError as exc:
+                await ctx.reply(f"PUBG AI alert resolution error: {exc}", mention_author=False)
+                return
+        finally:
+            connection.close()
+
+        await ctx.reply(format_alert_note_result(note), mention_author=False)
 
     return bot
 
