@@ -16,6 +16,7 @@ class AlertHistoryError(RuntimeError):
 
 ALERT_HISTORY_SOURCES = {"all", "storage", "worker"}
 ALERT_HISTORY_STATES = {"all", "active", "current", "acknowledged", "snoozed", "resolved"}
+ALERT_HISTORY_SORTS = {"newest", "oldest", "severity"}
 ALERT_HISTORY_PAGE_LIMIT = 200
 ALERT_HISTORY_EXPORT_LIMIT = 5000
 ALERT_NOTE_TYPES = {"note", "resolution"}
@@ -70,6 +71,7 @@ class AlertHistoryPage:
     offset: int
     source: str
     state: str
+    sort: str = "newest"
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -79,6 +81,7 @@ class AlertHistoryPage:
             "offset": self.offset,
             "source": self.source,
             "state": self.state,
+            "sort": self.sort,
             "has_previous": self.offset > 0,
             "has_next": self.offset + len(self.records) < self.total,
         }
@@ -169,10 +172,12 @@ def list_alert_history(
     offset: int = 0,
     source: str | None = None,
     state: str = "all",
+    sort: str = "newest",
 ) -> list[AlertHistoryRecord]:
     bounded_limit = _bounded_limit(limit, max_limit=max_limit)
     bounded_offset = max(0, int(offset))
     _, _, where, params = _history_filter_clause(source=source, state=state, active_only=active_only)
+    order_by = _history_order_by(sort)
     with connection.cursor() as cursor:
         cursor.execute(
             f"""
@@ -219,7 +224,7 @@ def list_alert_history(
                 ) AS latest_note_at_kst
             FROM system_alert_history
             {where}
-            ORDER BY last_seen_at_kst DESC, id DESC
+            ORDER BY {order_by}
             LIMIT %s OFFSET %s
             """,
             tuple(params + [bounded_limit, bounded_offset]),
@@ -256,12 +261,14 @@ def get_alert_history_page(
     offset: int = 0,
     source: str | None = None,
     state: str = "all",
+    sort: str = "newest",
 ) -> AlertHistoryPage:
     normalized_source, normalized_state, _, _ = _history_filter_clause(
         source=source,
         state=state,
         active_only=False,
     )
+    normalized_sort = _normalize_history_sort(sort)
     bounded_limit = _bounded_limit(limit, max_limit=ALERT_HISTORY_PAGE_LIMIT)
     bounded_offset = max(0, int(offset))
     records = list_alert_history(
@@ -271,6 +278,7 @@ def get_alert_history_page(
         offset=bounded_offset,
         source=normalized_source,
         state=normalized_state,
+        sort=normalized_sort,
     )
     total = count_alert_history(connection, source=normalized_source, state=normalized_state)
     return AlertHistoryPage(
@@ -280,6 +288,7 @@ def get_alert_history_page(
         offset=bounded_offset,
         source=normalized_source,
         state=normalized_state,
+        sort=normalized_sort,
     )
 
 
@@ -503,6 +512,31 @@ def _normalize_note_text(note_text: str) -> str:
     if not normalized:
         raise AlertHistoryError("alert note text is required.")
     return normalized[:5000]
+
+
+def _normalize_history_sort(sort: str) -> str:
+    normalized = (sort or "newest").strip().lower() or "newest"
+    if normalized in {"severity-first", "severity_first"}:
+        normalized = "severity"
+    if normalized not in ALERT_HISTORY_SORTS:
+        raise AlertHistoryError(f"invalid alert history sort: {sort}")
+    return normalized
+
+
+def _history_order_by(sort: str) -> str:
+    normalized = _normalize_history_sort(sort)
+    if normalized == "oldest":
+        return "last_seen_at_kst ASC, id ASC"
+    if normalized == "severity":
+        return (
+            "CASE severity "
+            "WHEN 'error' THEN 0 "
+            "WHEN 'warning' THEN 1 "
+            "WHEN 'info' THEN 2 "
+            "WHEN 'ok' THEN 3 "
+            "ELSE 4 END ASC, last_seen_at_kst DESC, id DESC"
+        )
+    return "last_seen_at_kst DESC, id DESC"
 
 
 def _history_filter_clause(

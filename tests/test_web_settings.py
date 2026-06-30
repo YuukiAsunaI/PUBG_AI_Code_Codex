@@ -31,6 +31,8 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn('id="alertHistoryPrev"', body)
         self.assertIn('id="alertHistoryNext"', body)
         self.assertIn('id="alertHistoryDetail"', body)
+        self.assertIn('name="sort"', body)
+        self.assertIn('value="severity"', body)
         self.assertIn("/settings/alerts", body)
         self.assertIn("/alerts/status", body)
         self.assertIn("/alerts/history/", body)
@@ -49,6 +51,7 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn("alert-severity-badge", body)
         self.assertIn("alert-severity-error", body)
         self.assertIn("table-badge-stack", body)
+        self.assertIn("sort ${alertHistoryPage.sort", body)
         self.assertIn("Snoozed until", body)
         self.assertIn("loadAlertHistoryDetail", body)
         self.assertIn("formatAlertHistoryStatus", body)
@@ -248,25 +251,27 @@ class WebSettingsTests(unittest.TestCase):
         connection = FakeWorkerRunConnection(rows=[], latest_id=0, alert_rows=[_alert_history_row()])
         with patch("pubg_ai.web.app.connect_mysql", return_value=connection):
             client = TestClient(create_app())
-            response = client.get("/alerts/history?source=storage&state=resolved&limit=25&offset=50")
+            response = client.get("/alerts/history?source=storage&state=resolved&sort=severity&limit=25&offset=50")
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["alert_history_page"]["source"], "storage")
         self.assertEqual(payload["alert_history_page"]["state"], "resolved")
+        self.assertEqual(payload["alert_history_page"]["sort"], "severity")
         self.assertEqual(payload["alert_history_page"]["limit"], 25)
         self.assertEqual(payload["alert_history_page"]["offset"], 50)
         self.assertEqual(payload["alert_history_page"]["total"], 1)
         executed_sql = "\n".join(query for query, _ in connection.cursor_obj.executed)
         self.assertIn("source = %s", executed_sql)
         self.assertIn("resolved_at_kst IS NOT NULL", executed_sql)
+        self.assertIn("CASE severity", executed_sql)
         self.assertIn("LIMIT %s OFFSET %s", executed_sql)
 
     def test_alert_history_export_endpoint_returns_csv(self) -> None:
         connection = FakeWorkerRunConnection(rows=[], latest_id=0, alert_rows=[_alert_history_row()])
         with patch("pubg_ai.web.app.connect_mysql", return_value=connection):
             client = TestClient(create_app())
-            response = client.get("/alerts/history/export.csv?source=storage&state=all&limit=5000&offset=0")
+            response = client.get("/alerts/history/export.csv?source=storage&state=all&sort=oldest&limit=5000&offset=0")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/csv", response.headers["content-type"])
@@ -275,6 +280,7 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn("raw_data_dir storage alert", response.text)
         executed_sql = "\n".join(query for query, _ in connection.cursor_obj.executed)
         self.assertIn("source = %s", executed_sql)
+        self.assertIn("ORDER BY last_seen_at_kst ASC, id ASC", executed_sql)
         self.assertIn("LIMIT %s OFFSET %s", executed_sql)
 
     def test_alert_history_note_endpoints_create_and_list_notes(self) -> None:

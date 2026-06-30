@@ -280,6 +280,7 @@ def create_app() -> Any:
     def alert_history(
         source: str = "all",
         state: str = "all",
+        sort: str = "newest",
         limit: int = Query(default=50, ge=1, le=200),
         offset: int = Query(default=0, ge=0),
     ) -> dict[str, Any]:
@@ -290,6 +291,7 @@ def create_app() -> Any:
                     connection,
                     source=source,
                     state=state,
+                    sort=sort,
                     limit=limit,
                     offset=offset,
                 )
@@ -303,6 +305,7 @@ def create_app() -> Any:
     def export_alert_history(
         source: str = "all",
         state: str = "all",
+        sort: str = "newest",
         limit: int = Query(default=ALERT_HISTORY_EXPORT_LIMIT, ge=1, le=ALERT_HISTORY_EXPORT_LIMIT),
         offset: int = Query(default=0, ge=0),
     ) -> Response:
@@ -313,6 +316,7 @@ def create_app() -> Any:
                     connection,
                     source=source,
                     state=state,
+                    sort=sort,
                     limit=limit,
                     max_limit=ALERT_HISTORY_EXPORT_LIMIT,
                     offset=offset,
@@ -1464,6 +1468,13 @@ _INDEX_HTML = """<!doctype html>
             <option value="200">200</option>
           </select>
         </label>
+        <label>Sort
+          <select name="sort">
+            <option value="newest" selected>newest</option>
+            <option value="oldest">oldest</option>
+            <option value="severity">severity-first</option>
+          </select>
+        </label>
         <button type="submit">Apply</button>
       </form>
       <div class="actions" style="margin-top: 10px;">
@@ -2047,6 +2058,7 @@ _INDEX_HTML = """<!doctype html>
       limit: 50,
       offset: 0,
       total: 0,
+      sort: "newest",
       has_previous: false,
       has_next: false,
     };
@@ -2137,11 +2149,13 @@ _INDEX_HTML = """<!doctype html>
       const form = new FormData(alertHistoryFilterForm);
       const source = options.source || String(form.get("source") || alertHistoryPage.source || "all");
       const state = options.state || String(form.get("state") || alertHistoryPage.state || "all");
+      const sort = options.sort || String(form.get("sort") || alertHistoryPage.sort || "newest");
       const limit = Number(options.limit || form.get("limit") || alertHistoryPage.limit || 50);
       const offset = Math.max(0, Number(options.offset ?? alertHistoryPage.offset ?? 0));
       const params = new URLSearchParams({
         source,
         state,
+        sort,
         limit: String(limit),
         offset: String(offset),
       });
@@ -2155,6 +2169,7 @@ _INDEX_HTML = """<!doctype html>
       const params = new URLSearchParams({
         source: String(form.get("source") || alertHistoryPage.source || "all"),
         state: String(form.get("state") || alertHistoryPage.state || "all"),
+        sort: String(form.get("sort") || alertHistoryPage.sort || "newest"),
         limit: "5000",
         offset: "0",
       });
@@ -2208,6 +2223,7 @@ _INDEX_HTML = """<!doctype html>
       if (syncControls) {
         alertHistoryFilterForm.elements.source.value = alertHistoryPage.source || "all";
         alertHistoryFilterForm.elements.state.value = alertHistoryPage.state || "all";
+        alertHistoryFilterForm.elements.sort.value = alertHistoryPage.sort || "newest";
         alertHistoryFilterForm.elements.limit.value = String(alertHistoryPage.limit || 50);
       }
       const start = history.length ? alertHistoryPage.offset + 1 : 0;
@@ -2216,6 +2232,7 @@ _INDEX_HTML = """<!doctype html>
         `${start}-${end} of ${alertHistoryPage.total}`,
         `source ${alertHistoryPage.source || "all"}`,
         `status ${alertHistoryPage.state || "all"}`,
+        `sort ${alertHistoryPage.sort || "newest"}`,
       ].join(" / ");
       alertHistoryPrev.disabled = !alertHistoryPage.has_previous;
       alertHistoryNext.disabled = !alertHistoryPage.has_next;

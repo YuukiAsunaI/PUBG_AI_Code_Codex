@@ -60,6 +60,7 @@ class AlertHistoryTests(unittest.TestCase):
             connection,
             source="storage",
             state="resolved",
+            sort="oldest",
             limit=25,
             offset=50,
         )
@@ -69,11 +70,24 @@ class AlertHistoryTests(unittest.TestCase):
         self.assertEqual(page.offset, 50)
         self.assertEqual(page.source, "storage")
         self.assertEqual(page.state, "resolved")
+        self.assertEqual(page.sort, "oldest")
+        self.assertEqual(page.to_record()["sort"], "oldest")
         executed_sql = "\n".join(query for query, _ in connection.cursor_obj.executed)
         self.assertIn("source = %s", executed_sql)
         self.assertIn("resolved_at_kst IS NOT NULL", executed_sql)
+        self.assertIn("ORDER BY last_seen_at_kst ASC, id ASC", executed_sql)
         self.assertIn("LIMIT %s OFFSET %s", executed_sql)
         self.assertIn("COUNT(*) AS total", executed_sql)
+
+    def test_history_sort_supports_severity_first(self) -> None:
+        connection = FakeConnection(rows=[_alert_row()])
+
+        list_alert_history(connection, sort="severity-first")
+
+        executed_sql = "\n".join(query for query, _ in connection.cursor_obj.executed)
+        self.assertIn("CASE severity", executed_sql)
+        self.assertIn("WHEN 'error' THEN 0", executed_sql)
+        self.assertIn("last_seen_at_kst DESC, id DESC", executed_sql)
 
     def test_export_limit_can_request_more_than_page_limit(self) -> None:
         connection = FakeConnection(rows=[_alert_row()])

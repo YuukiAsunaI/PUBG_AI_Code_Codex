@@ -384,7 +384,9 @@ Completed slices:
     state-specific timestamps, and short helper text.
 48. The local manager current-alert and alert-history tables show severity and state badges, so alert lists can be
     scanned before opening a detail panel.
+49. Alert history APIs and the local manager support `newest`, `oldest`, and `severity` sort modes, including CSV
+    export and paged history review.
 
 Next slice:
 
-1. Add alert-history table sorting controls for newest/oldest and severity-first review.
+1. Add alert-history text search for titles/messages so old incidents can be found without exporting CSV.
