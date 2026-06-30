@@ -151,7 +151,12 @@ def format_alert_notes_result(record: AlertHistoryRecord, notes: list[AlertHisto
     return "\n".join(lines)
 
 
-def format_alert_history_result(page: AlertHistoryPage, *, detail_base_url: str | None = None) -> str:
+def format_alert_history_result(
+    page: AlertHistoryPage,
+    *,
+    detail_base_url: str | None = None,
+    command_prefix: str = DEFAULT_DISCORD_PREFIX,
+) -> str:
     lines = [
         "PUBG AI alert history",
         (
@@ -173,6 +178,7 @@ def format_alert_history_result(page: AlertHistoryPage, *, detail_base_url: str 
             f"- #{record.id} [{record.source}/{record.severity}/{state}] {last_seen} "
             f"{title}: {message}{_alert_history_detail_link(record, detail_base_url)}"
         )
+    lines.extend(_alert_history_navigation_hints(page, command_prefix=command_prefix))
     return "\n".join(lines)
 
 
@@ -1093,7 +1099,11 @@ def create_discord_bot(
             connection.close()
 
         await ctx.reply(
-            format_alert_history_result(page, detail_base_url=config.app.local_web_base_url),
+            format_alert_history_result(
+                page,
+                detail_base_url=config.app.local_web_base_url,
+                command_prefix=command_prefix,
+            ),
             mention_author=False,
         )
 
@@ -1149,6 +1159,44 @@ def _alert_history_detail_link(record: AlertHistoryRecord, base_url: str | None)
     if not base_url:
         return ""
     return f" [detail]({base_url.rstrip('/')}/?{urlencode({'alert_id': record.id})})"
+
+
+def _alert_history_navigation_hints(page: AlertHistoryPage, *, command_prefix: str) -> list[str]:
+    hints: list[str] = []
+    if page.offset > 0:
+        previous_offset = max(0, page.offset - page.limit)
+        hints.append(
+            "- previous: `"
+            + _alert_history_command_for_page(page, offset=previous_offset, command_prefix=command_prefix)
+            + "`"
+        )
+    if page.offset + len(page.records) < page.total:
+        next_offset = page.offset + page.limit
+        hints.append(
+            "- next: `"
+            + _alert_history_command_for_page(page, offset=next_offset, command_prefix=command_prefix)
+            + "`"
+        )
+    return hints
+
+
+def _alert_history_command_for_page(page: AlertHistoryPage, *, offset: int, command_prefix: str) -> str:
+    parts = [
+        f"{command_prefix}pubg-alert-history",
+        _alert_history_filter_arg("source", page.source),
+        _alert_history_filter_arg("state", page.state),
+        _alert_history_filter_arg("severity", page.severity),
+        _alert_history_filter_arg("sort", page.sort),
+        _alert_history_filter_arg("limit", str(page.limit)),
+        _alert_history_filter_arg("offset", str(max(0, offset))),
+    ]
+    if page.search:
+        parts.append(_alert_history_filter_arg("search", page.search))
+    return " ".join(parts)
+
+
+def _alert_history_filter_arg(key: str, value: str) -> str:
+    return f"{key}={shlex.quote(str(value))}"
 
 
 def _short_match_id(match_id: str) -> str:

@@ -335,7 +335,8 @@ Discord after reading the ID from `pubg-alerts` or an automatic alert message. A
 are stored in the same MySQL `system_alert_notes` table shown by the local manager. Use
 `pubg-alert-notes alert_id [limit]` to review the newest notes from Discord. Use `pubg-alert-history` with quick
 presets or `source`/`state`/`severity`/`search` filters to review persisted alert history from Discord; when
-`PUBG_LOCAL_WEB_BASE_URL` is set, each row includes a local detail link.
+`PUBG_LOCAL_WEB_BASE_URL` is set, each row includes a local detail link. When more history rows are available, the
+response includes copyable previous/next `offset` commands.
 
 Run the local management app:
 

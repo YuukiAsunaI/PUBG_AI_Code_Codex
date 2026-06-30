@@ -136,7 +136,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
         page = AlertHistoryPage(
             records=[record],
             total=3,
-            limit=5,
+            limit=1,
             offset=0,
             source="worker",
             state="current",
@@ -152,10 +152,56 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("shown/total: 1/3", body)
         self.assertIn("#7 [worker/error/current]", body)
         self.assertIn("collector worker failed", body)
+        self.assertIn("next: `!pubg-alert-history", body)
+        self.assertIn("offset=1", body)
+        self.assertNotIn("previous:", body)
         self.assertNotIn("[detail]", body)
 
         linked = format_alert_history_result(page, detail_base_url="http://127.0.0.1:8000/")
         self.assertIn("[detail](http://127.0.0.1:8000/?alert_id=7)", linked)
+
+    def test_alert_history_result_formats_previous_and_next_hints(self) -> None:
+        page = AlertHistoryPage(
+            records=[
+                AlertHistoryRecord(
+                    id=8,
+                    alert_key="storage:raw",
+                    source="storage",
+                    severity="warning",
+                    title="raw storage alert",
+                    message="disk space below threshold",
+                    metadata={},
+                    first_seen_at_kst=None,
+                    last_seen_at_kst="2026-06-30T10:01:00+09:00",
+                    last_notified_at_kst=None,
+                    acknowledged_at_kst=None,
+                    snoozed_until_kst=None,
+                    resolved_at_kst=None,
+                    updated_at_kst=None,
+                )
+            ],
+            total=3,
+            limit=1,
+            offset=1,
+            source="storage",
+            state="active",
+            severity="warning",
+            sort="oldest",
+            search="disk full",
+        )
+
+        body = format_alert_history_result(page, command_prefix="?")
+
+        self.assertIn("previous: `?pubg-alert-history", body)
+        self.assertIn("next: `?pubg-alert-history", body)
+        self.assertIn("source=storage", body)
+        self.assertIn("state=active", body)
+        self.assertIn("severity=warning", body)
+        self.assertIn("sort=oldest", body)
+        self.assertIn("limit=1", body)
+        self.assertIn("offset=0", body)
+        self.assertIn("offset=2", body)
+        self.assertIn("search='disk full'", body)
 
     def test_alert_history_filter_parser_supports_presets_and_search_terms(self) -> None:
         filters = _parse_alert_history_filters("current-errors limit=7 raw drive")
