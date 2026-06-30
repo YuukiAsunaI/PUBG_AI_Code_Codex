@@ -7,6 +7,7 @@ from pubg_ai.discord_bot import (
     _player_visible_to_scope,
     format_alert_action_result,
     format_alert_note_result,
+    format_alert_notes_result,
     format_player_list,
     format_player_match_detail,
     format_player_profile_stats,
@@ -75,6 +76,43 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("- type: resolution", body)
         self.assertIn("discord:987654321:123456789", body)
         self.assertIn("raw drive expanded and worker restarted", body)
+
+    def test_alert_notes_result_formats_recent_notes(self) -> None:
+        record = AlertHistoryRecord(
+            id=7,
+            alert_key="worker:7",
+            source="worker",
+            severity="error",
+            title="collector worker failed with a very long title that should still fit in one Discord line",
+            message="drive missing",
+            metadata={},
+            first_seen_at_kst="2026-06-30T10:00:00+09:00",
+            last_seen_at_kst="2026-06-30T10:01:00+09:00",
+            last_notified_at_kst=None,
+            acknowledged_at_kst=None,
+            snoozed_until_kst=None,
+            resolved_at_kst=None,
+            updated_at_kst="2026-06-30T10:02:00+09:00",
+            note_count=2,
+        )
+        notes = [
+            AlertHistoryNote(
+                id=12,
+                alert_history_id=7,
+                note_type="resolution",
+                note_text="raw drive expanded\nworker restarted",
+                created_by="discord:987654321:123456789",
+                created_at_kst="2026-06-30T10:05:00+09:00",
+            )
+        ]
+
+        body = format_alert_notes_result(record, notes)
+
+        self.assertIn("PUBG AI alert notes", body)
+        self.assertIn("- alert_id: 7", body)
+        self.assertIn("- shown/total: 1/2", body)
+        self.assertIn("#12 resolution 2026-06-30T10:05:00+09:00", body)
+        self.assertIn("raw drive expanded worker restarted", body)
 
     def test_player_list_formats_status_and_short_account_id(self) -> None:
         players = [

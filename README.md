@@ -301,6 +301,7 @@ Discord's message content intent to be enabled for the bot application. Initial 
 !pubg-alert-snooze alert_id [minutes]
 !pubg-alert-note alert_id note
 !pubg-alert-resolution alert_id resolution
+!pubg-alert-notes alert_id [limit]
 !유저삭제 steam 닉네임또는accountId
 ```
 
@@ -328,7 +329,8 @@ the local manager's acknowledge or one-hour snooze action suppresses repeated lo
 alert record. Admins can also run `pubg-alert-ack alert_id` or `pubg-alert-snooze alert_id [minutes]` directly in
 Discord after reading the ID from `pubg-alerts` or an automatic alert message. Admins can attach incident notes with
 `pubg-alert-note alert_id note` and resolution comments with `pubg-alert-resolution alert_id resolution`; those entries
-are stored in the same MySQL `system_alert_notes` table shown by the local manager.
+are stored in the same MySQL `system_alert_notes` table shown by the local manager. Use
+`pubg-alert-notes alert_id [limit]` to review the newest notes from Discord.
 
 Run the local management app:
 

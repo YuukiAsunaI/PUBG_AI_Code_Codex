@@ -11,6 +11,8 @@ from pubg_ai.alert_history import (
     AlertHistoryRecord,
     acknowledge_alert,
     add_alert_note,
+    get_alert_history_record,
+    list_alert_notes,
     mark_alert_notified,
     snooze_alert,
     sync_alert_history,
@@ -90,6 +92,25 @@ def format_alert_note_result(note: AlertHistoryNote) -> str:
     if note.created_at_kst:
         lines.append(f"- created_at_kst: {note.created_at_kst}")
     lines.append(f"- text: {note.note_text}")
+    return "\n".join(lines)
+
+
+def format_alert_notes_result(record: AlertHistoryRecord, notes: list[AlertHistoryNote]) -> str:
+    lines = [
+        "PUBG AI alert notes",
+        f"- alert_id: {record.id}",
+        f"- title: {_discord_single_line(record.title, 120)}",
+        f"- shown/total: {len(notes)}/{record.note_count}",
+    ]
+    if not notes:
+        lines.append("- no notes or resolution comments")
+        return "\n".join(lines)
+
+    for note in notes:
+        created_at = note.created_at_kst or "-"
+        created_by = note.created_by or "-"
+        text = _discord_single_line(note.note_text, 180)
+        lines.append(f"- #{note.id} {note.note_type} {created_at} by {created_by}: {text}")
     return "\n".join(lines)
 
 
@@ -453,6 +474,7 @@ def create_discord_bot(
                     f"- `{command_prefix}pubg-alert-snooze alert_id [minutes]`",
                     f"- `{command_prefix}pubg-alert-note alert_id note`",
                     f"- `{command_prefix}pubg-alert-resolution alert_id resolution`",
+                    f"- `{command_prefix}pubg-alert-notes alert_id [limit]`",
                     f"- `{command_prefix}유저삭제 steam 닉네임또는accountId`",
                 ]
             ),
@@ -942,6 +964,36 @@ def create_discord_bot(
 
         await ctx.reply(format_alert_note_result(note), mention_author=False)
 
+    @bot.command(name="pubg-alert-notes", aliases=["pubg-alert-note-list"])
+    async def alert_notes_command(
+        ctx: Any,
+        alert_id: str | None = None,
+        limit: str = "5",
+    ) -> None:
+        if not await require_permission(ctx, "admin"):
+            return
+        parsed_alert_id = _positive_int(alert_id)
+        parsed_limit = _positive_int(limit)
+        if parsed_alert_id is None or parsed_limit is None:
+            await ctx.reply(
+                f"Usage: `{command_prefix}pubg-alert-notes alert_id [limit]`",
+                mention_author=False,
+            )
+            return
+
+        connection = connect_mysql(config.database)
+        try:
+            try:
+                record = get_alert_history_record(connection, parsed_alert_id)
+                notes = list_alert_notes(connection, parsed_alert_id, limit=min(parsed_limit, 10))
+            except AlertHistoryError as exc:
+                await ctx.reply(f"PUBG AI alert notes error: {exc}", mention_author=False)
+                return
+        finally:
+            connection.close()
+
+        await ctx.reply(format_alert_notes_result(record, notes), mention_author=False)
+
     return bot
 
 
@@ -992,6 +1044,13 @@ def _recommendation_evidence_link(
 
 def _short_match_id(match_id: str) -> str:
     return match_id[:8] if len(match_id) > 8 else match_id
+
+
+def _discord_single_line(value: str, max_length: int) -> str:
+    normalized = " ".join(str(value).split())
+    if len(normalized) <= max_length:
+        return normalized
+    return f"{normalized[: max(0, max_length - 3)]}..."
 
 
 def _percent(value: float) -> str:

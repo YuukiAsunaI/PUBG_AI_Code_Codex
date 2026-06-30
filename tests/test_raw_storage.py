@@ -290,6 +290,8 @@ class LocalSettingsStoreTests(unittest.TestCase):
             self.assertIn("pubg-alert-ack", loaded.command_groups["admin"])
             self.assertIn("pubg-alert-snooze", loaded.command_groups["admin"])
             self.assertIn("pubg-alert-note", loaded.command_groups["admin"])
+            self.assertIn("pubg-alert-notes", loaded.command_groups["admin"])
+            self.assertIn("pubg-alert-note-list", loaded.command_groups["admin"])
             self.assertIn("pubg-alert-resolution", loaded.command_groups["admin"])
             self.assertIn("pubg-register", loaded.command_groups["register"])
 

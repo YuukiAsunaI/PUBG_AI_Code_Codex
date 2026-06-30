@@ -150,6 +150,8 @@ DEFAULT_COMMAND_GROUPS["admin"] = sorted(
             "pubg-alert-acknowledge",
             "pubg-alert-snooze",
             "pubg-alert-note",
+            "pubg-alert-notes",
+            "pubg-alert-note-list",
             "pubg-alert-resolution",
             "pubg-alert-resolve",
         ]

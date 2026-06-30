@@ -75,6 +75,8 @@ Implemented behavior:
   persisted alert history from Discord.
 - The admin-only `pubg-alert-note alert_id note` and `pubg-alert-resolution alert_id resolution` commands append
   `note` and `resolution` rows to the same persisted alert history from Discord.
+- The admin-only `pubg-alert-notes alert_id [limit]` command lists recent notes and resolution comments for one alert
+  without opening the local manager.
 
 ## Duplicate Match Handling
 

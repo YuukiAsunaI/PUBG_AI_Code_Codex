@@ -372,8 +372,10 @@ Completed slices:
 42. Discord admins can add alert notes and resolution comments with `pubg-alert-note alert_id note` and
     `pubg-alert-resolution alert_id resolution`; both commands write to `system_alert_notes` with a Discord creator
     marker.
+43. Discord admins can review recent alert notes and resolution comments with `pubg-alert-notes alert_id [limit]`
+    without opening the local manager.
 
 Next slice:
 
-1. Add a Discord-side alert notes listing command so admins can review existing notes without opening the local
-   manager.
+1. Add a local manager alert-note detail view so admins can inspect the full note history for one alert without using
+   the raw API response.

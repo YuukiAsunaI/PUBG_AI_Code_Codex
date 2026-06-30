@@ -122,6 +122,8 @@ class DiscordCommandDefaultsTests(unittest.TestCase):
         self.assertIn("pubg-alert-ack", DEFAULT_COMMAND_GROUPS["admin"])
         self.assertIn("pubg-alert-snooze", DEFAULT_COMMAND_GROUPS["admin"])
         self.assertIn("pubg-alert-note", DEFAULT_COMMAND_GROUPS["admin"])
+        self.assertIn("pubg-alert-notes", DEFAULT_COMMAND_GROUPS["admin"])
+        self.assertIn("pubg-alert-note-list", DEFAULT_COMMAND_GROUPS["admin"])
         self.assertIn("pubg-alert-resolution", DEFAULT_COMMAND_GROUPS["admin"])
 
 
