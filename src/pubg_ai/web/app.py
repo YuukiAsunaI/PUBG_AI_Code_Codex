@@ -1271,6 +1271,23 @@ _INDEX_HTML = """<!doctype html>
     .alert-state-acknowledged { background: #edf2f7; color: #344054; border-color: #cbd5e1; }
     .alert-state-snoozed { background: #fff4d6; color: #7a4b00; border-color: #f5cf70; }
     .alert-state-resolved { background: #e8f0fe; color: #174ea6; border-color: #adc7ff; }
+    .alert-severity-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      border-radius: 6px;
+      padding: 3px 8px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0;
+      border: 1px solid transparent;
+    }
+    .alert-severity-error { background: #fde7e9; color: #9f1239; border-color: #f5b5bf; }
+    .alert-severity-warning { background: #fff4d6; color: #7a4b00; border-color: #f5cf70; }
+    .alert-severity-info { background: #e8f0fe; color: #174ea6; border-color: #adc7ff; }
+    .alert-severity-ok { background: #e6f4ea; color: #0f5132; border-color: #b7dfc6; }
+    .alert-severity-unknown { background: #edf2f7; color: #344054; border-color: #cbd5e1; }
+    .table-badge-stack { display: grid; justify-items: start; gap: 5px; }
     .detail-table { margin-top: 8px; table-layout: auto; }
     .detail-table th, .detail-table td { font-size: 12px; padding: 7px; vertical-align: top; }
     .player-controls { display: grid; grid-template-columns: minmax(220px, 1fr) 110px auto auto; gap: 10px; align-items: end; }
@@ -2165,7 +2182,7 @@ _INDEX_HTML = """<!doctype html>
         ? alerts.map((alert) => `
           <tr>
             <td>${escapeHtml(alert.source || "")}</td>
-            <td>${escapeHtml(alert.severity || "")}</td>
+            <td>${alertSeverityBadge(alert.severity)}</td>
             <td>${escapeHtml(alert.title || "")}</td>
             <td>${escapeHtml(alert.message || "")}</td>
             <td>
@@ -2206,9 +2223,19 @@ _INDEX_HTML = """<!doctype html>
         ? history.map((alert) => `
           <tr>
             <td>${escapeHtml(alert.last_seen_at_kst || "")}</td>
-            <td>${escapeHtml(alert.source || "")}</td>
+            <td>
+              <div class="table-badge-stack">
+                <span>${escapeHtml(alert.source || "")}</span>
+                ${alertSeverityBadge(alert.severity)}
+              </div>
+            </td>
             <td>${escapeHtml(alert.title || "")}</td>
-            <td>${escapeHtml(formatAlertHistoryStatus(alert))}</td>
+            <td>
+              <div class="table-badge-stack">
+                ${alertStateBadge(alert)}
+                <span class="status">${escapeHtml(formatAlertHistoryStatus(alert))}</span>
+              </div>
+            </td>
             <td>${escapeHtml(alertHistoryNoteSummary(alert))}</td>
             <td>${escapeHtml(alert.message || "")}</td>
             <td>
@@ -2264,6 +2291,21 @@ _INDEX_HTML = """<!doctype html>
       };
     }
 
+    function alertStateBadge(alert) {
+      const state = alertHistoryState(alert);
+      return `<span class="alert-state-badge alert-state-${attr(state.state)}">${escapeHtml(state.label)}</span>`;
+    }
+
+    function alertSeverityBadge(severity) {
+      const level = alertSeverityLevel(severity);
+      return `<span class="alert-severity-badge alert-severity-${attr(level)}">${escapeHtml(level.toUpperCase())}</span>`;
+    }
+
+    function alertSeverityLevel(severity) {
+      const level = String(severity || "unknown").toLowerCase();
+      return ["error", "warning", "info", "ok"].includes(level) ? level : "unknown";
+    }
+
     function formatAlertHistoryStatus(alert) {
       const state = alertHistoryState(alert);
       return state.timeValue ? `${state.label.toLowerCase()} ${state.timeValue}` : state.label.toLowerCase();
@@ -2314,13 +2356,13 @@ _INDEX_HTML = """<!doctype html>
         </div>
         <div class="status" style="margin-top: 6px;">${notes.length} notes shown</div>
         <div class="alert-state-row">
-          <span class="alert-state-badge alert-state-${attr(state.state)}">${escapeHtml(state.label)}</span>
+          ${alertStateBadge(alert)}
           <span class="status">${escapeHtml(state.timeLabel)}${state.timeValue ? `: ${escapeHtml(state.timeValue)}` : ""}</span>
         </div>
         <div class="status" style="margin-top: 4px;">${escapeHtml(state.helper)}</div>
         <div class="grid" style="margin-top: 10px;">
           ${cell("Source", escapeHtml(alert.source || ""))}
-          ${cell("Severity", escapeHtml(alert.severity || ""))}
+          ${cell("Severity", alertSeverityBadge(alert.severity))}
           ${cell("Status", escapeHtml(state.label))}
           ${cell("Last seen", escapeHtml(alert.last_seen_at_kst || ""))}
         </div>

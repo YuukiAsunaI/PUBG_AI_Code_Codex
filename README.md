@@ -355,5 +355,5 @@ changes. The same page stores storage/worker alert records in `system_alert_hist
 alerts separately from recent history, lets the admin acknowledge or temporarily hide noisy alerts, and can filter or
 page history by source/status when many old alerts have accumulated. The filtered history can also be exported as CSV
 from the local manager. Each alert history row can also store persistent admin notes and resolution comments, and the
-local manager can open a detail panel with status badges, ack/snooze controls, full note history, and inline
-note/resolution entry for one alert.
+local manager shows list-level state/severity badges and can open a detail panel with status badges, ack/snooze
+controls, full note history, and inline note/resolution entry for one alert.

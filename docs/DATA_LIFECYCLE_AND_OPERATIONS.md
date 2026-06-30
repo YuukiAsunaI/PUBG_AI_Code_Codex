@@ -68,6 +68,8 @@ Implemented behavior:
 - `POST /alerts/history/{alert_id}/notes` stores a `note` or `resolution` comment for one alert.
 - `POST /alerts/history/{alert_id}/acknowledge` marks a persisted alert as acknowledged.
 - `POST /alerts/history/{alert_id}/snooze` hides a persisted alert until the requested KST expiry, capped at 30 days.
+- The current-alert and alert-history tables show severity/state badges so admins can scan alert lists before opening
+  a detail row.
 - The local manager alert history table can open a detail panel that shows the selected alert and its full recent note
   history without reading the raw JSON API response, shows a state badge for active/acknowledged/snoozed/resolved, and
   can acknowledge, snooze, or add `note` and `resolution` comments.

@@ -382,8 +382,9 @@ Completed slices:
     suppression, and follow-up comments can be handled from one focused view.
 47. The local manager alert detail panel shows active, acknowledged, snoozed, and resolved states with visual badges,
     state-specific timestamps, and short helper text.
+48. The local manager current-alert and alert-history tables show severity and state badges, so alert lists can be
+    scanned before opening a detail panel.
 
 Next slice:
 
-1. Add state/severity badges to the current-alert and alert-history tables so alert lists are easier to scan before
-   opening the detail panel.
+1. Add alert-history table sorting controls for newest/oldest and severity-first review.
