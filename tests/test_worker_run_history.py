@@ -62,35 +62,38 @@ class WorkerRunHistoryTests(unittest.TestCase):
             ]
         )
 
-        runs = list_worker_runs(connection, worker_name="post_processing", limit=500)
+        runs = list_worker_runs(connection, worker_name="post_processing", status="succeeded", limit=500)
 
         self.assertEqual(len(runs), 1)
         self.assertEqual(runs[0].id, 7)
         self.assertEqual(runs[0].summary["map_snapshots"]["generated_snapshots"], 4)
         query, params = connection.cursor_obj.executed[0]
         self.assertIn("WHERE worker_name = %s", query)
+        self.assertIn("status = %s", query)
         self.assertIn("LIMIT %s OFFSET %s", query)
-        self.assertEqual(params, ("post_processing", 200, 0))
+        self.assertEqual(params, ("post_processing", "succeeded", 200, 0))
 
     def test_list_worker_runs_supports_offset(self) -> None:
         connection = FakeConnection()
 
-        list_worker_runs(connection, worker_name="collector", limit=5, offset=10)
+        list_worker_runs(connection, worker_name="collector", status="failed", limit=5, offset=10)
 
         query, params = connection.cursor_obj.executed[0]
+        self.assertIn("worker_name = %s AND status = %s", query)
         self.assertIn("LIMIT %s OFFSET %s", query)
-        self.assertEqual(params, ("collector", 5, 10))
+        self.assertEqual(params, ("collector", "failed", 5, 10))
 
     def test_count_worker_runs_supports_worker_filter(self) -> None:
         connection = FakeConnection(total=13)
 
-        total = count_worker_runs(connection, worker_name="collector")
+        total = count_worker_runs(connection, worker_name="collector", status="failed")
 
         self.assertEqual(total, 13)
         query, params = connection.cursor_obj.executed[0]
         self.assertIn("SELECT COUNT(*) AS total", query)
         self.assertIn("WHERE worker_name = %s", query)
-        self.assertEqual(params, ("collector",))
+        self.assertIn("status = %s", query)
+        self.assertEqual(params, ("collector", "failed"))
 
     def test_get_worker_run_page_returns_records_and_total(self) -> None:
         connection = FakeConnection(
@@ -111,12 +114,13 @@ class WorkerRunHistoryTests(unittest.TestCase):
             total=3,
         )
 
-        page = get_worker_run_page(connection, worker_name="collector", limit=1, offset=1)
+        page = get_worker_run_page(connection, worker_name="collector", status="succeeded", limit=1, offset=1)
 
         self.assertEqual(page.total, 3)
         self.assertEqual(page.limit, 1)
         self.assertEqual(page.offset, 1)
         self.assertEqual(page.worker_name, "collector")
+        self.assertEqual(page.status, "succeeded")
         self.assertEqual(page.records[0].id, 7)
         self.assertTrue(page.to_record()["has_previous"])
         self.assertTrue(page.to_record()["has_next"])
@@ -124,6 +128,10 @@ class WorkerRunHistoryTests(unittest.TestCase):
     def test_rejects_unknown_worker_name(self) -> None:
         with self.assertRaises(WorkerRunHistoryError):
             list_worker_runs(FakeConnection(), worker_name="other")
+
+    def test_rejects_unknown_worker_status(self) -> None:
+        with self.assertRaises(WorkerRunHistoryError):
+            list_worker_runs(FakeConnection(), status="broken")
 
     def test_lists_failed_worker_runs_after_id(self) -> None:
         connection = FakeConnection(

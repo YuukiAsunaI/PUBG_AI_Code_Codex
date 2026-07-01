@@ -13,6 +13,9 @@ class WorkerRunHistoryError(RuntimeError):
     """Raised when worker cycle history cannot be stored or loaded."""
 
 
+WORKER_RUN_STATUSES = {"all", "succeeded", "failed"}
+
+
 @dataclass(frozen=True)
 class WorkerRunRecord:
     id: int
@@ -37,6 +40,7 @@ class WorkerRunPage:
     limit: int
     offset: int
     worker_name: str | None = None
+    status: str = "all"
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -45,6 +49,7 @@ class WorkerRunPage:
             "limit": self.limit,
             "offset": self.offset,
             "worker_name": self.worker_name,
+            "status": self.status,
             "has_previous": self.offset > 0,
             "has_next": self.offset + len(self.records) < self.total,
         }
@@ -115,12 +120,13 @@ def list_worker_runs(
     connection: Any,
     *,
     worker_name: str | None = None,
+    status: str = "all",
     limit: int = 50,
     offset: int = 0,
 ) -> list[WorkerRunRecord]:
     bounded_limit = max(1, min(int(limit), 200))
     bounded_offset = max(0, int(offset))
-    where, params = _worker_run_filter_clause(worker_name)
+    where, params = _worker_run_filter_clause(worker_name, status=status)
     params.extend([bounded_limit, bounded_offset])
 
     with connection.cursor() as cursor:
@@ -153,8 +159,9 @@ def count_worker_runs(
     connection: Any,
     *,
     worker_name: str | None = None,
+    status: str = "all",
 ) -> int:
-    where, params = _worker_run_filter_clause(worker_name)
+    where, params = _worker_run_filter_clause(worker_name, status=status)
     with connection.cursor() as cursor:
         cursor.execute(
             f"""
@@ -172,25 +179,29 @@ def get_worker_run_page(
     connection: Any,
     *,
     worker_name: str | None = None,
+    status: str = "all",
     limit: int = 50,
     offset: int = 0,
 ) -> WorkerRunPage:
     bounded_limit = max(1, min(int(limit), 200))
     bounded_offset = max(0, int(offset))
     normalized_worker_name = _validate_worker_name(worker_name) if worker_name else None
+    normalized_status = _validate_worker_status(status)
     records = list_worker_runs(
         connection,
         worker_name=normalized_worker_name,
+        status=normalized_status,
         limit=bounded_limit,
         offset=bounded_offset,
     )
-    total = count_worker_runs(connection, worker_name=normalized_worker_name)
+    total = count_worker_runs(connection, worker_name=normalized_worker_name, status=normalized_status)
     return WorkerRunPage(
         records=records,
         total=total,
         limit=bounded_limit,
         offset=bounded_offset,
         worker_name=normalized_worker_name,
+        status=normalized_status,
     )
 
 
@@ -301,10 +312,28 @@ def _validate_worker_name(value: str) -> str:
     return text
 
 
-def _worker_run_filter_clause(worker_name: str | None) -> tuple[str, list[Any]]:
-    if not worker_name:
+def _validate_worker_status(value: str) -> str:
+    text = str(value).strip().lower()
+    if text not in WORKER_RUN_STATUSES:
+        raise WorkerRunHistoryError(f"unsupported worker run status: {value!r}")
+    return text
+
+
+def _worker_run_filter_clause(worker_name: str | None, *, status: str = "all") -> tuple[str, list[Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if worker_name:
+        clauses.append("worker_name = %s")
+        params.append(_validate_worker_name(worker_name))
+
+    normalized_status = _validate_worker_status(status)
+    if normalized_status != "all":
+        clauses.append("status = %s")
+        params.append(normalized_status)
+
+    if not clauses:
         return "", []
-    return "WHERE worker_name = %s", [_validate_worker_name(worker_name)]
+    return "WHERE " + " AND ".join(clauses), params
 
 
 def _error_list(value: Any) -> list[str]:

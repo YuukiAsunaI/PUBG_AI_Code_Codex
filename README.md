@@ -304,7 +304,7 @@ Discord's message content intent to be enabled for the bot application. Initial 
 !pubg-alert-notes alert_id [limit]
 !pubg-alert-history [current-errors|worker-failures|storage-pressure|all-history]
 !pubg-alert-history source=storage state=current severity=error search="drive" limit=5
-!pubg-worker-runs [collector|post_processing|all] [limit] [offset=0]
+!pubg-worker-runs [collector|post_processing|all] [status=succeeded|failed|all] [limit] [offset=0]
 !pubg-worker-run run_id
 !유저삭제 steam 닉네임또는accountId
 ```
@@ -340,8 +340,9 @@ presets or `source`/`state`/`severity`/`search` filters to review persisted aler
 `PUBG_LOCAL_WEB_BASE_URL` is set, each row includes a local detail link. When more history rows are available, the
 response includes copyable previous/next `offset` commands. Use `pubg-worker-runs` to review recent collector and
 post-processing cycle status, duration, error count, and last error directly from Discord; each row includes a
-copyable `pubg-worker-run run_id` detail command for inspecting one run's summary metrics and full error list. When
-more worker rows are available, the response includes copyable previous/next `offset` commands.
+copyable `pubg-worker-run run_id` detail command for inspecting one run's summary metrics and full error list. Filter
+the list with `status=succeeded|failed|all`; when more worker rows are available, the response includes copyable
+previous/next `offset` commands that keep the selected worker and status filters.
 
 Run the local management app:
 

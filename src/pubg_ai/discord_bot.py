@@ -38,6 +38,7 @@ from pubg_ai.replay_artifact_catalog import ReplayArtifactRecord, list_replay_ar
 from pubg_ai.replay_storage import ReplayArtifactStore, ReplayStorageError
 from pubg_ai.system_alerts import collect_system_alerts, format_alert_report, format_discord_alert
 from pubg_ai.worker_run_history import (
+    WORKER_RUN_STATUSES,
     WorkerRunHistoryError,
     WorkerRunPage,
     WorkerRunRecord,
@@ -196,7 +197,7 @@ def format_worker_run_history_result(
 ) -> str:
     lines = [
         "PUBG AI worker run history",
-        f"- filters: worker={page.worker_name or 'all'}",
+        f"- filters: worker={page.worker_name or 'all'} status={page.status}",
         f"- shown/total: {len(page.records)}/{page.total} offset={page.offset} limit={page.limit}",
     ]
     if not page.records:
@@ -1178,12 +1179,14 @@ def create_discord_bot(
             parsed = _parse_worker_run_filters(filters)
         except ValueError as exc:
             await ctx.reply(
-                f"Usage: `{command_prefix}pubg-worker-runs [collector|post_processing|all] [limit] offset=0`"
+                f"Usage: `{command_prefix}pubg-worker-runs [collector|post_processing|all] "
+                "status=succeeded|failed|all [limit] offset=0`"
                 f"\nError: {exc}",
                 mention_author=False,
             )
             return
         worker_name = str(parsed["worker_name"]) if parsed["worker_name"] is not None else None
+        status = str(parsed["status"])
         limit = int(parsed["limit"])
         offset = int(parsed["offset"])
 
@@ -1193,6 +1196,7 @@ def create_discord_bot(
                 page = get_worker_run_page(
                     connection,
                     worker_name=worker_name,
+                    status=status,
                     limit=limit,
                     offset=offset,
                 )
@@ -1346,6 +1350,7 @@ def _worker_run_history_command_for_page(page: WorkerRunPage, *, offset: int, co
     parts = [
         f"{command_prefix}pubg-worker-runs",
         _worker_run_filter_arg("worker", page.worker_name or "all"),
+        _worker_run_filter_arg("status", page.status),
         _worker_run_filter_arg("limit", str(page.limit)),
         _worker_run_filter_arg("offset", str(max(0, offset))),
     ]
@@ -1637,7 +1642,7 @@ def _alert_history_record_state(record: AlertHistoryRecord) -> str:
 
 
 def _parse_worker_run_filters(raw: str | None) -> dict[str, str | int | None]:
-    filters: dict[str, str | int | None] = {"worker_name": None, "limit": 5, "offset": 0}
+    filters: dict[str, str | int | None] = {"worker_name": None, "status": "all", "limit": 5, "offset": 0}
     if not raw or not raw.strip():
         return filters
 
@@ -1659,6 +1664,8 @@ def _parse_worker_run_filters(raw: str | None) -> dict[str, str | int | None]:
         lowered = normalized_token.lower()
         if _is_int_token(lowered):
             filters["limit"] = _worker_run_limit(lowered)
+        elif lowered in WORKER_RUN_STATUSES:
+            filters["status"] = lowered
         else:
             filters["worker_name"] = _worker_run_name(lowered)
 
@@ -1668,6 +1675,8 @@ def _parse_worker_run_filters(raw: str | None) -> dict[str, str | int | None]:
 def _apply_worker_run_filter(filters: dict[str, str | int | None], key: str, value: str) -> None:
     if key in {"worker", "worker_name", "name"}:
         filters["worker_name"] = _worker_run_name(value)
+    elif key in {"status", "state"}:
+        filters["status"] = _worker_run_status(value)
     elif key == "limit":
         filters["limit"] = _worker_run_limit(value)
     elif key == "offset":
@@ -1698,6 +1707,13 @@ def _worker_run_limit(value: str | int) -> int:
     if parsed is None:
         raise ValueError(f"invalid limit: {value}")
     return max(1, min(parsed, 10))
+
+
+def _worker_run_status(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized not in WORKER_RUN_STATUSES:
+        raise ValueError(f"invalid status: {value}")
+    return normalized
 
 
 def _worker_run_offset(value: str | int) -> int:
