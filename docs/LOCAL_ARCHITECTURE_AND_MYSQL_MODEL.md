@@ -404,7 +404,9 @@ Completed slices:
 60. The local manager worker-run API and table controls support worker/status filters plus paged navigation.
 61. The local manager worker-run table can open a detail panel for one run's summary metrics and full stored errors.
 62. The local manager worker-run detail panel supports copyable `worker_run_id` links and URL-parameter auto-open.
+63. The local manager current-alert, alert-history, and alert-detail views can jump from worker failure alerts to the
+    related worker-run detail panel.
 
 Next slice:
 
-1. Add worker-run detail controls to jump from current storage/worker alerts to the related failed run when available.
+1. Include local worker-run detail links in Discord worker failure alert messages when `local_web_base_url` is set.

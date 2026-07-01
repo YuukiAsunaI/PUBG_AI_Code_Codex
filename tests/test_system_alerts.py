@@ -69,6 +69,9 @@ class SystemAlertsTests(unittest.TestCase):
         self.assertIn("[PUBG AI Alert] post_processing worker failed", message)
         self.assertIn("drive missing", message)
         self.assertIn("run_id=9", message)
+        self.assertEqual(alert.source_id, 9)
+        self.assertEqual(alert.metadata["run_id"], 9)
+        self.assertEqual(alert.metadata["worker_name"], "post_processing")
 
     def test_empty_alert_report_message(self) -> None:
         self.assertEqual(format_alert_report([]), "PUBG AI alerts: no active alerts.")

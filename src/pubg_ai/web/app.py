@@ -2365,6 +2365,7 @@ _INDEX_HTML = """<!doctype html>
             <td>${escapeHtml(alert.message || "")}</td>
             <td>
               <div class="actions">
+                ${alertWorkerRunButton(alert)}
                 <button type="button" data-alert-action="acknowledge" data-alert-id="${attr(alert.id)}">Acknowledge</button>
                 <button class="secondary" type="button" data-alert-action="snooze" data-alert-id="${attr(alert.id)}">Snooze 1h</button>
               </div>
@@ -2425,6 +2426,7 @@ _INDEX_HTML = """<!doctype html>
             <td>${escapeHtml(alert.message || "")}</td>
             <td>
               <div class="actions">
+                ${alertWorkerRunButton(alert)}
                 <button class="secondary" type="button" data-alert-detail-id="${attr(alert.id)}">Details</button>
                 <button type="button" data-alert-note-type="note" data-alert-id="${attr(alert.id)}">Note</button>
                 <button class="secondary" type="button" data-alert-note-type="resolution" data-alert-id="${attr(alert.id)}">Resolution</button>
@@ -2504,6 +2506,34 @@ _INDEX_HTML = """<!doctype html>
       return `${count} ${type}${note}`;
     }
 
+    function alertWorkerRunButton(alert) {
+      const runId = alertWorkerRunId(alert);
+      return runId
+        ? `<button class="secondary" type="button" data-worker-run-from-alert="${attr(runId)}">Worker run</button>`
+        : "";
+    }
+
+    function alertWorkerRunId(alert) {
+      const metadata = alert?.metadata || {};
+      const candidates = [
+        metadata.run_id,
+        metadata.worker_run_id,
+        alert?.source_id,
+      ];
+      for (const candidate of candidates) {
+        const parsed = positiveIntegerText(candidate);
+        if (parsed) return parsed;
+      }
+      const keyMatch = String(alert?.alert_key || "").match(/^worker:(\\d+)$/);
+      return keyMatch ? keyMatch[1] : "";
+    }
+
+    function positiveIntegerText(value) {
+      const text = String(value ?? "").trim();
+      if (!/^\\d+$/.test(text)) return "";
+      return Number(text) > 0 ? text : "";
+    }
+
     async function loadAlertHistoryDetail(alert, noteType = activeAlertHistoryNoteType, focusEditor = false) {
       activeAlertHistoryDetailId = alert.id;
       activeAlertHistoryDetailAlert = alert;
@@ -2560,6 +2590,7 @@ _INDEX_HTML = """<!doctype html>
         <div class="recommendation-line">
           <strong>Alert #${escapeHtml(alert.id)} detail</strong>
           <div class="actions">
+            ${alertWorkerRunButton(alert)}
             <button type="button" data-alert-detail-action="acknowledge" data-alert-id="${attr(alert.id)}">Acknowledge</button>
             <button class="secondary" type="button" data-alert-detail-action="snooze" data-alert-id="${attr(alert.id)}">Snooze 1h</button>
           </div>
@@ -4539,6 +4570,20 @@ _INDEX_HTML = """<!doctype html>
     });
 
     alertsBody.addEventListener("click", async (event) => {
+      const workerRunButton = event.target instanceof Element
+        ? event.target.closest("button[data-worker-run-from-alert]")
+        : null;
+      if (workerRunButton) {
+        try {
+          await loadWorkerRunDetail(workerRunButton.dataset.workerRunFromAlert || "", { scroll: true });
+          banner.textContent = "Worker run detail loaded from alert";
+        } catch (error) {
+          workerRunsStatus.textContent = `Error: ${error.message}`;
+          banner.textContent = `Error: ${error.message}`;
+        }
+        return;
+      }
+
       const button = event.target instanceof Element
         ? event.target.closest("button[data-alert-action]")
         : null;
@@ -4585,6 +4630,21 @@ _INDEX_HTML = """<!doctype html>
     }
 
     alertHistoryBody.addEventListener("click", async (event) => {
+      const workerRunButton = event.target instanceof Element
+        ? event.target.closest("button[data-worker-run-from-alert]")
+        : null;
+      if (workerRunButton) {
+        try {
+          await loadWorkerRunDetail(workerRunButton.dataset.workerRunFromAlert || "", { scroll: true });
+          banner.textContent = "Worker run detail loaded from alert history";
+        } catch (error) {
+          workerRunsStatus.textContent = `Error: ${error.message}`;
+          alertHistoryStatus.textContent = `Error: ${error.message}`;
+          banner.textContent = `Error: ${error.message}`;
+        }
+        return;
+      }
+
       const detailButton = event.target instanceof Element
         ? event.target.closest("button[data-alert-detail-id]")
         : null;
@@ -4637,6 +4697,21 @@ _INDEX_HTML = """<!doctype html>
     });
 
     alertHistoryDetail.addEventListener("click", async (event) => {
+      const workerRunButton = event.target instanceof Element
+        ? event.target.closest("button[data-worker-run-from-alert]")
+        : null;
+      if (workerRunButton) {
+        try {
+          await loadWorkerRunDetail(workerRunButton.dataset.workerRunFromAlert || "", { scroll: true });
+          banner.textContent = "Worker run detail loaded from alert";
+        } catch (error) {
+          workerRunsStatus.textContent = `Error: ${error.message}`;
+          alertHistoryStatus.textContent = `Error: ${error.message}`;
+          banner.textContent = `Error: ${error.message}`;
+        }
+        return;
+      }
+
       const button = event.target instanceof Element
         ? event.target.closest("button[data-alert-detail-action]")
         : null;
