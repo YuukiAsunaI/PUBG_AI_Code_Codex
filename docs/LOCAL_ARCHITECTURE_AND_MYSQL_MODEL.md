@@ -401,7 +401,8 @@ Completed slices:
 57. Discord worker-run history rows include copyable `pubg-worker-run run_id` detail commands.
 58. Discord worker-run history supports `limit`/`offset` pagination with copyable previous/next commands.
 59. Worker-run history storage and Discord output support `status=succeeded|failed|all` filtering.
+60. The local manager worker-run API and table controls support worker/status filters plus paged navigation.
 
 Next slice:
 
-1. Add worker-run `status=succeeded|failed|all` filtering to the local manager API and table controls.
+1. Add a local manager worker-run detail panel that expands summary metrics and full stored errors.

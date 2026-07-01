@@ -83,6 +83,11 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn("/post-processing/worker/start", body)
         self.assertIn("/post-processing/worker/status", body)
         self.assertIn('id="workerRunsBody"', body)
+        self.assertIn('id="workerRunFilterForm"', body)
+        self.assertIn('id="workerRunsStatus"', body)
+        self.assertIn('id="workerRunsPrev"', body)
+        self.assertIn('id="workerRunsNext"', body)
+        self.assertIn('name="status"', body)
         self.assertIn("/workers/runs", body)
         self.assertIn("loadWorkerRuns", body)
         self.assertIn('id="discordScopeForm"', body)
@@ -213,13 +218,24 @@ class WebSettingsTests(unittest.TestCase):
         connection = FakeWorkerRunConnection()
         with patch("pubg_ai.web.app.connect_mysql", return_value=connection):
             client = TestClient(create_app())
-            response = client.get("/workers/runs?worker_name=collector&limit=5")
+            response = client.get("/workers/runs?worker_name=collector&status=succeeded&limit=5&offset=10")
 
         self.assertEqual(response.status_code, 200)
-        runs = response.json()["runs"]
+        payload = response.json()
+        page = payload["worker_run_page"]
+        runs = payload["runs"]
+        self.assertEqual(page["worker_name"], "collector")
+        self.assertEqual(page["status"], "succeeded")
+        self.assertEqual(page["limit"], 5)
+        self.assertEqual(page["offset"], 10)
+        self.assertEqual(page["total"], 1)
         self.assertEqual(len(runs), 1)
         self.assertEqual(runs[0]["worker_name"], "collector")
         self.assertEqual(runs[0]["summary"]["collection"]["queued_match_jobs"], 2)
+        executed_sql = "\n".join(query for query, _ in connection.cursor_obj.executed)
+        self.assertIn("worker_name = %s", executed_sql)
+        self.assertIn("status = %s", executed_sql)
+        self.assertIn("LIMIT %s OFFSET %s", executed_sql)
         self.assertTrue(connection.closed)
 
     def test_alert_settings_endpoint_updates_local_settings_file(self) -> None:
@@ -486,6 +502,8 @@ class FakeWorkerRunCursor:
 
     def fetchone(self) -> dict[str, object]:
         if "COUNT(*) AS total" in self.query:
+            if "FROM worker_run_history" in self.query:
+                return {"total": len(self.rows) if self.rows is not None else 1}
             return {"total": len(self.alert_rows)}
         if "FROM system_alert_notes" in self.query and "FROM system_alert_history" not in self.query:
             return self.note_rows[0] if self.note_rows else {}

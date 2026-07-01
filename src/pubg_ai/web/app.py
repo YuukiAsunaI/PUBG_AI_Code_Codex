@@ -54,7 +54,7 @@ from pubg_ai.telemetry_item_processor import TelemetryItemProcessor
 from pubg_ai.telemetry_job_processor import TelemetryJobProcessor
 from pubg_ai.telemetry_movement_processor import TelemetryMovementProcessor
 from pubg_ai.system_alerts import collect_system_alerts
-from pubg_ai.worker_run_history import WorkerRunHistoryError, list_worker_runs
+from pubg_ai.worker_run_history import WorkerRunHistoryError, get_worker_run_page
 
 
 class RegisterPlayerRequest(BaseModel):
@@ -477,15 +477,26 @@ def create_app() -> Any:
         return {"worker": post_processing_worker.stop().to_record()}
 
     @app.get("/workers/runs")
-    def worker_runs(worker_name: str | None = None, limit: int = 50) -> dict[str, Any]:
+    def worker_runs(
+        worker_name: str | None = None,
+        status: str = "all",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
         connection = connect_mysql(current_config().database)
         try:
-            runs = list_worker_runs(connection, worker_name=worker_name, limit=limit)
+            page = get_worker_run_page(
+                connection,
+                worker_name=worker_name,
+                status=status,
+                limit=limit,
+                offset=offset,
+            )
         except WorkerRunHistoryError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         finally:
             connection.close()
-        return {"runs": [run.to_record() for run in runs]}
+        return {"worker_run_page": page.to_record(), "runs": [run.to_record() for run in page.records]}
 
     @app.get("/discord/permissions")
     def discord_permissions() -> dict[str, Any]:
@@ -1239,6 +1250,10 @@ _INDEX_HTML = """<!doctype html>
     .alert-history-filter {
       grid-template-columns: 110px 130px 110px 90px 145px minmax(160px, 1fr) auto;
     }
+    .worker-run-filter {
+      grid-template-columns: 130px 120px 90px auto;
+      margin-bottom: 10px;
+    }
     label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
     input, select, textarea {
       width: 100%;
@@ -1398,6 +1413,7 @@ _INDEX_HTML = """<!doctype html>
       .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       form { grid-template-columns: 1fr; }
       .alert-history-filter { grid-template-columns: 1fr; }
+      .worker-run-filter { grid-template-columns: 1fr; }
       .player-controls { grid-template-columns: 1fr; }
       .timeline-range { grid-template-columns: 1fr; }
       .replay-detail-layout { grid-template-columns: 1fr; }
@@ -1878,9 +1894,32 @@ _INDEX_HTML = """<!doctype html>
     </section>
     <section>
       <h2>Worker Run History</h2>
+      <form id="workerRunFilterForm" class="worker-run-filter">
+        <label>Worker
+          <select name="worker_name">
+            <option value="all">all</option>
+            <option value="collector">collector</option>
+            <option value="post_processing">post_processing</option>
+          </select>
+        </label>
+        <label>Status
+          <select name="status">
+            <option value="all">all</option>
+            <option value="succeeded">succeeded</option>
+            <option value="failed">failed</option>
+          </select>
+        </label>
+        <label>Limit
+          <input name="limit" type="number" min="1" max="200" value="50">
+        </label>
+        <button type="submit">Apply</button>
+      </form>
       <div class="actions" style="margin-bottom: 10px;">
         <button class="secondary" type="button" onclick="loadWorkerRuns()">새로고침</button>
+        <button class="secondary" type="button" id="workerRunsPrev">Previous</button>
+        <button class="secondary" type="button" id="workerRunsNext">Next</button>
       </div>
+      <div class="status" id="workerRunsStatus" style="margin-bottom: 8px;">Waiting</div>
       <table>
         <thead>
           <tr>
@@ -2025,7 +2064,11 @@ _INDEX_HTML = """<!doctype html>
     const rankingBody = document.querySelector("#rankingBody");
     const jobsBody = document.querySelector("#jobsBody");
     const telemetryJobsBody = document.querySelector("#telemetryJobsBody");
+    const workerRunFilterForm = document.querySelector("#workerRunFilterForm");
     const workerRunsBody = document.querySelector("#workerRunsBody");
+    const workerRunsStatus = document.querySelector("#workerRunsStatus");
+    const workerRunsPrev = document.querySelector("#workerRunsPrev");
+    const workerRunsNext = document.querySelector("#workerRunsNext");
     const combatStatus = document.querySelector("#combatStatus");
     const itemStatus = document.querySelector("#itemStatus");
     const movementStatus = document.querySelector("#movementStatus");
@@ -2107,6 +2150,15 @@ _INDEX_HTML = """<!doctype html>
       total: 0,
       sort: "newest",
       search: "",
+      has_previous: false,
+      has_next: false,
+    };
+    let workerRunPage = {
+      total: 0,
+      limit: 50,
+      offset: 0,
+      worker_name: null,
+      status: "all",
       has_previous: false,
       has_next: false,
     };
@@ -3037,12 +3089,63 @@ _INDEX_HTML = """<!doctype html>
       `).join("");
     }
 
-    async function loadWorkerRuns() {
+    async function loadWorkerRuns(options = {}) {
       try {
-        const payload = await fetch("/workers/runs?limit=50").then((r) => r.json());
-        const runs = payload.runs || [];
-        workerRunsBody.innerHTML = runs.length
-          ? runs.map((run) => `
+        const form = new FormData(workerRunFilterForm);
+        const selectedWorker = options.worker_name ?? String(form.get("worker_name") || workerRunPage.worker_name || "all");
+        const selectedStatus = options.status ?? String(form.get("status") || workerRunPage.status || "all");
+        const limit = Number(options.limit || form.get("limit") || workerRunPage.limit || 50);
+        const offset = Math.max(0, Number(options.offset ?? workerRunPage.offset ?? 0));
+        const params = new URLSearchParams({
+          worker_name: selectedWorker === "all" ? "" : selectedWorker,
+          status: selectedStatus,
+          limit: String(limit),
+          offset: String(offset),
+        });
+        const payload = await fetch(`/workers/runs?${params.toString()}`).then((r) => r.json());
+        if (payload.detail) throw new Error(payload.detail);
+        const page = payload.worker_run_page || {
+          records: payload.runs || [],
+          total: (payload.runs || []).length,
+          limit,
+          offset,
+          worker_name: selectedWorker === "all" ? null : selectedWorker,
+          status: selectedStatus,
+        };
+        renderWorkerRuns(page.records || payload.runs || [], page, true);
+      } catch (error) {
+        workerRunsStatus.textContent = `Error: ${error.message}`;
+        workerRunsBody.innerHTML = `<tr><td colspan="5">Error: ${escapeHtml(error.message)}</td></tr>`;
+      }
+    }
+
+    function renderWorkerRuns(runs, page = {}, syncControls = false) {
+      workerRunPage = {
+        ...workerRunPage,
+        ...page,
+        limit: Number(page.limit || workerRunPage.limit || 50),
+        offset: Number(page.offset ?? workerRunPage.offset ?? 0),
+        total: Number(page.total ?? workerRunPage.total ?? runs.length),
+        status: String(page.status || workerRunPage.status || "all"),
+        has_previous: Boolean(page.has_previous),
+        has_next: Boolean(page.has_next),
+      };
+      if (syncControls) {
+        workerRunFilterForm.elements.worker_name.value = workerRunPage.worker_name || "all";
+        workerRunFilterForm.elements.status.value = workerRunPage.status || "all";
+        workerRunFilterForm.elements.limit.value = String(workerRunPage.limit || 50);
+      }
+      const start = runs.length ? workerRunPage.offset + 1 : 0;
+      const end = runs.length ? workerRunPage.offset + runs.length : 0;
+      workerRunsStatus.textContent = [
+        `${start}-${end} of ${workerRunPage.total}`,
+        `worker ${workerRunPage.worker_name || "all"}`,
+        `status ${workerRunPage.status || "all"}`,
+      ].join(" / ");
+      workerRunsPrev.disabled = !workerRunPage.has_previous;
+      workerRunsNext.disabled = !workerRunPage.has_next;
+      workerRunsBody.innerHTML = runs.length
+        ? runs.map((run) => `
             <tr>
               <td>${escapeHtml(run.worker_name || "")}</td>
               <td>${escapeHtml(run.status || "")}${run.error_count ? ` (${run.error_count})` : ""}</td>
@@ -3051,10 +3154,7 @@ _INDEX_HTML = """<!doctype html>
               <td>${workerRunSummary(run)}</td>
             </tr>
           `).join("")
-          : `<tr><td colspan="5">No worker runs yet</td></tr>`;
-      } catch (error) {
-        workerRunsBody.innerHTML = `<tr><td colspan="5">Error: ${escapeHtml(error.message)}</td></tr>`;
-      }
+        : `<tr><td colspan="5">No worker runs yet</td></tr>`;
     }
 
     function workerRunSummary(run) {
@@ -4428,6 +4528,39 @@ _INDEX_HTML = """<!doctype html>
         });
       } catch (error) {
         alertHistoryStatus.textContent = `Error: ${error.message}`;
+        banner.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    workerRunFilterForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        await loadWorkerRuns({ offset: 0 });
+        banner.textContent = "Worker run history loaded";
+      } catch (error) {
+        workerRunsStatus.textContent = `Error: ${error.message}`;
+        banner.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    workerRunsPrev.addEventListener("click", async () => {
+      try {
+        await loadWorkerRuns({
+          offset: Math.max(0, workerRunPage.offset - workerRunPage.limit),
+        });
+      } catch (error) {
+        workerRunsStatus.textContent = `Error: ${error.message}`;
+        banner.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    workerRunsNext.addEventListener("click", async () => {
+      try {
+        await loadWorkerRuns({
+          offset: workerRunPage.offset + workerRunPage.limit,
+        });
+      } catch (error) {
+        workerRunsStatus.textContent = `Error: ${error.message}`;
         banner.textContent = `Error: ${error.message}`;
       }
     });

@@ -363,8 +363,9 @@ The local manager can start or stop the in-process automatic collector and post-
 local web server stops; use the CLI `run-collector` and `run-post-processing` commands for separate long-running
 worker processes. Both worker entry points store recent cycle summaries in `worker_run_history`; the local manager
 shows those rows in `Worker Run History`, and admins can query them with `pubg-worker-runs`, so storage/API/parser
-failures remain visible after the in-memory status
-changes. The same page stores storage/worker alert records in `system_alert_history`, shows current unsuppressed
+failures remain visible after the in-memory status changes. The local manager can filter those worker rows by worker
+name and succeeded/failed status and page through older runs. The same page stores storage/worker alert records in
+`system_alert_history`, shows current unsuppressed
 alerts separately from recent history, lets the admin acknowledge or temporarily hide noisy alerts, and can filter or
 page history by source/status/severity, search title/message text, and sort it by newest, oldest, or severity-first
 when many old alerts have accumulated. Quick presets jump directly to current errors, worker failures, storage

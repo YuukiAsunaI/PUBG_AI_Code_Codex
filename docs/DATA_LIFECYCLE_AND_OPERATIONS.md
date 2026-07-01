@@ -69,6 +69,8 @@ Implemented behavior:
 - `POST /alerts/history/{alert_id}/notes` stores a `note` or `resolution` comment for one alert.
 - `POST /alerts/history/{alert_id}/acknowledge` marks a persisted alert as acknowledged.
 - `POST /alerts/history/{alert_id}/snooze` hides a persisted alert until the requested KST expiry, capped at 30 days.
+- `GET /workers/runs?worker_name=collector&status=failed&limit=50&offset=0` returns paged worker-run history for the
+  local manager, including total count and previous/next state for worker/status filters.
 - The current-alert and alert-history tables show severity/state badges so admins can scan alert lists before opening
   a detail row. Quick preset buttons set common alert-history filters for current errors, worker failures, storage
   pressure, and the full history.
