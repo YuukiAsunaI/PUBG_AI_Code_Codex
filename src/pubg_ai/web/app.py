@@ -54,7 +54,7 @@ from pubg_ai.telemetry_item_processor import TelemetryItemProcessor
 from pubg_ai.telemetry_job_processor import TelemetryJobProcessor
 from pubg_ai.telemetry_movement_processor import TelemetryMovementProcessor
 from pubg_ai.system_alerts import collect_system_alerts
-from pubg_ai.worker_run_history import WorkerRunHistoryError, get_worker_run_page
+from pubg_ai.worker_run_history import WorkerRunHistoryError, get_worker_run, get_worker_run_page
 
 
 class RegisterPlayerRequest(BaseModel):
@@ -497,6 +497,17 @@ def create_app() -> Any:
         finally:
             connection.close()
         return {"worker_run_page": page.to_record(), "runs": [run.to_record() for run in page.records]}
+
+    @app.get("/workers/runs/{run_id}")
+    def worker_run_detail(run_id: int) -> dict[str, Any]:
+        connection = connect_mysql(current_config().database)
+        try:
+            run = get_worker_run(connection, run_id)
+        except WorkerRunHistoryError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {"run": run.to_record()}
 
     @app.get("/discord/permissions")
     def discord_permissions() -> dict[str, Any]:
@@ -1928,10 +1939,14 @@ _INDEX_HTML = """<!doctype html>
             <th>Finished</th>
             <th>Duration</th>
             <th>Summary</th>
+            <th></th>
           </tr>
         </thead>
         <tbody id="workerRunsBody"></tbody>
       </table>
+      <div class="detail-panel" id="workerRunDetail">
+        Select a worker run row.
+      </div>
     </section>
     <section>
       <h2>Combat 파싱</h2>
@@ -2069,6 +2084,7 @@ _INDEX_HTML = """<!doctype html>
     const workerRunsStatus = document.querySelector("#workerRunsStatus");
     const workerRunsPrev = document.querySelector("#workerRunsPrev");
     const workerRunsNext = document.querySelector("#workerRunsNext");
+    const workerRunDetail = document.querySelector("#workerRunDetail");
     const combatStatus = document.querySelector("#combatStatus");
     const itemStatus = document.querySelector("#itemStatus");
     const movementStatus = document.querySelector("#movementStatus");
@@ -3115,7 +3131,7 @@ _INDEX_HTML = """<!doctype html>
         renderWorkerRuns(page.records || payload.runs || [], page, true);
       } catch (error) {
         workerRunsStatus.textContent = `Error: ${error.message}`;
-        workerRunsBody.innerHTML = `<tr><td colspan="5">Error: ${escapeHtml(error.message)}</td></tr>`;
+        workerRunsBody.innerHTML = `<tr><td colspan="6">Error: ${escapeHtml(error.message)}</td></tr>`;
       }
     }
 
@@ -3152,9 +3168,10 @@ _INDEX_HTML = """<!doctype html>
               <td>${escapeHtml(run.finished_at_kst || run.created_at_kst || "")}</td>
               <td>${run.duration_seconds === null || run.duration_seconds === undefined ? "-" : `${Number(run.duration_seconds).toFixed(2)}s`}</td>
               <td>${workerRunSummary(run)}</td>
+              <td><button class="secondary" type="button" data-worker-run-detail-id="${attr(run.id)}">Detail</button></td>
             </tr>
           `).join("")
-        : `<tr><td colspan="5">No worker runs yet</td></tr>`;
+        : `<tr><td colspan="6">No worker runs yet</td></tr>`;
     }
 
     function workerRunSummary(run) {
@@ -3176,6 +3193,91 @@ _INDEX_HTML = """<!doctype html>
         `maps ${summary.map_snapshots?.generated_snapshots ?? "-"}`,
         `timelines ${summary.replay_timelines?.generated_timelines ?? "-"}`,
       ].join(" / "));
+    }
+
+    async function loadWorkerRunDetail(runId) {
+      workerRunDetail.innerHTML = `<div class="status">Loading worker run #${escapeHtml(runId)} detail...</div>`;
+      const payload = await fetch(`/workers/runs/${encodeURIComponent(runId)}`).then((r) => r.json());
+      if (payload.detail) throw new Error(payload.detail);
+      if (!payload.run) throw new Error("worker run was not returned");
+      renderWorkerRunDetail(payload.run);
+    }
+
+    function renderWorkerRunDetail(run) {
+      const metrics = workerRunSummaryMetrics(run.summary || {});
+      const errors = workerRunSummaryErrors(run);
+      const metricRows = metrics.length
+        ? metrics.map((metric) => `
+          <tr>
+            <th>${escapeHtml(metric.key)}</th>
+            <td>${escapeHtml(metric.value)}</td>
+          </tr>
+        `).join("")
+        : `<tr><td colspan="2">No summary metrics</td></tr>`;
+      const errorRows = errors.length
+        ? errors.map((error, index) => `
+          <tr>
+            <th>${index + 1}</th>
+            <td><pre style="white-space: pre-wrap; margin: 0;">${escapeHtml(error)}</pre></td>
+          </tr>
+        `).join("")
+        : `<tr><td colspan="2">No stored errors</td></tr>`;
+      workerRunDetail.innerHTML = `
+        <div class="recommendation-line">
+          <strong>Worker Run #${escapeHtml(run.id)} detail</strong>
+          <span class="status">${escapeHtml(run.worker_name || "")}</span>
+        </div>
+        <div class="grid" style="margin-top: 10px;">
+          ${cell("Worker", escapeHtml(run.worker_name || ""))}
+          ${cell("Status", escapeHtml(run.status || ""))}
+          ${cell("Finished", escapeHtml(run.finished_at_kst || run.created_at_kst || ""))}
+          ${cell("Duration", run.duration_seconds === null || run.duration_seconds === undefined ? "-" : `${Number(run.duration_seconds).toFixed(2)}s`)}
+        </div>
+        <table class="detail-table">
+          <thead><tr><th>Summary metric</th><th>Value</th></tr></thead>
+          <tbody>${metricRows}</tbody>
+        </table>
+        <table class="detail-table">
+          <thead><tr><th>#</th><th>Stored error</th></tr></thead>
+          <tbody>${errorRows}</tbody>
+        </table>
+      `;
+    }
+
+    function workerRunSummaryMetrics(summary, prefix = "") {
+      if (!summary || typeof summary !== "object" || Array.isArray(summary)) return [];
+      const skippedKeys = new Set(["errors"]);
+      return Object.entries(summary).flatMap(([key, value]) => {
+        if (skippedKeys.has(key)) return [];
+        const metricKey = prefix ? `${prefix}.${key}` : key;
+        if (value && typeof value === "object" && !Array.isArray(value)) {
+          return workerRunSummaryMetrics(value, metricKey);
+        }
+        if (Array.isArray(value)) {
+          return [{ key: metricKey, value: `${value.length} items` }];
+        }
+        return [{ key: metricKey, value: formatWorkerRunMetricValue(value) }];
+      });
+    }
+
+    function workerRunSummaryErrors(run) {
+      const summary = run.summary || {};
+      const rawErrors = summary.errors;
+      const errors = Array.isArray(rawErrors)
+        ? rawErrors.map((item) => formatWorkerRunMetricValue(item)).filter(Boolean)
+        : rawErrors
+          ? [formatWorkerRunMetricValue(rawErrors)]
+          : [];
+      if (run.last_error && !errors.includes(String(run.last_error))) {
+        errors.push(String(run.last_error));
+      }
+      return errors;
+    }
+
+    function formatWorkerRunMetricValue(value) {
+      if (value === null || value === undefined) return "-";
+      if (typeof value === "object") return JSON.stringify(value);
+      return String(value);
     }
 
     async function loadReplayArtifacts() {
@@ -4561,6 +4663,21 @@ _INDEX_HTML = """<!doctype html>
         });
       } catch (error) {
         workerRunsStatus.textContent = `Error: ${error.message}`;
+        banner.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    workerRunsBody.addEventListener("click", async (event) => {
+      const detailButton = event.target instanceof Element
+        ? event.target.closest("button[data-worker-run-detail-id]")
+        : null;
+      if (!detailButton) return;
+      try {
+        await loadWorkerRunDetail(detailButton.dataset.workerRunDetailId || "");
+        banner.textContent = "Worker run detail loaded";
+      } catch (error) {
+        workerRunsStatus.textContent = `Error: ${error.message}`;
+        workerRunDetail.innerHTML = `<div class="status">Error: ${escapeHtml(error.message)}</div>`;
         banner.textContent = `Error: ${error.message}`;
       }
     });

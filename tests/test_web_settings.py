@@ -87,9 +87,16 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn('id="workerRunsStatus"', body)
         self.assertIn('id="workerRunsPrev"', body)
         self.assertIn('id="workerRunsNext"', body)
+        self.assertIn('id="workerRunDetail"', body)
+        self.assertIn("data-worker-run-detail-id", body)
         self.assertIn('name="status"', body)
         self.assertIn("/workers/runs", body)
+        self.assertIn("/workers/runs/${encodeURIComponent(runId)}", body)
         self.assertIn("loadWorkerRuns", body)
+        self.assertIn("loadWorkerRunDetail", body)
+        self.assertIn("renderWorkerRunDetail", body)
+        self.assertIn("Summary metric", body)
+        self.assertIn("Stored error", body)
         self.assertIn('id="discordScopeForm"', body)
         self.assertIn('id="publicProfileDefaultForm"', body)
         self.assertIn('id="discordScopesBody"', body)
@@ -236,6 +243,43 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn("worker_name = %s", executed_sql)
         self.assertIn("status = %s", executed_sql)
         self.assertIn("LIMIT %s OFFSET %s", executed_sql)
+        self.assertTrue(connection.closed)
+
+    def test_worker_run_detail_endpoint_returns_stored_summary_and_errors(self) -> None:
+        connection = FakeWorkerRunConnection(
+            rows=[
+                {
+                    "id": 7,
+                    "worker_name": "post_processing",
+                    "status": "failed",
+                    "started_at_kst": "2026-06-30T11:00:00+09:00",
+                    "finished_at_kst": "2026-06-30T11:00:05+09:00",
+                    "duration_seconds": 5.2,
+                    "error_count": 2,
+                    "last_error": "second parser error",
+                    "summary_json": json.dumps(
+                        {
+                            "errors": ["first parser error", "second parser error"],
+                            "combat": {"parsed_payloads": 3, "failed_payloads": 1},
+                        }
+                    ),
+                    "created_at_kst": "2026-06-30T11:00:05+09:00",
+                }
+            ]
+        )
+        with patch("pubg_ai.web.app.connect_mysql", return_value=connection):
+            client = TestClient(create_app())
+            response = client.get("/workers/runs/7")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["run"]
+        self.assertEqual(payload["id"], 7)
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["summary"]["combat"]["parsed_payloads"], 3)
+        self.assertEqual(payload["summary"]["errors"][1], "second parser error")
+        executed_sql = "\n".join(query for query, _ in connection.cursor_obj.executed)
+        self.assertIn("FROM worker_run_history", executed_sql)
+        self.assertIn("WHERE id = %s", executed_sql)
         self.assertTrue(connection.closed)
 
     def test_alert_settings_endpoint_updates_local_settings_file(self) -> None:
@@ -509,6 +553,16 @@ class FakeWorkerRunCursor:
             return self.note_rows[0] if self.note_rows else {}
         if "FROM system_alert_history" in self.query:
             return self.alert_rows[0] if self.alert_rows else {}
+        if "FROM worker_run_history" in self.query and "WHERE id = %s" in self.query:
+            rows = self.fetchall()
+            try:
+                target_id = int(self.params[0])
+            except (TypeError, ValueError, IndexError):
+                return {}
+            for row in rows:
+                if int(row.get("id") or 0) == target_id:
+                    return row
+            return {}
         return {"latest_id": self.latest_id}
 
 
