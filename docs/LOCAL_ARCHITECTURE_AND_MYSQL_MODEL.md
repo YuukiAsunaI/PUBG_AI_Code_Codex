@@ -406,7 +406,9 @@ Completed slices:
 62. The local manager worker-run detail panel supports copyable `worker_run_id` links and URL-parameter auto-open.
 63. The local manager current-alert, alert-history, and alert-detail views can jump from worker failure alerts to the
     related worker-run detail panel.
+64. Automatic Discord worker failure alert messages include local `worker_run_id` detail links when
+    `local_web_base_url` is configured.
 
 Next slice:
 
-1. Include local worker-run detail links in Discord worker failure alert messages when `local_web_base_url` is set.
+1. Include local worker-run detail links in Discord `pubg-worker-runs` history rows when `local_web_base_url` is set.

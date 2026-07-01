@@ -554,7 +554,10 @@ def create_discord_bot(
 
                 sent_alert = False
                 for channel_id in alert_settings.discord_channel_ids or []:
-                    sent_alert = await send_alert_to_channel(channel_id, format_discord_alert(alert)) or sent_alert
+                    sent_alert = await send_alert_to_channel(
+                        channel_id,
+                        format_discord_alert(alert, detail_base_url=config.app.local_web_base_url),
+                    ) or sent_alert
 
                 if sent_alert:
                     mark_alert_notified(connection, alert.id)

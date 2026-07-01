@@ -84,7 +84,8 @@ Implemented behavior:
   history without reading the raw JSON API response, shows a state badge for active/acknowledged/snoozed/resolved, and
   can acknowledge, snooze, or add `note` and `resolution` comments.
 - The Discord bot sends active storage alerts once per bot process and sends newly persisted worker failures from
-  `worker_run_history`; acknowledged and currently snoozed alert records are skipped.
+  `worker_run_history`; acknowledged and currently snoozed alert records are skipped. When `PUBG_LOCAL_WEB_BASE_URL`
+  is set, automatic worker failure messages include a local `worker_run_id` detail link.
 - The admin-only `pubg-alerts` Discord command returns the current alert report on demand, including alert IDs.
 - The admin-only `pubg-alert-ack alert_id` and `pubg-alert-snooze alert_id [minutes]` commands update the same
   persisted alert history from Discord.

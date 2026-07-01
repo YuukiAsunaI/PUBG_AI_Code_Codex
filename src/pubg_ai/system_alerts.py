@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlencode
 
 from pubg_ai.config import RuntimeConfig
 from pubg_ai.local_settings import AlertSettings
@@ -141,7 +142,7 @@ def worker_run_alert(run: WorkerRunRecord) -> SystemAlert:
     )
 
 
-def format_discord_alert(alert: SystemAlert) -> str:
+def format_discord_alert(alert: SystemAlert, *, detail_base_url: str | None = None) -> str:
     lines = [f"[PUBG AI Alert] {alert.title}"]
     alert_id = getattr(alert, "id", None)
     if alert_id is not None:
@@ -152,6 +153,9 @@ def format_discord_alert(alert: SystemAlert) -> str:
             f"- {alert.message}",
         ]
     )
+    detail_url = worker_run_detail_url(alert, detail_base_url)
+    if detail_url:
+        lines.append(f"- worker_run_detail: {detail_url}")
     return "\n".join(lines)
 
 
@@ -178,6 +182,38 @@ def format_bytes(value: int) -> str:
         index += 1
     precision = 0 if index == 0 else 1
     return f"{amount:.{precision}f} {units[index]}"
+
+
+def worker_run_detail_url(alert: SystemAlert, base_url: str | None) -> str:
+    run_id = _worker_run_id(alert)
+    if not base_url or not run_id:
+        return ""
+    return f"{base_url.rstrip('/')}/?{urlencode({'worker_run_id': run_id})}"
+
+
+def _worker_run_id(alert: SystemAlert) -> str:
+    if getattr(alert, "source", None) != "worker":
+        return ""
+    metadata = getattr(alert, "metadata", None) or {}
+    for value in (
+        metadata.get("run_id") if isinstance(metadata, dict) else None,
+        metadata.get("worker_run_id") if isinstance(metadata, dict) else None,
+        getattr(alert, "source_id", None),
+    ):
+        parsed = _positive_integer_text(value)
+        if parsed:
+            return parsed
+    key = str(getattr(alert, "alert_key", "") or getattr(alert, "key", ""))
+    if key.startswith("worker:"):
+        return _positive_integer_text(key.split(":", 1)[1])
+    return ""
+
+
+def _positive_integer_text(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text.isdigit():
+        return ""
+    return text if int(text) > 0 else ""
 
 
 def _duration(value: float | None) -> str:

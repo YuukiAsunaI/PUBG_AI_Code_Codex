@@ -72,6 +72,10 @@ class SystemAlertsTests(unittest.TestCase):
         self.assertEqual(alert.source_id, 9)
         self.assertEqual(alert.metadata["run_id"], 9)
         self.assertEqual(alert.metadata["worker_name"], "post_processing")
+        self.assertNotIn("worker_run_detail", message)
+
+        linked = format_discord_alert(alert, detail_base_url="http://127.0.0.1:8000/")
+        self.assertIn("- worker_run_detail: http://127.0.0.1:8000/?worker_run_id=9", linked)
 
     def test_empty_alert_report_message(self) -> None:
         self.assertEqual(format_alert_report([]), "PUBG AI alerts: no active alerts.")
@@ -84,7 +88,7 @@ class SystemAlertsTests(unittest.TestCase):
             severity="error",
             title="collector worker failed",
             message="drive missing",
-            metadata={},
+            metadata={"run_id": 7},
             first_seen_at_kst="2026-06-30T10:00:00+09:00",
             last_seen_at_kst="2026-06-30T10:01:00+09:00",
             last_notified_at_kst=None,
@@ -95,6 +99,10 @@ class SystemAlertsTests(unittest.TestCase):
         )
 
         self.assertIn("- alert_id: 7", format_discord_alert(record))
+        self.assertIn(
+            "- worker_run_detail: http://127.0.0.1:8000/?worker_run_id=7",
+            format_discord_alert(record, detail_base_url="http://127.0.0.1:8000"),
+        )
         self.assertIn("#7 collector worker failed", format_alert_report([record]))
 
 
