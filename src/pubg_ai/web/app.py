@@ -3195,12 +3195,25 @@ _INDEX_HTML = """<!doctype html>
       ].join(" / "));
     }
 
-    async function loadWorkerRunDetail(runId) {
+    async function loadWorkerRunDetail(runId, options = {}) {
       workerRunDetail.innerHTML = `<div class="status">Loading worker run #${escapeHtml(runId)} detail...</div>`;
       const payload = await fetch(`/workers/runs/${encodeURIComponent(runId)}`).then((r) => r.json());
       if (payload.detail) throw new Error(payload.detail);
       if (!payload.run) throw new Error("worker run was not returned");
       renderWorkerRunDetail(payload.run);
+      if (options.updateUrl !== false) {
+        updateWorkerRunDetailUrl(payload.run.id);
+      }
+      if (options.scroll) {
+        workerRunDetail.scrollIntoView({ block: "start" });
+      }
+    }
+
+    async function loadInitialWorkerRunDetailFromUrl() {
+      const params = new URLSearchParams(window.location.search);
+      const runId = params.get("worker_run_id") || params.get("worker_run");
+      if (!runId) return;
+      await loadWorkerRunDetail(runId, { updateUrl: false, scroll: true });
     }
 
     function renderWorkerRunDetail(run) {
@@ -3225,8 +3238,11 @@ _INDEX_HTML = """<!doctype html>
       workerRunDetail.innerHTML = `
         <div class="recommendation-line">
           <strong>Worker Run #${escapeHtml(run.id)} detail</strong>
-          <span class="status">${escapeHtml(run.worker_name || "")}</span>
+          <div class="actions">
+            <button class="secondary" type="button" data-copy-worker-run-link="${attr(run.id)}">Copy link</button>
+          </div>
         </div>
+        <div class="status" style="margin-top: 6px;">${escapeHtml(workerRunDetailUrl(run.id))}</div>
         <div class="grid" style="margin-top: 10px;">
           ${cell("Worker", escapeHtml(run.worker_name || ""))}
           ${cell("Status", escapeHtml(run.status || ""))}
@@ -3242,6 +3258,34 @@ _INDEX_HTML = """<!doctype html>
           <tbody>${errorRows}</tbody>
         </table>
       `;
+    }
+
+    function workerRunDetailUrl(runId) {
+      const url = new URL(window.location.href);
+      url.searchParams.set("worker_run_id", runId);
+      return url.toString();
+    }
+
+    function updateWorkerRunDetailUrl(runId) {
+      window.history.replaceState({}, "", workerRunDetailUrl(runId));
+    }
+
+    async function copyWorkerRunDetailLink(runId) {
+      const url = workerRunDetailUrl(runId);
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(url);
+        return url;
+      }
+      const input = document.createElement("textarea");
+      input.value = url;
+      input.setAttribute("readonly", "readonly");
+      input.style.position = "fixed";
+      input.style.opacity = "0";
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand("copy");
+      input.remove();
+      return url;
     }
 
     function workerRunSummaryMetrics(summary, prefix = "") {
@@ -4682,6 +4726,19 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
+    workerRunDetail.addEventListener("click", async (event) => {
+      const copyButton = event.target instanceof Element
+        ? event.target.closest("button[data-copy-worker-run-link]")
+        : null;
+      if (!copyButton) return;
+      try {
+        const url = await copyWorkerRunDetailLink(copyButton.dataset.copyWorkerRunLink || "");
+        banner.textContent = `Worker run detail link copied: ${url}`;
+      } catch (error) {
+        banner.textContent = `Error: ${error.message}`;
+      }
+    });
+
     collectorSettingsForm.addEventListener("submit", async (event) => {
       try {
         await saveCollectorSettings(event);
@@ -4903,6 +4960,7 @@ _INDEX_HTML = """<!doctype html>
     drawEmptyReplayCanvas();
     Promise.all([loadStatus(), loadAlerts(), loadDiscordPermissions(), loadDiscordScopes(), loadCollectorWorkerStatus(), loadPostProcessingWorkerStatus(), loadWorkerRuns(), loadPlayers(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
       .then(() => loadInitialAlertDetailFromUrl())
+      .then(() => loadInitialWorkerRunDetailFromUrl())
       .then(() => { banner.textContent = "localhost 전용 관리 화면"; })
       .catch((error) => { banner.textContent = `오류: ${error.message}`; });
     setInterval(loadCollectorWorkerStatus, 10000);

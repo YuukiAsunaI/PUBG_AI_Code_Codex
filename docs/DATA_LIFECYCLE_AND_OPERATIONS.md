@@ -73,6 +73,8 @@ Implemented behavior:
   local manager, including total count and previous/next state for worker/status filters.
 - `GET /workers/runs/{run_id}` returns one worker cycle with the stored summary JSON and error list for the local
   manager detail panel.
+- The local manager can load `/?worker_run_id={run_id}` directly, updates the browser URL when a worker-run detail is
+  opened, and exposes a copy button for sharing that local detail link with another admin on the same machine.
 - The current-alert and alert-history tables show severity/state badges so admins can scan alert lists before opening
   a detail row. Quick preset buttons set common alert-history filters for current errors, worker failures, storage
   pressure, and the full history.
