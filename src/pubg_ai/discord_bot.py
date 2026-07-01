@@ -193,6 +193,7 @@ def format_worker_run_history_result(
     *,
     worker_name: str | None = None,
     limit: int = 5,
+    command_prefix: str = DEFAULT_DISCORD_PREFIX,
 ) -> str:
     lines = [
         "PUBG AI worker run history",
@@ -209,7 +210,8 @@ def format_worker_run_history_result(
         last_error = _discord_single_line(run.last_error or "-", 120)
         lines.append(
             f"- #{run.id} [{run.worker_name}/{run.status}] {created_at} "
-            f"duration={duration} errors={run.error_count} last_error={last_error}"
+            f"duration={duration} errors={run.error_count} last_error={last_error} "
+            f"detail: `{command_prefix}pubg-worker-run {run.id}`"
         )
     return "\n".join(lines)
 
@@ -1203,6 +1205,7 @@ def create_discord_bot(
                 runs,
                 worker_name=worker_name,
                 limit=limit,
+                command_prefix=command_prefix,
             ),
             mention_author=False,
         )

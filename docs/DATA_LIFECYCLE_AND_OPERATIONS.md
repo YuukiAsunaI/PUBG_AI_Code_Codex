@@ -89,7 +89,7 @@ Implemented behavior:
   local detail links that open the management UI with `alert_id` selected. When the query has more rows, the response
   includes copyable previous/next commands with the right `offset`.
 - The admin-only `pubg-worker-runs [collector|post_processing|all] [limit]` command lists recent worker cycles from
-  `worker_run_history` with status, duration, error count, and last error.
+  `worker_run_history` with status, duration, error count, last error, and a copyable detail command for each row.
 - The admin-only `pubg-worker-run run_id` command opens one worker cycle from Discord and shows summary metrics plus
   the full stored error list.
 

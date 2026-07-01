@@ -339,8 +339,8 @@ are stored in the same MySQL `system_alert_notes` table shown by the local manag
 presets or `source`/`state`/`severity`/`search` filters to review persisted alert history from Discord; when
 `PUBG_LOCAL_WEB_BASE_URL` is set, each row includes a local detail link. When more history rows are available, the
 response includes copyable previous/next `offset` commands. Use `pubg-worker-runs` to review recent collector and
-post-processing cycle status, duration, error count, and last error directly from Discord, then use
-`pubg-worker-run run_id` to inspect one run's summary metrics and full error list.
+post-processing cycle status, duration, error count, and last error directly from Discord; each row includes a
+copyable `pubg-worker-run run_id` detail command for inspecting one run's summary metrics and full error list.
 
 Run the local management app:
 

@@ -265,8 +265,13 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("#12 [collector/failed]", body)
         self.assertIn("duration=3.2s errors=1", body)
         self.assertIn("raw drive disconnected", body)
+        self.assertIn("detail: `!pubg-worker-run 12`", body)
         self.assertIn("#11 [post_processing/succeeded]", body)
         self.assertIn("duration=5.0s errors=0 last_error=-", body)
+        self.assertIn("detail: `!pubg-worker-run 11`", body)
+
+        custom_prefix_body = format_worker_run_history_result(runs, command_prefix="?")
+        self.assertIn("detail: `?pubg-worker-run 12`", custom_prefix_body)
 
     def test_worker_run_history_result_formats_empty_state(self) -> None:
         body = format_worker_run_history_result([], worker_name="collector", limit=3)
