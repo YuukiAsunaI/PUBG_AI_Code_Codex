@@ -30,6 +30,26 @@ class WorkerRunRecord:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class WorkerRunPage:
+    records: list[WorkerRunRecord]
+    total: int
+    limit: int
+    offset: int
+    worker_name: str | None = None
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "records": [record.to_record() for record in self.records],
+            "total": self.total,
+            "limit": self.limit,
+            "offset": self.offset,
+            "worker_name": self.worker_name,
+            "has_previous": self.offset > 0,
+            "has_next": self.offset + len(self.records) < self.total,
+        }
+
+
 def record_worker_cycle(
     connection: Any,
     *,
@@ -96,14 +116,12 @@ def list_worker_runs(
     *,
     worker_name: str | None = None,
     limit: int = 50,
+    offset: int = 0,
 ) -> list[WorkerRunRecord]:
     bounded_limit = max(1, min(int(limit), 200))
-    params: list[Any] = []
-    where = ""
-    if worker_name:
-        where = "WHERE worker_name = %s"
-        params.append(_validate_worker_name(worker_name))
-    params.append(bounded_limit)
+    bounded_offset = max(0, int(offset))
+    where, params = _worker_run_filter_clause(worker_name)
+    params.extend([bounded_limit, bounded_offset])
 
     with connection.cursor() as cursor:
         cursor.execute(
@@ -122,13 +140,58 @@ def list_worker_runs(
             FROM worker_run_history
             {where}
             ORDER BY created_at_kst DESC, id DESC
-            LIMIT %s
+            LIMIT %s OFFSET %s
             """,
             tuple(params),
         )
         rows = cursor.fetchall()
 
     return [_row_to_record(row) for row in rows]
+
+
+def count_worker_runs(
+    connection: Any,
+    *,
+    worker_name: str | None = None,
+) -> int:
+    where, params = _worker_run_filter_clause(worker_name)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT COUNT(*) AS total
+            FROM worker_run_history
+            {where}
+            """,
+            tuple(params),
+        )
+        row = cursor.fetchone()
+    return int((row or {}).get("total") or 0)
+
+
+def get_worker_run_page(
+    connection: Any,
+    *,
+    worker_name: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> WorkerRunPage:
+    bounded_limit = max(1, min(int(limit), 200))
+    bounded_offset = max(0, int(offset))
+    normalized_worker_name = _validate_worker_name(worker_name) if worker_name else None
+    records = list_worker_runs(
+        connection,
+        worker_name=normalized_worker_name,
+        limit=bounded_limit,
+        offset=bounded_offset,
+    )
+    total = count_worker_runs(connection, worker_name=normalized_worker_name)
+    return WorkerRunPage(
+        records=records,
+        total=total,
+        limit=bounded_limit,
+        offset=bounded_offset,
+        worker_name=normalized_worker_name,
+    )
 
 
 def list_failed_worker_runs(
@@ -236,6 +299,12 @@ def _validate_worker_name(value: str) -> str:
     if text not in {"collector", "post_processing"}:
         raise WorkerRunHistoryError(f"unsupported worker_name: {value!r}")
     return text
+
+
+def _worker_run_filter_clause(worker_name: str | None) -> tuple[str, list[Any]]:
+    if not worker_name:
+        return "", []
+    return "WHERE worker_name = %s", [_validate_worker_name(worker_name)]
 
 
 def _error_list(value: Any) -> list[str]:

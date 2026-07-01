@@ -35,7 +35,7 @@ from pubg_ai.player_stats import (
     PlayerWeaponStats,
 )
 from pubg_ai.replay_artifact_catalog import ReplayArtifactRecord
-from pubg_ai.worker_run_history import WorkerRunRecord
+from pubg_ai.worker_run_history import WorkerRunPage, WorkerRunRecord
 
 
 class DiscordBotFormattingTests(unittest.TestCase):
@@ -258,10 +258,13 @@ class DiscordBotFormattingTests(unittest.TestCase):
             ),
         ]
 
-        body = format_worker_run_history_result(runs, worker_name=None, limit=5)
+        page = WorkerRunPage(records=runs, total=3, limit=2, offset=0)
+
+        body = format_worker_run_history_result(page)
 
         self.assertIn("PUBG AI worker run history", body)
-        self.assertIn("worker=all limit=5", body)
+        self.assertIn("worker=all", body)
+        self.assertIn("shown/total: 2/3 offset=0 limit=2", body)
         self.assertIn("#12 [collector/failed]", body)
         self.assertIn("duration=3.2s errors=1", body)
         self.assertIn("raw drive disconnected", body)
@@ -269,15 +272,47 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("#11 [post_processing/succeeded]", body)
         self.assertIn("duration=5.0s errors=0 last_error=-", body)
         self.assertIn("detail: `!pubg-worker-run 11`", body)
+        self.assertIn("next: `!pubg-worker-runs worker=all limit=2 offset=2`", body)
+        self.assertNotIn("previous:", body)
 
-        custom_prefix_body = format_worker_run_history_result(runs, command_prefix="?")
+        custom_prefix_body = format_worker_run_history_result(page, command_prefix="?")
         self.assertIn("detail: `?pubg-worker-run 12`", custom_prefix_body)
+        self.assertIn("next: `?pubg-worker-runs worker=all limit=2 offset=2`", custom_prefix_body)
 
     def test_worker_run_history_result_formats_empty_state(self) -> None:
-        body = format_worker_run_history_result([], worker_name="collector", limit=3)
+        page = WorkerRunPage(records=[], total=0, limit=3, offset=0, worker_name="collector")
+        body = format_worker_run_history_result(page)
 
-        self.assertIn("worker=collector limit=3", body)
+        self.assertIn("worker=collector", body)
+        self.assertIn("shown/total: 0/0 offset=0 limit=3", body)
         self.assertIn("no worker runs yet", body)
+
+    def test_worker_run_history_result_formats_previous_and_next_hints(self) -> None:
+        page = WorkerRunPage(
+            records=[
+                WorkerRunRecord(
+                    id=10,
+                    worker_name="collector",
+                    status="failed",
+                    started_at_kst="2026-07-01T09:50:00+09:00",
+                    finished_at_kst="2026-07-01T09:50:02+09:00",
+                    duration_seconds=2,
+                    error_count=1,
+                    last_error="boom",
+                    summary={},
+                    created_at_kst="2026-07-01T09:50:02+09:00",
+                )
+            ],
+            total=3,
+            limit=1,
+            offset=1,
+            worker_name="collector",
+        )
+
+        body = format_worker_run_history_result(page, command_prefix="?")
+
+        self.assertIn("previous: `?pubg-worker-runs worker=collector limit=1 offset=0`", body)
+        self.assertIn("next: `?pubg-worker-runs worker=collector limit=1 offset=2`", body)
 
     def test_worker_run_detail_result_formats_summary_metrics_and_errors(self) -> None:
         run = WorkerRunRecord(
@@ -320,9 +355,10 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertEqual(filters["worker_name"], "post_processing")
         self.assertEqual(filters["limit"], 10)
 
-        keyed = _parse_worker_run_filters("worker=collector limit=4")
+        keyed = _parse_worker_run_filters("worker=collector limit=4 offset=8")
         self.assertEqual(keyed["worker_name"], "collector")
         self.assertEqual(keyed["limit"], 4)
+        self.assertEqual(keyed["offset"], 8)
 
         all_workers = _parse_worker_run_filters("all")
         self.assertIsNone(all_workers["worker_name"])

@@ -6,8 +6,10 @@ import unittest
 
 from pubg_ai.worker_run_history import (
     WorkerRunHistoryError,
+    count_worker_runs,
     get_latest_worker_run_id,
     get_worker_run,
+    get_worker_run_page,
     list_failed_worker_runs,
     list_worker_runs,
     record_worker_cycle,
@@ -67,7 +69,57 @@ class WorkerRunHistoryTests(unittest.TestCase):
         self.assertEqual(runs[0].summary["map_snapshots"]["generated_snapshots"], 4)
         query, params = connection.cursor_obj.executed[0]
         self.assertIn("WHERE worker_name = %s", query)
-        self.assertEqual(params, ("post_processing", 200))
+        self.assertIn("LIMIT %s OFFSET %s", query)
+        self.assertEqual(params, ("post_processing", 200, 0))
+
+    def test_list_worker_runs_supports_offset(self) -> None:
+        connection = FakeConnection()
+
+        list_worker_runs(connection, worker_name="collector", limit=5, offset=10)
+
+        query, params = connection.cursor_obj.executed[0]
+        self.assertIn("LIMIT %s OFFSET %s", query)
+        self.assertEqual(params, ("collector", 5, 10))
+
+    def test_count_worker_runs_supports_worker_filter(self) -> None:
+        connection = FakeConnection(total=13)
+
+        total = count_worker_runs(connection, worker_name="collector")
+
+        self.assertEqual(total, 13)
+        query, params = connection.cursor_obj.executed[0]
+        self.assertIn("SELECT COUNT(*) AS total", query)
+        self.assertIn("WHERE worker_name = %s", query)
+        self.assertEqual(params, ("collector",))
+
+    def test_get_worker_run_page_returns_records_and_total(self) -> None:
+        connection = FakeConnection(
+            rows=[
+                {
+                    "id": 7,
+                    "worker_name": "collector",
+                    "status": "succeeded",
+                    "started_at_kst": "2026-07-01T10:00:00+09:00",
+                    "finished_at_kst": "2026-07-01T10:00:02+09:00",
+                    "duration_seconds": 2,
+                    "error_count": 0,
+                    "last_error": None,
+                    "summary_json": "{}",
+                    "created_at_kst": "2026-07-01T10:00:02+09:00",
+                }
+            ],
+            total=3,
+        )
+
+        page = get_worker_run_page(connection, worker_name="collector", limit=1, offset=1)
+
+        self.assertEqual(page.total, 3)
+        self.assertEqual(page.limit, 1)
+        self.assertEqual(page.offset, 1)
+        self.assertEqual(page.worker_name, "collector")
+        self.assertEqual(page.records[0].id, 7)
+        self.assertTrue(page.to_record()["has_previous"])
+        self.assertTrue(page.to_record()["has_next"])
 
     def test_rejects_unknown_worker_name(self) -> None:
         with self.assertRaises(WorkerRunHistoryError):
@@ -142,17 +194,23 @@ class WorkerRunHistoryTests(unittest.TestCase):
 
 
 class FakeConnection:
-    def __init__(self, rows: list[dict[str, object]] | None = None, latest_id: int = 0) -> None:
-        self.cursor_obj = FakeCursor(rows or [], latest_id=latest_id)
+    def __init__(
+        self,
+        rows: list[dict[str, object]] | None = None,
+        latest_id: int = 0,
+        total: int | None = None,
+    ) -> None:
+        self.cursor_obj = FakeCursor(rows or [], latest_id=latest_id, total=total)
 
     def cursor(self) -> "FakeCursor":
         return self.cursor_obj
 
 
 class FakeCursor:
-    def __init__(self, rows: list[dict[str, object]], latest_id: int = 0) -> None:
+    def __init__(self, rows: list[dict[str, object]], latest_id: int = 0, total: int | None = None) -> None:
         self.rows = rows
         self.latest_id = latest_id
+        self.total = len(rows) if total is None else total
         self.executed: list[tuple[str, tuple[object, ...]]] = []
         self.lastrowid = 123
 
@@ -172,6 +230,8 @@ class FakeCursor:
         last_query = self.executed[-1][0] if self.executed else ""
         if "COALESCE(MAX(id)" in last_query:
             return {"latest_id": self.latest_id}
+        if "COUNT(*) AS total" in last_query:
+            return {"total": self.total}
         if "FROM worker_run_history" in last_query:
             return self.rows[0] if self.rows else None
         return None

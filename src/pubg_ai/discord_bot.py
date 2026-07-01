@@ -39,10 +39,11 @@ from pubg_ai.replay_storage import ReplayArtifactStore, ReplayStorageError
 from pubg_ai.system_alerts import collect_system_alerts, format_alert_report, format_discord_alert
 from pubg_ai.worker_run_history import (
     WorkerRunHistoryError,
+    WorkerRunPage,
     WorkerRunRecord,
     get_latest_worker_run_id,
     get_worker_run,
-    list_worker_runs,
+    get_worker_run_page,
 )
 
 
@@ -189,22 +190,20 @@ def format_alert_history_result(
 
 
 def format_worker_run_history_result(
-    runs: list[WorkerRunRecord],
+    page: WorkerRunPage,
     *,
-    worker_name: str | None = None,
-    limit: int = 5,
     command_prefix: str = DEFAULT_DISCORD_PREFIX,
 ) -> str:
     lines = [
         "PUBG AI worker run history",
-        f"- filters: worker={worker_name or 'all'} limit={limit}",
-        f"- shown: {len(runs)}",
+        f"- filters: worker={page.worker_name or 'all'}",
+        f"- shown/total: {len(page.records)}/{page.total} offset={page.offset} limit={page.limit}",
     ]
-    if not runs:
+    if not page.records:
         lines.append("- no worker runs yet")
         return "\n".join(lines)
 
-    for run in runs:
+    for run in page.records:
         created_at = run.created_at_kst or run.finished_at_kst or run.started_at_kst or "-"
         duration = _optional_duration_seconds(run.duration_seconds)
         last_error = _discord_single_line(run.last_error or "-", 120)
@@ -213,6 +212,7 @@ def format_worker_run_history_result(
             f"duration={duration} errors={run.error_count} last_error={last_error} "
             f"detail: `{command_prefix}pubg-worker-run {run.id}`"
         )
+    lines.extend(_worker_run_navigation_hints(page, command_prefix=command_prefix))
     return "\n".join(lines)
 
 
@@ -1178,21 +1178,23 @@ def create_discord_bot(
             parsed = _parse_worker_run_filters(filters)
         except ValueError as exc:
             await ctx.reply(
-                f"Usage: `{command_prefix}pubg-worker-runs [collector|post_processing|all] [limit]`"
+                f"Usage: `{command_prefix}pubg-worker-runs [collector|post_processing|all] [limit] offset=0`"
                 f"\nError: {exc}",
                 mention_author=False,
             )
             return
         worker_name = str(parsed["worker_name"]) if parsed["worker_name"] is not None else None
         limit = int(parsed["limit"])
+        offset = int(parsed["offset"])
 
         connection = connect_mysql(config.database)
         try:
             try:
-                runs = list_worker_runs(
+                page = get_worker_run_page(
                     connection,
                     worker_name=worker_name,
                     limit=limit,
+                    offset=offset,
                 )
             except WorkerRunHistoryError as exc:
                 await ctx.reply(f"PUBG AI worker run history error: {exc}", mention_author=False)
@@ -1202,9 +1204,7 @@ def create_discord_bot(
 
         await ctx.reply(
             format_worker_run_history_result(
-                runs,
-                worker_name=worker_name,
-                limit=limit,
+                page,
                 command_prefix=command_prefix,
             ),
             mention_author=False,
@@ -1320,6 +1320,39 @@ def _alert_history_command_for_page(page: AlertHistoryPage, *, offset: int, comm
 
 
 def _alert_history_filter_arg(key: str, value: str) -> str:
+    return f"{key}={shlex.quote(str(value))}"
+
+
+def _worker_run_navigation_hints(page: WorkerRunPage, *, command_prefix: str) -> list[str]:
+    hints: list[str] = []
+    if page.offset > 0:
+        previous_offset = max(0, page.offset - page.limit)
+        hints.append(
+            "- previous: `"
+            + _worker_run_history_command_for_page(page, offset=previous_offset, command_prefix=command_prefix)
+            + "`"
+        )
+    if page.offset + len(page.records) < page.total:
+        next_offset = page.offset + page.limit
+        hints.append(
+            "- next: `"
+            + _worker_run_history_command_for_page(page, offset=next_offset, command_prefix=command_prefix)
+            + "`"
+        )
+    return hints
+
+
+def _worker_run_history_command_for_page(page: WorkerRunPage, *, offset: int, command_prefix: str) -> str:
+    parts = [
+        f"{command_prefix}pubg-worker-runs",
+        _worker_run_filter_arg("worker", page.worker_name or "all"),
+        _worker_run_filter_arg("limit", str(page.limit)),
+        _worker_run_filter_arg("offset", str(max(0, offset))),
+    ]
+    return " ".join(parts)
+
+
+def _worker_run_filter_arg(key: str, value: str) -> str:
     return f"{key}={shlex.quote(str(value))}"
 
 
@@ -1604,7 +1637,7 @@ def _alert_history_record_state(record: AlertHistoryRecord) -> str:
 
 
 def _parse_worker_run_filters(raw: str | None) -> dict[str, str | int | None]:
-    filters: dict[str, str | int | None] = {"worker_name": None, "limit": 5}
+    filters: dict[str, str | int | None] = {"worker_name": None, "limit": 5, "offset": 0}
     if not raw or not raw.strip():
         return filters
 
@@ -1637,6 +1670,8 @@ def _apply_worker_run_filter(filters: dict[str, str | int | None], key: str, val
         filters["worker_name"] = _worker_run_name(value)
     elif key == "limit":
         filters["limit"] = _worker_run_limit(value)
+    elif key == "offset":
+        filters["offset"] = _worker_run_offset(value)
     else:
         raise ValueError(f"unknown filter: {key}")
 
@@ -1663,6 +1698,14 @@ def _worker_run_limit(value: str | int) -> int:
     if parsed is None:
         raise ValueError(f"invalid limit: {value}")
     return max(1, min(parsed, 10))
+
+
+def _worker_run_offset(value: str | int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid offset: {value}") from exc
+    return max(0, parsed)
 
 
 def _top_parts(parts: dict[str, int]) -> str:

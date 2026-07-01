@@ -399,7 +399,8 @@ Completed slices:
     duration, error count, and last error.
 56. Discord admins can use `pubg-worker-run run_id` to review one worker cycle's summary metrics and full error list.
 57. Discord worker-run history rows include copyable `pubg-worker-run run_id` detail commands.
+58. Discord worker-run history supports `limit`/`offset` pagination with copyable previous/next commands.
 
 Next slice:
 
-1. Add next/previous limit/offset pagination support to Discord worker-run history.
+1. Add `status=succeeded|failed|all` filtering to worker-run history storage and Discord command output.
