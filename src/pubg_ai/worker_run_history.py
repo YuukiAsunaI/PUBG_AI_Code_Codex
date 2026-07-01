@@ -173,6 +173,41 @@ def list_failed_worker_runs(
     return [_row_to_record(row) for row in rows]
 
 
+def get_worker_run(connection: Any, run_id: int) -> WorkerRunRecord:
+    try:
+        parsed_id = int(run_id)
+    except (TypeError, ValueError) as exc:
+        raise WorkerRunHistoryError(f"invalid worker run id: {run_id}") from exc
+    if parsed_id <= 0:
+        raise WorkerRunHistoryError(f"invalid worker run id: {run_id}")
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                id,
+                worker_name,
+                status,
+                started_at_kst,
+                finished_at_kst,
+                duration_seconds,
+                error_count,
+                last_error,
+                summary_json,
+                created_at_kst
+            FROM worker_run_history
+            WHERE id = %s
+            LIMIT 1
+            """,
+            (parsed_id,),
+        )
+        row = cursor.fetchone()
+
+    if not row:
+        raise WorkerRunHistoryError(f"worker run not found: {parsed_id}")
+    return _row_to_record(row)
+
+
 def get_latest_worker_run_id(connection: Any) -> int:
     with connection.cursor() as cursor:
         cursor.execute("SELECT COALESCE(MAX(id), 0) AS latest_id FROM worker_run_history")

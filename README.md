@@ -305,6 +305,7 @@ Discord's message content intent to be enabled for the bot application. Initial 
 !pubg-alert-history [current-errors|worker-failures|storage-pressure|all-history]
 !pubg-alert-history source=storage state=current severity=error search="drive" limit=5
 !pubg-worker-runs [collector|post_processing|all] [limit]
+!pubg-worker-run run_id
 !유저삭제 steam 닉네임또는accountId
 ```
 
@@ -338,7 +339,8 @@ are stored in the same MySQL `system_alert_notes` table shown by the local manag
 presets or `source`/`state`/`severity`/`search` filters to review persisted alert history from Discord; when
 `PUBG_LOCAL_WEB_BASE_URL` is set, each row includes a local detail link. When more history rows are available, the
 response includes copyable previous/next `offset` commands. Use `pubg-worker-runs` to review recent collector and
-post-processing cycle status, duration, error count, and last error directly from Discord.
+post-processing cycle status, duration, error count, and last error directly from Discord, then use
+`pubg-worker-run run_id` to inspect one run's summary metrics and full error list.
 
 Run the local management app:
 

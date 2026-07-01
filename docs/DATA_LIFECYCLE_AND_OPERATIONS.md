@@ -90,6 +90,8 @@ Implemented behavior:
   includes copyable previous/next commands with the right `offset`.
 - The admin-only `pubg-worker-runs [collector|post_processing|all] [limit]` command lists recent worker cycles from
   `worker_run_history` with status, duration, error count, and last error.
+- The admin-only `pubg-worker-run run_id` command opens one worker cycle from Discord and shows summary metrics plus
+  the full stored error list.
 
 ## Duplicate Match Handling
 

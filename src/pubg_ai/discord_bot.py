@@ -41,6 +41,7 @@ from pubg_ai.worker_run_history import (
     WorkerRunHistoryError,
     WorkerRunRecord,
     get_latest_worker_run_id,
+    get_worker_run,
     list_worker_runs,
 )
 
@@ -210,6 +211,33 @@ def format_worker_run_history_result(
             f"- #{run.id} [{run.worker_name}/{run.status}] {created_at} "
             f"duration={duration} errors={run.error_count} last_error={last_error}"
         )
+    return "\n".join(lines)
+
+
+def format_worker_run_detail_result(run: WorkerRunRecord) -> str:
+    lines = [
+        "PUBG AI worker run detail",
+        f"- id: {run.id}",
+        f"- worker/status: {run.worker_name}/{run.status}",
+        f"- started_at_kst: {run.started_at_kst or '-'}",
+        f"- finished_at_kst: {run.finished_at_kst or '-'}",
+        f"- duration/errors: {_optional_duration_seconds(run.duration_seconds)} / {run.error_count}",
+        f"- created_at_kst: {run.created_at_kst or '-'}",
+    ]
+
+    metrics = _worker_run_summary_metrics(run.summary)
+    if metrics:
+        lines.append("- summary metrics:")
+        lines.extend(f"  - {metric}" for metric in metrics)
+    else:
+        lines.append("- summary metrics: none")
+
+    errors = _worker_run_summary_errors(run.summary)
+    lines.append("- errors:")
+    if errors:
+        lines.extend(f"  {index}. {_discord_single_line(error, 180)}" for index, error in enumerate(errors, start=1))
+    else:
+        lines.append("  none")
     return "\n".join(lines)
 
 
@@ -576,6 +604,7 @@ def create_discord_bot(
                     f"- `{command_prefix}pubg-alert-notes alert_id [limit]`",
                     f"- `{command_prefix}pubg-alert-history [preset|filters]`",
                     f"- `{command_prefix}pubg-worker-runs [collector|post_processing|all] [limit]`",
+                    f"- `{command_prefix}pubg-worker-run run_id`",
                     f"- `{command_prefix}유저삭제 steam 닉네임또는accountId`",
                 ]
             ),
@@ -1178,6 +1207,27 @@ def create_discord_bot(
             mention_author=False,
         )
 
+    @bot.command(name="pubg-worker-run", aliases=["pubg-worker-run-detail", "pubg-worker-detail"])
+    async def worker_run_detail_command(ctx: Any, run_id: str | None = None) -> None:
+        if not await require_permission(ctx, "admin"):
+            return
+        parsed_run_id = _positive_int(run_id)
+        if parsed_run_id is None:
+            await ctx.reply(f"Usage: `{command_prefix}pubg-worker-run run_id`", mention_author=False)
+            return
+
+        connection = connect_mysql(config.database)
+        try:
+            try:
+                run = get_worker_run(connection, parsed_run_id)
+            except WorkerRunHistoryError as exc:
+                await ctx.reply(f"PUBG AI worker run detail error: {exc}", mention_author=False)
+                return
+        finally:
+            connection.close()
+
+        await ctx.reply(format_worker_run_detail_result(run), mention_author=False)
+
     return bot
 
 
@@ -1272,6 +1322,56 @@ def _alert_history_filter_arg(key: str, value: str) -> str:
 
 def _optional_duration_seconds(value: float | None) -> str:
     return f"{value:.1f}s" if value is not None else "-"
+
+
+def _worker_run_summary_metrics(summary: dict[str, Any], *, limit: int = 12) -> list[str]:
+    metrics = _flatten_worker_run_summary_metrics(summary)
+    if len(metrics) <= limit:
+        return metrics
+    remaining = len(metrics) - limit
+    return metrics[:limit] + [f"... {remaining} more"]
+
+
+def _flatten_worker_run_summary_metrics(
+    value: Any,
+    *,
+    prefix: str = "",
+) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+
+    metrics: list[str] = []
+    skipped_keys = {"errors", "started_at_kst", "finished_at_kst", "duration_seconds"}
+    for key, nested in value.items():
+        if key in skipped_keys:
+            continue
+        metric_key = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(nested, dict):
+            metrics.extend(_flatten_worker_run_summary_metrics(nested, prefix=metric_key))
+        elif _is_worker_run_metric_value(nested):
+            metrics.append(f"{metric_key}={_worker_run_metric_value(nested)}")
+    return metrics
+
+
+def _is_worker_run_metric_value(value: Any) -> bool:
+    return isinstance(value, bool | int | float) or (isinstance(value, str) and len(value) <= 80)
+
+
+def _worker_run_metric_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float):
+        return f"{value:.2f}".rstrip("0").rstrip(".")
+    return str(value)
+
+
+def _worker_run_summary_errors(summary: dict[str, Any]) -> list[str]:
+    value = summary.get("errors")
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item)]
+    if value:
+        return [str(value)]
+    return []
 
 
 def _short_match_id(match_id: str) -> str:

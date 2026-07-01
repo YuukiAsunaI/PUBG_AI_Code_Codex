@@ -130,6 +130,9 @@ class DiscordCommandDefaultsTests(unittest.TestCase):
         self.assertIn("pubg-worker-runs", DEFAULT_COMMAND_GROUPS["admin"])
         self.assertIn("pubg-worker-history", DEFAULT_COMMAND_GROUPS["admin"])
         self.assertIn("pubg-worker-log", DEFAULT_COMMAND_GROUPS["admin"])
+        self.assertIn("pubg-worker-run", DEFAULT_COMMAND_GROUPS["admin"])
+        self.assertIn("pubg-worker-run-detail", DEFAULT_COMMAND_GROUPS["admin"])
+        self.assertIn("pubg-worker-detail", DEFAULT_COMMAND_GROUPS["admin"])
 
 
 if __name__ == "__main__":

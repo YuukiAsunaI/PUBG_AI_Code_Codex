@@ -298,6 +298,9 @@ class LocalSettingsStoreTests(unittest.TestCase):
             self.assertIn("pubg-worker-runs", loaded.command_groups["admin"])
             self.assertIn("pubg-worker-history", loaded.command_groups["admin"])
             self.assertIn("pubg-worker-log", loaded.command_groups["admin"])
+            self.assertIn("pubg-worker-run", loaded.command_groups["admin"])
+            self.assertIn("pubg-worker-run-detail", loaded.command_groups["admin"])
+            self.assertIn("pubg-worker-detail", loaded.command_groups["admin"])
             self.assertIn("pubg-register", loaded.command_groups["register"])
 
     def test_discord_permission_settings_reject_unknown_groups(self) -> None:

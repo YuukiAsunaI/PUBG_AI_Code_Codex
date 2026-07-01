@@ -397,7 +397,8 @@ Completed slices:
 54. Discord alert-history responses include copyable previous/next `offset` commands when more rows are available.
 55. Discord admins can use `pubg-worker-runs` to review recent collector/post-processing worker cycles with status,
     duration, error count, and last error.
+56. Discord admins can use `pubg-worker-run run_id` to review one worker cycle's summary metrics and full error list.
 
 Next slice:
 
-1. Add a Discord admin command for one worker-run detail record with summary metrics and full error list.
+1. Add copyable `pubg-worker-run run_id` detail hints to Discord worker-run history rows.

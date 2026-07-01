@@ -7,6 +7,7 @@ import unittest
 from pubg_ai.worker_run_history import (
     WorkerRunHistoryError,
     get_latest_worker_run_id,
+    get_worker_run,
     list_failed_worker_runs,
     list_worker_runs,
     record_worker_cycle,
@@ -99,6 +100,41 @@ class WorkerRunHistoryTests(unittest.TestCase):
         self.assertIn("ORDER BY id ASC", query)
         self.assertEqual(params, (7, 10))
 
+    def test_get_worker_run_by_id(self) -> None:
+        connection = FakeConnection(
+            rows=[
+                {
+                    "id": 9,
+                    "worker_name": "collector",
+                    "status": "failed",
+                    "started_at_kst": "2026-07-01T10:00:00+09:00",
+                    "finished_at_kst": "2026-07-01T10:00:02+09:00",
+                    "duration_seconds": 2,
+                    "error_count": 2,
+                    "last_error": "telemetry_jobs: RuntimeError: boom",
+                    "summary_json": '{"collection":{"queued_match_jobs":2},"errors":["one","two"]}',
+                    "created_at_kst": "2026-07-01T10:00:02+09:00",
+                }
+            ]
+        )
+
+        run = get_worker_run(connection, 9)
+
+        self.assertEqual(run.id, 9)
+        self.assertEqual(run.worker_name, "collector")
+        self.assertEqual(run.summary["collection"]["queued_match_jobs"], 2)
+        query, params = connection.cursor_obj.executed[0]
+        self.assertIn("WHERE id = %s", query)
+        self.assertEqual(params, (9,))
+
+    def test_get_worker_run_raises_for_missing_id(self) -> None:
+        with self.assertRaises(WorkerRunHistoryError):
+            get_worker_run(FakeConnection(rows=[]), 99)
+
+    def test_get_worker_run_rejects_invalid_id(self) -> None:
+        with self.assertRaises(WorkerRunHistoryError):
+            get_worker_run(FakeConnection(), 0)
+
     def test_get_latest_worker_run_id(self) -> None:
         connection = FakeConnection(latest_id=55)
 
@@ -132,8 +168,13 @@ class FakeCursor:
     def fetchall(self) -> list[dict[str, object]]:
         return self.rows
 
-    def fetchone(self) -> dict[str, object]:
-        return {"latest_id": self.latest_id}
+    def fetchone(self) -> dict[str, object] | None:
+        last_query = self.executed[-1][0] if self.executed else ""
+        if "COALESCE(MAX(id)" in last_query:
+            return {"latest_id": self.latest_id}
+        if "FROM worker_run_history" in last_query:
+            return self.rows[0] if self.rows else None
+        return None
 
 
 if __name__ == "__main__":

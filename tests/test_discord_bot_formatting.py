@@ -17,6 +17,7 @@ from pubg_ai.discord_bot import (
     format_player_ranking,
     format_player_weapon_detail,
     format_replay_artifact_summary,
+    format_worker_run_detail_result,
     format_worker_run_history_result,
 )
 from pubg_ai.alert_history import AlertHistoryNote, AlertHistoryPage, AlertHistoryRecord
@@ -272,6 +273,41 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         self.assertIn("worker=collector limit=3", body)
         self.assertIn("no worker runs yet", body)
+
+    def test_worker_run_detail_result_formats_summary_metrics_and_errors(self) -> None:
+        run = WorkerRunRecord(
+            id=12,
+            worker_name="collector",
+            status="failed",
+            started_at_kst="2026-07-01T10:00:00+09:00",
+            finished_at_kst="2026-07-01T10:00:03+09:00",
+            duration_seconds=3.25,
+            error_count=2,
+            last_error="telemetry_jobs: RuntimeError: telemetry missing",
+            summary={
+                "started_at_kst": "2026-07-01T10:00:00+09:00",
+                "finished_at_kst": "2026-07-01T10:00:03+09:00",
+                "duration_seconds": 3.25,
+                "poll_interval_seconds": 180,
+                "collection": {"queued_match_jobs": 2, "existing_match_jobs": 1},
+                "match_jobs": {"stored_matches": 4, "queued_telemetry_jobs": 3},
+                "errors": ["match_jobs: RuntimeError: boom", "telemetry_jobs: RuntimeError: telemetry missing"],
+            },
+            created_at_kst="2026-07-01T10:00:03+09:00",
+        )
+
+        body = format_worker_run_detail_result(run)
+
+        self.assertIn("PUBG AI worker run detail", body)
+        self.assertIn("- id: 12", body)
+        self.assertIn("worker/status: collector/failed", body)
+        self.assertIn("duration/errors: 3.2s / 2", body)
+        self.assertIn("poll_interval_seconds=180", body)
+        self.assertIn("collection.queued_match_jobs=2", body)
+        self.assertIn("collection.existing_match_jobs=1", body)
+        self.assertIn("match_jobs.stored_matches=4", body)
+        self.assertIn("1. match_jobs: RuntimeError: boom", body)
+        self.assertIn("2. telemetry_jobs: RuntimeError: telemetry missing", body)
 
     def test_worker_run_filter_parser_supports_worker_aliases_and_limit(self) -> None:
         filters = _parse_worker_run_filters("post-processing 99")
