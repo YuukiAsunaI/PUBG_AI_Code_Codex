@@ -91,6 +91,7 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn('id="workerRunsBody"', body)
         self.assertIn('id="workerRunFilterForm"', body)
         self.assertIn('id="workerRunsStatus"', body)
+        self.assertIn('id="workerRunsExport"', body)
         self.assertIn('id="workerRunsPrev"', body)
         self.assertIn('id="workerRunsNext"', body)
         self.assertIn('id="workerRunDetail"', body)
@@ -103,8 +104,10 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn('name="created_to_kst"', body)
         self.assertIn('type="datetime-local"', body)
         self.assertIn("/workers/runs", body)
+        self.assertIn("/workers/runs/export.csv", body)
         self.assertIn("/workers/runs/${encodeURIComponent(runId)}", body)
         self.assertIn("loadWorkerRuns", body)
+        self.assertIn("exportWorkerRunsCsv", body)
         self.assertIn("loadWorkerRunDetail", body)
         self.assertIn("loadInitialWorkerRunDetailFromUrl", body)
         self.assertIn("renderWorkerRunDetail", body)
@@ -278,6 +281,32 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn("created_at_kst >= %s", executed_sql)
         self.assertIn("created_at_kst <= %s", executed_sql)
         self.assertIn("LIMIT %s OFFSET %s", executed_sql)
+        self.assertTrue(connection.closed)
+
+    def test_worker_runs_export_endpoint_returns_csv(self) -> None:
+        connection = FakeWorkerRunConnection()
+        with patch("pubg_ai.web.app.connect_mysql", return_value=connection):
+            client = TestClient(create_app())
+            response = client.get(
+                "/workers/runs/export.csv?worker_name=collector&status=failed"
+                "&created_from_kst=2026-07-01T10:00&created_to_kst=2026-07-01T11:00"
+                "&limit=5000&offset=0"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/csv", response.headers["content-type"])
+        self.assertIn("pubg-ai-worker-run-history.csv", response.headers["content-disposition"])
+        body = response.text
+        self.assertIn("id,worker_name,status,created_at_kst", body)
+        self.assertIn("collector,succeeded", body)
+        self.assertIn("summary_json", body)
+        executed_sql = "\n".join(query for query, _ in connection.cursor_obj.executed)
+        self.assertIn("worker_name = %s", executed_sql)
+        self.assertIn("status = %s", executed_sql)
+        self.assertIn("created_at_kst >= %s", executed_sql)
+        self.assertIn("created_at_kst <= %s", executed_sql)
+        self.assertIn("LIMIT %s OFFSET %s", executed_sql)
+        self.assertEqual(connection.cursor_obj.executed[0][1][-2:], (5000, 0))
         self.assertTrue(connection.closed)
 
     def test_worker_run_detail_endpoint_returns_stored_summary_and_errors(self) -> None:

@@ -416,7 +416,8 @@ Completed slices:
 68. Discord `pubg-worker-runs` supports KST `created_at_kst` from/to range filters and preserves them in pagination
     commands.
 69. Local manager and Discord worker-run history filters support quick KST range presets for common lookups.
+70. The local manager can export filtered worker-run history to CSV for local incident review.
 
 Next slice:
 
-1. Add filtered worker-run history export for local incident review.
+1. Add shareable local worker-run history filter URLs for incident review handoff.

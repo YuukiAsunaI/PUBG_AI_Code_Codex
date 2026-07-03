@@ -54,7 +54,14 @@ from pubg_ai.telemetry_item_processor import TelemetryItemProcessor
 from pubg_ai.telemetry_job_processor import TelemetryJobProcessor
 from pubg_ai.telemetry_movement_processor import TelemetryMovementProcessor
 from pubg_ai.system_alerts import collect_system_alerts
-from pubg_ai.worker_run_history import WorkerRunHistoryError, get_worker_run, get_worker_run_page
+from pubg_ai.worker_run_history import (
+    WORKER_RUN_EXPORT_LIMIT,
+    WorkerRunHistoryError,
+    WorkerRunRecord,
+    get_worker_run,
+    get_worker_run_page,
+    list_worker_runs,
+)
 
 
 class RegisterPlayerRequest(BaseModel):
@@ -501,6 +508,34 @@ def create_app() -> Any:
         finally:
             connection.close()
         return {"worker_run_page": page.to_record(), "runs": [run.to_record() for run in page.records]}
+
+    @app.get("/workers/runs/export.csv")
+    def export_worker_runs(
+        worker_name: str | None = None,
+        status: str = "all",
+        created_from_kst: str | None = None,
+        created_to_kst: str | None = None,
+        limit: int = Query(default=WORKER_RUN_EXPORT_LIMIT, ge=1, le=WORKER_RUN_EXPORT_LIMIT),
+        offset: int = Query(default=0, ge=0),
+    ) -> Response:
+        connection = connect_mysql(current_config().database)
+        try:
+            try:
+                records = list_worker_runs(
+                    connection,
+                    worker_name=worker_name,
+                    status=status,
+                    created_from_kst=created_from_kst,
+                    created_to_kst=created_to_kst,
+                    limit=limit,
+                    max_limit=WORKER_RUN_EXPORT_LIMIT,
+                    offset=offset,
+                )
+            except WorkerRunHistoryError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return _worker_run_csv_response(records)
 
     @app.get("/workers/runs/{run_id}")
     def worker_run_detail(run_id: int) -> dict[str, Any]:
@@ -1176,6 +1211,49 @@ def _alert_history_csv_response(records: list[AlertHistoryRecord]) -> Response:
         content=output.getvalue(),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="pubg-ai-alert-history.csv"'},
+    )
+
+
+def _worker_run_csv_response(records: list[WorkerRunRecord]) -> Response:
+    output = io.StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "id",
+            "worker_name",
+            "status",
+            "created_at_kst",
+            "started_at_kst",
+            "finished_at_kst",
+            "duration_seconds",
+            "error_count",
+            "last_error",
+            "errors_json",
+            "summary_json",
+        ],
+    )
+    writer.writeheader()
+    for record in records:
+        errors = record.summary.get("errors")
+        writer.writerow(
+            {
+                "id": record.id,
+                "worker_name": record.worker_name,
+                "status": record.status,
+                "created_at_kst": record.created_at_kst or "",
+                "started_at_kst": record.started_at_kst or "",
+                "finished_at_kst": record.finished_at_kst or "",
+                "duration_seconds": record.duration_seconds if record.duration_seconds is not None else "",
+                "error_count": record.error_count,
+                "last_error": record.last_error or "",
+                "errors_json": _json_dumps_compact(errors if isinstance(errors, list) else []),
+                "summary_json": _json_dumps_compact(record.summary),
+            }
+        )
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="pubg-ai-worker-run-history.csv"'},
     )
 
 
@@ -1947,6 +2025,7 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="actions" style="margin-bottom: 10px;">
         <button class="secondary" type="button" onclick="loadWorkerRuns()">새로고침</button>
+        <button class="secondary" type="button" id="workerRunsExport">Export CSV</button>
         <button class="secondary" type="button" id="workerRunsPrev">Previous</button>
         <button class="secondary" type="button" id="workerRunsNext">Next</button>
       </div>
@@ -2102,6 +2181,7 @@ _INDEX_HTML = """<!doctype html>
     const workerRunFilterForm = document.querySelector("#workerRunFilterForm");
     const workerRunsBody = document.querySelector("#workerRunsBody");
     const workerRunsStatus = document.querySelector("#workerRunsStatus");
+    const workerRunsExport = document.querySelector("#workerRunsExport");
     const workerRunsPrev = document.querySelector("#workerRunsPrev");
     const workerRunsNext = document.querySelector("#workerRunsNext");
     const workerRunDetail = document.querySelector("#workerRunDetail");
@@ -3198,6 +3278,25 @@ _INDEX_HTML = """<!doctype html>
         workerRunsStatus.textContent = `Error: ${error.message}`;
         workerRunsBody.innerHTML = `<tr><td colspan="6">Error: ${escapeHtml(error.message)}</td></tr>`;
       }
+    }
+
+    function exportWorkerRunsCsv() {
+      const quickRange = normalizeWorkerRunQuickRange(
+        workerRunFilterForm.elements.quick_range?.value ?? workerRunPage.quick_range
+      );
+      applyWorkerRunQuickRange(quickRange);
+      const form = new FormData(workerRunFilterForm);
+      const selectedWorker = String(form.get("worker_name") || workerRunPage.worker_name || "all");
+      const selectedStatus = String(form.get("status") || workerRunPage.status || "all");
+      const params = new URLSearchParams({
+        worker_name: selectedWorker === "all" ? "" : selectedWorker,
+        status: selectedStatus,
+        created_from_kst: String(form.get("created_from_kst") || workerRunPage.created_from_kst || ""),
+        created_to_kst: String(form.get("created_to_kst") || workerRunPage.created_to_kst || ""),
+        limit: "5000",
+        offset: "0",
+      });
+      window.location.href = `/workers/runs/export.csv?${params.toString()}`;
     }
 
     function renderWorkerRuns(runs, page = {}, syncControls = false) {
@@ -4868,6 +4967,10 @@ _INDEX_HTML = """<!doctype html>
         workerRunsStatus.textContent = `Error: ${error.message}`;
         banner.textContent = `Error: ${error.message}`;
       }
+    });
+
+    workerRunsExport.addEventListener("click", () => {
+      exportWorkerRunsCsv();
     });
 
     workerRunFilterForm.elements.quick_range.addEventListener("change", () => {

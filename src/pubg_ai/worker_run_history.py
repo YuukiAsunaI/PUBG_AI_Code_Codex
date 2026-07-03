@@ -14,6 +14,7 @@ class WorkerRunHistoryError(RuntimeError):
 
 
 WORKER_RUN_STATUSES = {"all", "succeeded", "failed"}
+WORKER_RUN_EXPORT_LIMIT = 5000
 
 
 @dataclass(frozen=True)
@@ -128,9 +129,10 @@ def list_worker_runs(
     created_from_kst: Any | None = None,
     created_to_kst: Any | None = None,
     limit: int = 50,
+    max_limit: int = 200,
     offset: int = 0,
 ) -> list[WorkerRunRecord]:
-    bounded_limit = max(1, min(int(limit), 200))
+    bounded_limit = max(1, min(int(limit), max(1, int(max_limit))))
     bounded_offset = max(0, int(offset))
     where, params = _worker_run_filter_clause(
         worker_name,

@@ -72,6 +72,8 @@ Implemented behavior:
 - `GET /workers/runs?worker_name=collector&status=failed&created_from_kst=2026-07-01T00:00&created_to_kst=2026-07-02T00:00&limit=50&offset=0`
   returns paged worker-run history for the local manager, including total count and previous/next state for
   worker/status/KST-created-time filters.
+- `GET /workers/runs/export.csv` exports the same filtered worker-run history to CSV, bounded to 5,000 rows per
+  request, including summary JSON and stored error lists for local incident review.
 - The local manager worker-run filter form can fill those KST date fields with quick ranges for recent 1h, recent
   24h, today, yesterday, and recent 7d lookups.
 - `GET /workers/runs/{run_id}` returns one worker cycle with the stored summary JSON and error list for the local
