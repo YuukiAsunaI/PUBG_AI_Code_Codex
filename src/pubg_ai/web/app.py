@@ -1266,7 +1266,7 @@ _INDEX_HTML = """<!doctype html>
       grid-template-columns: 110px 130px 110px 90px 145px minmax(160px, 1fr) auto;
     }
     .worker-run-filter {
-      grid-template-columns: 130px 120px minmax(170px, 1fr) minmax(170px, 1fr) 90px auto;
+      grid-template-columns: 130px 120px 130px minmax(170px, 1fr) minmax(170px, 1fr) 90px auto;
       margin-bottom: 10px;
     }
     label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
@@ -1924,6 +1924,16 @@ _INDEX_HTML = """<!doctype html>
             <option value="failed">failed</option>
           </select>
         </label>
+        <label>Quick range
+          <select name="quick_range">
+            <option value="custom">custom</option>
+            <option value="last_1h">last 1h</option>
+            <option value="last_24h">last 24h</option>
+            <option value="today">today</option>
+            <option value="yesterday">yesterday</option>
+            <option value="last_7d">last 7d</option>
+          </select>
+        </label>
         <label>Created from
           <input name="created_from_kst" type="datetime-local">
         </label>
@@ -2185,6 +2195,7 @@ _INDEX_HTML = """<!doctype html>
       offset: 0,
       worker_name: null,
       status: "all",
+      quick_range: "custom",
       created_from_kst: "",
       created_to_kst: "",
       has_previous: false,
@@ -3150,6 +3161,10 @@ _INDEX_HTML = """<!doctype html>
 
     async function loadWorkerRuns(options = {}) {
       try {
+        const quickRange = normalizeWorkerRunQuickRange(
+          options.quick_range ?? workerRunFilterForm.elements.quick_range?.value ?? workerRunPage.quick_range
+        );
+        applyWorkerRunQuickRange(quickRange);
         const form = new FormData(workerRunFilterForm);
         const selectedWorker = options.worker_name ?? String(form.get("worker_name") || workerRunPage.worker_name || "all");
         const selectedStatus = options.status ?? String(form.get("status") || workerRunPage.status || "all");
@@ -3174,6 +3189,7 @@ _INDEX_HTML = """<!doctype html>
           offset,
           worker_name: selectedWorker === "all" ? null : selectedWorker,
           status: selectedStatus,
+          quick_range: quickRange,
           created_from_kst: createdFrom,
           created_to_kst: createdTo,
         };
@@ -3192,6 +3208,7 @@ _INDEX_HTML = """<!doctype html>
         offset: Number(page.offset ?? workerRunPage.offset ?? 0),
         total: Number(page.total ?? workerRunPage.total ?? runs.length),
         status: String(page.status || workerRunPage.status || "all"),
+        quick_range: normalizeWorkerRunQuickRange(page.quick_range || workerRunPage.quick_range || "custom"),
         created_from_kst: String(page.created_from_kst || workerRunPage.created_from_kst || ""),
         created_to_kst: String(page.created_to_kst || workerRunPage.created_to_kst || ""),
         has_previous: Boolean(page.has_previous),
@@ -3200,6 +3217,7 @@ _INDEX_HTML = """<!doctype html>
       if (syncControls) {
         workerRunFilterForm.elements.worker_name.value = workerRunPage.worker_name || "all";
         workerRunFilterForm.elements.status.value = workerRunPage.status || "all";
+        workerRunFilterForm.elements.quick_range.value = workerRunPage.quick_range || "custom";
         workerRunFilterForm.elements.created_from_kst.value = workerRunDateTimeInputValue(workerRunPage.created_from_kst);
         workerRunFilterForm.elements.created_to_kst.value = workerRunDateTimeInputValue(workerRunPage.created_to_kst);
         workerRunFilterForm.elements.limit.value = String(workerRunPage.limit || 50);
@@ -3210,6 +3228,7 @@ _INDEX_HTML = """<!doctype html>
         `${start}-${end} of ${workerRunPage.total}`,
         `worker ${workerRunPage.worker_name || "all"}`,
         `status ${workerRunPage.status || "all"}`,
+        `range ${workerRunPage.quick_range || "custom"}`,
         `created ${workerRunDateRangeLabel(workerRunPage.created_from_kst, workerRunPage.created_to_kst)}`,
       ].join(" / ");
       workerRunsPrev.disabled = !workerRunPage.has_previous;
@@ -3226,6 +3245,59 @@ _INDEX_HTML = """<!doctype html>
             </tr>
           `).join("")
         : `<tr><td colspan="6">No worker runs yet</td></tr>`;
+    }
+
+    function normalizeWorkerRunQuickRange(value) {
+      const text = String(value || "custom");
+      return ["custom", "last_1h", "last_24h", "today", "yesterday", "last_7d"].includes(text) ? text : "custom";
+    }
+
+    function applyWorkerRunQuickRange(value) {
+      const range = normalizeWorkerRunQuickRange(value);
+      workerRunFilterForm.elements.quick_range.value = range;
+      if (range === "custom") return;
+      const values = workerRunQuickRangeValues(range);
+      if (!values) return;
+      workerRunFilterForm.elements.created_from_kst.value = values.from;
+      workerRunFilterForm.elements.created_to_kst.value = values.to;
+    }
+
+    function workerRunQuickRangeValues(range) {
+      const now = new Date();
+      const dayMs = 24 * 60 * 60 * 1000;
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+      if (range === "last_1h") {
+        return workerRunQuickRangeResult(new Date(now.getTime() - 60 * 60 * 1000), now);
+      }
+      if (range === "last_24h") {
+        return workerRunQuickRangeResult(new Date(now.getTime() - dayMs), now);
+      }
+      if (range === "today") {
+        return workerRunQuickRangeResult(todayStart, now);
+      }
+      if (range === "yesterday") {
+        return workerRunQuickRangeResult(new Date(todayStart.getTime() - dayMs), todayStart);
+      }
+      if (range === "last_7d") {
+        return workerRunQuickRangeResult(new Date(now.getTime() - 7 * dayMs), now);
+      }
+      return null;
+    }
+
+    function workerRunQuickRangeResult(fromDate, toDate) {
+      return {
+        from: workerRunLocalDateTimeInputValue(fromDate),
+        to: workerRunLocalDateTimeInputValue(toDate),
+      };
+    }
+
+    function workerRunLocalDateTimeInputValue(date) {
+      const pad = (value) => String(value).padStart(2, "0");
+      return [
+        date.getFullYear(),
+        pad(date.getMonth() + 1),
+        pad(date.getDate()),
+      ].join("-") + `T${pad(date.getHours())}:${pad(date.getMinutes())}`;
     }
 
     function workerRunDateTimeInputValue(value) {
@@ -4796,6 +4868,20 @@ _INDEX_HTML = """<!doctype html>
         workerRunsStatus.textContent = `Error: ${error.message}`;
         banner.textContent = `Error: ${error.message}`;
       }
+    });
+
+    workerRunFilterForm.elements.quick_range.addEventListener("change", () => {
+      applyWorkerRunQuickRange(workerRunFilterForm.elements.quick_range.value);
+    });
+
+    workerRunFilterForm.elements.created_from_kst.addEventListener("input", () => {
+      workerRunFilterForm.elements.quick_range.value = "custom";
+      workerRunPage.quick_range = "custom";
+    });
+
+    workerRunFilterForm.elements.created_to_kst.addEventListener("input", () => {
+      workerRunFilterForm.elements.quick_range.value = "custom";
+      workerRunPage.quick_range = "custom";
     });
 
     workerRunsPrev.addEventListener("click", async () => {

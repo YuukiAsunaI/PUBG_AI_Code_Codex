@@ -72,6 +72,8 @@ Implemented behavior:
 - `GET /workers/runs?worker_name=collector&status=failed&created_from_kst=2026-07-01T00:00&created_to_kst=2026-07-02T00:00&limit=50&offset=0`
   returns paged worker-run history for the local manager, including total count and previous/next state for
   worker/status/KST-created-time filters.
+- The local manager worker-run filter form can fill those KST date fields with quick ranges for recent 1h, recent
+  24h, today, yesterday, and recent 7d lookups.
 - `GET /workers/runs/{run_id}` returns one worker cycle with the stored summary JSON and error list for the local
   manager detail panel.
 - The local manager can load `/?worker_run_id={run_id}` directly, updates the browser URL when a worker-run detail is
@@ -99,11 +101,12 @@ Implemented behavior:
   local detail links that open the management UI with `alert_id` selected. When the query has more rows, the response
   includes copyable previous/next commands with the right `offset`.
 - The admin-only
-  `pubg-worker-runs [collector|post_processing|all] [status=succeeded|failed|all] [limit] [from=KST] [to=KST]`
+  `pubg-worker-runs [collector|post_processing|all] [status=succeeded|failed|all] [limit] [range=last24h|today|yesterday|last7d] [from=KST] [to=KST]`
   command lists recent worker cycles from `worker_run_history` with status, duration, error count, last error,
   copyable previous/next `offset` commands, and a copyable detail command for each row. `from`/`to` filter
-  `created_at_kst` ranges in KST and are preserved in pagination commands. When `PUBG_LOCAL_WEB_BASE_URL` is set, each
-  row also includes a local `worker_run_id` detail link.
+  `created_at_kst` ranges in KST, while `range=last24h|today|yesterday|last7d` expands to common KST ranges. Date
+  filters are preserved in pagination commands. When `PUBG_LOCAL_WEB_BASE_URL` is set, each row also includes a local
+  `worker_run_id` detail link.
 - The admin-only `pubg-worker-run run_id` command opens one worker cycle from Discord and shows summary metrics plus
   the full stored error list. When `PUBG_LOCAL_WEB_BASE_URL` is set, the response also includes a local
   `worker_run_id` detail link.

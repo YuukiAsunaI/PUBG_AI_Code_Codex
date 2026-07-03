@@ -35,6 +35,7 @@ from pubg_ai.player_stats import (
     PlayerWeaponStats,
 )
 from pubg_ai.replay_artifact_catalog import ReplayArtifactRecord
+from pubg_ai.time_utils import KST
 from pubg_ai.worker_run_history import WorkerRunPage, WorkerRunRecord
 
 
@@ -398,6 +399,22 @@ class DiscordBotFormattingTests(unittest.TestCase):
         all_workers = _parse_worker_run_filters("all succeeded")
         self.assertIsNone(all_workers["worker_name"])
         self.assertEqual(all_workers["status"], "succeeded")
+
+        reference = datetime(2026, 7, 3, 12, 30, 15, tzinfo=KST)
+        today = _parse_worker_run_filters("range=today", reference_kst=reference)
+        self.assertEqual(today["created_from_kst"], "2026-07-03T00:00:00+09:00")
+        self.assertEqual(today["created_to_kst"], "2026-07-03T12:30:15+09:00")
+
+        last_24h = _parse_worker_run_filters("preset=last24h", reference_kst=reference)
+        self.assertEqual(last_24h["created_from_kst"], "2026-07-02T12:30:15+09:00")
+        self.assertEqual(last_24h["created_to_kst"], "2026-07-03T12:30:15+09:00")
+
+        yesterday = _parse_worker_run_filters("quick_range=yesterday", reference_kst=reference)
+        self.assertEqual(yesterday["created_from_kst"], "2026-07-02T00:00:00+09:00")
+        self.assertEqual(yesterday["created_to_kst"], "2026-07-03T00:00:00+09:00")
+
+        with self.assertRaises(ValueError):
+            _parse_worker_run_filters("range=tomorrow", reference_kst=reference)
 
     def test_player_list_formats_status_and_short_account_id(self) -> None:
         players = [

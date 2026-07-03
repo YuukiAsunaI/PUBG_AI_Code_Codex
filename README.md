@@ -304,7 +304,7 @@ Discord's message content intent to be enabled for the bot application. Initial 
 !pubg-alert-notes alert_id [limit]
 !pubg-alert-history [current-errors|worker-failures|storage-pressure|all-history]
 !pubg-alert-history source=storage state=current severity=error search="drive" limit=5
-!pubg-worker-runs [collector|post_processing|all] [status=succeeded|failed|all] [limit] [offset=0] [from=KST] [to=KST]
+!pubg-worker-runs [collector|post_processing|all] [status=succeeded|failed|all] [limit] [offset=0] [range=last24h|today|yesterday|last7d] [from=KST] [to=KST]
 !pubg-worker-run run_id
 !유저삭제 steam 닉네임또는accountId
 ```
@@ -344,9 +344,10 @@ post-processing cycle status, duration, error count, and last error directly fro
 copyable `pubg-worker-run run_id` detail command for inspecting one run's summary metrics and full error list, plus a
 local `worker_run_id` detail link when `PUBG_LOCAL_WEB_BASE_URL` is set. Filter the list with
 `status=succeeded|failed|all` and KST created-time ranges such as `from=2026-07-01T00:00` and
-`to=2026-07-02T00:00`; when more worker rows are available, the response includes copyable previous/next `offset`
-commands that keep the selected worker, status, and date filters. The `pubg-worker-run run_id` detail response also
-includes the same local link when the base URL is configured.
+`to=2026-07-02T00:00`, or quick presets such as `range=last24h`, `range=today`, `range=yesterday`, and
+`range=last7d`; when more worker rows are available, the response includes copyable previous/next `offset` commands
+that keep the selected worker, status, and date filters. The `pubg-worker-run run_id` detail response also includes
+the same local link when the base URL is configured.
 
 Run the local management app:
 
@@ -369,7 +370,8 @@ worker processes. Both worker entry points store recent cycle summaries in `work
 shows those rows in `Worker Run History`, and admins can query them with `pubg-worker-runs`, so storage/API/parser
 failures remain visible after the in-memory status changes. The local manager can filter those worker rows by worker
 name, succeeded/failed status, and KST created-time range, page through older runs, and open one run's summary metrics
-plus full stored errors from the table. Opening a worker run also keeps a copyable `worker_run_id` detail link in the
+plus full stored errors from the table. The date controls include quick ranges for recent 1h, recent 24h, today,
+yesterday, and recent 7d lookups. Opening a worker run also keeps a copyable `worker_run_id` detail link in the
 browser URL. The same
 page stores storage/worker alert records in
 `system_alert_history`, shows current unsuppressed

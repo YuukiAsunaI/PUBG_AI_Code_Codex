@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta
 from pathlib import Path
 import shlex
 from typing import Any
@@ -37,6 +38,7 @@ from pubg_ai.pubg_client import PubgApiClient, PubgApiError
 from pubg_ai.replay_artifact_catalog import ReplayArtifactRecord, list_replay_artifacts
 from pubg_ai.replay_storage import ReplayArtifactStore, ReplayStorageError
 from pubg_ai.system_alerts import collect_system_alerts, format_alert_report, format_discord_alert
+from pubg_ai.time_utils import now_kst, to_kst
 from pubg_ai.worker_run_history import (
     WORKER_RUN_STATUSES,
     WorkerRunHistoryError,
@@ -613,7 +615,7 @@ def create_discord_bot(
                     f"- `{command_prefix}pubg-alert-resolution alert_id resolution`",
                     f"- `{command_prefix}pubg-alert-notes alert_id [limit]`",
                     f"- `{command_prefix}pubg-alert-history [preset|filters]`",
-                    f"- `{command_prefix}pubg-worker-runs [collector|post_processing|all] [status=succeeded|failed|all] [limit] [from=KST] [to=KST]`",
+                    f"- `{command_prefix}pubg-worker-runs [collector|post_processing|all] [status=succeeded|failed|all] [limit] [range=last24h|today|yesterday|last7d]`",
                     f"- `{command_prefix}pubg-worker-run run_id`",
                     f"- `{command_prefix}유저삭제 steam 닉네임또는accountId`",
                 ]
@@ -1187,7 +1189,8 @@ def create_discord_bot(
         except ValueError as exc:
             await ctx.reply(
                 f"Usage: `{command_prefix}pubg-worker-runs [collector|post_processing|all] "
-                "status=succeeded|failed|all [limit] offset=0 from=2026-07-01T00:00 to=2026-07-02T00:00`"
+                "status=succeeded|failed|all [limit] offset=0 range=last24h|today|yesterday|last7d "
+                "from=2026-07-01T00:00 to=2026-07-02T00:00`"
                 f"\nError: {exc}",
                 mention_author=False,
             )
@@ -1685,7 +1688,11 @@ def _alert_history_record_state(record: AlertHistoryRecord) -> str:
     return "current"
 
 
-def _parse_worker_run_filters(raw: str | None) -> dict[str, str | int | None]:
+def _parse_worker_run_filters(
+    raw: str | None,
+    *,
+    reference_kst: datetime | None = None,
+) -> dict[str, str | int | None]:
     filters: dict[str, str | int | None] = {
         "worker_name": None,
         "status": "all",
@@ -1709,7 +1716,12 @@ def _parse_worker_run_filters(raw: str | None) -> dict[str, str | int | None]:
 
         if "=" in normalized_token:
             key, value = normalized_token.split("=", 1)
-            _apply_worker_run_filter(filters, key.strip().lower(), value.strip())
+            _apply_worker_run_filter(
+                filters,
+                key.strip().lower(),
+                value.strip(),
+                reference_kst=reference_kst,
+            )
             continue
 
         lowered = normalized_token.lower()
@@ -1723,7 +1735,13 @@ def _parse_worker_run_filters(raw: str | None) -> dict[str, str | int | None]:
     return filters
 
 
-def _apply_worker_run_filter(filters: dict[str, str | int | None], key: str, value: str) -> None:
+def _apply_worker_run_filter(
+    filters: dict[str, str | int | None],
+    key: str,
+    value: str,
+    *,
+    reference_kst: datetime | None = None,
+) -> None:
     if key in {"worker", "worker_name", "name"}:
         filters["worker_name"] = _worker_run_name(value)
     elif key in {"status", "state"}:
@@ -1736,6 +1754,10 @@ def _apply_worker_run_filter(filters: dict[str, str | int | None], key: str, val
         filters["created_from_kst"] = _worker_run_datetime_filter(value)
     elif key in {"to", "until", "end", "created_to", "created_to_kst", "date_to"}:
         filters["created_to_kst"] = _worker_run_datetime_filter(value)
+    elif key in {"range", "preset", "quick_range", "created_range"}:
+        created_from, created_to = _worker_run_range_preset(value, reference_kst=reference_kst)
+        filters["created_from_kst"] = created_from
+        filters["created_to_kst"] = created_to
     else:
         raise ValueError(f"unknown filter: {key}")
 
@@ -1782,6 +1804,55 @@ def _worker_run_offset(value: str | int) -> int:
 def _worker_run_datetime_filter(value: str) -> str | None:
     text = str(value).strip()
     return text or None
+
+
+def _worker_run_range_preset(value: str, *, reference_kst: datetime | None = None) -> tuple[str | None, str | None]:
+    normalized = str(value).strip().lower().replace("-", "_")
+    aliases = {
+        "none": "custom",
+        "all": "custom",
+        "custom": "custom",
+        "1h": "last_1h",
+        "last1h": "last_1h",
+        "last_1h": "last_1h",
+        "hour": "last_1h",
+        "last_hour": "last_1h",
+        "24h": "last_24h",
+        "last24h": "last_24h",
+        "last_24h": "last_24h",
+        "day": "last_24h",
+        "today": "today",
+        "yesterday": "yesterday",
+        "7d": "last_7d",
+        "last7d": "last_7d",
+        "last_7d": "last_7d",
+        "week": "last_7d",
+    }
+    preset = aliases.get(normalized)
+    if preset is None:
+        raise ValueError(f"invalid range preset: {value}")
+    if preset == "custom":
+        return None, None
+
+    now = to_kst(reference_kst) if reference_kst is not None else now_kst()
+    now = now.replace(microsecond=0)
+    today_start = now.replace(hour=0, minute=0, second=0)
+    if preset == "last_1h":
+        return _worker_run_datetime_preset_value(now - timedelta(hours=1)), _worker_run_datetime_preset_value(now)
+    if preset == "last_24h":
+        return _worker_run_datetime_preset_value(now - timedelta(hours=24)), _worker_run_datetime_preset_value(now)
+    if preset == "today":
+        return _worker_run_datetime_preset_value(today_start), _worker_run_datetime_preset_value(now)
+    if preset == "yesterday":
+        yesterday_start = today_start - timedelta(days=1)
+        return _worker_run_datetime_preset_value(yesterday_start), _worker_run_datetime_preset_value(today_start)
+    if preset == "last_7d":
+        return _worker_run_datetime_preset_value(now - timedelta(days=7)), _worker_run_datetime_preset_value(now)
+    raise ValueError(f"invalid range preset: {value}")
+
+
+def _worker_run_datetime_preset_value(value: datetime) -> str:
+    return to_kst(value).replace(microsecond=0).isoformat()
 
 
 def _top_parts(parts: dict[str, int]) -> str:
