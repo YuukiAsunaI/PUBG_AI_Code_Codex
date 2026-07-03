@@ -417,7 +417,8 @@ Completed slices:
     commands.
 69. Local manager and Discord worker-run history filters support quick KST range presets for common lookups.
 70. The local manager can export filtered worker-run history to CSV for local incident review.
+71. The local manager can copy and restore shareable worker-run history filter URLs for local incident handoff.
 
 Next slice:
 
-1. Add shareable local worker-run history filter URLs for incident review handoff.
+1. Add Discord worker-run history CSV export link support when `local_web_base_url` is configured.

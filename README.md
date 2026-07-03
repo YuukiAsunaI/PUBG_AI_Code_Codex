@@ -372,7 +372,8 @@ failures remain visible after the in-memory status changes. The local manager ca
 name, succeeded/failed status, and KST created-time range, page through older runs, and open one run's summary metrics
 plus full stored errors from the table. The date controls include quick ranges for recent 1h, recent 24h, today,
 yesterday, and recent 7d lookups, and the filtered rows can be exported as CSV for local incident review. Opening a
-worker run also keeps a copyable `worker_run_id` detail link in the browser URL. The same
+worker run also keeps a copyable `worker_run_id` detail link in the browser URL, and the filter bar can copy a
+shareable local URL that restores the same worker/status/time window and page offset. The same
 page stores storage/worker alert records in
 `system_alert_history`, shows current unsuppressed
 alerts separately from recent history, lets the admin acknowledge or temporarily hide noisy alerts, and can filter or

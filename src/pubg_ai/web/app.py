@@ -2026,6 +2026,7 @@ _INDEX_HTML = """<!doctype html>
       <div class="actions" style="margin-bottom: 10px;">
         <button class="secondary" type="button" onclick="loadWorkerRuns()">새로고침</button>
         <button class="secondary" type="button" id="workerRunsExport">Export CSV</button>
+        <button class="secondary" type="button" id="workerRunsCopyFilterLink">Copy filter link</button>
         <button class="secondary" type="button" id="workerRunsPrev">Previous</button>
         <button class="secondary" type="button" id="workerRunsNext">Next</button>
       </div>
@@ -2182,6 +2183,7 @@ _INDEX_HTML = """<!doctype html>
     const workerRunsBody = document.querySelector("#workerRunsBody");
     const workerRunsStatus = document.querySelector("#workerRunsStatus");
     const workerRunsExport = document.querySelector("#workerRunsExport");
+    const workerRunsCopyFilterLink = document.querySelector("#workerRunsCopyFilterLink");
     const workerRunsPrev = document.querySelector("#workerRunsPrev");
     const workerRunsNext = document.querySelector("#workerRunsNext");
     const workerRunDetail = document.querySelector("#workerRunDetail");
@@ -3274,6 +3276,9 @@ _INDEX_HTML = """<!doctype html>
           created_to_kst: createdTo,
         };
         renderWorkerRuns(page.records || payload.runs || [], page, true);
+        if (options.updateUrl) {
+          updateWorkerRunFilterUrl();
+        }
       } catch (error) {
         workerRunsStatus.textContent = `Error: ${error.message}`;
         workerRunsBody.innerHTML = `<tr><td colspan="6">Error: ${escapeHtml(error.message)}</td></tr>`;
@@ -3494,6 +3499,107 @@ _INDEX_HTML = """<!doctype html>
           <tbody>${errorRows}</tbody>
         </table>
       `;
+    }
+
+    function loadInitialWorkerRunFiltersFromUrl() {
+      const params = new URLSearchParams(window.location.search);
+      const filterKeys = [
+        "worker_run_worker",
+        "worker_run_status",
+        "worker_run_range",
+        "worker_run_from",
+        "worker_run_to",
+        "worker_run_limit",
+        "worker_run_offset",
+      ];
+      if (!filterKeys.some((key) => params.has(key))) return;
+
+      const worker = workerRunUrlWorker(params.get("worker_run_worker") || params.get("worker_runs_worker") || "all");
+      const status = workerRunUrlStatus(params.get("worker_run_status") || "all");
+      const fromValue = workerRunDateTimeInputValue(
+        params.get("worker_run_from") || params.get("worker_run_created_from_kst") || ""
+      );
+      const toValue = workerRunDateTimeInputValue(
+        params.get("worker_run_to") || params.get("worker_run_created_to_kst") || ""
+      );
+      const quickRange = fromValue || toValue
+        ? "custom"
+        : normalizeWorkerRunQuickRange(params.get("worker_run_range") || "custom");
+      const limit = workerRunUrlBoundedNumber(params.get("worker_run_limit"), 50, 1, 200);
+      const offset = workerRunUrlBoundedNumber(params.get("worker_run_offset"), 0, 0, 1000000);
+
+      workerRunFilterForm.elements.worker_name.value = worker;
+      workerRunFilterForm.elements.status.value = status;
+      workerRunFilterForm.elements.quick_range.value = quickRange;
+      workerRunFilterForm.elements.created_from_kst.value = fromValue;
+      workerRunFilterForm.elements.created_to_kst.value = toValue;
+      workerRunFilterForm.elements.limit.value = String(limit);
+      workerRunPage = {
+        ...workerRunPage,
+        worker_name: worker === "all" ? null : worker,
+        status,
+        quick_range: quickRange,
+        created_from_kst: fromValue,
+        created_to_kst: toValue,
+        limit,
+        offset,
+      };
+    }
+
+    function workerRunUrlWorker(value) {
+      return ["all", "collector", "post_processing"].includes(String(value || "all")) ? String(value || "all") : "all";
+    }
+
+    function workerRunUrlStatus(value) {
+      return ["all", "succeeded", "failed"].includes(String(value || "all")) ? String(value || "all") : "all";
+    }
+
+    function workerRunUrlBoundedNumber(value, fallback, min, max) {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return fallback;
+      return Math.max(min, Math.min(Math.floor(parsed), max));
+    }
+
+    function workerRunFilterUrl() {
+      const url = new URL(window.location.href);
+      const form = new FormData(workerRunFilterForm);
+      const worker = String(form.get("worker_name") || workerRunPage.worker_name || "all");
+      const status = String(form.get("status") || workerRunPage.status || "all");
+      const createdFrom = String(form.get("created_from_kst") || workerRunPage.created_from_kst || "");
+      const createdTo = String(form.get("created_to_kst") || workerRunPage.created_to_kst || "");
+      const limit = Number(form.get("limit") || workerRunPage.limit || 50);
+      url.searchParams.delete("worker_run_id");
+      url.searchParams.delete("worker_run");
+      url.searchParams.set("worker_run_worker", worker === "all" ? "all" : worker);
+      url.searchParams.set("worker_run_status", status);
+      url.searchParams.set("worker_run_range", "custom");
+      url.searchParams.set("worker_run_from", workerRunDateTimeInputValue(createdFrom));
+      url.searchParams.set("worker_run_to", workerRunDateTimeInputValue(createdTo));
+      url.searchParams.set("worker_run_limit", String(limit || 50));
+      url.searchParams.set("worker_run_offset", String(workerRunPage.offset || 0));
+      return url.toString();
+    }
+
+    function updateWorkerRunFilterUrl() {
+      window.history.replaceState({}, "", workerRunFilterUrl());
+    }
+
+    async function copyWorkerRunFilterLink() {
+      const url = workerRunFilterUrl();
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(url);
+        return url;
+      }
+      const input = document.createElement("textarea");
+      input.value = url;
+      input.setAttribute("readonly", "readonly");
+      input.style.position = "fixed";
+      input.style.opacity = "0";
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand("copy");
+      input.remove();
+      return url;
     }
 
     function workerRunDetailUrl(runId) {
@@ -4961,7 +5067,7 @@ _INDEX_HTML = """<!doctype html>
     workerRunFilterForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       try {
-        await loadWorkerRuns({ offset: 0 });
+        await loadWorkerRuns({ offset: 0, updateUrl: true });
         banner.textContent = "Worker run history loaded";
       } catch (error) {
         workerRunsStatus.textContent = `Error: ${error.message}`;
@@ -4971,6 +5077,15 @@ _INDEX_HTML = """<!doctype html>
 
     workerRunsExport.addEventListener("click", () => {
       exportWorkerRunsCsv();
+    });
+
+    workerRunsCopyFilterLink.addEventListener("click", async () => {
+      try {
+        const url = await copyWorkerRunFilterLink();
+        banner.textContent = `Worker run filter link copied: ${url}`;
+      } catch (error) {
+        banner.textContent = `Error: ${error.message}`;
+      }
     });
 
     workerRunFilterForm.elements.quick_range.addEventListener("change", () => {
@@ -4991,6 +5106,7 @@ _INDEX_HTML = """<!doctype html>
       try {
         await loadWorkerRuns({
           offset: Math.max(0, workerRunPage.offset - workerRunPage.limit),
+          updateUrl: true,
         });
       } catch (error) {
         workerRunsStatus.textContent = `Error: ${error.message}`;
@@ -5002,6 +5118,7 @@ _INDEX_HTML = """<!doctype html>
       try {
         await loadWorkerRuns({
           offset: workerRunPage.offset + workerRunPage.limit,
+          updateUrl: true,
         });
       } catch (error) {
         workerRunsStatus.textContent = `Error: ${error.message}`;
@@ -5256,6 +5373,8 @@ _INDEX_HTML = """<!doctype html>
     timelineZoom.addEventListener("change", renderReplayFrame);
 
     drawEmptyReplayCanvas();
+    loadInitialWorkerRunFiltersFromUrl();
+
     Promise.all([loadStatus(), loadAlerts(), loadDiscordPermissions(), loadDiscordScopes(), loadCollectorWorkerStatus(), loadPostProcessingWorkerStatus(), loadWorkerRuns(), loadPlayers(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
       .then(() => loadInitialAlertDetailFromUrl())
       .then(() => loadInitialWorkerRunDetailFromUrl())
