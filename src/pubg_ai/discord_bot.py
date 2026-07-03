@@ -40,6 +40,7 @@ from pubg_ai.replay_storage import ReplayArtifactStore, ReplayStorageError
 from pubg_ai.system_alerts import collect_system_alerts, format_alert_report, format_discord_alert
 from pubg_ai.time_utils import now_kst, to_kst
 from pubg_ai.worker_run_history import (
+    WORKER_RUN_EXPORT_LIMIT,
     WORKER_RUN_STATUSES,
     WorkerRunHistoryError,
     WorkerRunPage,
@@ -203,6 +204,9 @@ def format_worker_run_history_result(
         "- filters: " + " ".join(_worker_run_history_filter_labels(page)),
         f"- shown/total: {len(page.records)}/{page.total} offset={page.offset} limit={page.limit}",
     ]
+    export_link = _worker_run_export_link(page, detail_base_url)
+    if export_link:
+        lines.append(f"- export_csv: [download]({export_link})")
     if not page.records:
         lines.append("- no worker runs yet")
         return "\n".join(lines)
@@ -1313,6 +1317,22 @@ def _worker_run_detail_link(run: WorkerRunRecord, base_url: str | None) -> str:
     if not base_url:
         return ""
     return f" [detail]({base_url.rstrip('/')}/?{urlencode({'worker_run_id': run.id})})"
+
+
+def _worker_run_export_link(page: WorkerRunPage, base_url: str | None) -> str:
+    if not base_url:
+        return ""
+    query = urlencode(
+        {
+            "worker_name": page.worker_name or "",
+            "status": page.status,
+            "created_from_kst": page.created_from_kst or "",
+            "created_to_kst": page.created_to_kst or "",
+            "limit": WORKER_RUN_EXPORT_LIMIT,
+            "offset": 0,
+        }
+    )
+    return f"{base_url.rstrip('/')}/workers/runs/export.csv?{query}"
 
 
 def _alert_history_navigation_hints(page: AlertHistoryPage, *, command_prefix: str) -> list[str]:

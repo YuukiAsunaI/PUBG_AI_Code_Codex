@@ -111,7 +111,8 @@ Implemented behavior:
   copyable previous/next `offset` commands, and a copyable detail command for each row. `from`/`to` filter
   `created_at_kst` ranges in KST, while `range=last24h|today|yesterday|last7d` expands to common KST ranges. Date
   filters are preserved in pagination commands. When `PUBG_LOCAL_WEB_BASE_URL` is set, each row also includes a local
-  `worker_run_id` detail link.
+  `worker_run_id` detail link, and the response includes a filtered CSV export link for the same worker/status/time
+  window.
 - The admin-only `pubg-worker-run run_id` command opens one worker cycle from Discord and shows summary metrics plus
   the full stored error list. When `PUBG_LOCAL_WEB_BASE_URL` is set, the response also includes a local
   `worker_run_id` detail link.

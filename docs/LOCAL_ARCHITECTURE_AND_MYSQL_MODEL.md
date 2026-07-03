@@ -418,7 +418,9 @@ Completed slices:
 69. Local manager and Discord worker-run history filters support quick KST range presets for common lookups.
 70. The local manager can export filtered worker-run history to CSV for local incident review.
 71. The local manager can copy and restore shareable worker-run history filter URLs for local incident handoff.
+72. Discord `pubg-worker-runs` responses include filtered worker-run CSV export links when `local_web_base_url` is
+    configured.
 
 Next slice:
 
-1. Add Discord worker-run history CSV export link support when `local_web_base_url` is configured.
+1. Add Discord alert-history CSV export links when `local_web_base_url` is configured.

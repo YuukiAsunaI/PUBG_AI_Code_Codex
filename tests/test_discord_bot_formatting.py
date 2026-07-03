@@ -276,8 +276,14 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("detail: `!pubg-worker-run 11`", body)
         self.assertIn("next: `!pubg-worker-runs worker=all status=all limit=2 offset=2`", body)
         self.assertNotIn("previous:", body)
+        self.assertNotIn("export_csv", body)
 
         linked_body = format_worker_run_history_result(page, detail_base_url="http://127.0.0.1:8000/")
+        self.assertIn(
+            "export_csv: [download](http://127.0.0.1:8000/workers/runs/export.csv?"
+            "worker_name=&status=all&created_from_kst=&created_to_kst=&limit=5000&offset=0)",
+            linked_body,
+        )
         self.assertIn("[detail](http://127.0.0.1:8000/?worker_run_id=12)", linked_body)
         self.assertIn("[detail](http://127.0.0.1:8000/?worker_run_id=11)", linked_body)
         self.assertIn("detail: `!pubg-worker-run 12`", linked_body)
@@ -327,6 +333,13 @@ class DiscordBotFormattingTests(unittest.TestCase):
             "from=2026-07-01T09:00:00+09:00 to=2026-07-01T10:00:00+09:00`",
             body,
         )
+
+        linked_body = format_worker_run_history_result(page, detail_base_url="http://127.0.0.1:8000/")
+        self.assertIn("worker_name=collector", linked_body)
+        self.assertIn("status=failed", linked_body)
+        self.assertIn("created_from_kst=2026-07-01T09%3A00%3A00%2B09%3A00", linked_body)
+        self.assertIn("created_to_kst=2026-07-01T10%3A00%3A00%2B09%3A00", linked_body)
+        self.assertIn("limit=5000&offset=0", linked_body)
         self.assertIn(
             "next: `?pubg-worker-runs worker=collector status=failed limit=1 offset=2 "
             "from=2026-07-01T09:00:00+09:00 to=2026-07-01T10:00:00+09:00`",
