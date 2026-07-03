@@ -102,7 +102,8 @@ Implemented behavior:
   previous/next `offset` commands, and a copyable detail command for each row. When `PUBG_LOCAL_WEB_BASE_URL` is set,
   each row also includes a local `worker_run_id` detail link.
 - The admin-only `pubg-worker-run run_id` command opens one worker cycle from Discord and shows summary metrics plus
-  the full stored error list.
+  the full stored error list. When `PUBG_LOCAL_WEB_BASE_URL` is set, the response also includes a local
+  `worker_run_id` detail link.
 
 ## Duplicate Match Handling
 

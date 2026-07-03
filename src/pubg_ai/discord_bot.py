@@ -218,7 +218,7 @@ def format_worker_run_history_result(
     return "\n".join(lines)
 
 
-def format_worker_run_detail_result(run: WorkerRunRecord) -> str:
+def format_worker_run_detail_result(run: WorkerRunRecord, *, detail_base_url: str | None = None) -> str:
     lines = [
         "PUBG AI worker run detail",
         f"- id: {run.id}",
@@ -228,6 +228,9 @@ def format_worker_run_detail_result(run: WorkerRunRecord) -> str:
         f"- duration/errors: {_optional_duration_seconds(run.duration_seconds)} / {run.error_count}",
         f"- created_at_kst: {run.created_at_kst or '-'}",
     ]
+    detail_link = _worker_run_detail_link(run, detail_base_url).strip()
+    if detail_link:
+        lines.append(f"- local_detail: {detail_link}")
 
     metrics = _worker_run_summary_metrics(run.summary)
     if metrics:
@@ -1238,7 +1241,10 @@ def create_discord_bot(
         finally:
             connection.close()
 
-        await ctx.reply(format_worker_run_detail_result(run), mention_author=False)
+        await ctx.reply(
+            format_worker_run_detail_result(run, detail_base_url=config.app.local_web_base_url),
+            mention_author=False,
+        )
 
     return bot
 

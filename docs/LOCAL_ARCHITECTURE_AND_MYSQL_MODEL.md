@@ -410,7 +410,9 @@ Completed slices:
     `local_web_base_url` is configured.
 65. Discord `pubg-worker-runs` history rows include local `worker_run_id` detail links when `local_web_base_url` is
     configured.
+66. Discord `pubg-worker-run` detail responses include local `worker_run_id` detail links when `local_web_base_url` is
+    configured.
 
 Next slice:
 
-1. Include local worker-run detail links in Discord `pubg-worker-run` detail responses when `local_web_base_url` is set.
+1. Add local manager worker-run filters for date/time ranges.

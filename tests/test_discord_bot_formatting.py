@@ -349,12 +349,17 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("- id: 12", body)
         self.assertIn("worker/status: collector/failed", body)
         self.assertIn("duration/errors: 3.2s / 2", body)
+        self.assertNotIn("local_detail", body)
         self.assertIn("poll_interval_seconds=180", body)
         self.assertIn("collection.queued_match_jobs=2", body)
         self.assertIn("collection.existing_match_jobs=1", body)
         self.assertIn("match_jobs.stored_matches=4", body)
         self.assertIn("1. match_jobs: RuntimeError: boom", body)
         self.assertIn("2. telemetry_jobs: RuntimeError: telemetry missing", body)
+
+        linked_body = format_worker_run_detail_result(run, detail_base_url="http://127.0.0.1:8000/")
+        self.assertIn("- local_detail: [detail](http://127.0.0.1:8000/?worker_run_id=12)", linked_body)
+        self.assertIn("collection.queued_match_jobs=2", linked_body)
 
     def test_worker_run_filter_parser_supports_worker_aliases_and_limit(self) -> None:
         filters = _parse_worker_run_filters("post-processing 99")

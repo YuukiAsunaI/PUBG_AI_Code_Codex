@@ -344,7 +344,8 @@ post-processing cycle status, duration, error count, and last error directly fro
 copyable `pubg-worker-run run_id` detail command for inspecting one run's summary metrics and full error list, plus a
 local `worker_run_id` detail link when `PUBG_LOCAL_WEB_BASE_URL` is set. Filter the list with
 `status=succeeded|failed|all`; when more worker rows are available, the response includes copyable previous/next
-`offset` commands that keep the selected worker and status filters.
+`offset` commands that keep the selected worker and status filters. The `pubg-worker-run run_id` detail response also
+includes the same local link when the base URL is configured.
 
 Run the local management app:
 
