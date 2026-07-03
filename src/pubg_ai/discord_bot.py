@@ -198,7 +198,7 @@ def format_worker_run_history_result(
 ) -> str:
     lines = [
         "PUBG AI worker run history",
-        f"- filters: worker={page.worker_name or 'all'} status={page.status}",
+        "- filters: " + " ".join(_worker_run_history_filter_labels(page)),
         f"- shown/total: {len(page.records)}/{page.total} offset={page.offset} limit={page.limit}",
     ]
     if not page.records:
@@ -613,7 +613,7 @@ def create_discord_bot(
                     f"- `{command_prefix}pubg-alert-resolution alert_id resolution`",
                     f"- `{command_prefix}pubg-alert-notes alert_id [limit]`",
                     f"- `{command_prefix}pubg-alert-history [preset|filters]`",
-                    f"- `{command_prefix}pubg-worker-runs [collector|post_processing|all] [limit]`",
+                    f"- `{command_prefix}pubg-worker-runs [collector|post_processing|all] [status=succeeded|failed|all] [limit] [from=KST] [to=KST]`",
                     f"- `{command_prefix}pubg-worker-run run_id`",
                     f"- `{command_prefix}유저삭제 steam 닉네임또는accountId`",
                 ]
@@ -1187,7 +1187,7 @@ def create_discord_bot(
         except ValueError as exc:
             await ctx.reply(
                 f"Usage: `{command_prefix}pubg-worker-runs [collector|post_processing|all] "
-                "status=succeeded|failed|all [limit] offset=0`"
+                "status=succeeded|failed|all [limit] offset=0 from=2026-07-01T00:00 to=2026-07-02T00:00`"
                 f"\nError: {exc}",
                 mention_author=False,
             )
@@ -1196,6 +1196,10 @@ def create_discord_bot(
         status = str(parsed["status"])
         limit = int(parsed["limit"])
         offset = int(parsed["offset"])
+        created_from_kst = (
+            str(parsed["created_from_kst"]) if parsed["created_from_kst"] is not None else None
+        )
+        created_to_kst = str(parsed["created_to_kst"]) if parsed["created_to_kst"] is not None else None
 
         connection = connect_mysql(config.database)
         try:
@@ -1204,6 +1208,8 @@ def create_discord_bot(
                     connection,
                     worker_name=worker_name,
                     status=status,
+                    created_from_kst=created_from_kst,
+                    created_to_kst=created_to_kst,
                     limit=limit,
                     offset=offset,
                 )
@@ -1363,6 +1369,19 @@ def _worker_run_navigation_hints(page: WorkerRunPage, *, command_prefix: str) ->
     return hints
 
 
+def _worker_run_history_filter_labels(page: WorkerRunPage) -> list[str]:
+    labels = [
+        f"worker={page.worker_name or 'all'}",
+        f"status={page.status}",
+    ]
+    if page.created_from_kst or page.created_to_kst:
+        labels.append(
+            f"created={_worker_run_date_filter_value(page.created_from_kst)}.."
+            f"{_worker_run_date_filter_value(page.created_to_kst)}"
+        )
+    return labels
+
+
 def _worker_run_history_command_for_page(page: WorkerRunPage, *, offset: int, command_prefix: str) -> str:
     parts = [
         f"{command_prefix}pubg-worker-runs",
@@ -1371,11 +1390,19 @@ def _worker_run_history_command_for_page(page: WorkerRunPage, *, offset: int, co
         _worker_run_filter_arg("limit", str(page.limit)),
         _worker_run_filter_arg("offset", str(max(0, offset))),
     ]
+    if page.created_from_kst:
+        parts.append(_worker_run_filter_arg("from", page.created_from_kst))
+    if page.created_to_kst:
+        parts.append(_worker_run_filter_arg("to", page.created_to_kst))
     return " ".join(parts)
 
 
 def _worker_run_filter_arg(key: str, value: str) -> str:
     return f"{key}={shlex.quote(str(value))}"
+
+
+def _worker_run_date_filter_value(value: str | None) -> str:
+    return value or "-"
 
 
 def _optional_duration_seconds(value: float | None) -> str:
@@ -1659,7 +1686,14 @@ def _alert_history_record_state(record: AlertHistoryRecord) -> str:
 
 
 def _parse_worker_run_filters(raw: str | None) -> dict[str, str | int | None]:
-    filters: dict[str, str | int | None] = {"worker_name": None, "status": "all", "limit": 5, "offset": 0}
+    filters: dict[str, str | int | None] = {
+        "worker_name": None,
+        "status": "all",
+        "limit": 5,
+        "offset": 0,
+        "created_from_kst": None,
+        "created_to_kst": None,
+    }
     if not raw or not raw.strip():
         return filters
 
@@ -1698,6 +1732,10 @@ def _apply_worker_run_filter(filters: dict[str, str | int | None], key: str, val
         filters["limit"] = _worker_run_limit(value)
     elif key == "offset":
         filters["offset"] = _worker_run_offset(value)
+    elif key in {"from", "since", "start", "created_from", "created_from_kst", "date_from"}:
+        filters["created_from_kst"] = _worker_run_datetime_filter(value)
+    elif key in {"to", "until", "end", "created_to", "created_to_kst", "date_to"}:
+        filters["created_to_kst"] = _worker_run_datetime_filter(value)
     else:
         raise ValueError(f"unknown filter: {key}")
 
@@ -1739,6 +1777,11 @@ def _worker_run_offset(value: str | int) -> int:
     except (TypeError, ValueError) as exc:
         raise ValueError(f"invalid offset: {value}") from exc
     return max(0, parsed)
+
+
+def _worker_run_datetime_filter(value: str) -> str | None:
+    text = str(value).strip()
+    return text or None
 
 
 def _top_parts(parts: dict[str, int]) -> str:

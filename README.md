@@ -304,7 +304,7 @@ Discord's message content intent to be enabled for the bot application. Initial 
 !pubg-alert-notes alert_id [limit]
 !pubg-alert-history [current-errors|worker-failures|storage-pressure|all-history]
 !pubg-alert-history source=storage state=current severity=error search="drive" limit=5
-!pubg-worker-runs [collector|post_processing|all] [status=succeeded|failed|all] [limit] [offset=0]
+!pubg-worker-runs [collector|post_processing|all] [status=succeeded|failed|all] [limit] [offset=0] [from=KST] [to=KST]
 !pubg-worker-run run_id
 !유저삭제 steam 닉네임또는accountId
 ```
@@ -343,8 +343,9 @@ response includes copyable previous/next `offset` commands. Use `pubg-worker-run
 post-processing cycle status, duration, error count, and last error directly from Discord; each row includes a
 copyable `pubg-worker-run run_id` detail command for inspecting one run's summary metrics and full error list, plus a
 local `worker_run_id` detail link when `PUBG_LOCAL_WEB_BASE_URL` is set. Filter the list with
-`status=succeeded|failed|all`; when more worker rows are available, the response includes copyable previous/next
-`offset` commands that keep the selected worker and status filters. The `pubg-worker-run run_id` detail response also
+`status=succeeded|failed|all` and KST created-time ranges such as `from=2026-07-01T00:00` and
+`to=2026-07-02T00:00`; when more worker rows are available, the response includes copyable previous/next `offset`
+commands that keep the selected worker, status, and date filters. The `pubg-worker-run run_id` detail response also
 includes the same local link when the base URL is configured.
 
 Run the local management app:

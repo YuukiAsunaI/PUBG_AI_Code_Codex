@@ -314,12 +314,23 @@ class DiscordBotFormattingTests(unittest.TestCase):
             offset=1,
             worker_name="collector",
             status="failed",
+            created_from_kst="2026-07-01T09:00:00+09:00",
+            created_to_kst="2026-07-01T10:00:00+09:00",
         )
 
         body = format_worker_run_history_result(page, command_prefix="?")
 
-        self.assertIn("previous: `?pubg-worker-runs worker=collector status=failed limit=1 offset=0`", body)
-        self.assertIn("next: `?pubg-worker-runs worker=collector status=failed limit=1 offset=2`", body)
+        self.assertIn("created=2026-07-01T09:00:00+09:00..2026-07-01T10:00:00+09:00", body)
+        self.assertIn(
+            "previous: `?pubg-worker-runs worker=collector status=failed limit=1 offset=0 "
+            "from=2026-07-01T09:00:00+09:00 to=2026-07-01T10:00:00+09:00`",
+            body,
+        )
+        self.assertIn(
+            "next: `?pubg-worker-runs worker=collector status=failed limit=1 offset=2 "
+            "from=2026-07-01T09:00:00+09:00 to=2026-07-01T10:00:00+09:00`",
+            body,
+        )
 
     def test_worker_run_detail_result_formats_summary_metrics_and_errors(self) -> None:
         run = WorkerRunRecord(
@@ -367,11 +378,22 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertEqual(filters["worker_name"], "post_processing")
         self.assertEqual(filters["limit"], 10)
 
-        keyed = _parse_worker_run_filters("worker=collector status=failed limit=4 offset=8")
+        keyed = _parse_worker_run_filters(
+            "worker=collector status=failed limit=4 offset=8 "
+            "from=2026-07-01T09:00 to=2026-07-01T10:00"
+        )
         self.assertEqual(keyed["worker_name"], "collector")
         self.assertEqual(keyed["status"], "failed")
         self.assertEqual(keyed["limit"], 4)
         self.assertEqual(keyed["offset"], 8)
+        self.assertEqual(keyed["created_from_kst"], "2026-07-01T09:00")
+        self.assertEqual(keyed["created_to_kst"], "2026-07-01T10:00")
+
+        aliased_dates = _parse_worker_run_filters(
+            'created_from_kst="2026-07-01 09:00" created_to=2026-07-01T11:00'
+        )
+        self.assertEqual(aliased_dates["created_from_kst"], "2026-07-01 09:00")
+        self.assertEqual(aliased_dates["created_to_kst"], "2026-07-01T11:00")
 
         all_workers = _parse_worker_run_filters("all succeeded")
         self.assertIsNone(all_workers["worker_name"])

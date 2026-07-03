@@ -413,7 +413,9 @@ Completed slices:
 66. Discord `pubg-worker-run` detail responses include local `worker_run_id` detail links when `local_web_base_url` is
     configured.
 67. The local manager worker-run API and filter form support KST `created_at_kst` from/to range filters.
+68. Discord `pubg-worker-runs` supports KST `created_at_kst` from/to range filters and preserves them in pagination
+    commands.
 
 Next slice:
 
-1. Add Discord `pubg-worker-runs` date/time range filters for `created_at_kst`.
+1. Add worker-run quick range presets for common local manager and Discord lookups.
