@@ -480,6 +480,8 @@ def create_app() -> Any:
     def worker_runs(
         worker_name: str | None = None,
         status: str = "all",
+        created_from_kst: str | None = None,
+        created_to_kst: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
@@ -489,6 +491,8 @@ def create_app() -> Any:
                 connection,
                 worker_name=worker_name,
                 status=status,
+                created_from_kst=created_from_kst,
+                created_to_kst=created_to_kst,
                 limit=limit,
                 offset=offset,
             )
@@ -1262,7 +1266,7 @@ _INDEX_HTML = """<!doctype html>
       grid-template-columns: 110px 130px 110px 90px 145px minmax(160px, 1fr) auto;
     }
     .worker-run-filter {
-      grid-template-columns: 130px 120px 90px auto;
+      grid-template-columns: 130px 120px minmax(170px, 1fr) minmax(170px, 1fr) 90px auto;
       margin-bottom: 10px;
     }
     label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
@@ -1920,6 +1924,12 @@ _INDEX_HTML = """<!doctype html>
             <option value="failed">failed</option>
           </select>
         </label>
+        <label>Created from
+          <input name="created_from_kst" type="datetime-local">
+        </label>
+        <label>Created to
+          <input name="created_to_kst" type="datetime-local">
+        </label>
         <label>Limit
           <input name="limit" type="number" min="1" max="200" value="50">
         </label>
@@ -2175,6 +2185,8 @@ _INDEX_HTML = """<!doctype html>
       offset: 0,
       worker_name: null,
       status: "all",
+      created_from_kst: "",
+      created_to_kst: "",
       has_previous: false,
       has_next: false,
     };
@@ -3141,11 +3153,15 @@ _INDEX_HTML = """<!doctype html>
         const form = new FormData(workerRunFilterForm);
         const selectedWorker = options.worker_name ?? String(form.get("worker_name") || workerRunPage.worker_name || "all");
         const selectedStatus = options.status ?? String(form.get("status") || workerRunPage.status || "all");
+        const createdFrom = options.created_from_kst ?? String(form.get("created_from_kst") || workerRunPage.created_from_kst || "");
+        const createdTo = options.created_to_kst ?? String(form.get("created_to_kst") || workerRunPage.created_to_kst || "");
         const limit = Number(options.limit || form.get("limit") || workerRunPage.limit || 50);
         const offset = Math.max(0, Number(options.offset ?? workerRunPage.offset ?? 0));
         const params = new URLSearchParams({
           worker_name: selectedWorker === "all" ? "" : selectedWorker,
           status: selectedStatus,
+          created_from_kst: createdFrom,
+          created_to_kst: createdTo,
           limit: String(limit),
           offset: String(offset),
         });
@@ -3158,6 +3174,8 @@ _INDEX_HTML = """<!doctype html>
           offset,
           worker_name: selectedWorker === "all" ? null : selectedWorker,
           status: selectedStatus,
+          created_from_kst: createdFrom,
+          created_to_kst: createdTo,
         };
         renderWorkerRuns(page.records || payload.runs || [], page, true);
       } catch (error) {
@@ -3174,12 +3192,16 @@ _INDEX_HTML = """<!doctype html>
         offset: Number(page.offset ?? workerRunPage.offset ?? 0),
         total: Number(page.total ?? workerRunPage.total ?? runs.length),
         status: String(page.status || workerRunPage.status || "all"),
+        created_from_kst: String(page.created_from_kst || workerRunPage.created_from_kst || ""),
+        created_to_kst: String(page.created_to_kst || workerRunPage.created_to_kst || ""),
         has_previous: Boolean(page.has_previous),
         has_next: Boolean(page.has_next),
       };
       if (syncControls) {
         workerRunFilterForm.elements.worker_name.value = workerRunPage.worker_name || "all";
         workerRunFilterForm.elements.status.value = workerRunPage.status || "all";
+        workerRunFilterForm.elements.created_from_kst.value = workerRunDateTimeInputValue(workerRunPage.created_from_kst);
+        workerRunFilterForm.elements.created_to_kst.value = workerRunDateTimeInputValue(workerRunPage.created_to_kst);
         workerRunFilterForm.elements.limit.value = String(workerRunPage.limit || 50);
       }
       const start = runs.length ? workerRunPage.offset + 1 : 0;
@@ -3188,6 +3210,7 @@ _INDEX_HTML = """<!doctype html>
         `${start}-${end} of ${workerRunPage.total}`,
         `worker ${workerRunPage.worker_name || "all"}`,
         `status ${workerRunPage.status || "all"}`,
+        `created ${workerRunDateRangeLabel(workerRunPage.created_from_kst, workerRunPage.created_to_kst)}`,
       ].join(" / ");
       workerRunsPrev.disabled = !workerRunPage.has_previous;
       workerRunsNext.disabled = !workerRunPage.has_next;
@@ -3203,6 +3226,17 @@ _INDEX_HTML = """<!doctype html>
             </tr>
           `).join("")
         : `<tr><td colspan="6">No worker runs yet</td></tr>`;
+    }
+
+    function workerRunDateTimeInputValue(value) {
+      if (!value) return "";
+      return String(value).replace(" ", "T").slice(0, 16);
+    }
+
+    function workerRunDateRangeLabel(fromValue, toValue) {
+      const fromText = workerRunDateTimeInputValue(fromValue) || "-";
+      const toText = workerRunDateTimeInputValue(toValue) || "-";
+      return `${fromText}..${toText}`;
     }
 
     function workerRunSummary(run) {

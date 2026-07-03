@@ -41,6 +41,8 @@ class WorkerRunPage:
     offset: int
     worker_name: str | None = None
     status: str = "all"
+    created_from_kst: str | None = None
+    created_to_kst: str | None = None
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -50,6 +52,8 @@ class WorkerRunPage:
             "offset": self.offset,
             "worker_name": self.worker_name,
             "status": self.status,
+            "created_from_kst": self.created_from_kst,
+            "created_to_kst": self.created_to_kst,
             "has_previous": self.offset > 0,
             "has_next": self.offset + len(self.records) < self.total,
         }
@@ -121,12 +125,19 @@ def list_worker_runs(
     *,
     worker_name: str | None = None,
     status: str = "all",
+    created_from_kst: Any | None = None,
+    created_to_kst: Any | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list[WorkerRunRecord]:
     bounded_limit = max(1, min(int(limit), 200))
     bounded_offset = max(0, int(offset))
-    where, params = _worker_run_filter_clause(worker_name, status=status)
+    where, params = _worker_run_filter_clause(
+        worker_name,
+        status=status,
+        created_from_kst=created_from_kst,
+        created_to_kst=created_to_kst,
+    )
     params.extend([bounded_limit, bounded_offset])
 
     with connection.cursor() as cursor:
@@ -160,8 +171,15 @@ def count_worker_runs(
     *,
     worker_name: str | None = None,
     status: str = "all",
+    created_from_kst: Any | None = None,
+    created_to_kst: Any | None = None,
 ) -> int:
-    where, params = _worker_run_filter_clause(worker_name, status=status)
+    where, params = _worker_run_filter_clause(
+        worker_name,
+        status=status,
+        created_from_kst=created_from_kst,
+        created_to_kst=created_to_kst,
+    )
     with connection.cursor() as cursor:
         cursor.execute(
             f"""
@@ -180,6 +198,8 @@ def get_worker_run_page(
     *,
     worker_name: str | None = None,
     status: str = "all",
+    created_from_kst: Any | None = None,
+    created_to_kst: Any | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> WorkerRunPage:
@@ -187,14 +207,26 @@ def get_worker_run_page(
     bounded_offset = max(0, int(offset))
     normalized_worker_name = _validate_worker_name(worker_name) if worker_name else None
     normalized_status = _validate_worker_status(status)
+    created_from = _validate_filter_datetime(created_from_kst, "created_from_kst")
+    created_to = _validate_filter_datetime(created_to_kst, "created_to_kst")
+    if created_from is not None and created_to is not None and created_from > created_to:
+        raise WorkerRunHistoryError("created_from_kst must be earlier than or equal to created_to_kst")
     records = list_worker_runs(
         connection,
         worker_name=normalized_worker_name,
         status=normalized_status,
+        created_from_kst=created_from,
+        created_to_kst=created_to,
         limit=bounded_limit,
         offset=bounded_offset,
     )
-    total = count_worker_runs(connection, worker_name=normalized_worker_name, status=normalized_status)
+    total = count_worker_runs(
+        connection,
+        worker_name=normalized_worker_name,
+        status=normalized_status,
+        created_from_kst=created_from,
+        created_to_kst=created_to,
+    )
     return WorkerRunPage(
         records=records,
         total=total,
@@ -202,6 +234,8 @@ def get_worker_run_page(
         offset=bounded_offset,
         worker_name=normalized_worker_name,
         status=normalized_status,
+        created_from_kst=created_from.isoformat() if created_from is not None else None,
+        created_to_kst=created_to.isoformat() if created_to is not None else None,
     )
 
 
@@ -319,7 +353,13 @@ def _validate_worker_status(value: str) -> str:
     return text
 
 
-def _worker_run_filter_clause(worker_name: str | None, *, status: str = "all") -> tuple[str, list[Any]]:
+def _worker_run_filter_clause(
+    worker_name: str | None,
+    *,
+    status: str = "all",
+    created_from_kst: Any | None = None,
+    created_to_kst: Any | None = None,
+) -> tuple[str, list[Any]]:
     clauses: list[str] = []
     params: list[Any] = []
     if worker_name:
@@ -331,9 +371,31 @@ def _worker_run_filter_clause(worker_name: str | None, *, status: str = "all") -
         clauses.append("status = %s")
         params.append(normalized_status)
 
+    created_from = _validate_filter_datetime(created_from_kst, "created_from_kst")
+    created_to = _validate_filter_datetime(created_to_kst, "created_to_kst")
+    if created_from is not None and created_to is not None and created_from > created_to:
+        raise WorkerRunHistoryError("created_from_kst must be earlier than or equal to created_to_kst")
+    if created_from is not None:
+        clauses.append("created_at_kst >= %s")
+        params.append(_mysql_datetime(created_from))
+    if created_to is not None:
+        clauses.append("created_at_kst <= %s")
+        params.append(_mysql_datetime(created_to))
+
     if not clauses:
         return "", []
     return "WHERE " + " AND ".join(clauses), params
+
+
+def _validate_filter_datetime(value: Any, field_name: str) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    parsed = _parse_iso_datetime(value)
+    if parsed is None:
+        raise WorkerRunHistoryError(f"invalid {field_name}: {value!r}")
+    return parsed
 
 
 def _error_list(value: Any) -> list[str]:

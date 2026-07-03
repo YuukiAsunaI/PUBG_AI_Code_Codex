@@ -83,6 +83,29 @@ class WorkerRunHistoryTests(unittest.TestCase):
         self.assertIn("LIMIT %s OFFSET %s", query)
         self.assertEqual(params, ("collector", "failed", 5, 10))
 
+    def test_list_worker_runs_supports_created_at_range(self) -> None:
+        connection = FakeConnection()
+
+        list_worker_runs(
+            connection,
+            worker_name="collector",
+            status="failed",
+            created_from_kst="2026-07-01T10:00",
+            created_to_kst="2026-07-01T11:00:00+09:00",
+            limit=5,
+            offset=10,
+        )
+
+        query, params = connection.cursor_obj.executed[0]
+        self.assertIn("worker_name = %s AND status = %s", query)
+        self.assertIn("created_at_kst >= %s", query)
+        self.assertIn("created_at_kst <= %s", query)
+        self.assertIn("LIMIT %s OFFSET %s", query)
+        self.assertEqual(params[0:2], ("collector", "failed"))
+        self.assertEqual(params[2].isoformat(), "2026-07-01T10:00:00")
+        self.assertEqual(params[3].isoformat(), "2026-07-01T11:00:00")
+        self.assertEqual(params[4:6], (5, 10))
+
     def test_count_worker_runs_supports_worker_filter(self) -> None:
         connection = FakeConnection(total=13)
 
@@ -125,6 +148,22 @@ class WorkerRunHistoryTests(unittest.TestCase):
         self.assertTrue(page.to_record()["has_previous"])
         self.assertTrue(page.to_record()["has_next"])
 
+    def test_get_worker_run_page_returns_created_at_range(self) -> None:
+        connection = FakeConnection(total=0)
+
+        page = get_worker_run_page(
+            connection,
+            created_from_kst="2026-07-01T10:00",
+            created_to_kst="2026-07-01T11:00",
+        )
+
+        self.assertEqual(page.created_from_kst, "2026-07-01T10:00:00+09:00")
+        self.assertEqual(page.created_to_kst, "2026-07-01T11:00:00+09:00")
+        self.assertEqual(page.to_record()["created_from_kst"], "2026-07-01T10:00:00+09:00")
+        executed_sql = "\n".join(query for query, _ in connection.cursor_obj.executed)
+        self.assertIn("created_at_kst >= %s", executed_sql)
+        self.assertIn("created_at_kst <= %s", executed_sql)
+
     def test_rejects_unknown_worker_name(self) -> None:
         with self.assertRaises(WorkerRunHistoryError):
             list_worker_runs(FakeConnection(), worker_name="other")
@@ -132,6 +171,16 @@ class WorkerRunHistoryTests(unittest.TestCase):
     def test_rejects_unknown_worker_status(self) -> None:
         with self.assertRaises(WorkerRunHistoryError):
             list_worker_runs(FakeConnection(), status="broken")
+
+    def test_rejects_invalid_created_at_range(self) -> None:
+        with self.assertRaises(WorkerRunHistoryError):
+            get_worker_run_page(FakeConnection(), created_from_kst="not-a-date")
+        with self.assertRaises(WorkerRunHistoryError):
+            get_worker_run_page(
+                FakeConnection(),
+                created_from_kst="2026-07-01T12:00",
+                created_to_kst="2026-07-01T11:00",
+            )
 
     def test_lists_failed_worker_runs_after_id(self) -> None:
         connection = FakeConnection(

@@ -367,8 +367,9 @@ local web server stops; use the CLI `run-collector` and `run-post-processing` co
 worker processes. Both worker entry points store recent cycle summaries in `worker_run_history`; the local manager
 shows those rows in `Worker Run History`, and admins can query them with `pubg-worker-runs`, so storage/API/parser
 failures remain visible after the in-memory status changes. The local manager can filter those worker rows by worker
-name and succeeded/failed status, page through older runs, and open one run's summary metrics plus full stored errors
-from the table. Opening a worker run also keeps a copyable `worker_run_id` detail link in the browser URL. The same
+name, succeeded/failed status, and KST created-time range, page through older runs, and open one run's summary metrics
+plus full stored errors from the table. Opening a worker run also keeps a copyable `worker_run_id` detail link in the
+browser URL. The same
 page stores storage/worker alert records in
 `system_alert_history`, shows current unsuppressed
 alerts separately from recent history, lets the admin acknowledge or temporarily hide noisy alerts, and can filter or

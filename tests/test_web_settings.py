@@ -96,6 +96,9 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn('id="workerRunDetail"', body)
         self.assertIn("data-worker-run-detail-id", body)
         self.assertIn('name="status"', body)
+        self.assertIn('name="created_from_kst"', body)
+        self.assertIn('name="created_to_kst"', body)
+        self.assertIn('type="datetime-local"', body)
         self.assertIn("/workers/runs", body)
         self.assertIn("/workers/runs/${encodeURIComponent(runId)}", body)
         self.assertIn("loadWorkerRuns", body)
@@ -109,6 +112,9 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn('url.searchParams.set("worker_run_id", runId)', body)
         self.assertIn("data-copy-worker-run-link", body)
         self.assertIn("navigator.clipboard.writeText", body)
+        self.assertIn("workerRunDateTimeInputValue", body)
+        self.assertIn("workerRunDateRangeLabel", body)
+        self.assertIn("created ${workerRunDateRangeLabel", body)
         self.assertIn("Summary metric", body)
         self.assertIn("Stored error", body)
         self.assertIn('id="discordScopeForm"', body)
@@ -239,7 +245,11 @@ class WebSettingsTests(unittest.TestCase):
         connection = FakeWorkerRunConnection()
         with patch("pubg_ai.web.app.connect_mysql", return_value=connection):
             client = TestClient(create_app())
-            response = client.get("/workers/runs?worker_name=collector&status=succeeded&limit=5&offset=10")
+            response = client.get(
+                "/workers/runs?worker_name=collector&status=succeeded"
+                "&created_from_kst=2026-07-01T10:00&created_to_kst=2026-07-01T11:00"
+                "&limit=5&offset=10"
+            )
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
@@ -247,6 +257,8 @@ class WebSettingsTests(unittest.TestCase):
         runs = payload["runs"]
         self.assertEqual(page["worker_name"], "collector")
         self.assertEqual(page["status"], "succeeded")
+        self.assertEqual(page["created_from_kst"], "2026-07-01T10:00:00+09:00")
+        self.assertEqual(page["created_to_kst"], "2026-07-01T11:00:00+09:00")
         self.assertEqual(page["limit"], 5)
         self.assertEqual(page["offset"], 10)
         self.assertEqual(page["total"], 1)
@@ -256,6 +268,8 @@ class WebSettingsTests(unittest.TestCase):
         executed_sql = "\n".join(query for query, _ in connection.cursor_obj.executed)
         self.assertIn("worker_name = %s", executed_sql)
         self.assertIn("status = %s", executed_sql)
+        self.assertIn("created_at_kst >= %s", executed_sql)
+        self.assertIn("created_at_kst <= %s", executed_sql)
         self.assertIn("LIMIT %s OFFSET %s", executed_sql)
         self.assertTrue(connection.closed)
 

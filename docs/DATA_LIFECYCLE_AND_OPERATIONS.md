@@ -69,8 +69,9 @@ Implemented behavior:
 - `POST /alerts/history/{alert_id}/notes` stores a `note` or `resolution` comment for one alert.
 - `POST /alerts/history/{alert_id}/acknowledge` marks a persisted alert as acknowledged.
 - `POST /alerts/history/{alert_id}/snooze` hides a persisted alert until the requested KST expiry, capped at 30 days.
-- `GET /workers/runs?worker_name=collector&status=failed&limit=50&offset=0` returns paged worker-run history for the
-  local manager, including total count and previous/next state for worker/status filters.
+- `GET /workers/runs?worker_name=collector&status=failed&created_from_kst=2026-07-01T00:00&created_to_kst=2026-07-02T00:00&limit=50&offset=0`
+  returns paged worker-run history for the local manager, including total count and previous/next state for
+  worker/status/KST-created-time filters.
 - `GET /workers/runs/{run_id}` returns one worker cycle with the stored summary JSON and error list for the local
   manager detail panel.
 - The local manager can load `/?worker_run_id={run_id}` directly, updates the browser URL when a worker-run detail is
