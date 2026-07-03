@@ -269,11 +269,17 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("duration=3.2s errors=1", body)
         self.assertIn("raw drive disconnected", body)
         self.assertIn("detail: `!pubg-worker-run 12`", body)
+        self.assertNotIn("[detail](http://127.0.0.1:8000/?worker_run_id=12)", body)
         self.assertIn("#11 [post_processing/succeeded]", body)
         self.assertIn("duration=5.0s errors=0 last_error=-", body)
         self.assertIn("detail: `!pubg-worker-run 11`", body)
         self.assertIn("next: `!pubg-worker-runs worker=all status=all limit=2 offset=2`", body)
         self.assertNotIn("previous:", body)
+
+        linked_body = format_worker_run_history_result(page, detail_base_url="http://127.0.0.1:8000/")
+        self.assertIn("[detail](http://127.0.0.1:8000/?worker_run_id=12)", linked_body)
+        self.assertIn("[detail](http://127.0.0.1:8000/?worker_run_id=11)", linked_body)
+        self.assertIn("detail: `!pubg-worker-run 12`", linked_body)
 
         custom_prefix_body = format_worker_run_history_result(page, command_prefix="?")
         self.assertIn("detail: `?pubg-worker-run 12`", custom_prefix_body)

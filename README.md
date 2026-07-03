@@ -341,9 +341,10 @@ presets or `source`/`state`/`severity`/`search` filters to review persisted aler
 `PUBG_LOCAL_WEB_BASE_URL` is set, each row includes a local detail link. When more history rows are available, the
 response includes copyable previous/next `offset` commands. Use `pubg-worker-runs` to review recent collector and
 post-processing cycle status, duration, error count, and last error directly from Discord; each row includes a
-copyable `pubg-worker-run run_id` detail command for inspecting one run's summary metrics and full error list. Filter
-the list with `status=succeeded|failed|all`; when more worker rows are available, the response includes copyable
-previous/next `offset` commands that keep the selected worker and status filters.
+copyable `pubg-worker-run run_id` detail command for inspecting one run's summary metrics and full error list, plus a
+local `worker_run_id` detail link when `PUBG_LOCAL_WEB_BASE_URL` is set. Filter the list with
+`status=succeeded|failed|all`; when more worker rows are available, the response includes copyable previous/next
+`offset` commands that keep the selected worker and status filters.
 
 Run the local management app:
 

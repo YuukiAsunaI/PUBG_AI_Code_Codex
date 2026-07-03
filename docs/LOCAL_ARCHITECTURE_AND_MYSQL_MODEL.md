@@ -408,7 +408,9 @@ Completed slices:
     related worker-run detail panel.
 64. Automatic Discord worker failure alert messages include local `worker_run_id` detail links when
     `local_web_base_url` is configured.
+65. Discord `pubg-worker-runs` history rows include local `worker_run_id` detail links when `local_web_base_url` is
+    configured.
 
 Next slice:
 
-1. Include local worker-run detail links in Discord `pubg-worker-runs` history rows when `local_web_base_url` is set.
+1. Include local worker-run detail links in Discord `pubg-worker-run` detail responses when `local_web_base_url` is set.

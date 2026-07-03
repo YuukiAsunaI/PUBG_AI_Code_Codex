@@ -193,6 +193,7 @@ def format_alert_history_result(
 def format_worker_run_history_result(
     page: WorkerRunPage,
     *,
+    detail_base_url: str | None = None,
     command_prefix: str = DEFAULT_DISCORD_PREFIX,
 ) -> str:
     lines = [
@@ -211,7 +212,7 @@ def format_worker_run_history_result(
         lines.append(
             f"- #{run.id} [{run.worker_name}/{run.status}] {created_at} "
             f"duration={duration} errors={run.error_count} last_error={last_error} "
-            f"detail: `{command_prefix}pubg-worker-run {run.id}`"
+            f"detail: `{command_prefix}pubg-worker-run {run.id}`{_worker_run_detail_link(run, detail_base_url)}"
         )
     lines.extend(_worker_run_navigation_hints(page, command_prefix=command_prefix))
     return "\n".join(lines)
@@ -1212,6 +1213,7 @@ def create_discord_bot(
         await ctx.reply(
             format_worker_run_history_result(
                 page,
+                detail_base_url=config.app.local_web_base_url,
                 command_prefix=command_prefix,
             ),
             mention_author=False,
@@ -1290,6 +1292,12 @@ def _alert_history_detail_link(record: AlertHistoryRecord, base_url: str | None)
     if not base_url:
         return ""
     return f" [detail]({base_url.rstrip('/')}/?{urlencode({'alert_id': record.id})})"
+
+
+def _worker_run_detail_link(run: WorkerRunRecord, base_url: str | None) -> str:
+    if not base_url:
+        return ""
+    return f" [detail]({base_url.rstrip('/')}/?{urlencode({'worker_run_id': run.id})})"
 
 
 def _alert_history_navigation_hints(page: AlertHistoryPage, *, command_prefix: str) -> list[str]:
