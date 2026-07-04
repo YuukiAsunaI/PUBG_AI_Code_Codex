@@ -106,9 +106,9 @@ Implemented behavior:
   without opening the local manager.
 - The admin-only `pubg-alert-history` command lists persisted alert history from Discord with quick presets or
   `source`/`state`/`severity`/`search`/`limit` filters. When `PUBG_LOCAL_WEB_BASE_URL` is set, those rows include
-  local detail links that open the management UI with `alert_id` selected, and the response includes a filtered CSV
-  export link for the same source/state/severity/search window. When the query has more rows, the response includes
-  copyable previous/next commands with the right `offset`.
+  local detail links that open the management UI with `alert_id` selected, and the response includes a filtered local
+  manager page link plus a filtered CSV export link for the same source/state/severity/search window. When the query
+  has more rows, the response includes copyable previous/next commands with the right `offset`.
 - The admin-only
   `pubg-worker-runs [collector|post_processing|all] [status=succeeded|failed|all] [limit] [range=last24h|today|yesterday|last7d] [from=KST] [to=KST]`
   command lists recent worker cycles from `worker_run_history` with status, duration, error count, last error,

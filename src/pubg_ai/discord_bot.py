@@ -177,6 +177,9 @@ def format_alert_history_result(
         ),
         f"- shown/total: {len(page.records)}/{page.total} offset={page.offset} limit={page.limit}",
     ]
+    filter_page_link = _alert_history_filter_page_link(page, detail_base_url)
+    if filter_page_link:
+        lines.append(f"- filter_page: [open]({filter_page_link})")
     export_link = _alert_history_export_link(page, detail_base_url)
     if export_link:
         lines.append(f"- export_csv: [download]({export_link})")
@@ -1315,6 +1318,23 @@ def _alert_history_detail_link(record: AlertHistoryRecord, base_url: str | None)
     if not base_url:
         return ""
     return f" [detail]({base_url.rstrip('/')}/?{urlencode({'alert_id': record.id})})"
+
+
+def _alert_history_filter_page_link(page: AlertHistoryPage, base_url: str | None) -> str:
+    if not base_url:
+        return ""
+    query = urlencode(
+        {
+            "alert_history_source": page.source,
+            "alert_history_state": page.state,
+            "alert_history_severity": page.severity,
+            "alert_history_sort": page.sort,
+            "alert_history_search": page.search or "",
+            "alert_history_limit": page.limit,
+            "alert_history_offset": page.offset,
+        }
+    )
+    return f"{base_url.rstrip('/')}/?{query}"
 
 
 def _alert_history_export_link(page: AlertHistoryPage, base_url: str | None) -> str:

@@ -161,9 +161,16 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("offset=1", body)
         self.assertNotIn("previous:", body)
         self.assertNotIn("[detail]", body)
+        self.assertNotIn("filter_page", body)
         self.assertNotIn("export_csv", body)
 
         linked = format_alert_history_result(page, detail_base_url="http://127.0.0.1:8000/")
+        self.assertIn(
+            "filter_page: [open](http://127.0.0.1:8000/?"
+            "alert_history_source=worker&alert_history_state=current&alert_history_severity=error&"
+            "alert_history_sort=severity&alert_history_search=raw+drive&alert_history_limit=1&alert_history_offset=0)",
+            linked,
+        )
         self.assertIn(
             "export_csv: [download](http://127.0.0.1:8000/alerts/history/export.csv?"
             "source=worker&state=current&severity=error&sort=severity&search=raw+drive&limit=5000&offset=0)",
