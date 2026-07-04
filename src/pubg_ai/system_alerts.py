@@ -159,11 +159,19 @@ def format_discord_alert(alert: SystemAlert, *, detail_base_url: str | None = No
     return "\n".join(lines)
 
 
-def format_alert_report(alerts: list[SystemAlert], *, limit: int = 5) -> str:
+def format_alert_report(
+    alerts: list[SystemAlert],
+    *,
+    limit: int = 5,
+    detail_base_url: str | None = None,
+) -> str:
     if not alerts:
         return "PUBG AI alerts: no active alerts."
     selected = alerts[: max(1, limit)]
     lines: list[str] = [f"PUBG AI alerts ({len(alerts)})"]
+    alerts_url = current_alerts_url(detail_base_url)
+    if alerts_url:
+        lines.append(f"- current_alerts: [open]({alerts_url})")
     for alert in selected:
         alert_id = getattr(alert, "id", None)
         prefix = f"#{alert_id} " if alert_id is not None else ""
@@ -189,6 +197,23 @@ def worker_run_detail_url(alert: SystemAlert, base_url: str | None) -> str:
     if not base_url or not run_id:
         return ""
     return f"{base_url.rstrip('/')}/?{urlencode({'worker_run_id': run_id})}"
+
+
+def current_alerts_url(base_url: str | None) -> str:
+    if not base_url:
+        return ""
+    query = urlencode(
+        {
+            "alert_history_source": "all",
+            "alert_history_state": "current",
+            "alert_history_severity": "all",
+            "alert_history_sort": "severity",
+            "alert_history_search": "",
+            "alert_history_limit": 50,
+            "alert_history_offset": 0,
+        }
+    )
+    return f"{base_url.rstrip('/')}/?{query}"
 
 
 def _worker_run_id(alert: SystemAlert) -> str:

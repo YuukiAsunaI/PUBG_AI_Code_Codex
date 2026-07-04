@@ -427,7 +427,9 @@ Completed slices:
     `local_web_base_url` is configured.
 76. Discord `pubg-worker-runs` responses include filtered local manager worker-run page links when
     `local_web_base_url` is configured.
+77. Discord `pubg-alerts` current-alert responses include local current-alert list links when `local_web_base_url` is
+    configured.
 
 Next slice:
 
-1. Add Discord current-alert local list page links when `local_web_base_url` is configured.
+1. Add local manager anchor targets for alert and worker sections so Discord links land closer to the relevant panel.

@@ -97,7 +97,8 @@ Implemented behavior:
 - The Discord bot sends active storage alerts once per bot process and sends newly persisted worker failures from
   `worker_run_history`; acknowledged and currently snoozed alert records are skipped. When `PUBG_LOCAL_WEB_BASE_URL`
   is set, automatic worker failure messages include a local `worker_run_id` detail link.
-- The admin-only `pubg-alerts` Discord command returns the current alert report on demand, including alert IDs.
+- The admin-only `pubg-alerts` Discord command returns the current alert report on demand, including alert IDs. When
+  `PUBG_LOCAL_WEB_BASE_URL` is set, the response includes a local current-alert list link.
 - The admin-only `pubg-alert-ack alert_id` and `pubg-alert-snooze alert_id [minutes]` commands update the same
   persisted alert history from Discord.
 - The admin-only `pubg-alert-note alert_id note` and `pubg-alert-resolution alert_id resolution` commands append

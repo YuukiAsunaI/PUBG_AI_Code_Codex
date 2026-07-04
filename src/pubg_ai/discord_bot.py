@@ -998,7 +998,10 @@ def create_discord_bot(
         finally:
             connection.close()
 
-        await ctx.reply(format_alert_report(visible_records), mention_author=False)
+        await ctx.reply(
+            format_alert_report(visible_records, detail_base_url=config.app.local_web_base_url),
+            mention_author=False,
+        )
 
     @bot.command(name="pubg-alert-ack", aliases=["pubg-alert-acknowledge"])
     async def alert_acknowledge_command(ctx: Any, alert_id: str | None = None) -> None:

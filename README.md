@@ -327,7 +327,8 @@ python -m pubg_ai.cli discord-permissions
 
 Permission groups currently include `register`, `profile_read`, `ranking_read`, `replay_read`, `settings_write`, and
 `admin`.
-The `admin` group includes `pubg-alerts`, which returns current storage and worker alerts. When Discord alert channel
+The `admin` group includes `pubg-alerts`, which returns current storage and worker alerts. When
+`PUBG_LOCAL_WEB_BASE_URL` is set, that response includes a local current-alert list link. When Discord alert channel
 IDs are configured from the local manager, the running Discord bot also sends new worker failures and active storage
 capacity alerts to those channels. When `PUBG_LOCAL_WEB_BASE_URL` is set, automatic worker failure alerts also include
 a local `worker_run_id` detail link. Alerts are persisted in MySQL so the local manager can show alert history; using

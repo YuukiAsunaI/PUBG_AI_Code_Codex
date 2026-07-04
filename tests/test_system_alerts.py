@@ -103,7 +103,18 @@ class SystemAlertsTests(unittest.TestCase):
             "- worker_run_detail: http://127.0.0.1:8000/?worker_run_id=7",
             format_discord_alert(record, detail_base_url="http://127.0.0.1:8000"),
         )
-        self.assertIn("#7 collector worker failed", format_alert_report([record]))
+        report = format_alert_report([record])
+        self.assertIn("#7 collector worker failed", report)
+        self.assertNotIn("current_alerts", report)
+
+        linked_report = format_alert_report([record], detail_base_url="http://127.0.0.1:8000/")
+        self.assertIn(
+            "- current_alerts: [open](http://127.0.0.1:8000/?"
+            "alert_history_source=all&alert_history_state=current&alert_history_severity=all&"
+            "alert_history_sort=severity&alert_history_search=&alert_history_limit=50&alert_history_offset=0)",
+            linked_report,
+        )
+        self.assertIn("#7 collector worker failed", linked_report)
 
 
 def _runtime_config(raw_data_dir: Path, replay_data_dir: Path) -> RuntimeConfig:
