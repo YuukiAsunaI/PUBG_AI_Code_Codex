@@ -343,8 +343,9 @@ manager page link and a filtered CSV export link. When more history rows are ava
 previous/next `offset` commands. Use `pubg-worker-runs` to review recent collector and
 post-processing cycle status, duration, error count, and last error directly from Discord; each row includes a
 copyable `pubg-worker-run run_id` detail command for inspecting one run's summary metrics and full error list. When
-`PUBG_LOCAL_WEB_BASE_URL` is set, the response includes local `worker_run_id` detail links and a filtered CSV export
-link. Filter the list with `status=succeeded|failed|all` and KST created-time ranges such as
+`PUBG_LOCAL_WEB_BASE_URL` is set, the response includes local `worker_run_id` detail links, a filtered local manager
+page link, and a filtered CSV export link. Filter the list with status=succeeded|failed|all and KST
+created-time ranges such as
 `from=2026-07-01T00:00` and
 `to=2026-07-02T00:00`, or quick presets such as `range=last24h`, `range=today`, `range=yesterday`, and
 `range=last7d`; when more worker rows are available, the response includes copyable previous/next `offset` commands

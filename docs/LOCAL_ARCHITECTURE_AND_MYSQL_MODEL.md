@@ -425,7 +425,9 @@ Completed slices:
 74. The local manager can copy and restore shareable alert-history filter URLs for local incident handoff.
 75. Discord `pubg-alert-history` responses include filtered local manager alert-history page links when
     `local_web_base_url` is configured.
+76. Discord `pubg-worker-runs` responses include filtered local manager worker-run page links when
+    `local_web_base_url` is configured.
 
 Next slice:
 
-1. Add Discord worker-run local filter page links when `local_web_base_url` is configured.
+1. Add Discord current-alert local list page links when `local_web_base_url` is configured.

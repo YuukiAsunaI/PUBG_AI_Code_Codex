@@ -211,6 +211,9 @@ def format_worker_run_history_result(
         "- filters: " + " ".join(_worker_run_history_filter_labels(page)),
         f"- shown/total: {len(page.records)}/{page.total} offset={page.offset} limit={page.limit}",
     ]
+    filter_page_link = _worker_run_filter_page_link(page, detail_base_url)
+    if filter_page_link:
+        lines.append(f"- filter_page: [open]({filter_page_link})")
     export_link = _worker_run_export_link(page, detail_base_url)
     if export_link:
         lines.append(f"- export_csv: [download]({export_link})")
@@ -1358,6 +1361,23 @@ def _worker_run_detail_link(run: WorkerRunRecord, base_url: str | None) -> str:
     if not base_url:
         return ""
     return f" [detail]({base_url.rstrip('/')}/?{urlencode({'worker_run_id': run.id})})"
+
+
+def _worker_run_filter_page_link(page: WorkerRunPage, base_url: str | None) -> str:
+    if not base_url:
+        return ""
+    query = urlencode(
+        {
+            "worker_run_worker": page.worker_name or "all",
+            "worker_run_status": page.status,
+            "worker_run_range": "custom",
+            "worker_run_from": page.created_from_kst or "",
+            "worker_run_to": page.created_to_kst or "",
+            "worker_run_limit": page.limit,
+            "worker_run_offset": page.offset,
+        }
+    )
+    return f"{base_url.rstrip('/')}/?{query}"
 
 
 def _worker_run_export_link(page: WorkerRunPage, base_url: str | None) -> str:
