@@ -161,8 +161,14 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("offset=1", body)
         self.assertNotIn("previous:", body)
         self.assertNotIn("[detail]", body)
+        self.assertNotIn("export_csv", body)
 
         linked = format_alert_history_result(page, detail_base_url="http://127.0.0.1:8000/")
+        self.assertIn(
+            "export_csv: [download](http://127.0.0.1:8000/alerts/history/export.csv?"
+            "source=worker&state=current&severity=error&sort=severity&search=raw+drive&limit=5000&offset=0)",
+            linked,
+        )
         self.assertIn("[detail](http://127.0.0.1:8000/?alert_id=7)", linked)
 
     def test_alert_history_result_formats_previous_and_next_hints(self) -> None:

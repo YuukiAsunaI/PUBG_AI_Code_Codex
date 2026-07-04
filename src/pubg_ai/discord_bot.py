@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 from pubg_ai.alert_history import (
+    ALERT_HISTORY_EXPORT_LIMIT,
     ALERT_HISTORY_SEVERITIES,
     ALERT_HISTORY_SORTS,
     ALERT_HISTORY_SOURCES,
@@ -176,6 +177,9 @@ def format_alert_history_result(
         ),
         f"- shown/total: {len(page.records)}/{page.total} offset={page.offset} limit={page.limit}",
     ]
+    export_link = _alert_history_export_link(page, detail_base_url)
+    if export_link:
+        lines.append(f"- export_csv: [download]({export_link})")
     if not page.records:
         lines.append("- no alert history rows")
         return "\n".join(lines)
@@ -1311,6 +1315,23 @@ def _alert_history_detail_link(record: AlertHistoryRecord, base_url: str | None)
     if not base_url:
         return ""
     return f" [detail]({base_url.rstrip('/')}/?{urlencode({'alert_id': record.id})})"
+
+
+def _alert_history_export_link(page: AlertHistoryPage, base_url: str | None) -> str:
+    if not base_url:
+        return ""
+    query = urlencode(
+        {
+            "source": page.source,
+            "state": page.state,
+            "severity": page.severity,
+            "sort": page.sort,
+            "search": page.search or "",
+            "limit": ALERT_HISTORY_EXPORT_LIMIT,
+            "offset": 0,
+        }
+    )
+    return f"{base_url.rstrip('/')}/alerts/history/export.csv?{query}"
 
 
 def _worker_run_detail_link(run: WorkerRunRecord, base_url: str | None) -> str:
