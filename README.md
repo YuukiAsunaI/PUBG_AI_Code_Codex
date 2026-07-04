@@ -382,7 +382,9 @@ alerts separately from recent history, lets the admin acknowledge or temporarily
 page history by source/status/severity, search title/message text, and sort it by newest, oldest, or severity-first
 when many old alerts have accumulated. Quick presets jump directly to current errors, worker failures, storage
 pressure, or the full history, and worker failure rows can jump straight to the related worker-run detail panel. The
-filtered and searched history can also be exported as CSV from the local manager. Each alert history row can also store
-persistent admin notes and resolution comments, and the local manager shows list-level state/severity badges and can
+filtered and searched history can also be exported as CSV from the local manager, and the filter bar can copy a
+shareable local URL that restores the same source/status/severity/search/sort window and page offset. Each alert history
+row can also store persistent admin notes and resolution comments, and the local manager shows list-level
+state/severity badges and can
 open a detail panel with status badges, ack/snooze controls, full note history, and inline note/resolution entry for
 one alert.

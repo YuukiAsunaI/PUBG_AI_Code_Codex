@@ -1633,6 +1633,7 @@ _INDEX_HTML = """<!doctype html>
         <button class="secondary" type="button" data-alert-history-preset="storage-pressure">Storage pressure</button>
         <button class="secondary" type="button" data-alert-history-preset="all-history">All history</button>
         <button class="secondary" type="button" id="alertHistoryExport">Export CSV</button>
+        <button class="secondary" type="button" id="alertHistoryCopyFilterLink">Copy filter link</button>
         <button class="secondary" type="button" id="alertHistoryPrev">Previous</button>
         <button class="secondary" type="button" id="alertHistoryNext">Next</button>
       </div>
@@ -2209,6 +2210,7 @@ _INDEX_HTML = """<!doctype html>
     const alertHistoryBody = document.querySelector("#alertHistoryBody");
     const alertHistoryStatus = document.querySelector("#alertHistoryStatus");
     const alertHistoryExport = document.querySelector("#alertHistoryExport");
+    const alertHistoryCopyFilterLink = document.querySelector("#alertHistoryCopyFilterLink");
     const alertHistoryPrev = document.querySelector("#alertHistoryPrev");
     const alertHistoryNext = document.querySelector("#alertHistoryNext");
     const alertHistoryPresetButtons = document.querySelectorAll("[data-alert-history-preset]");
@@ -2354,10 +2356,10 @@ _INDEX_HTML = """<!doctype html>
       return `ok / free ${formatBytes(Number(status.free_bytes || 0))}`;
     }
 
-    async function loadAlerts() {
+    async function loadAlerts(options = {}) {
       try {
         const payload = await fetch("/alerts/status").then((r) => r.json());
-        renderAlertStatus(payload);
+        renderAlertStatus(payload, options.renderHistory !== false);
       } catch (error) {
         alertSettingsStatus.textContent = `Error: ${error.message}`;
         alertsBody.innerHTML = `<tr><td colspan="5">Error: ${escapeHtml(error.message)}</td></tr>`;
@@ -2387,6 +2389,15 @@ _INDEX_HTML = """<!doctype html>
       const payload = await fetch(`/alerts/history?${params.toString()}`).then((r) => r.json());
       if (payload.detail) throw new Error(payload.detail);
       renderAlertHistory(payload.alert_history || [], payload.alert_history_page || {}, true);
+      if (options.updateUrl) {
+        updateAlertHistoryFilterUrl();
+      }
+    }
+
+    async function refreshAlertsAndHistory() {
+      const page = { ...alertHistoryPage };
+      await loadAlerts({ renderHistory: false });
+      await loadAlertHistory(page);
     }
 
     function exportAlertHistoryCsv() {
@@ -2441,10 +2452,10 @@ _INDEX_HTML = """<!doctype html>
       alertHistoryFilterForm.elements.severity.value = filters.severity;
       alertHistoryFilterForm.elements.sort.value = filters.sort;
       alertHistoryFilterForm.elements.search.value = filters.search;
-      await loadAlertHistory({ ...filters, offset: 0 });
+      await loadAlertHistory({ ...filters, offset: 0, updateUrl: true });
     }
 
-    function renderAlertStatus(payload) {
+    function renderAlertStatus(payload, renderHistory = true) {
       const settings = payload.alert_settings || {};
       alertSettingsForm.elements.minimum_free_gb.value = bytesToGiB(settings.minimum_free_bytes ?? 0).toFixed(1);
       alertSettingsForm.elements.discord_channel_ids.value = (settings.discord_channel_ids || []).join(", ");
@@ -2457,7 +2468,9 @@ _INDEX_HTML = """<!doctype html>
         `history ${payload.alert_history_page?.total ?? (payload.alert_history || []).length}`,
       ].join(" / ");
       renderAlerts(payload.alerts || []);
-      renderAlertHistory(payload.alert_history || [], payload.alert_history_page || {}, true);
+      if (renderHistory) {
+        renderAlertHistory(payload.alert_history || [], payload.alert_history_page || {}, true);
+      }
     }
 
     function renderAlerts(alerts) {
@@ -2678,6 +2691,100 @@ _INDEX_HTML = """<!doctype html>
       alertHistoryDetail.scrollIntoView({ block: "start" });
     }
 
+    function loadInitialAlertHistoryFiltersFromUrl() {
+      const params = new URLSearchParams(window.location.search);
+      const filterKeys = [
+        "alert_history_source",
+        "alert_history_state",
+        "alert_history_severity",
+        "alert_history_sort",
+        "alert_history_search",
+        "alert_history_limit",
+        "alert_history_offset",
+      ];
+      if (!filterKeys.some((key) => params.has(key))) return false;
+
+      const source = alertHistoryUrlChoice(params.get("alert_history_source") || params.get("alert_source"), ["all", "storage", "worker"], "all");
+      const state = alertHistoryUrlChoice(params.get("alert_history_state") || params.get("alert_state"), ["all", "active", "current", "acknowledged", "snoozed", "resolved"], "all");
+      const severity = alertHistoryUrlChoice(params.get("alert_history_severity") || params.get("alert_severity"), ["all", "error", "warning", "info", "ok"], "all");
+      const sort = alertHistoryUrlChoice(params.get("alert_history_sort") || params.get("alert_sort"), ["newest", "oldest", "severity"], "newest");
+      const search = String(params.get("alert_history_search") || params.get("alert_search") || "");
+      const limit = alertHistoryUrlBoundedNumber(params.get("alert_history_limit"), 50, 1, 200);
+      const offset = alertHistoryUrlBoundedNumber(params.get("alert_history_offset"), 0, 0, 1000000);
+
+      alertHistoryFilterForm.elements.source.value = source;
+      alertHistoryFilterForm.elements.state.value = state;
+      alertHistoryFilterForm.elements.severity.value = severity;
+      alertHistoryFilterForm.elements.sort.value = sort;
+      alertHistoryFilterForm.elements.search.value = search;
+      alertHistoryFilterForm.elements.limit.value = String(limit);
+      alertHistoryPage = {
+        ...alertHistoryPage,
+        source,
+        state,
+        severity,
+        sort,
+        search,
+        limit,
+        offset,
+      };
+      return true;
+    }
+
+    function alertHistoryUrlChoice(value, allowed, fallback) {
+      const text = String(value || fallback);
+      return allowed.includes(text) ? text : fallback;
+    }
+
+    function alertHistoryUrlBoundedNumber(value, fallback, min, max) {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return fallback;
+      return Math.max(min, Math.min(Math.floor(parsed), max));
+    }
+
+    function alertHistoryFilterUrl() {
+      const url = new URL(window.location.href);
+      const form = new FormData(alertHistoryFilterForm);
+      const source = String(form.get("source") || alertHistoryPage.source || "all");
+      const state = String(form.get("state") || alertHistoryPage.state || "all");
+      const severity = String(form.get("severity") || alertHistoryPage.severity || "all");
+      const sort = String(form.get("sort") || alertHistoryPage.sort || "newest");
+      const search = String(form.get("search") ?? alertHistoryPage.search ?? "");
+      const limit = Number(form.get("limit") || alertHistoryPage.limit || 50);
+      url.searchParams.delete("alert_id");
+      url.searchParams.delete("alert");
+      url.searchParams.set("alert_history_source", source);
+      url.searchParams.set("alert_history_state", state);
+      url.searchParams.set("alert_history_severity", severity);
+      url.searchParams.set("alert_history_sort", sort);
+      url.searchParams.set("alert_history_search", search);
+      url.searchParams.set("alert_history_limit", String(limit || 50));
+      url.searchParams.set("alert_history_offset", String(alertHistoryPage.offset || 0));
+      return url.toString();
+    }
+
+    function updateAlertHistoryFilterUrl() {
+      window.history.replaceState({}, "", alertHistoryFilterUrl());
+    }
+
+    async function copyAlertHistoryFilterLink() {
+      const url = alertHistoryFilterUrl();
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(url);
+        return url;
+      }
+      const input = document.createElement("textarea");
+      input.value = url;
+      input.setAttribute("readonly", "readonly");
+      input.style.position = "fixed";
+      input.style.opacity = "0";
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand("copy");
+      input.remove();
+      return url;
+    }
+
     function renderAlertHistoryDetail(alert, notes) {
       const selectedNote = activeAlertHistoryNoteType === "resolution" ? "resolution" : "note";
       const state = alertHistoryState(alert);
@@ -2759,7 +2866,7 @@ _INDEX_HTML = """<!doctype html>
     async function acknowledgeAlert(alertId) {
       const page = { ...alertHistoryPage };
       await postJson(`/alerts/history/${encodeURIComponent(alertId)}/acknowledge`, {});
-      await loadAlerts();
+      await loadAlerts({ renderHistory: false });
       await loadAlertHistory(page);
       if (String(activeAlertHistoryDetailId) === String(alertId) && activeAlertHistoryDetailAlert) {
         await loadAlertHistoryDetail(activeAlertHistoryDetailAlert);
@@ -2769,7 +2876,7 @@ _INDEX_HTML = """<!doctype html>
     async function snoozeAlert(alertId, minutes = 60) {
       const page = { ...alertHistoryPage };
       await postJson(`/alerts/history/${encodeURIComponent(alertId)}/snooze`, { minutes });
-      await loadAlerts();
+      await loadAlerts({ renderHistory: false });
       await loadAlertHistory(page);
       if (String(activeAlertHistoryDetailId) === String(alertId) && activeAlertHistoryDetailAlert) {
         await loadAlertHistoryDetail(activeAlertHistoryDetailAlert);
@@ -2788,7 +2895,7 @@ _INDEX_HTML = """<!doctype html>
         note_type: noteType,
         created_by: "local-manager",
       });
-      await loadAlerts();
+      await loadAlerts({ renderHistory: false });
       await loadAlertHistory(page);
       const updatedAlert = alertHistoryRecords.find((record) => String(record.id) === String(alertId))
         || activeAlertHistoryDetailAlert;
@@ -4596,7 +4703,7 @@ _INDEX_HTML = """<!doctype html>
         `Replay ${formatStoragePathStatus(payload.storage_status?.replay_data_dir)}`,
       ].join(" / ");
       await loadStatus();
-      await loadAlerts();
+      await loadAlerts({ renderHistory: false });
     }
 
     async function saveCollectorSettings(event) {
@@ -4916,7 +5023,7 @@ _INDEX_HTML = """<!doctype html>
     alertHistoryFilterForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       try {
-        await loadAlertHistory({ offset: 0 });
+        await loadAlertHistory({ offset: 0, updateUrl: true });
         banner.textContent = "Alert history loaded";
       } catch (error) {
         alertHistoryStatus.textContent = `Error: ${error.message}`;
@@ -4926,6 +5033,15 @@ _INDEX_HTML = """<!doctype html>
 
     alertHistoryExport.addEventListener("click", () => {
       exportAlertHistoryCsv();
+    });
+
+    alertHistoryCopyFilterLink.addEventListener("click", async () => {
+      try {
+        const url = await copyAlertHistoryFilterLink();
+        banner.textContent = `Alert history filter link copied: ${url}`;
+      } catch (error) {
+        banner.textContent = `Error: ${error.message}`;
+      }
     });
 
     for (const button of alertHistoryPresetButtons) {
@@ -5046,6 +5162,7 @@ _INDEX_HTML = """<!doctype html>
       try {
         await loadAlertHistory({
           offset: Math.max(0, alertHistoryPage.offset - alertHistoryPage.limit),
+          updateUrl: true,
         });
       } catch (error) {
         alertHistoryStatus.textContent = `Error: ${error.message}`;
@@ -5057,6 +5174,7 @@ _INDEX_HTML = """<!doctype html>
       try {
         await loadAlertHistory({
           offset: alertHistoryPage.offset + alertHistoryPage.limit,
+          updateUrl: true,
         });
       } catch (error) {
         alertHistoryStatus.textContent = `Error: ${error.message}`;
@@ -5373,9 +5491,11 @@ _INDEX_HTML = """<!doctype html>
     timelineZoom.addEventListener("change", renderReplayFrame);
 
     drawEmptyReplayCanvas();
+    const initialAlertHistoryFilterFromUrl = loadInitialAlertHistoryFiltersFromUrl();
     loadInitialWorkerRunFiltersFromUrl();
 
     Promise.all([loadStatus(), loadAlerts(), loadDiscordPermissions(), loadDiscordScopes(), loadCollectorWorkerStatus(), loadPostProcessingWorkerStatus(), loadWorkerRuns(), loadPlayers(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
+      .then(() => initialAlertHistoryFilterFromUrl ? loadAlertHistory(alertHistoryPage) : null)
       .then(() => loadInitialAlertDetailFromUrl())
       .then(() => loadInitialWorkerRunDetailFromUrl())
       .then(() => { banner.textContent = "localhost 전용 관리 화면"; })
@@ -5383,7 +5503,9 @@ _INDEX_HTML = """<!doctype html>
     setInterval(loadCollectorWorkerStatus, 10000);
     setInterval(loadPostProcessingWorkerStatus, 10000);
     setInterval(loadWorkerRuns, 30000);
-    setInterval(loadAlerts, 30000);
+    setInterval(() => {
+      refreshAlertsAndHistory().catch((error) => { banner.textContent = `Error: ${error.message}`; });
+    }, 30000);
   </script>
 </body>
 </html>

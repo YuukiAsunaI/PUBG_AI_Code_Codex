@@ -83,6 +83,9 @@ Implemented behavior:
 - The local manager can also load and copy worker-run history filter URLs with `worker_run_worker`,
   `worker_run_status`, `worker_run_range`, `worker_run_from`, `worker_run_to`, `worker_run_limit`, and
   `worker_run_offset` query parameters for local incident-review handoff.
+- The local manager can also load and copy alert-history filter URLs with `alert_history_source`,
+  `alert_history_state`, `alert_history_severity`, `alert_history_sort`, `alert_history_search`,
+  `alert_history_limit`, and `alert_history_offset` query parameters for local incident-review handoff.
 - The current-alert and alert-history tables show severity/state badges so admins can scan alert lists before opening
   a detail row. Quick preset buttons set common alert-history filters for current errors, worker failures, storage
   pressure, and the full history.

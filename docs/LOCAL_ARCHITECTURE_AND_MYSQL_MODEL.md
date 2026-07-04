@@ -422,7 +422,8 @@ Completed slices:
     configured.
 73. Discord `pubg-alert-history` responses include filtered alert-history CSV export links when `local_web_base_url`
     is configured.
+74. The local manager can copy and restore shareable alert-history filter URLs for local incident handoff.
 
 Next slice:
 
-1. Add shareable local alert-history filter URLs for incident review handoff.
+1. Add Discord alert-history local filter page links when `local_web_base_url` is configured.
