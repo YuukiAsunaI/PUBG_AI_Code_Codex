@@ -249,6 +249,11 @@ class DiscordBotFormattingTests(unittest.TestCase):
             "alert_history_limit=4&alert_history_offset=8#alerts)",
             linked,
         )
+        self.assertIn(
+            "export_csv: [download](http://127.0.0.1:8000/alerts/history/export.csv?"
+            "source=storage&state=resolved&severity=warning&sort=oldest&search=disk+full&limit=5000&offset=0)",
+            linked,
+        )
 
     def test_alert_history_result_formats_previous_and_next_hints(self) -> None:
         page = AlertHistoryPage(
