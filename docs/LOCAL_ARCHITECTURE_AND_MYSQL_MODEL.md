@@ -449,8 +449,10 @@ Completed slices:
     is configured and parsed filters are available.
 87. Discord alert-history parser-error responses include filtered local manager and CSV export links when
     `local_web_base_url` is configured and safe defaults are available.
+88. Discord worker-run parser-error responses include filtered local manager and CSV export links when
+    `local_web_base_url` is configured and safe defaults are available.
 
 Next slice:
 
-1. Add filtered local manager and CSV links to Discord worker-run parser-error responses when filters cannot be parsed
-   but safe defaults are available.
+1. Review remaining Discord admin command usage/error responses for local-link coverage and document any gaps or
+   next fixes.

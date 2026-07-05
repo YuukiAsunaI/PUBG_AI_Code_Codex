@@ -419,6 +419,22 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         self.assertEqual(format_worker_run_history_command_reply(message), message)
 
+        default_linked = format_worker_run_history_command_reply(
+            "Usage: `!pubg-worker-runs ...`\nError: invalid worker",
+            detail_base_url="http://127.0.0.1:8000/",
+        )
+        self.assertIn(
+            "filter_page: [open](http://127.0.0.1:8000/?"
+            "worker_run_worker=all&worker_run_status=all&worker_run_range=custom&"
+            "worker_run_from=&worker_run_to=&worker_run_limit=5&worker_run_offset=0#worker-runs)",
+            default_linked,
+        )
+        self.assertIn(
+            "export_csv: [download](http://127.0.0.1:8000/workers/runs/export.csv?"
+            "worker_name=&status=all&created_from_kst=&created_to_kst=&limit=5000&offset=0)",
+            default_linked,
+        )
+
         linked = format_worker_run_history_command_reply(
             message,
             worker_name="collector",

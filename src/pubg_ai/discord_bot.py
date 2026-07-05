@@ -1420,10 +1420,15 @@ def create_discord_bot(
             parsed = _parse_worker_run_filters(filters)
         except ValueError as exc:
             await ctx.reply(
-                f"Usage: `{command_prefix}pubg-worker-runs [collector|post_processing|all] "
-                "status=succeeded|failed|all [limit] offset=0 range=last24h|today|yesterday|last7d "
-                "from=2026-07-01T00:00 to=2026-07-02T00:00`"
-                f"\nError: {exc}",
+                format_worker_run_history_command_reply(
+                    (
+                        f"Usage: `{command_prefix}pubg-worker-runs [collector|post_processing|all] "
+                        "status=succeeded|failed|all [limit] offset=0 range=last24h|today|yesterday|last7d "
+                        "from=2026-07-01T00:00 to=2026-07-02T00:00`"
+                        f"\nError: {exc}"
+                    ),
+                    detail_base_url=config.app.local_web_base_url,
+                ),
                 mention_author=False,
             )
             return
