@@ -20,6 +20,7 @@ from pubg_ai.discord_bot import (
     format_player_ranking,
     format_player_weapon_detail,
     format_replay_artifact_summary,
+    format_unregister_command_reply,
     format_worker_run_command_reply,
     format_worker_run_detail_result,
     format_worker_run_history_command_reply,
@@ -665,6 +666,19 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
     def test_empty_player_list_has_clear_message(self) -> None:
         self.assertEqual(format_player_list([]), "등록된 유저가 없습니다.")
+
+    def test_unregister_command_reply_adds_registered_players_link_when_url_is_available(self) -> None:
+        message = "대상 유저를 찾지 못했습니다."
+
+        self.assertEqual(format_unregister_command_reply(message), message)
+
+        linked = format_unregister_command_reply(message, detail_base_url="http://127.0.0.1:8000/")
+
+        self.assertIn(message, linked)
+        self.assertIn(
+            "- registered_players: [open](http://127.0.0.1:8000/#registered-players)",
+            linked,
+        )
 
     def test_profile_stats_summary_formats_core_metrics(self) -> None:
         profile = PlayerProfileStats(

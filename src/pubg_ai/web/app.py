@@ -1792,7 +1792,7 @@ _INDEX_HTML = """<!doctype html>
         <button type="submit">등록</button>
       </form>
     </section>
-    <section>
+    <section id="registered-players">
       <h2>등록 유저</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="refreshCollection()">최근 매치 수집</button>

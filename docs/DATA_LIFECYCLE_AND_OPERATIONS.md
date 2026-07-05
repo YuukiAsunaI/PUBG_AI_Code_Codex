@@ -139,8 +139,10 @@ Implemented behavior:
   parsed filters, or safe defaults give a stable target.
 - Permission-denied and server-channel-required responses intentionally remain plain text because they are not tied to
   a local object and should not expose extra admin UI context.
-- Remaining admin gap: `유저삭제` not-found responses remain plain text until the local manager has a stable player
-  list/detail anchor or filter deep link that can safely target the attempted shard/name or account ID.
+- The local manager registered-player list has a stable `#registered-players` anchor. `유저삭제` not-found responses
+  include that local registered-player list link when `PUBG_LOCAL_WEB_BASE_URL` is configured.
+- Current admin-link coverage leaves permission-denied and server-channel-required responses as the only intentional
+  plain-text admin cases because they are not tied to a local object.
 
 ## Duplicate Match Handling
 

@@ -455,8 +455,10 @@ Completed slices:
     intentional plain-text cases and the next concrete `pubg-alerts` settings-error link.
 90. Discord `pubg-alerts` settings unavailable/load-error responses include a local current-alerts section link when
     `local_web_base_url` is configured.
+91. The local registered-player list has a stable anchor, and Discord `유저삭제` not-found responses include that local
+    list link when `local_web_base_url` is configured.
 
 Next slice:
 
-1. Add a stable local registered-player list/detail anchor or filter link, then use it from `유저삭제` not-found
-   responses when `local_web_base_url` is configured.
+1. Review remaining Discord profile/replay command not-found responses for local-link coverage and document the next
+   concrete local deep-link fixes.

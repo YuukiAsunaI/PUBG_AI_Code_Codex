@@ -48,6 +48,15 @@ class WebReplayPlayerTests(unittest.TestCase):
         self.assertIn("loadReplayMapImage", body)
         self.assertIn("/replay/map-assets/", body)
 
+    def test_index_includes_registered_players_anchor(self) -> None:
+        client = TestClient(create_app())
+        response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.text
+        self.assertIn('id="registered-players"', body)
+        self.assertIn('id="playersBody"', body)
+
     def test_unknown_map_asset_returns_404(self) -> None:
         client = TestClient(create_app())
         response = client.get("/replay/map-assets/Unknown_Main")

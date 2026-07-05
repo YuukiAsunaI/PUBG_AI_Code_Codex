@@ -104,6 +104,13 @@ def format_player_list(players: list[RegisteredPlayer]) -> str:
     return "\n".join(lines)
 
 
+def format_unregister_command_reply(message: str, *, detail_base_url: str | None = None) -> str:
+    lines = [message]
+    if detail_base_url:
+        lines.append(f"- registered_players: [open]({detail_base_url.rstrip('/')}/#registered-players)")
+    return "\n".join(lines)
+
+
 def format_replay_artifact_summary(artifact: ReplayArtifactRecord) -> str:
     player = artifact.player_name or _short_account_id(artifact.account_id or "")
     match_id = artifact.match_id
@@ -1044,7 +1051,13 @@ def create_discord_bot(
             connection.close()
 
         if player is None:
-            await ctx.reply("대상 유저를 찾지 못했습니다.", mention_author=False)
+            await ctx.reply(
+                format_unregister_command_reply(
+                    "대상 유저를 찾지 못했습니다.",
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
         else:
             await ctx.reply(f"수집 중지 완료: {player.current_name} ({player.shard})", mention_author=False)
 
