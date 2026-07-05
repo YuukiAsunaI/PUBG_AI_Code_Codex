@@ -110,6 +110,8 @@ Implemented behavior:
   set, their responses include a local alert-detail link.
 - The admin-only `pubg-alert-notes alert_id [limit]` command lists recent notes and resolution comments for one alert
   without opening the local manager, and can include the same local alert-detail link.
+- Alert action, note, resolution, and note-list usage/error responses also include that local detail link whenever an
+  alert ID was supplied and parsed successfully.
 - The admin-only `pubg-alert-history` command lists persisted alert history from Discord with quick presets or
   `source`/`state`/`severity`/`search`/`limit` filters. When `PUBG_LOCAL_WEB_BASE_URL` is set, those rows include
   local detail links that open the management UI with `alert_id` selected, and the response includes a filtered local

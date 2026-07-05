@@ -182,6 +182,20 @@ def format_alert_notes_result(
     return "\n".join(lines)
 
 
+def format_alert_command_reply(
+    message: str,
+    alert_id: int | None = None,
+    *,
+    detail_base_url: str | None = None,
+) -> str:
+    lines = [message]
+    if alert_id is not None:
+        detail_link = _alert_history_detail_markdown(alert_id, detail_base_url)
+        if detail_link:
+            lines.append(f"- local_detail: {detail_link}")
+    return "\n".join(lines)
+
+
 def format_alert_history_result(
     page: AlertHistoryPage,
     *,
@@ -1028,7 +1042,14 @@ def create_discord_bot(
             return
         parsed_alert_id = _positive_int(alert_id)
         if parsed_alert_id is None:
-            await ctx.reply(f"Usage: `{command_prefix}pubg-alert-ack alert_id`", mention_author=False)
+            await ctx.reply(
+                format_alert_command_reply(
+                    f"Usage: `{command_prefix}pubg-alert-ack alert_id`",
+                    parsed_alert_id,
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
             return
 
         connection = connect_mysql(config.database)
@@ -1036,7 +1057,14 @@ def create_discord_bot(
             try:
                 record = acknowledge_alert(connection, parsed_alert_id)
             except AlertHistoryError as exc:
-                await ctx.reply(f"PUBG AI alert not found: {exc}", mention_author=False)
+                await ctx.reply(
+                    format_alert_command_reply(
+                        f"PUBG AI alert not found: {exc}",
+                        parsed_alert_id,
+                        detail_base_url=config.app.local_web_base_url,
+                    ),
+                    mention_author=False,
+                )
                 return
         finally:
             connection.close()
@@ -1062,7 +1090,11 @@ def create_discord_bot(
         parsed_minutes = _positive_int(minutes)
         if parsed_alert_id is None or parsed_minutes is None:
             await ctx.reply(
-                f"Usage: `{command_prefix}pubg-alert-snooze alert_id [minutes]`",
+                format_alert_command_reply(
+                    f"Usage: `{command_prefix}pubg-alert-snooze alert_id [minutes]`",
+                    parsed_alert_id,
+                    detail_base_url=config.app.local_web_base_url,
+                ),
                 mention_author=False,
             )
             return
@@ -1072,7 +1104,14 @@ def create_discord_bot(
             try:
                 record = snooze_alert(connection, parsed_alert_id, parsed_minutes)
             except AlertHistoryError as exc:
-                await ctx.reply(f"PUBG AI alert not found: {exc}", mention_author=False)
+                await ctx.reply(
+                    format_alert_command_reply(
+                        f"PUBG AI alert not found: {exc}",
+                        parsed_alert_id,
+                        detail_base_url=config.app.local_web_base_url,
+                    ),
+                    mention_author=False,
+                )
                 return
         finally:
             connection.close()
@@ -1098,7 +1137,11 @@ def create_discord_bot(
         parsed_alert_id = _positive_int(alert_id)
         if parsed_alert_id is None or not note_text or not note_text.strip():
             await ctx.reply(
-                f"Usage: `{command_prefix}pubg-alert-note alert_id note`",
+                format_alert_command_reply(
+                    f"Usage: `{command_prefix}pubg-alert-note alert_id note`",
+                    parsed_alert_id,
+                    detail_base_url=config.app.local_web_base_url,
+                ),
                 mention_author=False,
             )
             return
@@ -1114,7 +1157,14 @@ def create_discord_bot(
                     created_by=alert_note_creator_for(ctx),
                 )
             except AlertHistoryError as exc:
-                await ctx.reply(f"PUBG AI alert note error: {exc}", mention_author=False)
+                await ctx.reply(
+                    format_alert_command_reply(
+                        f"PUBG AI alert note error: {exc}",
+                        parsed_alert_id,
+                        detail_base_url=config.app.local_web_base_url,
+                    ),
+                    mention_author=False,
+                )
                 return
         finally:
             connection.close()
@@ -1136,7 +1186,11 @@ def create_discord_bot(
         parsed_alert_id = _positive_int(alert_id)
         if parsed_alert_id is None or not note_text or not note_text.strip():
             await ctx.reply(
-                f"Usage: `{command_prefix}pubg-alert-resolution alert_id resolution`",
+                format_alert_command_reply(
+                    f"Usage: `{command_prefix}pubg-alert-resolution alert_id resolution`",
+                    parsed_alert_id,
+                    detail_base_url=config.app.local_web_base_url,
+                ),
                 mention_author=False,
             )
             return
@@ -1152,7 +1206,14 @@ def create_discord_bot(
                     created_by=alert_note_creator_for(ctx),
                 )
             except AlertHistoryError as exc:
-                await ctx.reply(f"PUBG AI alert resolution error: {exc}", mention_author=False)
+                await ctx.reply(
+                    format_alert_command_reply(
+                        f"PUBG AI alert resolution error: {exc}",
+                        parsed_alert_id,
+                        detail_base_url=config.app.local_web_base_url,
+                    ),
+                    mention_author=False,
+                )
                 return
         finally:
             connection.close()
@@ -1174,7 +1235,11 @@ def create_discord_bot(
         parsed_limit = _positive_int(limit)
         if parsed_alert_id is None or parsed_limit is None:
             await ctx.reply(
-                f"Usage: `{command_prefix}pubg-alert-notes alert_id [limit]`",
+                format_alert_command_reply(
+                    f"Usage: `{command_prefix}pubg-alert-notes alert_id [limit]`",
+                    parsed_alert_id,
+                    detail_base_url=config.app.local_web_base_url,
+                ),
                 mention_author=False,
             )
             return
@@ -1185,7 +1250,14 @@ def create_discord_bot(
                 record = get_alert_history_record(connection, parsed_alert_id)
                 notes = list_alert_notes(connection, parsed_alert_id, limit=min(parsed_limit, 10))
             except AlertHistoryError as exc:
-                await ctx.reply(f"PUBG AI alert notes error: {exc}", mention_author=False)
+                await ctx.reply(
+                    format_alert_command_reply(
+                        f"PUBG AI alert notes error: {exc}",
+                        parsed_alert_id,
+                        detail_base_url=config.app.local_web_base_url,
+                    ),
+                    mention_author=False,
+                )
                 return
         finally:
             connection.close()

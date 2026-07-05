@@ -8,6 +8,7 @@ from pubg_ai.discord_bot import (
     _parse_worker_run_filters,
     _player_visible_to_scope,
     format_alert_action_result,
+    format_alert_command_reply,
     format_alert_history_result,
     format_alert_note_result,
     format_alert_notes_result,
@@ -137,6 +138,27 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertNotIn("local_detail", body)
 
         linked = format_alert_notes_result(record, notes, detail_base_url="http://127.0.0.1:8000/")
+        self.assertIn(
+            "- local_detail: [detail](http://127.0.0.1:8000/?alert_id=7#alertHistoryDetail)",
+            linked,
+        )
+
+    def test_alert_command_reply_adds_detail_only_when_alert_id_and_url_are_available(self) -> None:
+        message = "Usage: `!pubg-alert-note alert_id note`"
+
+        self.assertEqual(format_alert_command_reply(message), message)
+        self.assertEqual(
+            format_alert_command_reply(message, 7),
+            message,
+        )
+        self.assertEqual(
+            format_alert_command_reply(message, None, detail_base_url="http://127.0.0.1:8000/"),
+            message,
+        )
+
+        linked = format_alert_command_reply(message, 7, detail_base_url="http://127.0.0.1:8000/")
+
+        self.assertIn(message, linked)
         self.assertIn(
             "- local_detail: [detail](http://127.0.0.1:8000/?alert_id=7#alertHistoryDetail)",
             linked,

@@ -339,8 +339,8 @@ Discord after reading the ID from `pubg-alerts` or an automatic alert message. A
 `pubg-alert-note alert_id note` and resolution comments with `pubg-alert-resolution alert_id resolution`; those entries
 are stored in the same MySQL `system_alert_notes` table shown by the local manager. Use
 `pubg-alert-notes alert_id [limit]` to review the newest notes from Discord. When `PUBG_LOCAL_WEB_BASE_URL` is set,
-those action, note, resolution, and note-list responses include a local alert-detail link. Use `pubg-alert-history`
-with quick
+those action, note, resolution, and note-list responses include a local alert-detail link, and matching usage/error
+responses include the same link whenever the supplied alert ID can be parsed. Use `pubg-alert-history` with quick
 presets or `source`/`state`/`severity`/`search` filters to review persisted alert history from Discord; when
 `PUBG_LOCAL_WEB_BASE_URL` is set, each row includes a local detail link and the response includes both a filtered local
 manager page link and a filtered CSV export link. When more history rows are available, the response includes copyable
