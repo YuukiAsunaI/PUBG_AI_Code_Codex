@@ -229,6 +229,23 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         self.assertEqual(format_alert_history_command_reply(message), message)
 
+        default_linked = format_alert_history_command_reply(
+            "Usage: `!pubg-alert-history ...`\nError: invalid state",
+            detail_base_url="http://127.0.0.1:8000/",
+        )
+        self.assertIn(
+            "filter_page: [open](http://127.0.0.1:8000/?"
+            "alert_history_source=all&alert_history_state=all&alert_history_severity=all&"
+            "alert_history_sort=newest&alert_history_search=&"
+            "alert_history_limit=5&alert_history_offset=0#alerts)",
+            default_linked,
+        )
+        self.assertIn(
+            "export_csv: [download](http://127.0.0.1:8000/alerts/history/export.csv?"
+            "source=all&state=all&severity=all&sort=newest&search=&limit=5000&offset=0)",
+            default_linked,
+        )
+
         linked = format_alert_history_command_reply(
             message,
             source="storage",

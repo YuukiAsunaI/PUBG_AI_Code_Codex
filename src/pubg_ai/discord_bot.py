@@ -1357,10 +1357,16 @@ def create_discord_bot(
             parsed = _parse_alert_history_filters(filters)
         except ValueError as exc:
             await ctx.reply(
-                f"Usage: `{command_prefix}pubg-alert-history [current-errors|worker-failures|storage-pressure|all-history] "
-                "source=all|storage|worker state=all|current|active|acknowledged|snoozed|resolved "
-                "severity=all|error|warning|info|ok search=text limit=5`"
-                f"\nError: {exc}",
+                format_alert_history_command_reply(
+                    (
+                        f"Usage: `{command_prefix}pubg-alert-history "
+                        "[current-errors|worker-failures|storage-pressure|all-history] "
+                        "source=all|storage|worker state=all|current|active|acknowledged|snoozed|resolved "
+                        "severity=all|error|warning|info|ok search=text limit=5`"
+                        f"\nError: {exc}"
+                    ),
+                    detail_base_url=config.app.local_web_base_url,
+                ),
                 mention_author=False,
             )
             return
