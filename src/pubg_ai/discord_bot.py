@@ -113,7 +113,12 @@ def format_replay_artifact_summary(artifact: ReplayArtifactRecord) -> str:
     )
 
 
-def format_alert_action_result(record: AlertHistoryRecord, action: str) -> str:
+def format_alert_action_result(
+    record: AlertHistoryRecord,
+    action: str,
+    *,
+    detail_base_url: str | None = None,
+) -> str:
     status = "acknowledged" if action == "acknowledged" else "snoozed"
     lines = [
         f"PUBG AI alert {status}",
@@ -121,6 +126,9 @@ def format_alert_action_result(record: AlertHistoryRecord, action: str) -> str:
         f"- title: {record.title}",
         f"- source/severity: {record.source}/{record.severity}",
     ]
+    detail_link = _alert_history_detail_markdown(record.id, detail_base_url)
+    if detail_link:
+        lines.append(f"- local_detail: {detail_link}")
     if action == "snoozed" and record.snoozed_until_kst:
         lines.append(f"- snoozed_until_kst: {record.snoozed_until_kst}")
     if action == "acknowledged" and record.acknowledged_at_kst:
@@ -128,7 +136,7 @@ def format_alert_action_result(record: AlertHistoryRecord, action: str) -> str:
     return "\n".join(lines)
 
 
-def format_alert_note_result(note: AlertHistoryNote) -> str:
+def format_alert_note_result(note: AlertHistoryNote, *, detail_base_url: str | None = None) -> str:
     label = "resolution" if note.note_type == "resolution" else "note"
     lines = [
         f"PUBG AI alert {label} saved",
@@ -136,6 +144,9 @@ def format_alert_note_result(note: AlertHistoryNote) -> str:
         f"- note_id: {note.id}",
         f"- type: {note.note_type}",
     ]
+    detail_link = _alert_history_detail_markdown(note.alert_history_id, detail_base_url)
+    if detail_link:
+        lines.append(f"- local_detail: {detail_link}")
     if note.created_by:
         lines.append(f"- created_by: {note.created_by}")
     if note.created_at_kst:
@@ -144,13 +155,21 @@ def format_alert_note_result(note: AlertHistoryNote) -> str:
     return "\n".join(lines)
 
 
-def format_alert_notes_result(record: AlertHistoryRecord, notes: list[AlertHistoryNote]) -> str:
+def format_alert_notes_result(
+    record: AlertHistoryRecord,
+    notes: list[AlertHistoryNote],
+    *,
+    detail_base_url: str | None = None,
+) -> str:
     lines = [
         "PUBG AI alert notes",
         f"- alert_id: {record.id}",
         f"- title: {_discord_single_line(record.title, 120)}",
-        f"- shown/total: {len(notes)}/{record.note_count}",
     ]
+    detail_link = _alert_history_detail_markdown(record.id, detail_base_url)
+    if detail_link:
+        lines.append(f"- local_detail: {detail_link}")
+    lines.append(f"- shown/total: {len(notes)}/{record.note_count}")
     if not notes:
         lines.append("- no notes or resolution comments")
         return "\n".join(lines)
@@ -1022,7 +1041,14 @@ def create_discord_bot(
         finally:
             connection.close()
 
-        await ctx.reply(format_alert_action_result(record, "acknowledged"), mention_author=False)
+        await ctx.reply(
+            format_alert_action_result(
+                record,
+                "acknowledged",
+                detail_base_url=config.app.local_web_base_url,
+            ),
+            mention_author=False,
+        )
 
     @bot.command(name="pubg-alert-snooze")
     async def alert_snooze_command(
@@ -1051,7 +1077,14 @@ def create_discord_bot(
         finally:
             connection.close()
 
-        await ctx.reply(format_alert_action_result(record, "snoozed"), mention_author=False)
+        await ctx.reply(
+            format_alert_action_result(
+                record,
+                "snoozed",
+                detail_base_url=config.app.local_web_base_url,
+            ),
+            mention_author=False,
+        )
 
     @bot.command(name="pubg-alert-note")
     async def alert_note_command(
@@ -1086,7 +1119,10 @@ def create_discord_bot(
         finally:
             connection.close()
 
-        await ctx.reply(format_alert_note_result(note), mention_author=False)
+        await ctx.reply(
+            format_alert_note_result(note, detail_base_url=config.app.local_web_base_url),
+            mention_author=False,
+        )
 
     @bot.command(name="pubg-alert-resolution", aliases=["pubg-alert-resolve"])
     async def alert_resolution_command(
@@ -1121,7 +1157,10 @@ def create_discord_bot(
         finally:
             connection.close()
 
-        await ctx.reply(format_alert_note_result(note), mention_author=False)
+        await ctx.reply(
+            format_alert_note_result(note, detail_base_url=config.app.local_web_base_url),
+            mention_author=False,
+        )
 
     @bot.command(name="pubg-alert-notes", aliases=["pubg-alert-note-list"])
     async def alert_notes_command(
@@ -1151,7 +1190,14 @@ def create_discord_bot(
         finally:
             connection.close()
 
-        await ctx.reply(format_alert_notes_result(record, notes), mention_author=False)
+        await ctx.reply(
+            format_alert_notes_result(
+                record,
+                notes,
+                detail_base_url=config.app.local_web_base_url,
+            ),
+            mention_author=False,
+        )
 
     @bot.command(name="pubg-alert-history", aliases=["pubg-alert-log"])
     async def alert_history_command(ctx: Any, *, filters: str | None = None) -> None:
@@ -1321,9 +1367,14 @@ def _recommendation_evidence_link(
 
 
 def _alert_history_detail_link(record: AlertHistoryRecord, base_url: str | None) -> str:
+    detail = _alert_history_detail_markdown(record.id, base_url)
+    return f" {detail}" if detail else ""
+
+
+def _alert_history_detail_markdown(alert_id: int, base_url: str | None) -> str:
     if not base_url:
         return ""
-    return f" [detail]({base_url.rstrip('/')}/?{urlencode({'alert_id': record.id})}#alertHistoryDetail)"
+    return f"[detail]({base_url.rstrip('/')}/?{urlencode({'alert_id': alert_id})}#alertHistoryDetail)"
 
 
 def _alert_history_filter_page_link(page: AlertHistoryPage, base_url: str | None) -> str:

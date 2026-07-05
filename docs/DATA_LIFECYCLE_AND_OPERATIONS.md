@@ -103,11 +103,13 @@ Implemented behavior:
 - The admin-only `pubg-alerts` Discord command returns the current alert report on demand, including alert IDs. When
   `PUBG_LOCAL_WEB_BASE_URL` is set, the response includes a local current-alert list link.
 - The admin-only `pubg-alert-ack alert_id` and `pubg-alert-snooze alert_id [minutes]` commands update the same
-  persisted alert history from Discord.
+  persisted alert history from Discord. When `PUBG_LOCAL_WEB_BASE_URL` is set, their responses include a local
+  alert-detail link.
 - The admin-only `pubg-alert-note alert_id note` and `pubg-alert-resolution alert_id resolution` commands append
-  `note` and `resolution` rows to the same persisted alert history from Discord.
+  `note` and `resolution` rows to the same persisted alert history from Discord. When `PUBG_LOCAL_WEB_BASE_URL` is
+  set, their responses include a local alert-detail link.
 - The admin-only `pubg-alert-notes alert_id [limit]` command lists recent notes and resolution comments for one alert
-  without opening the local manager.
+  without opening the local manager, and can include the same local alert-detail link.
 - The admin-only `pubg-alert-history` command lists persisted alert history from Discord with quick presets or
   `source`/`state`/`severity`/`search`/`limit` filters. When `PUBG_LOCAL_WEB_BASE_URL` is set, those rows include
   local detail links that open the management UI with `alert_id` selected, and the response includes a filtered local

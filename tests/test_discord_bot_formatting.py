@@ -64,6 +64,13 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("- id: 7", body)
         self.assertIn("collector worker failed", body)
         self.assertIn("acknowledged_at_kst", body)
+        self.assertNotIn("local_detail", body)
+
+        linked = format_alert_action_result(record, "acknowledged", detail_base_url="http://127.0.0.1:8000/")
+        self.assertIn(
+            "- local_detail: [detail](http://127.0.0.1:8000/?alert_id=7#alertHistoryDetail)",
+            linked,
+        )
 
     def test_alert_note_result_formats_discord_admin_response(self) -> None:
         note = AlertHistoryNote(
@@ -83,6 +90,13 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("- type: resolution", body)
         self.assertIn("discord:987654321:123456789", body)
         self.assertIn("raw drive expanded and worker restarted", body)
+        self.assertNotIn("local_detail", body)
+
+        linked = format_alert_note_result(note, detail_base_url="http://127.0.0.1:8000/")
+        self.assertIn(
+            "- local_detail: [detail](http://127.0.0.1:8000/?alert_id=7#alertHistoryDetail)",
+            linked,
+        )
 
     def test_alert_notes_result_formats_recent_notes(self) -> None:
         record = AlertHistoryRecord(
@@ -120,6 +134,13 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("- shown/total: 1/2", body)
         self.assertIn("#12 resolution 2026-06-30T10:05:00+09:00", body)
         self.assertIn("raw drive expanded worker restarted", body)
+        self.assertNotIn("local_detail", body)
+
+        linked = format_alert_notes_result(record, notes, detail_base_url="http://127.0.0.1:8000/")
+        self.assertIn(
+            "- local_detail: [detail](http://127.0.0.1:8000/?alert_id=7#alertHistoryDetail)",
+            linked,
+        )
 
     def test_alert_history_result_formats_filters_and_rows(self) -> None:
         record = AlertHistoryRecord(

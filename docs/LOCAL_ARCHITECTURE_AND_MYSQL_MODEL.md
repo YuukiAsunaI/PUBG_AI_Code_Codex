@@ -433,7 +433,9 @@ Completed slices:
     relevant panel.
 79. Automatic Discord storage and worker alert messages include local `alert_id` detail links when
     `local_web_base_url` is configured and persisted alert IDs are available.
+80. Discord alert action, note, resolution, and note-list responses include local `alert_id` detail links when
+    `local_web_base_url` is configured.
 
 Next slice:
 
-1. Add local alert-detail links to Discord alert action and note responses when `local_web_base_url` is configured.
+1. Add local alert-detail links to Discord alert command error/help responses when a supplied alert ID can be parsed.
