@@ -20,6 +20,7 @@ from pubg_ai.discord_bot import (
     format_replay_artifact_summary,
     format_worker_run_command_reply,
     format_worker_run_detail_result,
+    format_worker_run_history_command_reply,
     format_worker_run_history_result,
 )
 from pubg_ai.alert_history import AlertHistoryNote, AlertHistoryPage, AlertHistoryRecord
@@ -363,6 +364,32 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("worker=collector status=failed", body)
         self.assertIn("shown/total: 0/0 offset=0 limit=3", body)
         self.assertIn("no worker runs yet", body)
+
+    def test_worker_run_history_command_reply_formats_filter_page_link(self) -> None:
+        message = "PUBG AI worker run history error: failed to read worker_run_history"
+
+        self.assertEqual(format_worker_run_history_command_reply(message), message)
+
+        linked = format_worker_run_history_command_reply(
+            message,
+            worker_name="collector",
+            status="failed",
+            limit=4,
+            offset=8,
+            created_from_kst="2026-07-01T09:00:00+09:00",
+            created_to_kst="2026-07-01T10:00:00+09:00",
+            detail_base_url="http://127.0.0.1:8000/",
+        )
+
+        self.assertIn(message, linked)
+        self.assertIn(
+            "filter_page: [open](http://127.0.0.1:8000/?"
+            "worker_run_worker=collector&worker_run_status=failed&worker_run_range=custom&"
+            "worker_run_from=2026-07-01T09%3A00%3A00%2B09%3A00&"
+            "worker_run_to=2026-07-01T10%3A00%3A00%2B09%3A00&"
+            "worker_run_limit=4&worker_run_offset=8#worker-runs)",
+            linked,
+        )
 
     def test_worker_run_history_result_formats_previous_and_next_hints(self) -> None:
         page = WorkerRunPage(

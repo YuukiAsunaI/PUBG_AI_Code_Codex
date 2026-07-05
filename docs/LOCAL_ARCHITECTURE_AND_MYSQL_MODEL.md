@@ -439,8 +439,9 @@ Completed slices:
     configured and a supplied alert ID can be parsed.
 82. Discord worker-run detail command usage/error responses include local `worker_run_id` detail links when
     `local_web_base_url` is configured and a supplied run ID can be parsed.
+83. Discord worker-run history error responses include filtered local manager worker-run page links when
+    `local_web_base_url` is configured and parsed filters are available.
 
 Next slice:
 
-1. Add local worker-run history filter links to Discord worker history error responses when parsed filters are
-   available.
+1. Add local alert-history filter links to Discord alert-history error responses when parsed filters are available.

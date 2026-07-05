@@ -124,7 +124,8 @@ Implemented behavior:
   `created_at_kst` ranges in KST, while `range=last24h|today|yesterday|last7d` expands to common KST ranges. Date
   filters are preserved in pagination commands. When `PUBG_LOCAL_WEB_BASE_URL` is set, each row also includes a local
   `worker_run_id` detail link, and the response includes a filtered local manager page link plus a filtered CSV export
-  link for the same worker/status/time window.
+  link for the same worker/status/time window. If parsed filters later fail during history lookup, the error response
+  includes the same filtered local manager page link.
 - The admin-only `pubg-worker-run run_id` command opens one worker cycle from Discord and shows summary metrics plus
   the full stored error list. When `PUBG_LOCAL_WEB_BASE_URL` is set, the response also includes a local
   `worker_run_id` detail link, and usage/error responses include that same link whenever the supplied run ID can be

@@ -267,6 +267,34 @@ def format_worker_run_history_result(
     return "\n".join(lines)
 
 
+def format_worker_run_history_command_reply(
+    message: str,
+    *,
+    worker_name: str | None = None,
+    status: str = "all",
+    limit: int = 5,
+    offset: int = 0,
+    created_from_kst: str | None = None,
+    created_to_kst: str | None = None,
+    detail_base_url: str | None = None,
+) -> str:
+    lines = [message]
+    page = WorkerRunPage(
+        records=[],
+        total=0,
+        limit=limit,
+        offset=offset,
+        worker_name=worker_name,
+        status=status,
+        created_from_kst=created_from_kst,
+        created_to_kst=created_to_kst,
+    )
+    filter_page_link = _worker_run_filter_page_link(page, detail_base_url)
+    if filter_page_link:
+        lines.append(f"- filter_page: [open]({filter_page_link})")
+    return "\n".join(lines)
+
+
 def format_worker_run_detail_result(run: WorkerRunRecord, *, detail_base_url: str | None = None) -> str:
     lines = [
         "PUBG AI worker run detail",
@@ -1366,7 +1394,19 @@ def create_discord_bot(
                     offset=offset,
                 )
             except WorkerRunHistoryError as exc:
-                await ctx.reply(f"PUBG AI worker run history error: {exc}", mention_author=False)
+                await ctx.reply(
+                    format_worker_run_history_command_reply(
+                        f"PUBG AI worker run history error: {exc}",
+                        worker_name=worker_name,
+                        status=status,
+                        limit=limit,
+                        offset=offset,
+                        created_from_kst=created_from_kst,
+                        created_to_kst=created_to_kst,
+                        detail_base_url=config.app.local_web_base_url,
+                    ),
+                    mention_author=False,
+                )
                 return
         finally:
             connection.close()
