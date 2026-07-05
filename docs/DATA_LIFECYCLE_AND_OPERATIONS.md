@@ -86,6 +86,8 @@ Implemented behavior:
 - The local manager can also load and copy alert-history filter URLs with `alert_history_source`,
   `alert_history_state`, `alert_history_severity`, `alert_history_sort`, `alert_history_search`,
   `alert_history_limit`, and `alert_history_offset` query parameters for local incident-review handoff.
+- Local manager share links and Discord local links use `#alerts`, `#alertHistoryDetail`, `#worker-runs`, and
+  `#workerRunDetail` anchors so incident handoff opens near the relevant table or detail panel.
 - The current-alert and alert-history tables show severity/state badges so admins can scan alert lists before opening
   a detail row. Quick preset buttons set common alert-history filters for current errors, worker failures, storage
   pressure, and the full history.

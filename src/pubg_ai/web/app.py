@@ -1543,7 +1543,7 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="storageSettingsStatus" style="margin-top: 12px;">Waiting</div>
     </section>
-    <section>
+    <section id="alerts">
       <h2>Alert Settings</h2>
       <form id="alertSettingsForm">
         <label>Minimum free GB
@@ -1986,7 +1986,7 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="postProcessingWorkerStatus" style="margin-top: 12px;">Post-processing stopped</div>
     </section>
-    <section>
+    <section id="worker-runs">
       <h2>Worker Run History</h2>
       <form id="workerRunFilterForm" class="worker-run-filter">
         <label>Worker
@@ -2760,6 +2760,7 @@ _INDEX_HTML = """<!doctype html>
       url.searchParams.set("alert_history_search", search);
       url.searchParams.set("alert_history_limit", String(limit || 50));
       url.searchParams.set("alert_history_offset", String(alertHistoryPage.offset || 0));
+      url.hash = "alerts";
       return url.toString();
     }
 
@@ -3684,6 +3685,7 @@ _INDEX_HTML = """<!doctype html>
       url.searchParams.set("worker_run_to", workerRunDateTimeInputValue(createdTo));
       url.searchParams.set("worker_run_limit", String(limit || 50));
       url.searchParams.set("worker_run_offset", String(workerRunPage.offset || 0));
+      url.hash = "worker-runs";
       return url.toString();
     }
 
@@ -3712,6 +3714,7 @@ _INDEX_HTML = """<!doctype html>
     function workerRunDetailUrl(runId) {
       const url = new URL(window.location.href);
       url.searchParams.set("worker_run_id", runId);
+      url.hash = "workerRunDetail";
       return url.toString();
     }
 

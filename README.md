@@ -345,7 +345,7 @@ previous/next `offset` commands. Use `pubg-worker-runs` to review recent collect
 post-processing cycle status, duration, error count, and last error directly from Discord; each row includes a
 copyable `pubg-worker-run run_id` detail command for inspecting one run's summary metrics and full error list. When
 `PUBG_LOCAL_WEB_BASE_URL` is set, the response includes local `worker_run_id` detail links, a filtered local manager
-page link, and a filtered CSV export link. Filter the list with status=succeeded|failed|all and KST
+page link, and a filtered CSV export link. Filter the list with `status=succeeded|failed|all` and KST
 created-time ranges such as
 `from=2026-07-01T00:00` and
 `to=2026-07-02T00:00`, or quick presets such as `range=last24h`, `range=today`, `range=yesterday`, and
@@ -377,8 +377,9 @@ name, succeeded/failed status, and KST created-time range, page through older ru
 plus full stored errors from the table. The date controls include quick ranges for recent 1h, recent 24h, today,
 yesterday, and recent 7d lookups, and the filtered rows can be exported as CSV for local incident review. Opening a
 worker run also keeps a copyable `worker_run_id` detail link in the browser URL, and the filter bar can copy a
-shareable local URL that restores the same worker/status/time window and page offset. The same
-page stores storage/worker alert records in
+shareable local URL that restores the same worker/status/time window and page offset. Worker links use `#worker-runs`
+or #workerRunDetail anchors so shared URLs land near the relevant panel. The same page stores storage/worker
+alert records in
 `system_alert_history`, shows current unsuppressed
 alerts separately from recent history, lets the admin acknowledge or temporarily hide noisy alerts, and can filter or
 page history by source/status/severity, search title/message text, and sort it by newest, oldest, or severity-first
@@ -389,4 +390,4 @@ shareable local URL that restores the same source/status/severity/search/sort wi
 row can also store persistent admin notes and resolution comments, and the local manager shows list-level
 state/severity badges and can
 open a detail panel with status badges, ack/snooze controls, full note history, and inline note/resolution entry for
-one alert.
+one alert. Alert links use `#alerts` or `#alertHistoryDetail` anchors so shared URLs land near the relevant panel.

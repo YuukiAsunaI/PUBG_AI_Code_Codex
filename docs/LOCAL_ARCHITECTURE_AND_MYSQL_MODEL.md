@@ -429,7 +429,9 @@ Completed slices:
     `local_web_base_url` is configured.
 77. Discord `pubg-alerts` current-alert responses include local current-alert list links when `local_web_base_url` is
     configured.
+78. Local manager alert and worker share links use section/detail anchors so Discord and copied links land near the
+    relevant panel.
 
 Next slice:
 
-1. Add local manager anchor targets for alert and worker sections so Discord links land closer to the relevant panel.
+1. Add local alert-detail links to automatic storage/worker alert messages when persisted alert IDs are available.

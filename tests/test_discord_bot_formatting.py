@@ -168,7 +168,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn(
             "filter_page: [open](http://127.0.0.1:8000/?"
             "alert_history_source=worker&alert_history_state=current&alert_history_severity=error&"
-            "alert_history_sort=severity&alert_history_search=raw+drive&alert_history_limit=1&alert_history_offset=0)",
+            "alert_history_sort=severity&alert_history_search=raw+drive&alert_history_limit=1&alert_history_offset=0#alerts)",
             linked,
         )
         self.assertIn(
@@ -176,7 +176,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
             "source=worker&state=current&severity=error&sort=severity&search=raw+drive&limit=5000&offset=0)",
             linked,
         )
-        self.assertIn("[detail](http://127.0.0.1:8000/?alert_id=7)", linked)
+        self.assertIn("[detail](http://127.0.0.1:8000/?alert_id=7#alertHistoryDetail)", linked)
 
     def test_alert_history_result_formats_previous_and_next_hints(self) -> None:
         page = AlertHistoryPage(
@@ -283,7 +283,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("duration=3.2s errors=1", body)
         self.assertIn("raw drive disconnected", body)
         self.assertIn("detail: `!pubg-worker-run 12`", body)
-        self.assertNotIn("[detail](http://127.0.0.1:8000/?worker_run_id=12)", body)
+        self.assertNotIn("[detail](http://127.0.0.1:8000/?worker_run_id=12#workerRunDetail)", body)
         self.assertIn("#11 [post_processing/succeeded]", body)
         self.assertIn("duration=5.0s errors=0 last_error=-", body)
         self.assertIn("detail: `!pubg-worker-run 11`", body)
@@ -296,7 +296,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn(
             "filter_page: [open](http://127.0.0.1:8000/?"
             "worker_run_worker=all&worker_run_status=all&worker_run_range=custom&"
-            "worker_run_from=&worker_run_to=&worker_run_limit=2&worker_run_offset=0)",
+            "worker_run_from=&worker_run_to=&worker_run_limit=2&worker_run_offset=0#worker-runs)",
             linked_body,
         )
         self.assertIn(
@@ -304,8 +304,8 @@ class DiscordBotFormattingTests(unittest.TestCase):
             "worker_name=&status=all&created_from_kst=&created_to_kst=&limit=5000&offset=0)",
             linked_body,
         )
-        self.assertIn("[detail](http://127.0.0.1:8000/?worker_run_id=12)", linked_body)
-        self.assertIn("[detail](http://127.0.0.1:8000/?worker_run_id=11)", linked_body)
+        self.assertIn("[detail](http://127.0.0.1:8000/?worker_run_id=12#workerRunDetail)", linked_body)
+        self.assertIn("[detail](http://127.0.0.1:8000/?worker_run_id=11#workerRunDetail)", linked_body)
         self.assertIn("detail: `!pubg-worker-run 12`", linked_body)
 
         custom_prefix_body = format_worker_run_history_result(page, command_prefix="?")
@@ -360,7 +360,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("worker_run_range=custom", linked_body)
         self.assertIn("worker_run_from=2026-07-01T09%3A00%3A00%2B09%3A00", linked_body)
         self.assertIn("worker_run_to=2026-07-01T10%3A00%3A00%2B09%3A00", linked_body)
-        self.assertIn("worker_run_limit=1&worker_run_offset=1", linked_body)
+        self.assertIn("worker_run_limit=1&worker_run_offset=1#worker-runs", linked_body)
         self.assertIn("worker_name=collector", linked_body)
         self.assertIn("status=failed", linked_body)
         self.assertIn("created_from_kst=2026-07-01T09%3A00%3A00%2B09%3A00", linked_body)
@@ -409,7 +409,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("2. telemetry_jobs: RuntimeError: telemetry missing", body)
 
         linked_body = format_worker_run_detail_result(run, detail_base_url="http://127.0.0.1:8000/")
-        self.assertIn("- local_detail: [detail](http://127.0.0.1:8000/?worker_run_id=12)", linked_body)
+        self.assertIn("- local_detail: [detail](http://127.0.0.1:8000/?worker_run_id=12#workerRunDetail)", linked_body)
         self.assertIn("collection.queued_match_jobs=2", linked_body)
 
     def test_worker_run_filter_parser_supports_worker_aliases_and_limit(self) -> None:

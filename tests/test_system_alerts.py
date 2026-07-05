@@ -75,7 +75,7 @@ class SystemAlertsTests(unittest.TestCase):
         self.assertNotIn("worker_run_detail", message)
 
         linked = format_discord_alert(alert, detail_base_url="http://127.0.0.1:8000/")
-        self.assertIn("- worker_run_detail: http://127.0.0.1:8000/?worker_run_id=9", linked)
+        self.assertIn("- worker_run_detail: http://127.0.0.1:8000/?worker_run_id=9#workerRunDetail", linked)
 
     def test_empty_alert_report_message(self) -> None:
         self.assertEqual(format_alert_report([]), "PUBG AI alerts: no active alerts.")
@@ -100,7 +100,7 @@ class SystemAlertsTests(unittest.TestCase):
 
         self.assertIn("- alert_id: 7", format_discord_alert(record))
         self.assertIn(
-            "- worker_run_detail: http://127.0.0.1:8000/?worker_run_id=7",
+            "- worker_run_detail: http://127.0.0.1:8000/?worker_run_id=7#workerRunDetail",
             format_discord_alert(record, detail_base_url="http://127.0.0.1:8000"),
         )
         report = format_alert_report([record])
@@ -111,7 +111,7 @@ class SystemAlertsTests(unittest.TestCase):
         self.assertIn(
             "- current_alerts: [open](http://127.0.0.1:8000/?"
             "alert_history_source=all&alert_history_state=current&alert_history_severity=all&"
-            "alert_history_sort=severity&alert_history_search=&alert_history_limit=50&alert_history_offset=0)",
+            "alert_history_sort=severity&alert_history_search=&alert_history_limit=50&alert_history_offset=0#alerts)",
             linked_report,
         )
         self.assertIn("#7 collector worker failed", linked_report)

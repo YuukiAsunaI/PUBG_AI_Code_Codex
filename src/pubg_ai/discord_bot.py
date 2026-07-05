@@ -1323,7 +1323,7 @@ def _recommendation_evidence_link(
 def _alert_history_detail_link(record: AlertHistoryRecord, base_url: str | None) -> str:
     if not base_url:
         return ""
-    return f" [detail]({base_url.rstrip('/')}/?{urlencode({'alert_id': record.id})})"
+    return f" [detail]({base_url.rstrip('/')}/?{urlencode({'alert_id': record.id})}#alertHistoryDetail)"
 
 
 def _alert_history_filter_page_link(page: AlertHistoryPage, base_url: str | None) -> str:
@@ -1340,7 +1340,7 @@ def _alert_history_filter_page_link(page: AlertHistoryPage, base_url: str | None
             "alert_history_offset": page.offset,
         }
     )
-    return f"{base_url.rstrip('/')}/?{query}"
+    return f"{base_url.rstrip('/')}/?{query}#alerts"
 
 
 def _alert_history_export_link(page: AlertHistoryPage, base_url: str | None) -> str:
@@ -1363,7 +1363,7 @@ def _alert_history_export_link(page: AlertHistoryPage, base_url: str | None) -> 
 def _worker_run_detail_link(run: WorkerRunRecord, base_url: str | None) -> str:
     if not base_url:
         return ""
-    return f" [detail]({base_url.rstrip('/')}/?{urlencode({'worker_run_id': run.id})})"
+    return f" [detail]({base_url.rstrip('/')}/?{urlencode({'worker_run_id': run.id})}#workerRunDetail)"
 
 
 def _worker_run_filter_page_link(page: WorkerRunPage, base_url: str | None) -> str:
@@ -1380,7 +1380,7 @@ def _worker_run_filter_page_link(page: WorkerRunPage, base_url: str | None) -> s
             "worker_run_offset": page.offset,
         }
     )
-    return f"{base_url.rstrip('/')}/?{query}"
+    return f"{base_url.rstrip('/')}/?{query}#worker-runs"
 
 
 def _worker_run_export_link(page: WorkerRunPage, base_url: str | None) -> str:

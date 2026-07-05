@@ -196,7 +196,7 @@ def worker_run_detail_url(alert: SystemAlert, base_url: str | None) -> str:
     run_id = _worker_run_id(alert)
     if not base_url or not run_id:
         return ""
-    return f"{base_url.rstrip('/')}/?{urlencode({'worker_run_id': run_id})}"
+    return f"{base_url.rstrip('/')}/?{urlencode({'worker_run_id': run_id})}#workerRunDetail"
 
 
 def current_alerts_url(base_url: str | None) -> str:
@@ -213,7 +213,7 @@ def current_alerts_url(base_url: str | None) -> str:
             "alert_history_offset": 0,
         }
     )
-    return f"{base_url.rstrip('/')}/?{query}"
+    return f"{base_url.rstrip('/')}/?{query}#alerts"
 
 
 def _worker_run_id(alert: SystemAlert) -> str:
