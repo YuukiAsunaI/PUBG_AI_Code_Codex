@@ -18,6 +18,7 @@ from pubg_ai.discord_bot import (
     format_player_ranking,
     format_player_weapon_detail,
     format_replay_artifact_summary,
+    format_worker_run_command_reply,
     format_worker_run_detail_result,
     format_worker_run_history_result,
 )
@@ -454,6 +455,27 @@ class DiscordBotFormattingTests(unittest.TestCase):
         linked_body = format_worker_run_detail_result(run, detail_base_url="http://127.0.0.1:8000/")
         self.assertIn("- local_detail: [detail](http://127.0.0.1:8000/?worker_run_id=12#workerRunDetail)", linked_body)
         self.assertIn("collection.queued_match_jobs=2", linked_body)
+
+    def test_worker_run_command_reply_adds_detail_only_when_run_id_and_url_are_available(self) -> None:
+        message = "PUBG AI worker run detail error: worker run not found: 12"
+
+        self.assertEqual(format_worker_run_command_reply(message), message)
+        self.assertEqual(
+            format_worker_run_command_reply(message, 12),
+            message,
+        )
+        self.assertEqual(
+            format_worker_run_command_reply(message, None, detail_base_url="http://127.0.0.1:8000/"),
+            message,
+        )
+
+        linked = format_worker_run_command_reply(message, 12, detail_base_url="http://127.0.0.1:8000/")
+
+        self.assertIn(message, linked)
+        self.assertIn(
+            "- local_detail: [detail](http://127.0.0.1:8000/?worker_run_id=12#workerRunDetail)",
+            linked,
+        )
 
     def test_worker_run_filter_parser_supports_worker_aliases_and_limit(self) -> None:
         filters = _parse_worker_run_filters("post-processing 99")

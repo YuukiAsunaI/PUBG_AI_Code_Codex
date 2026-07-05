@@ -354,7 +354,8 @@ created-time ranges such as
 `to=2026-07-02T00:00`, or quick presets such as `range=last24h`, `range=today`, `range=yesterday`, and
 `range=last7d`; when more worker rows are available, the response includes copyable previous/next `offset` commands
 that keep the selected worker, status, and date filters. The `pubg-worker-run run_id` detail response also includes
-the same local link when the base URL is configured.
+the same local link when the base URL is configured, and matching usage/error responses include it whenever the
+supplied run ID can be parsed.
 
 Run the local management app:
 

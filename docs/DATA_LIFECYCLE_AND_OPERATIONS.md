@@ -127,7 +127,8 @@ Implemented behavior:
   link for the same worker/status/time window.
 - The admin-only `pubg-worker-run run_id` command opens one worker cycle from Discord and shows summary metrics plus
   the full stored error list. When `PUBG_LOCAL_WEB_BASE_URL` is set, the response also includes a local
-  `worker_run_id` detail link.
+  `worker_run_id` detail link, and usage/error responses include that same link whenever the supplied run ID can be
+  parsed.
 
 ## Duplicate Match Handling
 

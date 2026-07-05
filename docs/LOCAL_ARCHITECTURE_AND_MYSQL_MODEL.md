@@ -437,8 +437,10 @@ Completed slices:
     `local_web_base_url` is configured.
 81. Discord alert command usage/error responses include local `alert_id` detail links when `local_web_base_url` is
     configured and a supplied alert ID can be parsed.
+82. Discord worker-run detail command usage/error responses include local `worker_run_id` detail links when
+    `local_web_base_url` is configured and a supplied run ID can be parsed.
 
 Next slice:
 
-1. Add local worker-run detail links to Discord worker command usage/error responses when a supplied run ID can be
-   parsed.
+1. Add local worker-run history filter links to Discord worker history error responses when parsed filters are
+   available.

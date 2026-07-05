@@ -297,6 +297,20 @@ def format_worker_run_detail_result(run: WorkerRunRecord, *, detail_base_url: st
     return "\n".join(lines)
 
 
+def format_worker_run_command_reply(
+    message: str,
+    run_id: int | None = None,
+    *,
+    detail_base_url: str | None = None,
+) -> str:
+    lines = [message]
+    if run_id is not None:
+        detail_link = _worker_run_detail_markdown(run_id, detail_base_url)
+        if detail_link:
+            lines.append(f"- local_detail: {detail_link}")
+    return "\n".join(lines)
+
+
 def format_player_profile_stats(profile: PlayerProfileStats) -> str:
     totals = profile.totals
     lines = [
@@ -1372,7 +1386,14 @@ def create_discord_bot(
             return
         parsed_run_id = _positive_int(run_id)
         if parsed_run_id is None:
-            await ctx.reply(f"Usage: `{command_prefix}pubg-worker-run run_id`", mention_author=False)
+            await ctx.reply(
+                format_worker_run_command_reply(
+                    f"Usage: `{command_prefix}pubg-worker-run run_id`",
+                    parsed_run_id,
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
             return
 
         connection = connect_mysql(config.database)
@@ -1380,7 +1401,14 @@ def create_discord_bot(
             try:
                 run = get_worker_run(connection, parsed_run_id)
             except WorkerRunHistoryError as exc:
-                await ctx.reply(f"PUBG AI worker run detail error: {exc}", mention_author=False)
+                await ctx.reply(
+                    format_worker_run_command_reply(
+                        f"PUBG AI worker run detail error: {exc}",
+                        parsed_run_id,
+                        detail_base_url=config.app.local_web_base_url,
+                    ),
+                    mention_author=False,
+                )
                 return
         finally:
             connection.close()
@@ -1484,9 +1512,14 @@ def _alert_history_export_link(page: AlertHistoryPage, base_url: str | None) -> 
 
 
 def _worker_run_detail_link(run: WorkerRunRecord, base_url: str | None) -> str:
+    detail = _worker_run_detail_markdown(run.id, base_url)
+    return f" {detail}" if detail else ""
+
+
+def _worker_run_detail_markdown(run_id: int, base_url: str | None) -> str:
     if not base_url:
         return ""
-    return f" [detail]({base_url.rstrip('/')}/?{urlencode({'worker_run_id': run.id})}#workerRunDetail)"
+    return f"[detail]({base_url.rstrip('/')}/?{urlencode({'worker_run_id': run_id})}#workerRunDetail)"
 
 
 def _worker_run_filter_page_link(page: WorkerRunPage, base_url: str | None) -> str:
