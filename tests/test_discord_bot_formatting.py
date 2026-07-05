@@ -9,6 +9,7 @@ from pubg_ai.discord_bot import (
     _player_visible_to_scope,
     format_alert_action_result,
     format_alert_command_reply,
+    format_alerts_command_reply,
     format_alert_history_command_reply,
     format_alert_history_result,
     format_alert_note_result,
@@ -164,6 +165,22 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn(message, linked)
         self.assertIn(
             "- local_detail: [detail](http://127.0.0.1:8000/?alert_id=7#alertHistoryDetail)",
+            linked,
+        )
+
+    def test_alerts_command_reply_adds_current_alerts_link_when_url_is_available(self) -> None:
+        message = "PUBG AI alert settings error: local settings file is invalid"
+
+        self.assertEqual(format_alerts_command_reply(message), message)
+
+        linked = format_alerts_command_reply(message, detail_base_url="http://127.0.0.1:8000/")
+
+        self.assertIn(message, linked)
+        self.assertIn(
+            "- current_alerts: [open](http://127.0.0.1:8000/?"
+            "alert_history_source=all&alert_history_state=current&alert_history_severity=all&"
+            "alert_history_sort=severity&alert_history_search=&"
+            "alert_history_limit=50&alert_history_offset=0#alerts)",
             linked,
         )
 

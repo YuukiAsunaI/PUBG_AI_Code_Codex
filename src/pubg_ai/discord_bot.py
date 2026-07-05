@@ -38,7 +38,12 @@ from pubg_ai.player_stats import PlayerMatchDetail, PlayerProfileStats, PlayerSt
 from pubg_ai.pubg_client import PubgApiClient, PubgApiError
 from pubg_ai.replay_artifact_catalog import ReplayArtifactRecord, list_replay_artifacts
 from pubg_ai.replay_storage import ReplayArtifactStore, ReplayStorageError
-from pubg_ai.system_alerts import collect_system_alerts, format_alert_report, format_discord_alert
+from pubg_ai.system_alerts import (
+    collect_system_alerts,
+    current_alerts_url,
+    format_alert_report,
+    format_discord_alert,
+)
 from pubg_ai.time_utils import now_kst, to_kst
 from pubg_ai.worker_run_history import (
     WORKER_RUN_EXPORT_LIMIT,
@@ -193,6 +198,14 @@ def format_alert_command_reply(
         detail_link = _alert_history_detail_markdown(alert_id, detail_base_url)
         if detail_link:
             lines.append(f"- local_detail: {detail_link}")
+    return "\n".join(lines)
+
+
+def format_alerts_command_reply(message: str, *, detail_base_url: str | None = None) -> str:
+    lines = [message]
+    alerts_link = current_alerts_url(detail_base_url)
+    if alerts_link:
+        lines.append(f"- current_alerts: [open]({alerts_link})")
     return "\n".join(lines)
 
 
@@ -1082,13 +1095,25 @@ def create_discord_bot(
         if not await require_permission(ctx, "admin"):
             return
         if scope_settings_store is None:
-            await ctx.reply("PUBG AI alert settings are unavailable.", mention_author=False)
+            await ctx.reply(
+                format_alerts_command_reply(
+                    "PUBG AI alert settings are unavailable.",
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
             return
 
         try:
             alert_settings = scope_settings_store.load_alert_settings()
         except LocalSettingsError as exc:
-            await ctx.reply(f"PUBG AI alert settings error: {exc}", mention_author=False)
+            await ctx.reply(
+                format_alerts_command_reply(
+                    f"PUBG AI alert settings error: {exc}",
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
             return
 
         connection = connect_mysql(config.database)

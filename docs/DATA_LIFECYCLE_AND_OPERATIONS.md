@@ -101,7 +101,8 @@ Implemented behavior:
   is set, automatic storage and worker alert messages include local `alert_id` detail links, and worker failure
   messages also include a local `worker_run_id` detail link.
 - The admin-only `pubg-alerts` Discord command returns the current alert report on demand, including alert IDs. When
-  `PUBG_LOCAL_WEB_BASE_URL` is set, the response includes a local current-alert list link.
+  `PUBG_LOCAL_WEB_BASE_URL` is set, the response includes a local current-alert list link. Settings unavailable/load
+  error responses include the same local `#alerts` section link when the base URL is configured.
 - The admin-only `pubg-alert-ack alert_id` and `pubg-alert-snooze alert_id [minutes]` commands update the same
   persisted alert history from Discord. When `PUBG_LOCAL_WEB_BASE_URL` is set, their responses include a local
   alert-detail link.
@@ -138,10 +139,8 @@ Implemented behavior:
   parsed filters, or safe defaults give a stable target.
 - Permission-denied and server-channel-required responses intentionally remain plain text because they are not tied to
   a local object and should not expose extra admin UI context.
-- Remaining admin gaps: `pubg-alerts` settings unavailable/load errors currently remain plain text even though the
-  local `#alerts` section is a stable target, and `유저삭제` not-found responses remain plain text until the local
-  manager has player detail/filter deep links. The next implementation slice should prioritize the `pubg-alerts`
-  settings error link because the `#alerts` anchor already exists.
+- Remaining admin gap: `유저삭제` not-found responses remain plain text until the local manager has a stable player
+  list/detail anchor or filter deep link that can safely target the attempted shard/name or account ID.
 
 ## Duplicate Match Handling
 

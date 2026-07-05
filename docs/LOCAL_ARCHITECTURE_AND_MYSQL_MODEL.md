@@ -453,8 +453,10 @@ Completed slices:
     `local_web_base_url` is configured and safe defaults are available.
 89. Remaining Discord admin command usage/error local-link coverage has been reviewed and documented, including
     intentional plain-text cases and the next concrete `pubg-alerts` settings-error link.
+90. Discord `pubg-alerts` settings unavailable/load-error responses include a local current-alerts section link when
+    `local_web_base_url` is configured.
 
 Next slice:
 
-1. Add a local alerts-section link to `pubg-alerts` settings unavailable/load-error responses when
-   `local_web_base_url` is configured.
+1. Add a stable local registered-player list/detail anchor or filter link, then use it from `유저삭제` not-found
+   responses when `local_web_base_url` is configured.
