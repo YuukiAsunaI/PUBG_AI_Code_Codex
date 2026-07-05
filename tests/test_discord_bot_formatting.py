@@ -422,6 +422,12 @@ class DiscordBotFormattingTests(unittest.TestCase):
             "worker_run_limit=4&worker_run_offset=8#worker-runs)",
             linked,
         )
+        self.assertIn(
+            "export_csv: [download](http://127.0.0.1:8000/workers/runs/export.csv?"
+            "worker_name=collector&status=failed&created_from_kst=2026-07-01T09%3A00%3A00%2B09%3A00&"
+            "created_to_kst=2026-07-01T10%3A00%3A00%2B09%3A00&limit=5000&offset=0)",
+            linked,
+        )
 
     def test_worker_run_history_result_formats_previous_and_next_hints(self) -> None:
         page = WorkerRunPage(

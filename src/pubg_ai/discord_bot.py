@@ -325,6 +325,9 @@ def format_worker_run_history_command_reply(
     filter_page_link = _worker_run_filter_page_link(page, detail_base_url)
     if filter_page_link:
         lines.append(f"- filter_page: [open]({filter_page_link})")
+    export_link = _worker_run_export_link(page, detail_base_url)
+    if export_link:
+        lines.append(f"- export_csv: [download]({export_link})")
     return "\n".join(lines)
 
 
