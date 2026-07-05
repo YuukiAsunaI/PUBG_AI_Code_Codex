@@ -9,6 +9,7 @@ from pubg_ai.discord_bot import (
     _player_visible_to_scope,
     format_alert_action_result,
     format_alert_command_reply,
+    format_alert_history_command_reply,
     format_alert_history_result,
     format_alert_note_result,
     format_alert_notes_result,
@@ -222,6 +223,32 @@ class DiscordBotFormattingTests(unittest.TestCase):
             linked,
         )
         self.assertIn("[detail](http://127.0.0.1:8000/?alert_id=7#alertHistoryDetail)", linked)
+
+    def test_alert_history_command_reply_formats_filter_page_link(self) -> None:
+        message = "PUBG AI alert history error: failed to read system_alert_history"
+
+        self.assertEqual(format_alert_history_command_reply(message), message)
+
+        linked = format_alert_history_command_reply(
+            message,
+            source="storage",
+            state="resolved",
+            severity="warning",
+            sort="oldest",
+            search="disk full",
+            limit=4,
+            offset=8,
+            detail_base_url="http://127.0.0.1:8000/",
+        )
+
+        self.assertIn(message, linked)
+        self.assertIn(
+            "filter_page: [open](http://127.0.0.1:8000/?"
+            "alert_history_source=storage&alert_history_state=resolved&alert_history_severity=warning&"
+            "alert_history_sort=oldest&alert_history_search=disk+full&"
+            "alert_history_limit=4&alert_history_offset=8#alerts)",
+            linked,
+        )
 
     def test_alert_history_result_formats_previous_and_next_hints(self) -> None:
         page = AlertHistoryPage(

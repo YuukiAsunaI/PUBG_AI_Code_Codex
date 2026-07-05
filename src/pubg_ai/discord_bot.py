@@ -233,6 +233,36 @@ def format_alert_history_result(
     return "\n".join(lines)
 
 
+def format_alert_history_command_reply(
+    message: str,
+    *,
+    source: str = "all",
+    state: str = "all",
+    severity: str = "all",
+    sort: str = "newest",
+    search: str = "",
+    limit: int = 5,
+    offset: int = 0,
+    detail_base_url: str | None = None,
+) -> str:
+    lines = [message]
+    page = AlertHistoryPage(
+        records=[],
+        total=0,
+        limit=limit,
+        offset=offset,
+        source=source,
+        state=state,
+        severity=severity,
+        sort=sort,
+        search=search,
+    )
+    filter_page_link = _alert_history_filter_page_link(page, detail_base_url)
+    if filter_page_link:
+        lines.append(f"- filter_page: [open]({filter_page_link})")
+    return "\n".join(lines)
+
+
 def format_worker_run_history_result(
     page: WorkerRunPage,
     *,
@@ -1343,7 +1373,20 @@ def create_discord_bot(
                     offset=int(parsed["offset"]),
                 )
             except AlertHistoryError as exc:
-                await ctx.reply(f"PUBG AI alert history error: {exc}", mention_author=False)
+                await ctx.reply(
+                    format_alert_history_command_reply(
+                        f"PUBG AI alert history error: {exc}",
+                        source=str(parsed["source"]),
+                        state=str(parsed["state"]),
+                        severity=str(parsed["severity"]),
+                        sort=str(parsed["sort"]),
+                        search=str(parsed["search"]),
+                        limit=int(parsed["limit"]),
+                        offset=int(parsed["offset"]),
+                        detail_base_url=config.app.local_web_base_url,
+                    ),
+                    mention_author=False,
+                )
                 return
         finally:
             connection.close()
