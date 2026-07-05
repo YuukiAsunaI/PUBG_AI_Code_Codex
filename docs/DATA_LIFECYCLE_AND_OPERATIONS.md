@@ -141,6 +141,9 @@ Implemented behavior:
   a local object and should not expose extra admin UI context.
 - The local manager registered-player list has a stable `#registered-players` anchor. `유저삭제` not-found responses
   include that local registered-player list link when `PUBG_LOCAL_WEB_BASE_URL` is configured.
+- Remaining profile/replay local-link audit: Discord `전적`, `무기`, `추천`, `매치`, and `최근스냅샷` not-found/file
+  error responses currently remain plain text. The local manager has matching lookup/replay sections, but those
+  sections need stable anchors before Discord can safely link to them.
 - Current admin-link coverage leaves permission-denied and server-channel-required responses as the only intentional
   plain-text admin cases because they are not tied to a local object.
 

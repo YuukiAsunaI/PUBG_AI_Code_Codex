@@ -457,8 +457,10 @@ Completed slices:
     `local_web_base_url` is configured.
 91. The local registered-player list has a stable anchor, and Discord `유저삭제` not-found responses include that local
     list link when `local_web_base_url` is configured.
+92. Remaining Discord profile/replay command not-found responses have been reviewed against local manager sections,
+    and the next local lookup/replay anchor fixes are documented.
 
 Next slice:
 
-1. Review remaining Discord profile/replay command not-found responses for local-link coverage and document the next
-   concrete local deep-link fixes.
+1. Add stable local manager anchors for profile, weapon, recommendation, match, and 2D replay sections so Discord
+   not-found responses can link to the right local lookup or replay panel.
