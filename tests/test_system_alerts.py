@@ -72,9 +72,11 @@ class SystemAlertsTests(unittest.TestCase):
         self.assertEqual(alert.source_id, 9)
         self.assertEqual(alert.metadata["run_id"], 9)
         self.assertEqual(alert.metadata["worker_name"], "post_processing")
+        self.assertNotIn("alert_detail", message)
         self.assertNotIn("worker_run_detail", message)
 
         linked = format_discord_alert(alert, detail_base_url="http://127.0.0.1:8000/")
+        self.assertNotIn("alert_detail", linked)
         self.assertIn("- worker_run_detail: http://127.0.0.1:8000/?worker_run_id=9#workerRunDetail", linked)
 
     def test_empty_alert_report_message(self) -> None:
@@ -99,9 +101,14 @@ class SystemAlertsTests(unittest.TestCase):
         )
 
         self.assertIn("- alert_id: 7", format_discord_alert(record))
+        linked_alert = format_discord_alert(record, detail_base_url="http://127.0.0.1:8000")
+        self.assertIn(
+            "- alert_detail: http://127.0.0.1:8000/?alert_id=7#alertHistoryDetail",
+            linked_alert,
+        )
         self.assertIn(
             "- worker_run_detail: http://127.0.0.1:8000/?worker_run_id=7#workerRunDetail",
-            format_discord_alert(record, detail_base_url="http://127.0.0.1:8000"),
+            linked_alert,
         )
         report = format_alert_report([record])
         self.assertIn("#7 collector worker failed", report)
@@ -115,6 +122,33 @@ class SystemAlertsTests(unittest.TestCase):
             linked_report,
         )
         self.assertIn("#7 collector worker failed", linked_report)
+
+    def test_storage_alert_history_record_includes_local_alert_detail_link(self) -> None:
+        record = AlertHistoryRecord(
+            id=8,
+            alert_key="storage:raw_data_dir:D:/BackUP/raw:Path does not exist",
+            source="storage",
+            severity="error",
+            title="raw_data_dir storage alert",
+            message="Path does not exist. path=D:/BackUP/raw",
+            metadata={"role": "raw_data_dir", "path": "D:/BackUP/raw"},
+            first_seen_at_kst="2026-06-30T10:00:00+09:00",
+            last_seen_at_kst="2026-06-30T10:01:00+09:00",
+            last_notified_at_kst=None,
+            acknowledged_at_kst=None,
+            snoozed_until_kst=None,
+            resolved_at_kst=None,
+            updated_at_kst="2026-06-30T10:01:00+09:00",
+        )
+
+        linked_alert = format_discord_alert(record, detail_base_url="http://127.0.0.1:8000/")
+
+        self.assertIn("- alert_id: 8", linked_alert)
+        self.assertIn(
+            "- alert_detail: http://127.0.0.1:8000/?alert_id=8#alertHistoryDetail",
+            linked_alert,
+        )
+        self.assertNotIn("worker_run_detail", linked_alert)
 
 
 def _runtime_config(raw_data_dir: Path, replay_data_dir: Path) -> RuntimeConfig:

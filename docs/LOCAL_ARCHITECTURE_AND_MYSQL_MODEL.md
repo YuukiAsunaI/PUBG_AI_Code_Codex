@@ -431,7 +431,9 @@ Completed slices:
     configured.
 78. Local manager alert and worker share links use section/detail anchors so Discord and copied links land near the
     relevant panel.
+79. Automatic Discord storage and worker alert messages include local `alert_id` detail links when
+    `local_web_base_url` is configured and persisted alert IDs are available.
 
 Next slice:
 
-1. Add local alert-detail links to automatic storage/worker alert messages when persisted alert IDs are available.
+1. Add local alert-detail links to Discord alert action and note responses when `local_web_base_url` is configured.

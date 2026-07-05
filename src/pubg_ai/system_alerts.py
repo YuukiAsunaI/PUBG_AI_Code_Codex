@@ -153,6 +153,9 @@ def format_discord_alert(alert: SystemAlert, *, detail_base_url: str | None = No
             f"- {alert.message}",
         ]
     )
+    alert_detail_url = alert_history_detail_url(alert, detail_base_url)
+    if alert_detail_url:
+        lines.append(f"- alert_detail: {alert_detail_url}")
     detail_url = worker_run_detail_url(alert, detail_base_url)
     if detail_url:
         lines.append(f"- worker_run_detail: {detail_url}")
@@ -232,6 +235,17 @@ def _worker_run_id(alert: SystemAlert) -> str:
     if key.startswith("worker:"):
         return _positive_integer_text(key.split(":", 1)[1])
     return ""
+
+
+def alert_history_detail_url(alert: SystemAlert, base_url: str | None) -> str:
+    alert_id = _alert_history_id(alert)
+    if not base_url or not alert_id:
+        return ""
+    return f"{base_url.rstrip('/')}/?{urlencode({'alert_id': alert_id})}#alertHistoryDetail"
+
+
+def _alert_history_id(alert: SystemAlert) -> str:
+    return _positive_integer_text(getattr(alert, "id", None))
 
 
 def _positive_integer_text(value: Any) -> str:
