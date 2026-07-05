@@ -133,6 +133,15 @@ Implemented behavior:
   the full stored error list. When `PUBG_LOCAL_WEB_BASE_URL` is set, the response also includes a local
   `worker_run_id` detail link, and usage/error responses include that same link whenever the supplied run ID can be
   parsed.
+- Discord admin usage/error local-link audit: alert action commands, alert-history, worker-run history, and worker-run
+  detail commands now attach a local detail/filter/export link whenever a parsed `alert_id`, parsed `worker_run_id`,
+  parsed filters, or safe defaults give a stable target.
+- Permission-denied and server-channel-required responses intentionally remain plain text because they are not tied to
+  a local object and should not expose extra admin UI context.
+- Remaining admin gaps: `pubg-alerts` settings unavailable/load errors currently remain plain text even though the
+  local `#alerts` section is a stable target, and `유저삭제` not-found responses remain plain text until the local
+  manager has player detail/filter deep links. The next implementation slice should prioritize the `pubg-alerts`
+  settings error link because the `#alerts` anchor already exists.
 
 ## Duplicate Match Handling
 

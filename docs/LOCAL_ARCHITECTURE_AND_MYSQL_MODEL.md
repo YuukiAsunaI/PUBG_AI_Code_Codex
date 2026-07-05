@@ -451,8 +451,10 @@ Completed slices:
     `local_web_base_url` is configured and safe defaults are available.
 88. Discord worker-run parser-error responses include filtered local manager and CSV export links when
     `local_web_base_url` is configured and safe defaults are available.
+89. Remaining Discord admin command usage/error local-link coverage has been reviewed and documented, including
+    intentional plain-text cases and the next concrete `pubg-alerts` settings-error link.
 
 Next slice:
 
-1. Review remaining Discord admin command usage/error responses for local-link coverage and document any gaps or
-   next fixes.
+1. Add a local alerts-section link to `pubg-alerts` settings unavailable/load-error responses when
+   `local_web_base_url` is configured.
