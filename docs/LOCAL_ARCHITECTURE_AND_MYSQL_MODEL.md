@@ -459,8 +459,10 @@ Completed slices:
     list link when `local_web_base_url` is configured.
 92. Remaining Discord profile/replay command not-found responses have been reviewed against local manager sections,
     and the next local lookup/replay anchor fixes are documented.
+93. Local manager profile, weapon, recommendation, match, replay player, and replay artifact sections have stable
+    anchors for future Discord not-found links.
 
 Next slice:
 
-1. Add stable local manager anchors for profile, weapon, recommendation, match, and 2D replay sections so Discord
-   not-found responses can link to the right local lookup or replay panel.
+1. Add local lookup/replay section links to Discord `전적`, `무기`, `추천`, `매치`, and `최근스냅샷` not-found/file
+   error responses when `local_web_base_url` is configured.

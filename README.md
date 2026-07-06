@@ -362,9 +362,9 @@ that keep the selected worker, status, and date filters. The `pubg-worker-run ru
 the same local link when the base URL is configured, and matching usage/error responses include it whenever the
 supplied run ID can be parsed. `pubg-alerts` settings unavailable/load errors also include a local `#alerts` link
 when the base URL is configured. `유저삭제` not-found responses include a local `#registered-players` link when the
-base URL is configured. Profile, weapon, recommendation, match, and replay not-found responses are still plain text
-until their local lookup/replay sections have stable anchors. Current admin-link coverage leaves permission/scope
-failures as plain text by design.
+base URL is configured. The local manager now exposes stable anchors for profile, weapon, recommendation, match,
+replay player, and replay artifact sections; the related Discord not-found responses are ready to be linked in the
+next slice. Current admin-link coverage leaves permission/scope failures as plain text by design.
 
 Run the local management app:
 

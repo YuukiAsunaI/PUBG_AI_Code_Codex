@@ -48,13 +48,19 @@ class WebReplayPlayerTests(unittest.TestCase):
         self.assertIn("loadReplayMapImage", body)
         self.assertIn("/replay/map-assets/", body)
 
-    def test_index_includes_registered_players_anchor(self) -> None:
+    def test_index_includes_lookup_and_replay_section_anchors(self) -> None:
         client = TestClient(create_app())
         response = client.get("/")
 
         self.assertEqual(response.status_code, 200)
         body = response.text
         self.assertIn('id="registered-players"', body)
+        self.assertIn('id="profile-lookup"', body)
+        self.assertIn('id="weapon-lookup"', body)
+        self.assertIn('id="recommendation-lookup"', body)
+        self.assertIn('id="match-lookup"', body)
+        self.assertIn('id="replay-player"', body)
+        self.assertIn('id="replay-artifacts"', body)
         self.assertIn('id="playersBody"', body)
 
     def test_unknown_map_asset_returns_404(self) -> None:

@@ -1811,7 +1811,7 @@ _INDEX_HTML = """<!doctype html>
         <tbody id="playersBody"></tbody>
       </table>
     </section>
-    <section>
+    <section id="profile-lookup">
       <h2>전적 조회</h2>
       <form id="profileForm">
         <label>플랫폼
@@ -1827,7 +1827,7 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="profileBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
-    <section>
+    <section id="weapon-lookup">
       <h2>무기 조회</h2>
       <form id="weaponForm">
         <label>플랫폼
@@ -1846,7 +1846,7 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="weaponBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
-    <section>
+    <section id="recommendation-lookup">
       <h2>Recommendation 조회</h2>
       <form id="recommendationForm">
         <label>플랫폼
@@ -1865,7 +1865,7 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="recommendationBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
-    <section>
+    <section id="match-lookup">
       <h2>매치 조회</h2>
       <form id="matchForm">
         <label>플랫폼
@@ -2097,7 +2097,7 @@ _INDEX_HTML = """<!doctype html>
       </div>
       <div class="status" id="timelineStatus">대기 중</div>
     </section>
-    <section>
+    <section id="replay-player">
       <h2>2D Replay Player</h2>
       <div class="player-controls">
         <label>Timeline
@@ -2149,7 +2149,7 @@ _INDEX_HTML = """<!doctype html>
       </div>
       <div class="status" id="replayPlayerStatus" style="margin-top: 12px;">대기 중</div>
     </section>
-    <section>
+    <section id="replay-artifacts">
       <h2>Replay Artifact 목록</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button class="secondary" type="button" onclick="loadReplayArtifacts()">새로고침</button>
