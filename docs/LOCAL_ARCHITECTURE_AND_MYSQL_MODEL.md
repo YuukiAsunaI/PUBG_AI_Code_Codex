@@ -465,8 +465,10 @@ Completed slices:
     lookup/replay section links when `local_web_base_url` is configured.
 95. Local manager lookup/replay sections pre-fill forms and replay artifact filters from URL parameters, and Discord
     not-found/file local links carry shard, target, match, weapon, account, and replay artifact context when available.
+96. Successful Discord `전적`, `무기`, `추천`, `매치`, and `최근스냅샷` responses include contextual local manager
+    section links when `local_web_base_url` is configured.
 
 Next slice:
 
-1. Review successful Discord profile, weapon, recommendation, match, and replay responses for optional contextual
-   local links back to the matching local manager section or artifact detail.
+1. Review Discord ranking and registered-player list success responses for local manager anchors, query prefill, and
+   contextual links.

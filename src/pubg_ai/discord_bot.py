@@ -142,18 +142,35 @@ def _local_section_url(
     return f"{detail_base_url.rstrip('/')}/{query}#{section_anchor}"
 
 
-def format_replay_artifact_summary(artifact: ReplayArtifactRecord) -> str:
+def format_replay_artifact_summary(
+    artifact: ReplayArtifactRecord,
+    *,
+    detail_base_url: str | None = None,
+) -> str:
     player = artifact.player_name or _short_account_id(artifact.account_id or "")
     match_id = artifact.match_id
     map_name = artifact.map_name or "unknown"
     mode = artifact.game_mode or "-"
     size_kb = artifact.size_bytes / 1024
-    return (
-        f"{player} 최근 2D 스냅샷\n"
-        f"- match: {match_id}\n"
-        f"- map/mode: {map_name} / {mode}\n"
-        f"- size: {size_kb:.1f} KB"
+    lines = [
+        f"{player} 최근 2D 스냅샷",
+        f"- match: {match_id}",
+        f"- map/mode: {map_name} / {mode}",
+        f"- size: {size_kb:.1f} KB",
+    ]
+    local_link = _local_section_url(
+        detail_base_url,
+        "replay-artifacts",
+        {
+            "shard": artifact.shard,
+            "match_id": artifact.match_id,
+            "account_id": artifact.account_id,
+            "replay_artifact_id": artifact.id,
+        },
     )
+    if local_link:
+        lines.append(f"- local_replay: [open]({local_link})")
+    return "\n".join(lines)
 
 
 def format_alert_action_result(
@@ -426,7 +443,7 @@ def format_worker_run_command_reply(
     return "\n".join(lines)
 
 
-def format_player_profile_stats(profile: PlayerProfileStats) -> str:
+def format_player_profile_stats(profile: PlayerProfileStats, *, detail_base_url: str | None = None) -> str:
     totals = profile.totals
     lines = [
         f"{profile.player.current_name} 전적 ({profile.player.shard})",
@@ -457,10 +474,18 @@ def format_player_profile_stats(profile: PlayerProfileStats) -> str:
     if totals.match_count == 0:
         lines.append("아직 파싱된 전투 요약 데이터가 없습니다.")
 
+    local_link = _local_section_url(
+        detail_base_url,
+        "profile-lookup",
+        {"shard": profile.player.shard, "account_id": profile.player.account_id},
+    )
+    if local_link:
+        lines.append(f"- local_profile: [open]({local_link})")
+
     return "\n".join(lines)
 
 
-def format_player_weapon_detail(detail: PlayerWeaponDetail) -> str:
+def format_player_weapon_detail(detail: PlayerWeaponDetail, *, detail_base_url: str | None = None) -> str:
     totals = detail.totals
     lines = [
         f"{detail.player.current_name} {detail.weapon_name} 무기 통계",
@@ -485,10 +510,18 @@ def format_player_weapon_detail(detail: PlayerWeaponDetail) -> str:
                 f"{_percent(match.accuracy)}"
             )
 
+    local_link = _local_section_url(
+        detail_base_url,
+        "weapon-lookup",
+        {"shard": detail.player.shard, "account_id": detail.player.account_id, "weapon": detail.weapon_name},
+    )
+    if local_link:
+        lines.append(f"- local_weapon: [open]({local_link})")
+
     return "\n".join(lines)
 
 
-def format_player_match_detail(detail: PlayerMatchDetail) -> str:
+def format_player_match_detail(detail: PlayerMatchDetail, *, detail_base_url: str | None = None) -> str:
     rank = f"#{detail.win_place}" if detail.win_place is not None else "-"
     total_players = _optional_number(detail.total_players)
     human_players = _optional_number(detail.human_players)
@@ -525,6 +558,14 @@ def format_player_match_detail(detail: PlayerMatchDetail) -> str:
     if detail.replay_artifact:
         lines.append(f"- 2D 스냅샷: 생성됨 (`!최근스냅샷 {detail.match_id}`)")
 
+    local_link = _local_section_url(
+        detail_base_url,
+        "match-lookup",
+        {"shard": detail.shard, "account_id": detail.player.account_id, "match_id": detail.match_id},
+    )
+    if local_link:
+        lines.append(f"- local_match: [open]({local_link})")
+
     return "\n".join(lines)
 
 
@@ -548,6 +589,7 @@ def format_player_recommendations(
     report: PlayerRecommendationReport,
     *,
     evidence_base_url: str | None = None,
+    detail_base_url: str | None = None,
 ) -> str:
     lines = [
         f"{report.player.current_name} recommendations ({report.player.shard})",
@@ -612,6 +654,14 @@ def format_player_recommendations(
         ))
     else:
         lines.append("- drop zones: no data")
+
+    local_link = _local_section_url(
+        detail_base_url,
+        "recommendation-lookup",
+        {"shard": report.player.shard, "account_id": report.player.account_id, "min_matches": report.min_matches},
+    )
+    if local_link:
+        lines.append(f"- local_recommendations: [open]({local_link})")
 
     return "\n".join(lines)
 
@@ -863,7 +913,10 @@ def create_discord_bot(
             )
             return
 
-        await ctx.reply(format_player_profile_stats(profile), mention_author=False)
+        await ctx.reply(
+            format_player_profile_stats(profile, detail_base_url=config.app.local_web_base_url),
+            mention_author=False,
+        )
 
     @bot.command(name="무기", aliases=["pubg-weapon"])
     async def player_weapon_command(
@@ -909,7 +962,10 @@ def create_discord_bot(
             )
             return
 
-        await ctx.reply(format_player_weapon_detail(detail), mention_author=False)
+        await ctx.reply(
+            format_player_weapon_detail(detail, detail_base_url=config.app.local_web_base_url),
+            mention_author=False,
+        )
 
     @bot.command(name="추천", aliases=["pubg-recommend"])
     async def player_recommendations_command(
@@ -957,6 +1013,7 @@ def create_discord_bot(
             format_player_recommendations(
                 recommendations,
                 evidence_base_url=config.app.local_web_base_url,
+                detail_base_url=config.app.local_web_base_url,
             ),
             mention_author=False,
         )
@@ -1012,7 +1069,10 @@ def create_discord_bot(
             )
             return
 
-        await ctx.reply(format_player_match_detail(detail), mention_author=False)
+        await ctx.reply(
+            format_player_match_detail(detail, detail_base_url=config.app.local_web_base_url),
+            mention_author=False,
+        )
 
     @bot.command(name="랭킹", aliases=["pubg-ranking"])
     async def ranking_command(
@@ -1202,7 +1262,7 @@ def create_discord_bot(
             return
 
         await ctx.reply(
-            format_replay_artifact_summary(artifact),
+            format_replay_artifact_summary(artifact, detail_base_url=config.app.local_web_base_url),
             file=discord.File(Path(path), filename=path.name),
             mention_author=False,
         )

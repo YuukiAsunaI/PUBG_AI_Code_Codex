@@ -779,6 +779,12 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("베릴 M762 12킬 1200딜", body)
         self.assertIn("match-12 #1 5킬/550딜", body)
 
+        body_with_link = format_player_profile_stats(profile, detail_base_url="http://127.0.0.1:8000/")
+        self.assertIn(
+            "- local_profile: [open](http://127.0.0.1:8000/?shard=steam&account_id=account.test#profile-lookup)",
+            body_with_link,
+        )
+
     def test_weapon_detail_summary_formats_weapon_metrics(self) -> None:
         detail = PlayerWeaponDetail(
             player=RegisteredPlayer(
@@ -843,6 +849,12 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("23.0%", body)
         self.assertIn("몸통 140", body)
         self.assertIn("match-12 #1 4킬/3기절/520딜", body)
+
+        body_with_link = format_player_weapon_detail(detail, detail_base_url="http://127.0.0.1:8000/")
+        self.assertIn(
+            "- local_weapon: [open](http://127.0.0.1:8000/?shard=steam&account_id=account.test&weapon=M416#weapon-lookup)",
+            body_with_link,
+        )
 
     def test_match_detail_summary_formats_core_metrics(self) -> None:
         artifact = ReplayArtifactRecord(
@@ -946,6 +958,12 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("M416 3킬/4기절/420딜/30.0%", body)
         self.assertIn("!최근스냅샷 match-123456789", body)
 
+        body_with_link = format_player_match_detail(detail, detail_base_url="http://127.0.0.1:8000/")
+        self.assertIn(
+            "- local_match: [open](http://127.0.0.1:8000/?shard=steam&account_id=account.test&match_id=match-123456789#match-lookup)",
+            body_with_link,
+        )
+
     def test_player_ranking_summary_formats_rows(self) -> None:
         ranking = PlayerRanking(
             metric="kda",
@@ -1044,6 +1062,12 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("- match: match-123", body)
         self.assertIn("- map/mode: Erangel / squad-fpp", body)
         self.assertIn("- size: 2.0 KB", body)
+
+        body_with_link = format_replay_artifact_summary(artifact, detail_base_url="http://127.0.0.1:8000/")
+        self.assertIn(
+            "- local_replay: [open](http://127.0.0.1:8000/?shard=steam&match_id=match-123&account_id=account.1234567890abcdef&replay_artifact_id=10#replay-artifacts)",
+            body_with_link,
+        )
 
 
 if __name__ == "__main__":

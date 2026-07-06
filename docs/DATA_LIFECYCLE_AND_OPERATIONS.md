@@ -146,7 +146,8 @@ Implemented behavior:
   `#replay-artifacts`. Discord `전적`, `무기`, `추천`, `매치`, and `최근스냅샷` not-found/file error responses
   include the matching section links when `PUBG_LOCAL_WEB_BASE_URL` is configured. These links carry shard, target,
   match, weapon, account, and replay artifact query parameters when available, and the local page pre-fills the
-  matching lookup form or replay artifact filter from the URL.
+  matching lookup form or replay artifact filter from the URL. Successful `전적`, `무기`, `추천`, `매치`, and
+  `최근스냅샷` responses also include contextual local manager links when the base URL is configured.
 - Current admin-link coverage leaves permission-denied and server-channel-required responses as the only intentional
   plain-text admin cases because they are not tied to a local object.
 

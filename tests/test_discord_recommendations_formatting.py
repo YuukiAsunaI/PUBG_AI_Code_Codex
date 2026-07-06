@@ -178,6 +178,7 @@ class DiscordRecommendationFormattingTests(unittest.TestCase):
         body_with_links = format_player_recommendations(
             report,
             evidence_base_url="http://127.0.0.1:8000/",
+            detail_base_url="http://127.0.0.1:8000/",
         )
 
         self.assertIn(
@@ -187,6 +188,10 @@ class DiscordRecommendationFormattingTests(unittest.TestCase):
         self.assertIn("account_id=account.test", body_with_links)
         self.assertIn("weapon_code=WeapHK416_C", body_with_links)
         self.assertIn("attachment_code=Item_Attach_Weapon_Lower_Foregrip_C", body_with_links)
+        self.assertIn(
+            "- local_recommendations: [open](http://127.0.0.1:8000/?shard=steam&account_id=account.test&min_matches=1#recommendation-lookup)",
+            body_with_links,
+        )
 
 
 if __name__ == "__main__":
