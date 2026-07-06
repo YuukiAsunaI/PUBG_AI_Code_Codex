@@ -665,6 +665,18 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("account.1234567...cdef", body)
         self.assertNotIn("account.1234567890abcdef", body)
 
+        body_with_list_link = format_player_list(players, detail_base_url="http://127.0.0.1:8000/")
+        self.assertIn(
+            "- local_registered_players: [open](http://127.0.0.1:8000/#registered-players)",
+            body_with_list_link,
+        )
+
+        body_with_single_link = format_player_list([players[0]], detail_base_url="http://127.0.0.1:8000/")
+        self.assertIn(
+            "- local_registered_players: [open](http://127.0.0.1:8000/?registered_shard=steam&registered_account_id=account.1234567890abcdef&registered_name=Yuuki_Asuna---#registered-players)",
+            body_with_single_link,
+        )
+
     def test_empty_player_list_has_clear_message(self) -> None:
         self.assertEqual(format_player_list([]), "등록된 유저가 없습니다.")
 
@@ -1016,6 +1028,16 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("#1 Yuuki_Asuna---: 3.75", body)
         self.assertIn("10전 2치킨", body)
         self.assertIn("25K/8D/5A", body)
+
+        body_with_link = format_player_ranking(
+            ranking,
+            detail_base_url="http://127.0.0.1:8000/",
+            limit=10,
+        )
+        self.assertIn(
+            "- local_ranking: [open](http://127.0.0.1:8000/?ranking_metric=kda&ranking_shard=steam&ranking_limit=10&ranking_guild_id=guild-1#ranking-lookup)",
+            body_with_link,
+        )
 
     def test_player_scope_visibility_requires_matching_guild_or_global_scope(self) -> None:
         player = RegisteredPlayer(

@@ -467,8 +467,10 @@ Completed slices:
     not-found/file local links carry shard, target, match, weapon, account, and replay artifact context when available.
 96. Successful Discord `전적`, `무기`, `추천`, `매치`, and `최근스냅샷` responses include contextual local manager
     section links when `local_web_base_url` is configured.
+97. Discord `유저조회` and `랭킹` success responses include local registered-player/ranking links; the local manager
+    can highlight linked registered-player rows and pre-fill ranking controls from URL parameters.
 
 Next slice:
 
-1. Review Discord ranking and registered-player list success responses for local manager anchors, query prefill, and
-   contextual links.
+1. Review Discord `유저등록` and `유저삭제` success responses for contextual registered-player local links and row
+   highlighting.

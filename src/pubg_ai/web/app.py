@@ -1499,6 +1499,8 @@ _INDEX_HTML = """<!doctype html>
     }
     .team-member.self { border-color: #39ff14; }
     .team-member.registered { background: #eef7ff; border-color: var(--accent); }
+    tr.linked-row td { background: #fff7ed; }
+    tr.linked-row td:first-child { border-left: 3px solid var(--accent); }
     .team-member strong { overflow-wrap: anywhere; }
     .team-member span { color: var(--muted); font-size: 12px; }
     .team-member span:last-child { grid-column: 1 / -1; }
@@ -1884,7 +1886,7 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="matchBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
-    <section>
+    <section id="ranking-lookup">
       <h2>랭킹 조회</h2>
       <form id="rankingForm">
         <label>플랫폼
@@ -2262,6 +2264,7 @@ _INDEX_HTML = """<!doctype html>
     let activeRecommendationTarget = "";
     let activeRecommendationShard = "steam";
     let replayArtifactFilter = { match_id: "", account_id: "", artifact_id: "" };
+    let registeredPlayerHighlight = { shard: "", account_id: "", name: "" };
     let alertHistoryPage = {
       source: "all",
       state: "all",
@@ -3034,21 +3037,30 @@ _INDEX_HTML = """<!doctype html>
 
     async function loadPlayers() {
       const payload = await fetch("/players?active_only=false").then((r) => r.json());
-      playersBody.innerHTML = payload.players.map((player) => `
-        <tr>
-          <td>${player.shard}</td>
-          <td>${player.current_name}</td>
-          <td>${player.account_id}</td>
+      playersBody.innerHTML = payload.players.map((player) => {
+        const highlighted = Boolean(
+          (registeredPlayerHighlight.account_id && player.account_id === registeredPlayerHighlight.account_id)
+          || (
+            registeredPlayerHighlight.name
+            && player.current_name === registeredPlayerHighlight.name
+            && (!registeredPlayerHighlight.shard || player.shard === registeredPlayerHighlight.shard)
+          )
+        );
+        return `
+        <tr${highlighted ? ' class="linked-row"' : ""}>
+          <td>${escapeHtml(player.shard)}</td>
+          <td>${escapeHtml(player.current_name)}</td>
+          <td>${escapeHtml(player.account_id)}</td>
           <td>${player.active ? "수집중" : "중지"}</td>
           <td>
             <div class="actions">
-              <button class="danger" type="button" onclick="unregisterPlayer('${player.shard}', '${player.account_id}')">
+              <button class="danger" type="button" onclick="unregisterPlayer('${attr(player.shard)}', '${attr(player.account_id)}')">
                 삭제
               </button>
             </div>
           </td>
-        </tr>
-      `).join("");
+        </tr>`;
+      }).join("");
     }
 
     function firstUrlParam(params, keys) {
@@ -3099,6 +3111,13 @@ _INDEX_HTML = """<!doctype html>
         "replay_account_id",
         "replay_artifact_id",
         "artifact_id",
+        "registered_shard",
+        "registered_account_id",
+        "registered_name",
+        "ranking_metric",
+        "ranking_shard",
+        "ranking_guild_id",
+        "ranking_limit",
       ];
       if (!lookupKeys.some((key) => params.has(key))) return false;
 
@@ -3111,6 +3130,27 @@ _INDEX_HTML = """<!doctype html>
       const replayAccountId = firstUrlParam(params, ["replay_account_id", "account_id"])
         || (target.startsWith("account.") ? target : "");
       const replayArtifactId = firstUrlParam(params, ["replay_artifact_id", "artifact_id"]);
+      const registeredShard = lookupUrlChoice(firstUrlParam(params, ["registered_shard", "shard"]), ["steam", "kakao"], "steam");
+      const registeredAccountId = firstUrlParam(params, ["registered_account_id", "account_id"]);
+      const registeredName = firstUrlParam(params, ["registered_name", "name", "target"]);
+      const rankingShard = lookupUrlChoice(firstUrlParam(params, ["ranking_shard", "shard"]), ["steam", "kakao"], "steam");
+      const rankingMetric = firstUrlParam(params, ["ranking_metric", "metric"]) || "kda";
+      const rankingGuildId = firstUrlParam(params, ["ranking_guild_id", "guild_id"]);
+      const rankingLimit = lookupUrlBoundedNumber(firstUrlParam(params, ["ranking_limit", "limit"]), 10, 1, 100);
+
+      if (shouldPrefillSection(hash, "registered-players")) {
+        registeredPlayerHighlight = {
+          shard: registeredShard,
+          account_id: registeredAccountId,
+          name: registeredName,
+        };
+      }
+      if (shouldPrefillSection(hash, "ranking-lookup")) {
+        setFormElementValue(document.querySelector("#rankingForm"), "shard", rankingShard);
+        setFormElementValue(document.querySelector("#rankingForm"), "metric", rankingMetric);
+        setFormElementValue(document.querySelector("#rankingForm"), "guild_id", rankingGuildId);
+        setFormElementValue(document.querySelector("#rankingForm"), "limit", String(rankingLimit));
+      }
 
       if (shouldPrefillSection(hash, "profile-lookup")) {
         setFormElementValue(document.querySelector("#profileForm"), "shard", shard);

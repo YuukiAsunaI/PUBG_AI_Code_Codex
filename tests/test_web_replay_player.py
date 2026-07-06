@@ -59,6 +59,7 @@ class WebReplayPlayerTests(unittest.TestCase):
         self.assertIn('id="weapon-lookup"', body)
         self.assertIn('id="recommendation-lookup"', body)
         self.assertIn('id="match-lookup"', body)
+        self.assertIn('id="ranking-lookup"', body)
         self.assertIn('id="replay-player"', body)
         self.assertIn('id="replay-artifacts"', body)
         self.assertIn('id="playersBody"', body)
@@ -67,6 +68,9 @@ class WebReplayPlayerTests(unittest.TestCase):
         self.assertIn("lookup_match_id", body)
         self.assertIn("replay_artifact_id", body)
         self.assertIn("replayArtifactFilter", body)
+        self.assertIn("registeredPlayerHighlight", body)
+        self.assertIn("ranking_metric", body)
+        self.assertIn("ranking-lookup", body)
 
     def test_unknown_map_asset_returns_404(self) -> None:
         client = TestClient(create_app())

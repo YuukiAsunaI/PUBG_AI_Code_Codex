@@ -90,18 +90,41 @@ ALERT_HISTORY_PRESETS: dict[str, dict[str, str]] = {
 }
 
 
-def format_player_list(players: list[RegisteredPlayer]) -> str:
+def format_player_list(
+    players: list[RegisteredPlayer],
+    *,
+    detail_base_url: str | None = None,
+) -> str:
     if not players:
-        return "등록된 유저가 없습니다."
+        lines = ["등록된 유저가 없습니다."]
+    else:
+        lines = ["등록 유저"]
+        for player in players:
+            status = "수집중" if player.active else "중지"
+            visibility = "공개" if player.public_profile else "비공개"
+            lines.append(
+                f"- {player.current_name} ({player.shard}) / {status} / {visibility} / {_short_account_id(player.account_id)}"
+            )
 
-    lines = ["등록 유저"]
-    for player in players:
-        status = "수집중" if player.active else "중지"
-        visibility = "공개" if player.public_profile else "비공개"
-        lines.append(
-            f"- {player.current_name} ({player.shard}) / {status} / {visibility} / {_short_account_id(player.account_id)}"
-        )
+    local_link = _local_section_url(
+        detail_base_url,
+        "registered-players",
+        _registered_players_query_params(players),
+    )
+    if local_link:
+        lines.append(f"- local_registered_players: [open]({local_link})")
     return "\n".join(lines)
+
+
+def _registered_players_query_params(players: list[RegisteredPlayer]) -> dict[str, Any]:
+    if len(players) != 1:
+        return {}
+    player = players[0]
+    return {
+        "registered_shard": player.shard,
+        "registered_account_id": player.account_id,
+        "registered_name": player.current_name,
+    }
 
 
 def format_unregister_command_reply(message: str, *, detail_base_url: str | None = None) -> str:
@@ -569,19 +592,36 @@ def format_player_match_detail(detail: PlayerMatchDetail, *, detail_base_url: st
     return "\n".join(lines)
 
 
-def format_player_ranking(ranking: PlayerRanking) -> str:
+def format_player_ranking(
+    ranking: PlayerRanking,
+    *,
+    detail_base_url: str | None = None,
+    limit: int | None = None,
+) -> str:
     scope = "전체" if ranking.global_scope else f"서버 {ranking.guild_id}"
     lines = [f"{ranking.metric_label} 랭킹 ({ranking.shard}, {scope})"]
     if not ranking.rows:
         lines.append("- 랭킹 데이터가 없습니다.")
-        return "\n".join(lines)
+    else:
+        for row in ranking.rows:
+            lines.append(
+                f"- #{row.rank} {row.player.current_name}: {_ranking_score(ranking.metric, row.score)} "
+                f"({row.match_count}전 {row.wins}치킨, {row.kills}K/{row.deaths}D/{row.assists}A, "
+                f"평딜 {_number(row.avg_damage_dealt, 1)})"
+            )
 
-    for row in ranking.rows:
-        lines.append(
-            f"- #{row.rank} {row.player.current_name}: {_ranking_score(ranking.metric, row.score)} "
-            f"({row.match_count}전 {row.wins}치킨, {row.kills}K/{row.deaths}D/{row.assists}A, "
-            f"평딜 {_number(row.avg_damage_dealt, 1)})"
-        )
+    local_link = _local_section_url(
+        detail_base_url,
+        "ranking-lookup",
+        {
+            "ranking_metric": ranking.metric,
+            "ranking_shard": ranking.shard,
+            "ranking_limit": limit,
+            "ranking_guild_id": None if ranking.global_scope else ranking.guild_id,
+        },
+    )
+    if local_link:
+        lines.append(f"- local_ranking: [open]({local_link})")
     return "\n".join(lines)
 
 
@@ -873,7 +913,10 @@ def create_discord_bot(
         finally:
             connection.close()
 
-        await ctx.reply(format_player_list(players), mention_author=False)
+        await ctx.reply(
+            format_player_list(players, detail_base_url=config.app.local_web_base_url),
+            mention_author=False,
+        )
 
     @bot.command(name="전적", aliases=["pubg-stats"])
     async def player_stats_command(ctx: Any, name: str | None = None, shard: str = "steam") -> None:
@@ -1117,7 +1160,14 @@ def create_discord_bot(
         finally:
             connection.close()
 
-        await ctx.reply(format_player_ranking(ranking), mention_author=False)
+        await ctx.reply(
+            format_player_ranking(
+                ranking,
+                detail_base_url=config.app.local_web_base_url,
+                limit=limit,
+            ),
+            mention_author=False,
+        )
 
     @bot.command(name="유저등록", aliases=["pubg-register"])
     async def register_player_command(ctx: Any, shard: str, nickname: str) -> None:
