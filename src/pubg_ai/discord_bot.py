@@ -117,11 +117,29 @@ def format_local_section_command_reply(
     section_anchor: str,
     *,
     detail_base_url: str | None = None,
+    query_params: dict[str, Any] | None = None,
 ) -> str:
     lines = [message]
-    if detail_base_url:
-        lines.append(f"- {section_label}: [open]({detail_base_url.rstrip('/')}/#{section_anchor})")
+    section_url = _local_section_url(detail_base_url, section_anchor, query_params)
+    if section_url:
+        lines.append(f"- {section_label}: [open]({section_url})")
     return "\n".join(lines)
+
+
+def _local_section_url(
+    detail_base_url: str | None,
+    section_anchor: str,
+    query_params: dict[str, Any] | None = None,
+) -> str:
+    if not detail_base_url:
+        return ""
+    cleaned_params = {
+        key: str(value)
+        for key, value in (query_params or {}).items()
+        if value is not None and str(value) != ""
+    }
+    query = f"?{urlencode(cleaned_params)}" if cleaned_params else ""
+    return f"{detail_base_url.rstrip('/')}/{query}#{section_anchor}"
 
 
 def format_replay_artifact_summary(artifact: ReplayArtifactRecord) -> str:
@@ -839,6 +857,7 @@ def create_discord_bot(
                     "profile_lookup",
                     "profile-lookup",
                     detail_base_url=config.app.local_web_base_url,
+                    query_params={"shard": shard, "target": name},
                 ),
                 mention_author=False,
             )
@@ -884,6 +903,7 @@ def create_discord_bot(
                     "weapon_lookup",
                     "weapon-lookup",
                     detail_base_url=config.app.local_web_base_url,
+                    query_params={"shard": shard, "target": name, "weapon": weapon},
                 ),
                 mention_author=False,
             )
@@ -927,6 +947,7 @@ def create_discord_bot(
                     "recommendation_lookup",
                     "recommendation-lookup",
                     detail_base_url=config.app.local_web_base_url,
+                    query_params={"shard": shard, "target": name},
                 ),
                 mention_author=False,
             )
@@ -985,6 +1006,7 @@ def create_discord_bot(
                     "match_lookup",
                     "match-lookup",
                     detail_base_url=config.app.local_web_base_url,
+                    query_params={"shard": shard, "target": name, "match_id": match_id},
                 ),
                 mention_author=False,
             )
@@ -1133,6 +1155,7 @@ def create_discord_bot(
                     "replay_artifacts",
                     "replay-artifacts",
                     detail_base_url=config.app.local_web_base_url,
+                    query_params={"match_id": match_id},
                 ),
                 mention_author=False,
             )
@@ -1149,6 +1172,12 @@ def create_discord_bot(
                     "replay_artifacts",
                     "replay-artifacts",
                     detail_base_url=config.app.local_web_base_url,
+                    query_params={
+                        "shard": artifact.shard,
+                        "match_id": artifact.match_id,
+                        "account_id": artifact.account_id,
+                        "replay_artifact_id": artifact.id,
+                    },
                 ),
                 mention_author=False,
             )
@@ -1161,6 +1190,12 @@ def create_discord_bot(
                     "replay_artifacts",
                     "replay-artifacts",
                     detail_base_url=config.app.local_web_base_url,
+                    query_params={
+                        "shard": artifact.shard,
+                        "match_id": artifact.match_id,
+                        "account_id": artifact.account_id,
+                        "replay_artifact_id": artifact.id,
+                    },
                 ),
                 mention_author=False,
             )

@@ -62,6 +62,11 @@ class WebReplayPlayerTests(unittest.TestCase):
         self.assertIn('id="replay-player"', body)
         self.assertIn('id="replay-artifacts"', body)
         self.assertIn('id="playersBody"', body)
+        self.assertIn("loadInitialLookupPrefillFromUrl", body)
+        self.assertIn("lookup_target", body)
+        self.assertIn("lookup_match_id", body)
+        self.assertIn("replay_artifact_id", body)
+        self.assertIn("replayArtifactFilter", body)
 
     def test_unknown_map_asset_returns_404(self) -> None:
         client = TestClient(create_app())

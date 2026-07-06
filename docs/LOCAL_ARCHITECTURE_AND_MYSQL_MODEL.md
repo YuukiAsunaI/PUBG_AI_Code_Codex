@@ -463,8 +463,10 @@ Completed slices:
     anchors for future Discord not-found links.
 94. Discord `전적`, `무기`, `추천`, `매치`, and `최근스냅샷` not-found/file error responses include local
     lookup/replay section links when `local_web_base_url` is configured.
+95. Local manager lookup/replay sections pre-fill forms and replay artifact filters from URL parameters, and Discord
+    not-found/file local links carry shard, target, match, weapon, account, and replay artifact context when available.
 
 Next slice:
 
-1. Review local manager lookup/replay section URL-parameter prefill support so Discord links can carry shard, player,
-   match, and weapon context.
+1. Review successful Discord profile, weapon, recommendation, match, and replay responses for optional contextual
+   local links back to the matching local manager section or artifact detail.

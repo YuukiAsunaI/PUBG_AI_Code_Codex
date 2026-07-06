@@ -2261,6 +2261,7 @@ _INDEX_HTML = """<!doctype html>
     let replayPlaying = false;
     let activeRecommendationTarget = "";
     let activeRecommendationShard = "steam";
+    let replayArtifactFilter = { match_id: "", account_id: "", artifact_id: "" };
     let alertHistoryPage = {
       source: "all",
       state: "all",
@@ -3050,6 +3051,96 @@ _INDEX_HTML = """<!doctype html>
       `).join("");
     }
 
+    function firstUrlParam(params, keys) {
+      for (const key of keys) {
+        const value = params.get(key);
+        if (value !== null && value !== "") return value;
+      }
+      return "";
+    }
+
+    function lookupUrlChoice(value, allowed, fallback) {
+      const text = String(value || fallback);
+      return allowed.includes(text) ? text : fallback;
+    }
+
+    function lookupUrlBoundedNumber(value, fallback, min, max) {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return fallback;
+      return Math.max(min, Math.min(Math.floor(parsed), max));
+    }
+
+    function setFormElementValue(form, name, value) {
+      if (!form || value === "") return;
+      const element = form.elements[name];
+      if (element) element.value = value;
+    }
+
+    function shouldPrefillSection(hash, sectionId) {
+      return !hash || hash === sectionId;
+    }
+
+    function loadInitialLookupPrefillFromUrl() {
+      const params = new URLSearchParams(window.location.search);
+      const lookupKeys = [
+        "lookup_shard",
+        "shard",
+        "lookup_target",
+        "target",
+        "name",
+        "account_id",
+        "lookup_weapon",
+        "weapon",
+        "weapon_code",
+        "lookup_match_id",
+        "match_id",
+        "lookup_min_matches",
+        "min_matches",
+        "replay_account_id",
+        "replay_artifact_id",
+        "artifact_id",
+      ];
+      if (!lookupKeys.some((key) => params.has(key))) return false;
+
+      const hash = window.location.hash.replace(/^#/, "");
+      const shard = lookupUrlChoice(firstUrlParam(params, ["lookup_shard", "shard"]), ["steam", "kakao"], "steam");
+      const target = firstUrlParam(params, ["lookup_target", "target", "name", "account_id"]);
+      const weapon = firstUrlParam(params, ["lookup_weapon", "weapon", "weapon_code"]);
+      const matchId = firstUrlParam(params, ["lookup_match_id", "match_id"]);
+      const minMatches = lookupUrlBoundedNumber(firstUrlParam(params, ["lookup_min_matches", "min_matches"]), 1, 1, 50);
+      const replayAccountId = firstUrlParam(params, ["replay_account_id", "account_id"])
+        || (target.startsWith("account.") ? target : "");
+      const replayArtifactId = firstUrlParam(params, ["replay_artifact_id", "artifact_id"]);
+
+      if (shouldPrefillSection(hash, "profile-lookup")) {
+        setFormElementValue(document.querySelector("#profileForm"), "shard", shard);
+        setFormElementValue(document.querySelector("#profileForm"), "target", target);
+      }
+      if (shouldPrefillSection(hash, "weapon-lookup")) {
+        setFormElementValue(document.querySelector("#weaponForm"), "shard", shard);
+        setFormElementValue(document.querySelector("#weaponForm"), "target", target);
+        setFormElementValue(document.querySelector("#weaponForm"), "weapon", weapon);
+      }
+      if (shouldPrefillSection(hash, "recommendation-lookup")) {
+        setFormElementValue(document.querySelector("#recommendationForm"), "shard", shard);
+        setFormElementValue(document.querySelector("#recommendationForm"), "target", target);
+        setFormElementValue(document.querySelector("#recommendationForm"), "min_matches", String(minMatches));
+      }
+      if (shouldPrefillSection(hash, "match-lookup")) {
+        setFormElementValue(document.querySelector("#matchForm"), "shard", shard);
+        setFormElementValue(document.querySelector("#matchForm"), "target", target);
+        setFormElementValue(document.querySelector("#matchForm"), "match_id", matchId);
+      }
+      if (shouldPrefillSection(hash, "replay-artifacts") || shouldPrefillSection(hash, "replay-player")) {
+        replayArtifactFilter = {
+          match_id: matchId,
+          account_id: replayAccountId,
+          artifact_id: replayArtifactId,
+        };
+      }
+      return true;
+    }
+
     async function loadPlayerProfile(target, shard) {
       const params = new URLSearchParams({ shard });
       if (target.startsWith("account.")) {
@@ -3776,9 +3867,14 @@ _INDEX_HTML = """<!doctype html>
       return String(value);
     }
 
-    async function loadReplayArtifacts() {
-      const payload = await fetch("/replay/artifacts?artifact_type=&limit=50").then((r) => r.json());
-      updateTimelineOptions(payload.artifacts || []);
+    async function loadReplayArtifacts(options = {}) {
+      const params = new URLSearchParams({ artifact_type: "", limit: "50" });
+      const matchId = options.match_id ?? replayArtifactFilter.match_id;
+      const accountId = options.account_id ?? replayArtifactFilter.account_id;
+      if (matchId) params.set("match_id", matchId);
+      if (accountId) params.set("account_id", accountId);
+      const payload = await fetch(`/replay/artifacts?${params.toString()}`).then((r) => r.json());
+      updateTimelineOptions(payload.artifacts || [], options.artifact_id ?? replayArtifactFilter.artifact_id);
       replayArtifactsBody.innerHTML = payload.artifacts.map((artifact) => `
         <tr>
           <td>${artifact.generated_at_kst || ""}</td>
@@ -3800,7 +3896,7 @@ _INDEX_HTML = """<!doctype html>
       }
     }
 
-    function updateTimelineOptions(artifacts) {
+    function updateTimelineOptions(artifacts, preferredArtifactId = "") {
       const previous = timelineSelect.value;
       replayTimelineArtifacts = artifacts.filter((artifact) => artifact.artifact_type === "timeline");
       if (!replayTimelineArtifacts.length) {
@@ -3825,7 +3921,9 @@ _INDEX_HTML = """<!doctype html>
         return `<option value="${attr(artifact.id)}">${escapeHtml(label)}</option>`;
       }).join("") || `<option value="">timeline 없음</option>`;
 
-      if (previous && replayTimelineArtifacts.some((artifact) => String(artifact.id) === previous)) {
+      if (preferredArtifactId && replayTimelineArtifacts.some((artifact) => String(artifact.id) === String(preferredArtifactId))) {
+        timelineSelect.value = String(preferredArtifactId);
+      } else if (previous && replayTimelineArtifacts.some((artifact) => String(artifact.id) === previous)) {
         timelineSelect.value = previous;
       }
     }
@@ -5494,6 +5592,7 @@ _INDEX_HTML = """<!doctype html>
     timelineZoom.addEventListener("change", renderReplayFrame);
 
     drawEmptyReplayCanvas();
+    loadInitialLookupPrefillFromUrl();
     const initialAlertHistoryFilterFromUrl = loadInitialAlertHistoryFiltersFromUrl();
     loadInitialWorkerRunFiltersFromUrl();
 

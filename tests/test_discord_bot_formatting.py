@@ -694,11 +694,12 @@ class DiscordBotFormattingTests(unittest.TestCase):
             "profile_lookup",
             "profile-lookup",
             detail_base_url="http://127.0.0.1:8000/",
+            query_params={"shard": "steam", "target": "Yuuki_Asuna---", "empty": ""},
         )
 
         self.assertIn(message, linked)
         self.assertIn(
-            "- profile_lookup: [open](http://127.0.0.1:8000/#profile-lookup)",
+            "- profile_lookup: [open](http://127.0.0.1:8000/?shard=steam&target=Yuuki_Asuna---#profile-lookup)",
             linked,
         )
 

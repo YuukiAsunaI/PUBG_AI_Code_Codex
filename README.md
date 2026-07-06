@@ -364,8 +364,10 @@ supplied run ID can be parsed. `pubg-alerts` settings unavailable/load errors al
 when the base URL is configured. `유저삭제` not-found responses include a local `#registered-players` link when the
 base URL is configured. The local manager exposes stable anchors for profile, weapon, recommendation, match,
 replay player, and replay artifact sections, and Discord `전적`, `무기`, `추천`, `매치`, and `최근스냅샷`
-not-found/file error responses include those section links when the base URL is configured. Current admin-link
-coverage leaves permission/scope failures as plain text by design.
+not-found/file error responses include those section links when the base URL is configured. Those lookup/replay links
+carry shard, target, match, weapon, account, and replay artifact query parameters where the command has that context,
+and the local page pre-fills the matching form or replay artifact filter from the URL. Current admin-link coverage
+leaves permission/scope failures as plain text by design.
 
 Run the local management app:
 

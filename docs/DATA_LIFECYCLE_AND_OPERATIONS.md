@@ -144,7 +144,9 @@ Implemented behavior:
 - The local manager profile, weapon, recommendation, match, replay player, and replay artifact sections have stable
   anchors: `#profile-lookup`, `#weapon-lookup`, `#recommendation-lookup`, `#match-lookup`, `#replay-player`, and
   `#replay-artifacts`. Discord `전적`, `무기`, `추천`, `매치`, and `최근스냅샷` not-found/file error responses
-  include the matching section links when `PUBG_LOCAL_WEB_BASE_URL` is configured.
+  include the matching section links when `PUBG_LOCAL_WEB_BASE_URL` is configured. These links carry shard, target,
+  match, weapon, account, and replay artifact query parameters when available, and the local page pre-fills the
+  matching lookup form or replay artifact filter from the URL.
 - Current admin-link coverage leaves permission-denied and server-channel-required responses as the only intentional
   plain-text admin cases because they are not tied to a local object.
 
