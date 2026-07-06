@@ -15,6 +15,7 @@ from pubg_ai.discord_bot import (
     format_alert_note_result,
     format_alert_notes_result,
     format_player_list,
+    format_local_section_command_reply,
     format_player_match_detail,
     format_player_profile_stats,
     format_player_ranking,
@@ -677,6 +678,27 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn(message, linked)
         self.assertIn(
             "- registered_players: [open](http://127.0.0.1:8000/#registered-players)",
+            linked,
+        )
+
+    def test_local_section_command_reply_adds_section_link_when_url_is_available(self) -> None:
+        message = "조회 가능한 등록 유저를 찾지 못했습니다."
+
+        self.assertEqual(
+            format_local_section_command_reply(message, "profile_lookup", "profile-lookup"),
+            message,
+        )
+
+        linked = format_local_section_command_reply(
+            message,
+            "profile_lookup",
+            "profile-lookup",
+            detail_base_url="http://127.0.0.1:8000/",
+        )
+
+        self.assertIn(message, linked)
+        self.assertIn(
+            "- profile_lookup: [open](http://127.0.0.1:8000/#profile-lookup)",
             linked,
         )
 

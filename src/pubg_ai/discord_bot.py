@@ -111,6 +111,19 @@ def format_unregister_command_reply(message: str, *, detail_base_url: str | None
     return "\n".join(lines)
 
 
+def format_local_section_command_reply(
+    message: str,
+    section_label: str,
+    section_anchor: str,
+    *,
+    detail_base_url: str | None = None,
+) -> str:
+    lines = [message]
+    if detail_base_url:
+        lines.append(f"- {section_label}: [open]({detail_base_url.rstrip('/')}/#{section_anchor})")
+    return "\n".join(lines)
+
+
 def format_replay_artifact_summary(artifact: ReplayArtifactRecord) -> str:
     player = artifact.player_name or _short_account_id(artifact.account_id or "")
     match_id = artifact.match_id
@@ -820,7 +833,15 @@ def create_discord_bot(
             connection.close()
 
         if profile is None:
-            await ctx.reply("조회 가능한 등록 유저를 찾지 못했습니다.", mention_author=False)
+            await ctx.reply(
+                format_local_section_command_reply(
+                    "조회 가능한 등록 유저를 찾지 못했습니다.",
+                    "profile_lookup",
+                    "profile-lookup",
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
             return
 
         await ctx.reply(format_player_profile_stats(profile), mention_author=False)
@@ -857,7 +878,15 @@ def create_discord_bot(
             connection.close()
 
         if detail is None:
-            await ctx.reply("조회 가능한 무기 통계를 찾지 못했습니다.", mention_author=False)
+            await ctx.reply(
+                format_local_section_command_reply(
+                    "조회 가능한 무기 통계를 찾지 못했습니다.",
+                    "weapon_lookup",
+                    "weapon-lookup",
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
             return
 
         await ctx.reply(format_player_weapon_detail(detail), mention_author=False)
@@ -892,7 +921,15 @@ def create_discord_bot(
             connection.close()
 
         if recommendations is None:
-            await ctx.reply("조회 가능한 추천 데이터를 찾지 못했습니다.", mention_author=False)
+            await ctx.reply(
+                format_local_section_command_reply(
+                    "조회 가능한 추천 데이터를 찾지 못했습니다.",
+                    "recommendation_lookup",
+                    "recommendation-lookup",
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
             return
 
         await ctx.reply(
@@ -942,7 +979,15 @@ def create_discord_bot(
             connection.close()
 
         if detail is None:
-            await ctx.reply("조회 가능한 등록 유저의 매치 상세를 찾지 못했습니다.", mention_author=False)
+            await ctx.reply(
+                format_local_section_command_reply(
+                    "조회 가능한 등록 유저의 매치 상세를 찾지 못했습니다.",
+                    "match_lookup",
+                    "match-lookup",
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
             return
 
         await ctx.reply(format_player_match_detail(detail), mention_author=False)
@@ -1082,7 +1127,15 @@ def create_discord_bot(
             connection.close()
 
         if not artifacts:
-            await ctx.reply("생성된 2D 스냅샷이 없습니다.", mention_author=False)
+            await ctx.reply(
+                format_local_section_command_reply(
+                    "생성된 2D 스냅샷이 없습니다.",
+                    "replay_artifacts",
+                    "replay-artifacts",
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
             return
 
         artifact = artifacts[0]
@@ -1090,11 +1143,27 @@ def create_discord_bot(
         try:
             path = store.resolve_path(artifact.relative_path)
         except ReplayStorageError:
-            await ctx.reply("스냅샷 파일 경로가 올바르지 않습니다.", mention_author=False)
+            await ctx.reply(
+                format_local_section_command_reply(
+                    "스냅샷 파일 경로가 올바르지 않습니다.",
+                    "replay_artifacts",
+                    "replay-artifacts",
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
             return
 
         if not path.is_file():
-            await ctx.reply("스냅샷 파일을 찾지 못했습니다.", mention_author=False)
+            await ctx.reply(
+                format_local_section_command_reply(
+                    "스냅샷 파일을 찾지 못했습니다.",
+                    "replay_artifacts",
+                    "replay-artifacts",
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
             return
 
         await ctx.reply(
