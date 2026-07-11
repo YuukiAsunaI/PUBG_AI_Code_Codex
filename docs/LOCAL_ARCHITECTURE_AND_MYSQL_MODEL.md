@@ -482,8 +482,12 @@ Completed slices:
 101. `pubg-delete-data` creates a 24-hour review request without deleting data; Discord/local cancellation, local
      approval/rejection, automatic expiry, actor notes, and immutable KST audit events are stored in schema version 10.
      The localhost review UI exposes request history while all execution APIs remain disabled.
+102. The local review detail now generates a read-only scoped impact preview. Player-owned registration/normalized
+     rows are counted separately from preserved references, raw match/telemetry payloads are protected as match-shared,
+     and exact-account replay artifacts are cataloged. Root/path/existence/size checks use metadata only, catalog limits
+     preserve complete totals, no checksum content is read, and every execution API remains disabled.
 
 Next slice:
 
-1. Add a read-only deletion impact preview that counts affected normalized rows and catalogs raw/replay files per scope;
-   keep execution disabled until preview verification and an explicit local confirmation contract are complete.
+1. Persist an immutable preview snapshot and fingerprint, then require an explicit localhost confirmation contract
+   bound to that fingerprint; keep deletion execution disabled while the confirmation lifecycle is verified.

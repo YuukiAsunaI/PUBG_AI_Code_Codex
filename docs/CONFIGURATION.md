@@ -98,8 +98,12 @@ Discord never returns API keys, bot tokens, database settings, or storage paths,
 those remain `.env` or localhost-manager concerns.
 
 `pubg-delete-data` creates an expiring review request only. The localhost manager records approve/reject/cancel
-decisions and immutable audit events, but no deletion executor or execution endpoint is enabled in schema version 10.
-Run `python -m pubg_ai.cli init-db` after updating so the two deletion-review tables are created.
+decisions and immutable audit events. Its detail view generates a read-only impact preview from MySQL plus the current
+`PUBG_RAW_DATA_DIR` and `PUBG_REPLAY_DATA_DIR` settings. The per-storage file display is limited to 100 by default and
+500 at most, while database totals and declared byte totals cover the complete candidate set. Paths outside the
+configured roots, missing files, and size mismatches are reported without reading file contents. No deletion executor
+or execution endpoint is enabled, and the preview adds no schema beyond version 10. Run
+`python -m pubg_ai.cli init-db` after updating so the two deletion-review tables are created.
 
 1. Built-in defaults: `./data/raw`, `./data/replays`
 2. `.env` values: `PUBG_RAW_DATA_DIR`, `PUBG_REPLAY_DATA_DIR`

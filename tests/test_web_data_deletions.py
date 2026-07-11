@@ -29,6 +29,18 @@ class WebDataDeletionTests(unittest.TestCase):
         service.get_request.return_value = pending
         service.list_events.return_value = [event]
         service.approve_request.return_value = approved
+        preview = MagicMock()
+        preview.to_record.return_value = {
+            "request_id": 17,
+            "deletion_scope": "raw",
+            "verification": {
+                "read_only": True,
+                "execution_enabled": False,
+                "ready_for_execution": False,
+            },
+        }
+        preview_service = MagicMock()
+        preview_service.build_preview.return_value = preview
         connections: list[FakeConnection] = []
 
         def connection_factory(*_: object, **__: object) -> FakeConnection:
@@ -39,10 +51,13 @@ class WebDataDeletionTests(unittest.TestCase):
         with (
             patch("pubg_ai.web.app.connect_mysql", side_effect=connection_factory),
             patch("pubg_ai.web.app.DataDeletionRequestService", return_value=service),
+            patch("pubg_ai.web.app.DataDeletionImpactPreviewService", return_value=preview_service),
         ):
             client = TestClient(create_app())
             list_response = client.get("/data-deletions?status=pending&limit=50")
             detail_response = client.get("/data-deletions/17")
+            preview_response = client.get("/data-deletions/17/preview?file_limit=25")
+            invalid_preview_response = client.get("/data-deletions/17/preview?file_limit=0")
             approve_response = client.post(
                 "/data-deletions/17/approve",
                 json={"actor_id": "local-owner", "note": "대상 확인"},
@@ -57,6 +72,12 @@ class WebDataDeletionTests(unittest.TestCase):
         self.assertEqual(detail_response.status_code, 200)
         self.assertFalse(detail_response.json()["execution_enabled"])
         self.assertEqual(detail_response.json()["events"][0]["event_type"], "requested")
+        self.assertEqual(detail_response.json()["preview_url"], "/data-deletions/17/preview")
+        self.assertEqual(preview_response.status_code, 200)
+        self.assertFalse(preview_response.json()["execution_enabled"])
+        self.assertTrue(preview_response.json()["preview"]["verification"]["read_only"])
+        self.assertFalse(preview_response.json()["preview"]["verification"]["ready_for_execution"])
+        self.assertEqual(invalid_preview_response.status_code, 422)
         self.assertEqual(approve_response.status_code, 200)
         self.assertEqual(approve_response.json()["request"]["status"], "approved")
         self.assertFalse(approve_response.json()["execution_enabled"])
@@ -66,6 +87,7 @@ class WebDataDeletionTests(unittest.TestCase):
             actor_id="local-owner",
             note="대상 확인",
         )
+        preview_service.build_preview.assert_called_once_with(pending, file_limit=25)
         self.assertTrue(all(connection.closed for connection in connections))
 
 

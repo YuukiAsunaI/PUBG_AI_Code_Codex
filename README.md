@@ -350,8 +350,13 @@ local-program-only.
 stores the requested deletion scope and Discord context, and links to the localhost `Data Deletion Review` section.
 The local owner can approve, reject, or cancel the request with an audit note; approval records authorization but
 `execution_enabled` remains false. `!pubg-delete-cancel request_id [reason]` lets the requester, the request guild's
-admins, or a global admin cancel a pending/approved request. Schema version 10 adds the request and immutable event
-tables; rerun `python -m pubg_ai.cli init-db` after updating.
+admins, or a global admin cancel a pending/approved request. The detail screen calls the read-only
+`GET /data-deletions/{request_id}/preview` endpoint to count scoped rows and catalog configured raw/replay files.
+Raw match and telemetry payloads are marked as protected match-shared records; only replay artifacts with the target
+`account_id` and shard are classified as player artifact candidates. File checks resolve paths inside the configured
+root and compare existence and size without reading payload contents or recomputing checksums. Schema version 10 adds
+the request and immutable event tables; the preview requires no schema change. Rerun
+`python -m pubg_ai.cli init-db` after updating from an earlier schema.
 The `admin` group includes `pubg-alerts`, which returns current storage and worker alerts. When
 `PUBG_LOCAL_WEB_BASE_URL` is set, that response includes a local current-alert list link. When Discord alert channel
 IDs are configured from the local manager, the running Discord bot also sends new worker failures and active storage
@@ -401,7 +406,8 @@ usage, and settings-error responses include contextual `#discord-permissions` or
 the local forms. `pubg-settings` responses link to stable `#collector-settings`, `#storage-settings`, and
 `#discord-scopes` sections; successful collector/public-profile updates pre-fill the affected local controls.
 Deletion-request responses link to `#data-deletions` with the request ID highlighted; the local detail view shows the
-complete audit event history and explicitly reports that deletion execution is disabled.
+complete audit event history, scoped row counts, protected references, raw/replay file status, and explicitly reports
+that deletion execution is disabled. Catalog totals remain complete when the displayed file list is limited.
 Permission-denied and blocked privilege-boundary attempts remain plain text by design.
 
 Run the local management app:

@@ -175,8 +175,12 @@ Suggested command groups:
 - Only an administrator can choose destructive deletion.
 - Discord can create or cancel an expiring deletion review request, but cannot execute deletion.
 - A localhost reviewer must approve or reject the request; approval and execution are separate states.
-- Every request transition stores an immutable actor/note/KST audit event. Approval does not enable execution until a
-  scoped impact preview and executor are implemented and verified.
+- Every request transition stores an immutable actor/note/KST audit event.
+- The scoped impact preview is read-only and is generated on demand. It distinguishes player-owned rows from
+  preserved cross-player/shared-match references, protects match-shared raw payloads, and checks file metadata without
+  reading payload contents or recomputing hashes.
+- Approval still does not enable execution. An immutable preview fingerprint, explicit local confirmation contract,
+  and separately verified executor are required before destructive actions can be considered.
 - Deletion should be split into options:
   - delete registration only
   - delete normalized DB data

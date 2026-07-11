@@ -28,6 +28,12 @@ from pubg_ai.alert_history import (
 )
 from pubg_ai.collector_worker import CollectorWorkerController, CollectorWorkerError, CollectorWorkerOptions
 from pubg_ai.config import RuntimeConfig, load_dotenv_values
+from pubg_ai.data_deletion_preview import (
+    DEFAULT_PREVIEW_FILE_LIMIT,
+    MAX_PREVIEW_FILE_LIMIT,
+    DataDeletionImpactPreviewService,
+    DataDeletionPreviewError,
+)
 from pubg_ai.data_deletion_requests import DataDeletionRequestError, DataDeletionRequestService
 from pubg_ai.database import connect_mysql, count_tables
 from pubg_ai.discord_permission_manager import DiscordPermissionManager
@@ -645,6 +651,38 @@ def create_app() -> Any:
         return {
             "request": request.to_record(),
             "events": [event.to_record() for event in events],
+            "preview_url": f"/data-deletions/{request_id}/preview",
+            "execution_enabled": False,
+        }
+
+    @app.get("/data-deletions/{request_id}/preview")
+    def data_deletion_request_preview(
+        request_id: int,
+        file_limit: int = Query(
+            default=DEFAULT_PREVIEW_FILE_LIMIT,
+            ge=1,
+            le=MAX_PREVIEW_FILE_LIMIT,
+        ),
+    ) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(runtime_config.database)
+        try:
+            try:
+                request = DataDeletionRequestService(connection).get_request(request_id)
+            except DataDeletionRequestError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            try:
+                preview = DataDeletionImpactPreviewService(
+                    connection,
+                    raw_data_dir=runtime_config.app.raw_data_dir,
+                    replay_data_dir=runtime_config.app.replay_data_dir,
+                ).build_preview(request, file_limit=file_limit)
+            except DataDeletionPreviewError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {
+            "preview": preview.to_record(),
             "execution_enabled": False,
         }
 
@@ -1949,7 +1987,7 @@ _INDEX_HTML = """<!doctype html>
         <tbody id="dataDeletionBody"></tbody>
       </table>
       <div class="detail-panel" id="dataDeletionDetail">
-        Select a request to inspect its audit history.
+        Select a request to inspect its audit history and read-only impact preview.
       </div>
     </section>
     <section id="profile-lookup">
@@ -3299,6 +3337,74 @@ _INDEX_HTML = """<!doctype html>
       dataDeletionStatus.textContent = `${(payload.requests || []).length} request(s). Approval does not execute deletion.`;
     }
 
+    function dataDeletionPreviewRowRows(preview) {
+      const candidateRows = (preview.row_impacts || []).map((row) => ({ ...row, preview_state: row.deletion_candidate ? "candidate" : "protected" }));
+      const preservedRows = (preview.preserved_references || []).map((row) => ({ ...row, preview_state: "preserved" }));
+      const rows = [...candidateRows, ...preservedRows];
+      return rows.map((row) => `
+        <tr>
+          <td>${escapeHtml(row.table)}</td>
+          <td>${escapeHtml(row.category)}</td>
+          <td>${escapeHtml(row.relationship)}</td>
+          <td>${escapeHtml(row.row_count)}</td>
+          <td>${escapeHtml(row.preview_state)}</td>
+        </tr>`).join("") || `<tr><td colspan="5">No database rows in this scope.</td></tr>`;
+    }
+
+    function dataDeletionPreviewFileRows(preview) {
+      const files = [
+        ...(preview.raw_files?.files || []).map((file) => ({ ...file, catalog_category: "raw" })),
+        ...(preview.replay_files?.files || []).map((file) => ({ ...file, catalog_category: "replay" })),
+      ];
+      return files.map((file) => `
+        <tr>
+          <td>${escapeHtml(file.catalog_category)} / ${escapeHtml(file.file_type)}</td>
+          <td>${escapeHtml(file.match_id)}</td>
+          <td>${escapeHtml(file.ownership)}<br><small>${file.deletion_candidate ? "candidate" : "protected"}</small></td>
+          <td>${escapeHtml(file.verification_status)}<br><small>${formatBytes(file.declared_size_bytes || 0)}</small></td>
+          <td>${escapeHtml(file.relative_path)}<br><small>${escapeHtml(file.resolved_path || "-")}</small></td>
+        </tr>`).join("") || `<tr><td colspan="5">No files in this scope.</td></tr>`;
+    }
+
+    function renderDataDeletionPreview(preview) {
+      const verification = preview.verification || {};
+      const catalogs = [preview.raw_files, preview.replay_files].filter((catalog) => catalog?.included);
+      const catalogSummary = catalogs.map((catalog) => `
+        <tr>
+          <td>${escapeHtml(catalog.category)}</td>
+          <td>${escapeHtml(catalog.total_records)}</td>
+          <td>${formatBytes(catalog.total_declared_size_bytes || 0)}</td>
+          <td>${escapeHtml(catalog.listed_records)}</td>
+          <td>${catalog.truncated ? "yes" : "no"}</td>
+          <td>${escapeHtml(catalog.shared_match_records)}</td>
+        </tr>`).join("") || `<tr><td colspan="6">No file catalog in this scope.</td></tr>`;
+      return `
+        <h3>Read-only impact preview</h3>
+        <div class="status">
+          Generated ${escapeHtml(preview.generated_at_kst)} / matches ${escapeHtml(preview.matched_match_count)} /
+          candidate rows ${escapeHtml(preview.candidate_row_count)} / execution enabled: no
+        </div>
+        <table class="detail-table">
+          <thead><tr><th>Table</th><th>Category</th><th>Relationship</th><th>Rows</th><th>State</th></tr></thead>
+          <tbody>${dataDeletionPreviewRowRows(preview)}</tbody>
+        </table>
+        <h3>File catalog summary</h3>
+        <table class="detail-table">
+          <thead><tr><th>Storage</th><th>Total</th><th>Declared size</th><th>Listed</th><th>Truncated</th><th>Shared</th></tr></thead>
+          <tbody>${catalogSummary}</tbody>
+        </table>
+        <div class="status">
+          Filesystem issues ${escapeHtml(verification.filesystem_issue_count || 0)} /
+          unsafe paths ${escapeHtml(verification.unsafe_path_count || 0)} /
+          checksum verification: not performed
+        </div>
+        <table class="detail-table">
+          <thead><tr><th>Type</th><th>Match</th><th>Ownership</th><th>Verification</th><th>Path</th></tr></thead>
+          <tbody>${dataDeletionPreviewFileRows(preview)}</tbody>
+        </table>
+        <ul>${(preview.warnings || []).map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul>`;
+    }
+
     async function loadDataDeletionRequestDetail(requestId) {
       const response = await fetch(`/data-deletions/${encodeURIComponent(requestId)}`);
       if (!response.ok) {
@@ -3316,7 +3422,21 @@ _INDEX_HTML = """<!doctype html>
         <div>Execution enabled: ${payload.execution_enabled ? "yes" : "no"}</div>
         <ul>
           ${events.map((event) => `<li>${escapeHtml(event.created_at_kst)} / ${escapeHtml(event.event_type)} / ${escapeHtml(event.actor_type)}:${escapeHtml(event.actor_id)} / ${escapeHtml(event.note || "-")}</li>`).join("")}
-        </ul>`;
+        </ul>
+        <div id="dataDeletionPreview" class="status">Loading read-only impact preview...</div>`;
+      const previewHost = document.querySelector("#dataDeletionPreview");
+      try {
+        const previewUrl = payload.preview_url || `/data-deletions/${encodeURIComponent(requestId)}/preview`;
+        const previewResponse = await fetch(`${previewUrl}?file_limit=100`);
+        if (!previewResponse.ok) {
+          const error = await previewResponse.json().catch(() => ({ detail: previewResponse.statusText }));
+          throw new Error(error.detail || previewResponse.statusText);
+        }
+        const previewPayload = await previewResponse.json();
+        previewHost.innerHTML = renderDataDeletionPreview(previewPayload.preview);
+      } catch (error) {
+        previewHost.textContent = `Preview error: ${error.message}`;
+      }
     }
 
     async function reviewDataDeletionRequest(requestId, action) {

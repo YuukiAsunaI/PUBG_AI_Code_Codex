@@ -370,6 +370,11 @@ The current Discord bot slice is intentionally small and reuses the same local M
 - `!pubg-delete-cancel request_id [reason]` cancels a pending or approved request when called by its requester, an admin
   from the same guild, or a global admin. Local approve/reject/cancel actions and automatic expiry append immutable
   audit events. Approved requests remain unexecuted in this slice.
+- The localhost request detail loads a separate read-only preview. Registration/normalized counts are scoped to the
+  target identity, cross-player and shared-match rows are shown as preserved, raw match/telemetry files are protected
+  as match-shared, and replay files require an exact target account/shard match.
+- Preview file verification resolves only under configured roots and checks metadata without reading payload content.
+  The route has no write SQL, no file-removal operation, no confirmation mutation, and no execution counterpart.
 - The bot reloads local Discord permission settings before every gated command, so local web/CLI changes take effect
   without a bot restart. Global-admin membership remains editable only from the local web UI or CLI.
 - The local web UI and CLI can now add/revoke user command-group grants and add/remove global Discord admins without

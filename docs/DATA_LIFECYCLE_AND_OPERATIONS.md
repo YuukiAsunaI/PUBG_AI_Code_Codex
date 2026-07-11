@@ -166,6 +166,14 @@ Implemented behavior:
 - Approval is authorization only. The API returns `execution_enabled=false`, and there is no execution route or UI
   button. Request rows retain player identity snapshots and audit events use `ON DELETE RESTRICT` so review history
   cannot be discarded accidentally.
+- `GET /data-deletions/{request_id}/preview` is read-only. It counts registration and player-owned normalized rows,
+  lists preserved cross-player/shared-match references separately, and never includes deletion-request audit tables.
+- Raw player snapshots are player candidates, but raw match/telemetry payload metadata and files are protected as
+  match-shared because the same payload feeds every participant. Replay candidates require an exact target
+  `account_id` and shard match.
+- File verification accepts only `local_file` records under the expected configured root. It checks path safety,
+  existence, file type, and declared size by metadata only; payload bytes and SHA-256 contents are not read during
+  preview. Limited catalogs keep complete record/byte totals and report `truncated=true`.
 
 ## Duplicate Match Handling
 
