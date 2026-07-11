@@ -368,10 +368,11 @@ not-found/file error responses include those section links when the base URL is 
 carry shard, target, match, weapon, account, and replay artifact query parameters where the command has that context,
 and the local page pre-fills the matching form or replay artifact filter from the URL. Successful `전적`, `무기`,
 `추천`, `매치`, and `최근스냅샷` responses also include contextual `local_profile`, `local_weapon`,
-`local_recommendations`, `local_match`, or `local_replay` links when the base URL is configured. `유저조회` and
-`랭킹` success responses include `local_registered_players` and `local_ranking` links, and the local page can highlight
-a linked registered player row or pre-fill the ranking form from those URLs. Current admin-link coverage leaves
-permission/scope failures as plain text by design.
+`local_recommendations`, `local_match`, or `local_replay` links when the base URL is configured.
+`유저등록`, `유저조회`, and `유저삭제` success responses include contextual `local_registered_players` links,
+while `랭킹` success responses include `local_ranking` links. The local page can highlight a linked registered player
+row or pre-fill the ranking form from those URLs. Current admin-link coverage leaves permission/scope failures as plain
+text by design.
 
 Run the local management app:
 

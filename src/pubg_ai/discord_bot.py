@@ -149,6 +149,21 @@ def format_local_section_command_reply(
     return "\n".join(lines)
 
 
+def format_registered_player_command_reply(
+    message: str,
+    player: RegisteredPlayer,
+    *,
+    detail_base_url: str | None = None,
+) -> str:
+    return format_local_section_command_reply(
+        message,
+        "local_registered_players",
+        "registered-players",
+        detail_base_url=detail_base_url,
+        query_params=_registered_players_query_params([player]),
+    )
+
+
 def _local_section_url(
     detail_base_url: str | None,
     section_anchor: str,
@@ -1197,7 +1212,14 @@ def create_discord_bot(
         finally:
             connection.close()
 
-        await ctx.reply(f"등록 완료: {player.current_name} ({player.shard})", mention_author=False)
+        await ctx.reply(
+            format_registered_player_command_reply(
+                f"등록 완료: {player.current_name} ({player.shard})",
+                player,
+                detail_base_url=config.app.local_web_base_url,
+            ),
+            mention_author=False,
+        )
 
     @bot.command(name="유저삭제", aliases=["pubg-unregister"])
     async def unregister_player_command(ctx: Any, shard: str, target: str) -> None:
@@ -1236,7 +1258,14 @@ def create_discord_bot(
                 mention_author=False,
             )
         else:
-            await ctx.reply(f"수집 중지 완료: {player.current_name} ({player.shard})", mention_author=False)
+            await ctx.reply(
+                format_registered_player_command_reply(
+                    f"수집 중지 완료: {player.current_name} ({player.shard})",
+                    player,
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
 
     @bot.command(name="최근스냅샷", aliases=["pubg-replay"])
     async def latest_snapshot_command(ctx: Any, match_id: str | None = None) -> None:

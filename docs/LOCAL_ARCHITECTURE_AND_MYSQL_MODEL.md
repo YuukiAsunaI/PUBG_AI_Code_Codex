@@ -469,8 +469,9 @@ Completed slices:
     section links when `local_web_base_url` is configured.
 97. Discord `유저조회` and `랭킹` success responses include local registered-player/ranking links; the local manager
     can highlight linked registered-player rows and pre-fill ranking controls from URL parameters.
+98. Discord `유저등록` and `유저삭제` success responses include contextual registered-player links that highlight
+    the affected active or inactive row in the local manager.
 
 Next slice:
 
-1. Review Discord `유저등록` and `유저삭제` success responses for contextual registered-player local links and row
-   highlighting.
+1. Review Discord permission and guild-scope mutation responses for contextual local settings links.

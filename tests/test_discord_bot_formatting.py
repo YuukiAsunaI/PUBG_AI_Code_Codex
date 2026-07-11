@@ -19,6 +19,7 @@ from pubg_ai.discord_bot import (
     format_player_match_detail,
     format_player_profile_stats,
     format_player_ranking,
+    format_registered_player_command_reply,
     format_player_weapon_detail,
     format_replay_artifact_summary,
     format_unregister_command_reply,
@@ -690,6 +691,30 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn(message, linked)
         self.assertIn(
             "- registered_players: [open](http://127.0.0.1:8000/#registered-players)",
+            linked,
+        )
+
+    def test_registered_player_command_reply_adds_highlight_link_when_url_is_available(self) -> None:
+        player = RegisteredPlayer(
+            id=1,
+            account_id="account.1234567890abcdef",
+            shard="steam",
+            current_name="Yuuki_Asuna---",
+            active=False,
+            public_profile=True,
+        )
+        message = "수집 중지 완료: Yuuki_Asuna--- (steam)"
+
+        self.assertEqual(format_registered_player_command_reply(message, player), message)
+
+        linked = format_registered_player_command_reply(
+            message,
+            player,
+            detail_base_url="http://127.0.0.1:8000/",
+        )
+        self.assertIn(message, linked)
+        self.assertIn(
+            "- local_registered_players: [open](http://127.0.0.1:8000/?registered_shard=steam&registered_account_id=account.1234567890abcdef&registered_name=Yuuki_Asuna---#registered-players)",
             linked,
         )
 
