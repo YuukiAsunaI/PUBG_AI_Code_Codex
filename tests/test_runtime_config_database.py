@@ -77,6 +77,8 @@ class DatabaseSchemaTests(unittest.TestCase):
             "worker_run_history",
             "system_alert_history",
             "system_alert_notes",
+            "data_deletion_requests",
+            "data_deletion_request_events",
             "matches",
             "raw_match_payloads",
             "raw_telemetry_payloads",
@@ -96,7 +98,9 @@ class DatabaseSchemaTests(unittest.TestCase):
         ]:
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table_name}", schema)
 
-        self.assertEqual(SCHEMA_VERSION, 9)
+        self.assertEqual(SCHEMA_VERSION, 10)
+        self.assertIn("fk_data_deletion_events_request", schema)
+        self.assertIn("ON DELETE RESTRICT", schema)
 
     def test_schema_tracks_official_rate_limit_headers(self) -> None:
         schema = "\n".join(schema_statements())
@@ -135,6 +139,8 @@ class DiscordCommandDefaultsTests(unittest.TestCase):
         self.assertIn("pubg-worker-detail", DEFAULT_COMMAND_GROUPS["admin"])
         self.assertIn("pubg-ranking-scope", DEFAULT_COMMAND_GROUPS["admin"])
         self.assertIn("pubg-guild-scope", DEFAULT_COMMAND_GROUPS["admin"])
+        self.assertIn("pubg-delete-data", DEFAULT_COMMAND_GROUPS["admin"])
+        self.assertIn("pubg-delete-cancel", DEFAULT_COMMAND_GROUPS["admin"])
 
 
 if __name__ == "__main__":

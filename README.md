@@ -311,6 +311,8 @@ Discord's message content intent to be enabled for the bot application. Initial 
 !pubg-settings public-profile public|private
 !pubg-permission user_id group allow|deny [guild_id|global]
 !pubg-ranking-scope guild|global [guild_id]
+!pubg-delete-data steam target registration|normalized|raw|replay|all [reason]
+!pubg-delete-cancel request_id [reason]
 !유저삭제 steam 닉네임또는accountId
 ```
 
@@ -344,6 +346,12 @@ default, and the current guild ranking scope. It never returns API keys, bot tok
 paths. Global admins and users with a global `settings_write` grant can update collector limits or the public-profile
 default. A guild-only `settings_write` grant is read-only. Storage-path and compression changes remain
 local-program-only.
+`!pubg-delete-data` does not delete anything. It creates a 24-hour review request for an in-scope registered player,
+stores the requested deletion scope and Discord context, and links to the localhost `Data Deletion Review` section.
+The local owner can approve, reject, or cancel the request with an audit note; approval records authorization but
+`execution_enabled` remains false. `!pubg-delete-cancel request_id [reason]` lets the requester, the request guild's
+admins, or a global admin cancel a pending/approved request. Schema version 10 adds the request and immutable event
+tables; rerun `python -m pubg_ai.cli init-db` after updating.
 The `admin` group includes `pubg-alerts`, which returns current storage and worker alerts. When
 `PUBG_LOCAL_WEB_BASE_URL` is set, that response includes a local current-alert list link. When Discord alert channel
 IDs are configured from the local manager, the running Discord bot also sends new worker failures and active storage
@@ -392,6 +400,8 @@ row or pre-fill the ranking form from those URLs. Authorized `pubg-permission` a
 usage, and settings-error responses include contextual `#discord-permissions` or `#discord-scopes` links that pre-fill
 the local forms. `pubg-settings` responses link to stable `#collector-settings`, `#storage-settings`, and
 `#discord-scopes` sections; successful collector/public-profile updates pre-fill the affected local controls.
+Deletion-request responses link to `#data-deletions` with the request ID highlighted; the local detail view shows the
+complete audit event history and explicitly reports that deletion execution is disabled.
 Permission-denied and blocked privilege-boundary attempts remain plain text by design.
 
 Run the local management app:

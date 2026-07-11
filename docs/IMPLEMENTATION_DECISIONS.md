@@ -173,6 +173,10 @@ Suggested command groups:
 - Unregistering a player stops future collection.
 - Existing match, telemetry, replay, and aggregate data is retained by default.
 - Only an administrator can choose destructive deletion.
+- Discord can create or cancel an expiring deletion review request, but cannot execute deletion.
+- A localhost reviewer must approve or reject the request; approval and execution are separate states.
+- Every request transition stores an immutable actor/note/KST audit event. Approval does not enable execution until a
+  scoped impact preview and executor are implemented and verified.
 - Deletion should be split into options:
   - delete registration only
   - delete normalized DB data

@@ -54,7 +54,7 @@ Recommended JSON shape:
       "ranking_read": ["랭킹", "pubg-ranking"],
       "replay_read": ["pubg-replay"],
       "settings_write": ["pubg-settings"],
-      "admin": ["유저삭제", "pubg-permission", "pubg-ranking-scope", "pubg-guild-scope", "pubg-unregister", "pubg-delete-data"]
+      "admin": ["유저삭제", "pubg-permission", "pubg-ranking-scope", "pubg-guild-scope", "pubg-unregister", "pubg-delete-data", "pubg-delete-cancel"]
     },
     "user_grants": {
       "discord-user-id": ["profile_read", "ranking_read"]
@@ -96,6 +96,10 @@ The `settings_write` group enables `pubg-settings`. Guild-scoped grants may read
 admins and globally granted `settings_write` users may change collector limits and the default `public_profile` value.
 Discord never returns API keys, bot tokens, database settings, or storage paths, and it never changes raw compression;
 those remain `.env` or localhost-manager concerns.
+
+`pubg-delete-data` creates an expiring review request only. The localhost manager records approve/reject/cancel
+decisions and immutable audit events, but no deletion executor or execution endpoint is enabled in schema version 10.
+Run `python -m pubg_ai.cli init-db` after updating so the two deletion-review tables are created.
 
 1. Built-in defaults: `./data/raw`, `./data/replays`
 2. `.env` values: `PUBG_RAW_DATA_DIR`, `PUBG_REPLAY_DATA_DIR`

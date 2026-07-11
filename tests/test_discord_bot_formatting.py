@@ -18,6 +18,8 @@ from pubg_ai.discord_bot import (
     format_alert_history_result,
     format_alert_note_result,
     format_alert_notes_result,
+    format_data_deletion_command_reply,
+    format_data_deletion_request_result,
     format_discord_permission_change_result,
     format_discord_permission_command_reply,
     format_discord_collector_settings_result,
@@ -39,6 +41,7 @@ from pubg_ai.discord_bot import (
     format_worker_run_history_result,
 )
 from pubg_ai.alert_history import AlertHistoryNote, AlertHistoryPage, AlertHistoryRecord
+from pubg_ai.data_deletion_requests import DataDeletionRequest
 from pubg_ai.player_rankings import PlayerRanking, PlayerRankingRow
 from pubg_ai.player_registry import RegisteredPlayer
 from pubg_ai.player_stats import (
@@ -827,6 +830,41 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn(
             "- local_discord_scopes: [open](http://127.0.0.1:8000/?discord_public_profile_default=false#discord-scopes)",
             body,
+        )
+
+    def test_data_deletion_request_result_requires_local_review_and_links_request(self) -> None:
+        request = DataDeletionRequest(
+            id=17,
+            registered_player_id=1,
+            account_id="account.1234567890abcdef",
+            shard="steam",
+            player_name="Yuuki_Asuna---",
+            deletion_scope="raw",
+            status="pending",
+            reason="관리자 검토",
+            requested_by_discord_user_id="100",
+            requested_guild_id="10",
+            requested_channel_id="20",
+            requested_at_kst=datetime(2026, 7, 11, 20, 0, 0),
+            expires_at_kst=datetime(2026, 7, 12, 20, 0, 0),
+        )
+
+        body = format_data_deletion_request_result(
+            request,
+            detail_base_url="http://127.0.0.1:8000/",
+        )
+
+        self.assertIn("삭제 검토 요청 생성 완료", body)
+        self.assertIn("- status: pending", body)
+        self.assertIn("- execution: 실제 삭제 미실행", body)
+        self.assertIn(
+            "- local_data_deletions: [open](http://127.0.0.1:8000/?deletion_request_id=17&deletion_shard=steam&deletion_target=account.1234567890abcdef#data-deletions)",
+            body,
+        )
+
+        self.assertEqual(
+            format_data_deletion_command_reply("요청 실패"),
+            "요청 실패",
         )
 
     def test_local_section_command_reply_adds_section_link_when_url_is_available(self) -> None:

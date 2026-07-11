@@ -28,6 +28,7 @@ from pubg_ai.alert_history import (
 )
 from pubg_ai.collector_worker import CollectorWorkerController, CollectorWorkerError, CollectorWorkerOptions
 from pubg_ai.config import RuntimeConfig, load_dotenv_values
+from pubg_ai.data_deletion_requests import DataDeletionRequestError, DataDeletionRequestService
 from pubg_ai.database import connect_mysql, count_tables
 from pubg_ai.discord_permission_manager import DiscordPermissionManager
 from pubg_ai.local_settings import LocalSettingsError, LocalSettingsStore, check_storage_path
@@ -136,6 +137,11 @@ class DiscordGlobalAdminRequest(BaseModel):
 class DiscordScopeSettingsRequest(BaseModel):
     guild_ranking_scopes: dict[str, str] = Field(default_factory=dict)
     public_profile_default: bool = True
+
+
+class DataDeletionReviewRequest(BaseModel):
+    actor_id: str = Field(default="local-manager", min_length=1, max_length=191)
+    note: str | None = Field(default=None, max_length=1000)
 
 
 class WebSettingsRequest(BaseModel):
@@ -608,6 +614,97 @@ def create_app() -> Any:
         except LocalSettingsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"discord_scopes": settings.to_record()}
+
+    @app.get("/data-deletions")
+    def data_deletion_requests(status: str = "pending", limit: int = 50) -> dict[str, Any]:
+        connection = connect_mysql(current_config().database)
+        try:
+            try:
+                requests = DataDeletionRequestService(connection).list_requests(
+                    status=status,
+                    limit=limit,
+                )
+            except DataDeletionRequestError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {"requests": [request.to_record() for request in requests]}
+
+    @app.get("/data-deletions/{request_id}")
+    def data_deletion_request_detail(request_id: int) -> dict[str, Any]:
+        connection = connect_mysql(current_config().database)
+        try:
+            service = DataDeletionRequestService(connection)
+            try:
+                request = service.get_request(request_id)
+                events = service.list_events(request_id)
+            except DataDeletionRequestError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {
+            "request": request.to_record(),
+            "events": [event.to_record() for event in events],
+            "execution_enabled": False,
+        }
+
+    @app.post("/data-deletions/{request_id}/approve")
+    def approve_data_deletion_request(
+        request_id: int,
+        review: DataDeletionReviewRequest,
+    ) -> dict[str, Any]:
+        return _review_data_deletion_request(request_id, "approve", review)
+
+    @app.post("/data-deletions/{request_id}/reject")
+    def reject_data_deletion_request(
+        request_id: int,
+        review: DataDeletionReviewRequest,
+    ) -> dict[str, Any]:
+        return _review_data_deletion_request(request_id, "reject", review)
+
+    @app.post("/data-deletions/{request_id}/cancel")
+    def cancel_data_deletion_request(
+        request_id: int,
+        review: DataDeletionReviewRequest,
+    ) -> dict[str, Any]:
+        return _review_data_deletion_request(request_id, "cancel", review)
+
+    def _review_data_deletion_request(
+        request_id: int,
+        action: str,
+        review: DataDeletionReviewRequest,
+    ) -> dict[str, Any]:
+        connection = connect_mysql(current_config().database)
+        try:
+            service = DataDeletionRequestService(connection)
+            try:
+                if action == "approve":
+                    request = service.approve_request(
+                        request_id,
+                        actor_id=review.actor_id,
+                        note=review.note,
+                    )
+                elif action == "reject":
+                    request = service.reject_request(
+                        request_id,
+                        actor_id=review.actor_id,
+                        note=review.note,
+                    )
+                else:
+                    request = service.cancel_request(
+                        request_id,
+                        actor_type="local",
+                        actor_id=review.actor_id,
+                        note=review.note,
+                    )
+            except DataDeletionRequestError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {
+            "request": request.to_record(),
+            "execution_enabled": False,
+        }
 
     @app.get("/database/status")
     def database_status() -> dict[str, Any]:
@@ -1813,6 +1910,48 @@ _INDEX_HTML = """<!doctype html>
         <tbody id="playersBody"></tbody>
       </table>
     </section>
+    <section id="data-deletions">
+      <h2>Data Deletion Review</h2>
+      <form id="dataDeletionFilterForm">
+        <label>Status
+          <select name="status">
+            <option value="pending">pending</option>
+            <option value="approved">approved</option>
+            <option value="all">all</option>
+            <option value="rejected">rejected</option>
+            <option value="cancelled">cancelled</option>
+            <option value="expired">expired</option>
+          </select>
+        </label>
+        <label>Local reviewer
+          <input name="actor_id" autocomplete="off" value="local-manager" required>
+        </label>
+        <label>Audit note
+          <input name="note" autocomplete="off" maxlength="1000">
+        </label>
+        <button type="submit">Refresh</button>
+      </form>
+      <div class="status" id="dataDeletionStatus" style="margin: 10px 0;">
+        Approval records authorization only. Deletion execution is disabled.
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Target</th>
+            <th>Scope</th>
+            <th>Status</th>
+            <th>Requested KST</th>
+            <th>Expires KST</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="dataDeletionBody"></tbody>
+      </table>
+      <div class="detail-panel" id="dataDeletionDetail">
+        Select a request to inspect its audit history.
+      </div>
+    </section>
     <section id="profile-lookup">
       <h2>전적 조회</h2>
       <form id="profileForm">
@@ -2175,6 +2314,10 @@ _INDEX_HTML = """<!doctype html>
   <script>
     const statusGrid = document.querySelector("#statusGrid");
     const playersBody = document.querySelector("#playersBody");
+    const dataDeletionFilterForm = document.querySelector("#dataDeletionFilterForm");
+    const dataDeletionBody = document.querySelector("#dataDeletionBody");
+    const dataDeletionStatus = document.querySelector("#dataDeletionStatus");
+    const dataDeletionDetail = document.querySelector("#dataDeletionDetail");
     const profileBody = document.querySelector("#profileBody");
     const weaponBody = document.querySelector("#weaponBody");
     const recommendationBody = document.querySelector("#recommendationBody");
@@ -2266,6 +2409,7 @@ _INDEX_HTML = """<!doctype html>
     let activeRecommendationShard = "steam";
     let replayArtifactFilter = { match_id: "", account_id: "", artifact_id: "" };
     let registeredPlayerHighlight = { shard: "", account_id: "", name: "" };
+    let deletionRequestHighlightId = "";
     let discordSettingsPrefill = { permission_group: "", public_profile_default: "" };
     let localSettingsPrefill = {
       collector_poll_interval_seconds: "",
@@ -3104,12 +3248,96 @@ _INDEX_HTML = """<!doctype html>
           <td>
             <div class="actions">
               <button class="danger" type="button" onclick="unregisterPlayer('${attr(player.shard)}', '${attr(player.account_id)}')">
-                삭제
+                수집 중지
               </button>
             </div>
           </td>
         </tr>`;
       }).join("");
+    }
+
+    function dataDeletionActionButtons(request) {
+      const buttons = [
+        `<button class="secondary" type="button" data-deletion-action="detail" data-request-id="${attr(request.id)}">Detail</button>`,
+      ];
+      if (request.status === "pending") {
+        buttons.push(
+          `<button type="button" data-deletion-action="approve" data-request-id="${attr(request.id)}">Approve</button>`,
+          `<button class="danger" type="button" data-deletion-action="reject" data-request-id="${attr(request.id)}">Reject</button>`,
+          `<button class="secondary" type="button" data-deletion-action="cancel" data-request-id="${attr(request.id)}">Cancel</button>`,
+        );
+      } else if (request.status === "approved") {
+        buttons.push(
+          `<button class="secondary" type="button" data-deletion-action="cancel" data-request-id="${attr(request.id)}">Cancel approval</button>`,
+        );
+      }
+      return buttons.join("");
+    }
+
+    async function loadDataDeletionRequests() {
+      const form = new FormData(dataDeletionFilterForm);
+      const status = String(form.get("status") || "pending");
+      const response = await fetch(`/data-deletions?status=${encodeURIComponent(status)}&limit=100`);
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const payload = await response.json();
+      dataDeletionBody.innerHTML = (payload.requests || []).map((request) => {
+        const highlighted = String(request.id) === deletionRequestHighlightId;
+        return `
+          <tr${highlighted ? ' class="linked-row"' : ""}>
+            <td>${escapeHtml(request.id)}</td>
+            <td>${escapeHtml(request.player_name)}<br><small>${escapeHtml(request.shard)} / ${escapeHtml(request.account_id)}</small></td>
+            <td>${escapeHtml(request.deletion_scope)}</td>
+            <td>${escapeHtml(request.status)}</td>
+            <td>${escapeHtml(request.requested_at_kst)}</td>
+            <td>${escapeHtml(request.expires_at_kst)}</td>
+            <td><div class="actions">${dataDeletionActionButtons(request)}</div></td>
+          </tr>`;
+      }).join("") || `<tr><td colspan="7">No deletion review requests.</td></tr>`;
+      dataDeletionStatus.textContent = `${(payload.requests || []).length} request(s). Approval does not execute deletion.`;
+    }
+
+    async function loadDataDeletionRequestDetail(requestId) {
+      const response = await fetch(`/data-deletions/${encodeURIComponent(requestId)}`);
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const payload = await response.json();
+      const request = payload.request;
+      const events = payload.events || [];
+      dataDeletionDetail.innerHTML = `
+        <strong>Request #${escapeHtml(request.id)} / ${escapeHtml(request.status)}</strong>
+        <div>${escapeHtml(request.player_name)} / ${escapeHtml(request.shard)} / ${escapeHtml(request.deletion_scope)}</div>
+        <div>Reason: ${escapeHtml(request.reason || "-")}</div>
+        <div>Reviewer: ${escapeHtml(request.reviewed_by || "-")} / ${escapeHtml(request.review_note || "-")}</div>
+        <div>Execution enabled: ${payload.execution_enabled ? "yes" : "no"}</div>
+        <ul>
+          ${events.map((event) => `<li>${escapeHtml(event.created_at_kst)} / ${escapeHtml(event.event_type)} / ${escapeHtml(event.actor_type)}:${escapeHtml(event.actor_id)} / ${escapeHtml(event.note || "-")}</li>`).join("")}
+        </ul>`;
+    }
+
+    async function reviewDataDeletionRequest(requestId, action) {
+      const form = new FormData(dataDeletionFilterForm);
+      const actorId = String(form.get("actor_id") || "").trim();
+      const note = String(form.get("note") || "").trim();
+      if (!actorId) throw new Error("Local reviewer is required.");
+      const warning = action === "approve"
+        ? "Approve this request? This records authorization only and does not delete data."
+        : `${action} this deletion review request?`;
+      if (!window.confirm(warning)) return;
+      await postJson(`/data-deletions/${encodeURIComponent(requestId)}/${action}`, {
+        actor_id: actorId,
+        note: note || null,
+      });
+      dataDeletionFilterForm.elements.note.value = "";
+      deletionRequestHighlightId = String(requestId);
+      dataDeletionFilterForm.elements.status.value = "all";
+      await loadDataDeletionRequests();
+      await loadDataDeletionRequestDetail(requestId);
+      dataDeletionStatus.textContent = `${action} recorded. Deletion execution remains disabled.`;
     }
 
     function firstUrlParam(params, keys) {
@@ -3176,6 +3404,7 @@ _INDEX_HTML = """<!doctype html>
         "collector_cycle_player_limit",
         "collector_player_lookup_chunk_size",
         "discord_public_profile_default",
+        "deletion_request_id",
       ];
       if (!lookupKeys.some((key) => params.has(key))) return false;
 
@@ -3212,6 +3441,12 @@ _INDEX_HTML = """<!doctype html>
         ["true", "false"],
         "",
       );
+      const deletionRequestId = firstUrlParam(params, ["deletion_request_id"]);
+
+      if (shouldPrefillSection(hash, "data-deletions") && /^\\d+$/.test(deletionRequestId)) {
+        deletionRequestHighlightId = deletionRequestId;
+        setFormElementValue(dataDeletionFilterForm, "status", "all");
+      }
 
       if (shouldPrefillSection(hash, "collector-settings")) {
         localSettingsPrefill = {
@@ -5687,6 +5922,35 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
+    dataDeletionFilterForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        await loadDataDeletionRequests();
+      } catch (error) {
+        dataDeletionStatus.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    dataDeletionBody.addEventListener("click", async (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("button[data-deletion-action]")
+        : null;
+      if (!button) return;
+      const requestId = button.dataset.requestId || "";
+      const action = button.dataset.deletionAction || "detail";
+      try {
+        if (action === "detail") {
+          deletionRequestHighlightId = requestId;
+          await loadDataDeletionRequestDetail(requestId);
+          await loadDataDeletionRequests();
+        } else {
+          await reviewDataDeletionRequest(requestId, action);
+        }
+      } catch (error) {
+        dataDeletionStatus.textContent = `Error: ${error.message}`;
+      }
+    });
+
     replayArtifactsBody.addEventListener("click", async (event) => {
       const button = event.target instanceof Element
         ? event.target.closest("button[data-load-timeline]")
@@ -5736,15 +6000,19 @@ _INDEX_HTML = """<!doctype html>
     const initialAlertHistoryFilterFromUrl = loadInitialAlertHistoryFiltersFromUrl();
     loadInitialWorkerRunFiltersFromUrl();
 
-    Promise.all([loadStatus(), loadAlerts(), loadDiscordPermissions(), loadDiscordScopes(), loadCollectorWorkerStatus(), loadPostProcessingWorkerStatus(), loadWorkerRuns(), loadPlayers(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
+    Promise.all([loadStatus(), loadAlerts(), loadDiscordPermissions(), loadDiscordScopes(), loadCollectorWorkerStatus(), loadPostProcessingWorkerStatus(), loadWorkerRuns(), loadPlayers(), loadDataDeletionRequests(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
       .then(() => initialAlertHistoryFilterFromUrl ? loadAlertHistory(alertHistoryPage) : null)
       .then(() => loadInitialAlertDetailFromUrl())
       .then(() => loadInitialWorkerRunDetailFromUrl())
+      .then(() => deletionRequestHighlightId ? loadDataDeletionRequestDetail(deletionRequestHighlightId) : null)
       .then(() => { banner.textContent = "localhost 전용 관리 화면"; })
       .catch((error) => { banner.textContent = `오류: ${error.message}`; });
     setInterval(loadCollectorWorkerStatus, 10000);
     setInterval(loadPostProcessingWorkerStatus, 10000);
     setInterval(loadWorkerRuns, 30000);
+    setInterval(() => {
+      loadDataDeletionRequests().catch((error) => { dataDeletionStatus.textContent = `Error: ${error.message}`; });
+    }, 30000);
     setInterval(() => {
       refreshAlertsAndHistory().catch((error) => { banner.textContent = `Error: ${error.message}`; });
     }, 30000);

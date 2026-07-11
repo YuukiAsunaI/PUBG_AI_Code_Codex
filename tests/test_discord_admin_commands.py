@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from pubg_ai.config import AppConfig, DatabaseConfig, RuntimeConfig, SecretConfig
+from pubg_ai.data_deletion_requests import DataDeletionRequest
 from pubg_ai.discord_bot import create_discord_bot
 from pubg_ai.discord_permissions import DiscordCommandIdentity, DiscordPermissionChecker
 from pubg_ai.local_settings import DEFAULT_COMMAND_GROUPS, LocalSettingsStore
+from pubg_ai.player_registry import RegisteredPlayer
 
 
 pytestmark = pytest.mark.filterwarnings(
@@ -203,11 +207,71 @@ class DiscordAdminCommandTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("로컬 프로그램에서만 변경", storage_reply)
             self.assertIn("#storage-settings", storage_reply)
 
+    async def test_delete_data_command_creates_review_request_without_execution(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            _, _, bot = _bot_fixture(
+                base_dir,
+                guild_user_grants={"10": {"100": ["admin"]}},
+            )
+            player = RegisteredPlayer(
+                id=1,
+                account_id="account.test",
+                shard="steam",
+                current_name="Yuuki_Asuna---",
+                active=False,
+                public_profile=True,
+                registered_guild_id="10",
+            )
+            request = DataDeletionRequest(
+                id=17,
+                registered_player_id=1,
+                account_id=player.account_id,
+                shard=player.shard,
+                player_name=player.current_name,
+                deletion_scope="raw",
+                status="pending",
+                reason="검토 요청",
+                requested_by_discord_user_id="100",
+                requested_guild_id="10",
+                requested_channel_id="20",
+                requested_at_kst=datetime(2026, 7, 11, 20, 0, 0),
+                expires_at_kst=datetime(2026, 7, 12, 20, 0, 0),
+            )
+            connection = FakeDatabaseConnection()
+            registry = MagicMock()
+            registry.get_player.return_value = player
+            service = MagicMock()
+            service.create_request.return_value = request
+            ctx = FakeContext(user_id=100, guild_id=10)
+            try:
+                with (
+                    patch("pubg_ai.discord_bot.connect_mysql", return_value=connection),
+                    patch("pubg_ai.discord_bot.PlayerRegistry", return_value=registry),
+                    patch("pubg_ai.discord_bot.DataDeletionRequestService", return_value=service),
+                ):
+                    await bot.get_command("pubg-delete-data").callback(
+                        ctx,
+                        "steam",
+                        "Yuuki_Asuna---",
+                        "raw",
+                        reason="검토 요청",
+                    )
+            finally:
+                await bot.close()
+
+            service.create_request.assert_called_once()
+            self.assertTrue(connection.closed)
+            self.assertIn("삭제 검토 요청 생성 완료", ctx.replies[-1])
+            self.assertIn("실제 삭제 미실행", ctx.replies[-1])
+            self.assertIn("#data-deletions", ctx.replies[-1])
+
 
 class FakeContext:
     def __init__(self, *, user_id: int, guild_id: int | None) -> None:
         self.author = FakeDiscordObject(user_id)
         self.guild = FakeDiscordObject(guild_id) if guild_id is not None else None
+        self.channel = FakeDiscordObject(20)
         self.replies: list[str] = []
 
     async def reply(self, message: str, **_: object) -> None:
@@ -217,6 +281,14 @@ class FakeContext:
 class FakeDiscordObject:
     def __init__(self, object_id: int) -> None:
         self.id = object_id
+
+
+class FakeDatabaseConnection:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def _bot_fixture(

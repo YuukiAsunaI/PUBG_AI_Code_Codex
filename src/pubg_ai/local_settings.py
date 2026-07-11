@@ -164,6 +164,7 @@ DEFAULT_COMMAND_GROUPS["admin"] = sorted(
             "pubg-worker-detail",
             "pubg-ranking-scope",
             "pubg-guild-scope",
+            "pubg-delete-cancel",
         ]
     )
 )

@@ -160,6 +160,12 @@ Implemented behavior:
   ranking scope. Global `settings_write` grants can change collector limits or the public-profile default; guild-only
   grants are read-only. Secrets, database details, and storage paths are never returned, and storage/compression
   changes remain local-program-only. Responses link to stable local settings anchors with safe form pre-fill values.
+- `pubg-delete-data shard target scope [reason]` creates a 24-hour `pending` review request and a `requested` audit
+  event. It performs no database or file deletion. Local review may transition it to `approved`, `rejected`, or
+  `cancelled`; pending requests expire automatically, and every transition records actor, note, details, and KST time.
+- Approval is authorization only. The API returns `execution_enabled=false`, and there is no execution route or UI
+  button. Request rows retain player identity snapshots and audit events use `ON DELETE RESTRICT` so review history
+  cannot be discarded accidentally.
 
 ## Duplicate Match Handling
 

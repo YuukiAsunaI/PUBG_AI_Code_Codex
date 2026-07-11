@@ -74,6 +74,8 @@ Use a two-layer storage model:
 | Table | Purpose |
 | --- | --- |
 | `registered_players` | Admin-managed tracking targets: `account_id`, `current_name`, required `shard`, `active`, `public_profile` |
+| `data_deletion_requests` | Expiring scoped deletion-review requests with player identity snapshots and separate approval/execution states |
+| `data_deletion_request_events` | Immutable requested/approved/rejected/cancelled/expired/executed/failed audit events |
 | `player_aliases` | Nickname history and lookup evidence |
 | `discord_users` | Discord user records; not assumed to own PUBG accounts |
 | `discord_guilds` | Guild-specific settings, ranking scope, and visibility defaults |
@@ -477,8 +479,11 @@ Completed slices:
 100. `pubg-settings` provides a non-secret operational summary; global `settings_write` grants can change collector
      limits or the public-profile default, while guild-only grants are read-only. Secrets, database details, storage
      paths, and storage mutations remain excluded, and safe responses pre-fill stable local settings sections.
+101. `pubg-delete-data` creates a 24-hour review request without deleting data; Discord/local cancellation, local
+     approval/rejection, automatic expiry, actor notes, and immutable KST audit events are stored in schema version 10.
+     The localhost review UI exposes request history while all execution APIs remain disabled.
 
 Next slice:
 
-1. Review the reserved destructive `pubg-delete-data` command gap and define a two-step, locally auditable deletion
-   workflow before enabling any Discord-side deletion.
+1. Add a read-only deletion impact preview that counts affected normalized rows and catalogs raw/replay files per scope;
+   keep execution disabled until preview verification and an explicit local confirmation contract are complete.

@@ -365,6 +365,11 @@ The current Discord bot slice is intentionally small and reuses the same local M
 - Discord settings output omits secret values, database configuration, and local storage paths. Storage paths and raw
   compression remain editable only in the localhost manager, and contextual responses link back to the safe local
   controls.
+- `!pubg-delete-data steam target registration|normalized|raw|replay|all [reason]` creates an expiring review request
+  for a registered target visible to that Discord scope. It never runs deletion SQL or removes files.
+- `!pubg-delete-cancel request_id [reason]` cancels a pending or approved request when called by its requester, an admin
+  from the same guild, or a global admin. Local approve/reject/cancel actions and automatic expiry append immutable
+  audit events. Approved requests remain unexecuted in this slice.
 - The bot reloads local Discord permission settings before every gated command, so local web/CLI changes take effect
   without a bot restart. Global-admin membership remains editable only from the local web UI or CLI.
 - The local web UI and CLI can now add/revoke user command-group grants and add/remove global Discord admins without

@@ -167,6 +167,16 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn("collector_player_lookup_chunk_size", body)
         self.assertIn("discord_public_profile_default", body)
         self.assertIn("applyCollectorSettingsPrefill", body)
+        self.assertIn('id="data-deletions"', body)
+        self.assertIn('id="dataDeletionFilterForm"', body)
+        self.assertIn('id="dataDeletionBody"', body)
+        self.assertIn('id="dataDeletionDetail"', body)
+        self.assertIn("deletion_request_id", body)
+        self.assertIn("loadDataDeletionRequests", body)
+        self.assertIn("loadDataDeletionRequestDetail", body)
+        self.assertIn("reviewDataDeletionRequest", body)
+        self.assertIn("Approval does not execute deletion", body)
+        self.assertIn("/data-deletions", body)
         self.assertIn("/discord/scopes", body)
 
     def test_web_settings_endpoint_updates_local_settings_file(self) -> None:

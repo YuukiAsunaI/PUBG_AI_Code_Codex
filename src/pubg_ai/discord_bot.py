@@ -28,6 +28,12 @@ from pubg_ai.alert_history import (
     visible_alert_records,
 )
 from pubg_ai.config import RuntimeConfig
+from pubg_ai.data_deletion_requests import (
+    DataDeletionRequest,
+    DataDeletionRequestError,
+    DataDeletionRequestService,
+    normalize_deletion_scope,
+)
 from pubg_ai.database import connect_mysql
 from pubg_ai.discord_permission_manager import DiscordPermissionManager
 from pubg_ai.discord_permissions import DiscordCommandIdentity, DiscordPermissionChecker
@@ -340,6 +346,54 @@ def format_discord_public_profile_settings_result(
         "discord-scopes",
         detail_base_url=detail_base_url,
         query_params={"discord_public_profile_default": str(public_profile_default).lower()},
+    )
+
+
+def format_data_deletion_command_reply(
+    message: str,
+    *,
+    request_id: int | None = None,
+    shard: str | None = None,
+    target: str | None = None,
+    detail_base_url: str | None = None,
+) -> str:
+    return format_local_section_command_reply(
+        message,
+        "local_data_deletions",
+        "data-deletions",
+        detail_base_url=detail_base_url,
+        query_params={
+            "deletion_request_id": request_id,
+            "deletion_shard": shard,
+            "deletion_target": target,
+        },
+    )
+
+
+def format_data_deletion_request_result(
+    request: DataDeletionRequest,
+    *,
+    action_label: str = "삭제 검토 요청 생성 완료",
+    detail_base_url: str | None = None,
+) -> str:
+    expires_at = to_kst(request.expires_at_kst).isoformat(timespec="seconds")
+    return format_data_deletion_command_reply(
+        "\n".join(
+            [
+                action_label,
+                f"- request_id: {request.id}",
+                f"- target: {request.player_name} ({request.shard})",
+                f"- account_id: {_short_account_id(request.account_id)}",
+                f"- scope: {request.deletion_scope}",
+                f"- status: {request.status}",
+                f"- expires_at_kst: {expires_at}",
+                "- execution: 실제 삭제 미실행",
+            ]
+        ),
+        request_id=request.id,
+        shard=request.shard,
+        target=request.account_id,
+        detail_base_url=detail_base_url,
     )
 
 
@@ -1095,6 +1149,8 @@ def create_discord_bot(
                     f"- `{command_prefix}pubg-settings public-profile public|private`",
                     f"- `{command_prefix}pubg-permission user_id group allow|deny [guild_id|global]`",
                     f"- `{command_prefix}pubg-ranking-scope guild|global [guild_id]`",
+                    f"- `{command_prefix}pubg-delete-data steam target registration|normalized|raw|replay|all [reason]`",
+                    f"- `{command_prefix}pubg-delete-cancel request_id [reason]`",
                     f"- `{command_prefix}유저삭제 steam 닉네임또는accountId`",
                 ]
             ),
@@ -1750,6 +1806,176 @@ def create_discord_bot(
                     f"`{command_prefix}pubg-settings collector 180 100 10`, or "
                     f"`{command_prefix}pubg-settings public-profile public|private`"
                 ),
+                detail_base_url=config.app.local_web_base_url,
+            ),
+            mention_author=False,
+        )
+
+    @bot.command(name="pubg-delete-data")
+    async def data_deletion_request_command(
+        ctx: Any,
+        shard: str | None = None,
+        target: str | None = None,
+        deletion_scope: str | None = None,
+        *,
+        reason: str | None = None,
+    ) -> None:
+        if not await require_permission(ctx, "admin"):
+            return
+        guild_id = await require_scoped_guild(ctx)
+        if guild_id is None and not has_global_scope(ctx):
+            return
+
+        try:
+            normalized_scope = normalize_deletion_scope(deletion_scope or "")
+        except DataDeletionRequestError:
+            await ctx.reply(
+                format_data_deletion_command_reply(
+                    (
+                        f"Usage: `{command_prefix}pubg-delete-data steam target "
+                        "registration|normalized|raw|replay|all [reason]`"
+                    ),
+                    shard=shard,
+                    target=target,
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
+            return
+        if not shard or not target:
+            await ctx.reply(
+                format_data_deletion_command_reply(
+                    (
+                        f"Usage: `{command_prefix}pubg-delete-data steam target "
+                        "registration|normalized|raw|replay|all [reason]`"
+                    ),
+                    shard=shard,
+                    target=target,
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
+            return
+
+        connection = connect_mysql(config.database)
+        try:
+            registry = PlayerRegistry(connection)
+            player = registry.get_player(
+                shard=shard,
+                account_id=target if target.startswith("account.") else None,
+                name=None if target.startswith("account.") else target,
+                include_inactive=True,
+            )
+            if not player or not _player_visible_to_scope(player, guild_id, has_global_scope(ctx)):
+                await ctx.reply(
+                    format_data_deletion_command_reply(
+                        "삭제 검토 요청 대상을 찾지 못했습니다.",
+                        shard=shard,
+                        target=target,
+                        detail_base_url=config.app.local_web_base_url,
+                    ),
+                    mention_author=False,
+                )
+                return
+            try:
+                request = DataDeletionRequestService(connection).create_request(
+                    player=player,
+                    deletion_scope=normalized_scope,
+                    requested_by_discord_user_id=str(ctx.author.id),
+                    requested_guild_id=guild_id,
+                    requested_channel_id=str(ctx.channel.id) if ctx.channel else None,
+                    reason=reason,
+                )
+            except DataDeletionRequestError as exc:
+                await ctx.reply(
+                    format_data_deletion_command_reply(
+                        f"삭제 검토 요청 실패: {exc}",
+                        shard=player.shard,
+                        target=player.account_id,
+                        detail_base_url=config.app.local_web_base_url,
+                    ),
+                    mention_author=False,
+                )
+                return
+        finally:
+            connection.close()
+
+        await ctx.reply(
+            format_data_deletion_request_result(
+                request,
+                detail_base_url=config.app.local_web_base_url,
+            ),
+            mention_author=False,
+        )
+
+    @bot.command(name="pubg-delete-cancel")
+    async def data_deletion_cancel_command(
+        ctx: Any,
+        request_id: str | None = None,
+        *,
+        reason: str | None = None,
+    ) -> None:
+        if not await require_permission(ctx, "admin"):
+            return
+        parsed_request_id = _positive_int(request_id)
+        if parsed_request_id is None:
+            await ctx.reply(
+                format_data_deletion_command_reply(
+                    f"Usage: `{command_prefix}pubg-delete-cancel request_id [reason]`",
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
+            return
+        guild_id = await require_scoped_guild(ctx)
+        if guild_id is None and not has_global_scope(ctx):
+            return
+
+        connection = connect_mysql(config.database)
+        try:
+            service = DataDeletionRequestService(connection)
+            try:
+                request = service.get_request(parsed_request_id)
+            except DataDeletionRequestError as exc:
+                await ctx.reply(
+                    format_data_deletion_command_reply(
+                        f"삭제 검토 요청 조회 실패: {exc}",
+                        request_id=parsed_request_id,
+                        detail_base_url=config.app.local_web_base_url,
+                    ),
+                    mention_author=False,
+                )
+                return
+
+            requester = request.requested_by_discord_user_id == str(ctx.author.id)
+            same_guild = guild_id is not None and request.requested_guild_id == guild_id
+            if not (requester or same_guild or has_global_scope(ctx)):
+                await ctx.reply("이 삭제 검토 요청을 취소할 권한이 없습니다.", mention_author=False)
+                return
+            try:
+                cancelled = service.cancel_request(
+                    parsed_request_id,
+                    actor_type="discord",
+                    actor_id=str(ctx.author.id),
+                    note=reason,
+                )
+            except DataDeletionRequestError as exc:
+                await ctx.reply(
+                    format_data_deletion_command_reply(
+                        f"삭제 검토 요청 취소 실패: {exc}",
+                        request_id=parsed_request_id,
+                        detail_base_url=config.app.local_web_base_url,
+                    ),
+                    mention_author=False,
+                )
+                return
+        finally:
+            connection.close()
+
+        await ctx.reply(
+            format_data_deletion_request_result(
+                cancelled,
+                action_label="삭제 검토 요청 취소 완료",
                 detail_base_url=config.app.local_web_base_url,
             ),
             mention_author=False,

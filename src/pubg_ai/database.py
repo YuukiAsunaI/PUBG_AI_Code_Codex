@@ -8,7 +8,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 class DatabaseError(RuntimeError):
@@ -76,7 +76,7 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 VALUES (%s, %s, NOW(6))
                 ON DUPLICATE KEY UPDATE description = VALUES(description)
                 """,
-                (SCHEMA_VERSION, "system alert notes schema"),
+                (SCHEMA_VERSION, "audited data deletion request schema"),
             )
             applied += 1
     finally:
@@ -240,6 +240,53 @@ def schema_statements() -> list[str]:
             CONSTRAINT fk_system_alert_notes_alert_history
                 FOREIGN KEY (alert_history_id) REFERENCES system_alert_history(id)
                 ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS data_deletion_requests (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            registered_player_id BIGINT UNSIGNED NULL,
+            account_id VARCHAR(128) NOT NULL,
+            shard VARCHAR(32) NOT NULL,
+            player_name VARCHAR(191) NOT NULL,
+            deletion_scope ENUM('registration', 'normalized', 'raw', 'replay', 'all') NOT NULL,
+            status ENUM('pending', 'approved', 'rejected', 'cancelled', 'expired', 'executed', 'failed')
+                NOT NULL DEFAULT 'pending',
+            reason VARCHAR(500) NULL,
+            requested_by_discord_user_id VARCHAR(32) NOT NULL,
+            requested_guild_id VARCHAR(32) NULL,
+            requested_channel_id VARCHAR(32) NULL,
+            requested_at_kst DATETIME(6) NOT NULL,
+            expires_at_kst DATETIME(6) NOT NULL,
+            reviewed_by VARCHAR(191) NULL,
+            reviewed_at_kst DATETIME(6) NULL,
+            review_note VARCHAR(1000) NULL,
+            executed_at_kst DATETIME(6) NULL,
+            execution_summary_json JSON NULL,
+            updated_at_kst DATETIME(6) NOT NULL,
+            KEY idx_data_deletion_status_expiry (status, expires_at_kst),
+            KEY idx_data_deletion_player_scope (account_id, shard, deletion_scope, status),
+            KEY idx_data_deletion_requester (requested_by_discord_user_id, requested_at_kst),
+            CONSTRAINT fk_data_deletion_registered_player
+                FOREIGN KEY (registered_player_id) REFERENCES registered_players(id)
+                ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS data_deletion_request_events (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            request_id BIGINT UNSIGNED NOT NULL,
+            event_type ENUM('requested', 'approved', 'rejected', 'cancelled', 'expired', 'executed', 'failed')
+                NOT NULL,
+            actor_type ENUM('discord', 'local', 'system') NOT NULL,
+            actor_id VARCHAR(191) NOT NULL,
+            note VARCHAR(1000) NULL,
+            details_json JSON NULL,
+            created_at_kst DATETIME(6) NOT NULL,
+            KEY idx_data_deletion_events_request_time (request_id, created_at_kst),
+            CONSTRAINT fk_data_deletion_events_request
+                FOREIGN KEY (request_id) REFERENCES data_deletion_requests(id)
+                ON DELETE RESTRICT
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """,
         """
