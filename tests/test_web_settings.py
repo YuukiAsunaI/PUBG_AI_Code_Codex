@@ -153,6 +153,13 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn('id="discordScopeForm"', body)
         self.assertIn('id="publicProfileDefaultForm"', body)
         self.assertIn('id="discordScopesBody"', body)
+        self.assertIn('id="discord-permissions"', body)
+        self.assertIn('id="discord-scopes"', body)
+        self.assertIn("discord_permission_user_id", body)
+        self.assertIn("discord_permission_group", body)
+        self.assertIn("discord_permission_guild_id", body)
+        self.assertIn("discord_scope_guild_id", body)
+        self.assertIn("discord_scope_value", body)
         self.assertIn("/discord/scopes", body)
 
     def test_web_settings_endpoint_updates_local_settings_file(self) -> None:

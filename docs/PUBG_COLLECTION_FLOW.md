@@ -353,6 +353,13 @@ The current Discord bot slice is intentionally small and reuses the same local M
   alert notes/resolution comments and review recent entries with `!pubg-alert-notes alert_id [limit]`.
 - Command access is checked through local Discord permission settings. Global admins can manage every guild, while
   guild-specific grants stay scoped by `guild_id`.
+- `!pubg-permission user_id group allow|deny [guild_id|global]` grants or revokes command groups. The current guild is
+  the default target; only global admins can target another guild or global grants.
+- `!pubg-ranking-scope guild|global [guild_id]` is global-admin-only and changes the ranking visibility override for
+  the current or explicitly selected guild. Both admin commands include contextual local settings links when
+  `PUBG_LOCAL_WEB_BASE_URL` is configured.
+- The bot reloads local Discord permission settings before every gated command, so local web/CLI changes take effect
+  without a bot restart. Global-admin membership remains editable only from the local web UI or CLI.
 - The local web UI and CLI can now add/revoke user command-group grants and add/remove global Discord admins without
   storing any bot token or PUBG API key outside `.env`.
 - The bot does not fetch live in-match data. It only reads completed-match data and already generated replay

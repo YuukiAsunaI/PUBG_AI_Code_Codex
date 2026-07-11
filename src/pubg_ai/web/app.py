@@ -1704,7 +1704,7 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="webSettingsStatus" style="margin-top: 12px;">Waiting</div>
     </section>
-    <section>
+    <section id="discord-permissions">
       <h2>Discord 권한</h2>
       <form id="discordGrantForm">
         <label>User ID
@@ -1736,7 +1736,7 @@ _INDEX_HTML = """<!doctype html>
         <tbody id="discordPermissionsBody"></tbody>
       </table>
     </section>
-    <section>
+    <section id="discord-scopes">
       <h2>Discord Scope Settings</h2>
       <form id="discordScopeForm">
         <label>Guild ID
@@ -2197,6 +2197,7 @@ _INDEX_HTML = """<!doctype html>
     const mapSnapshotStatus = document.querySelector("#mapSnapshotStatus");
     const timelineStatus = document.querySelector("#timelineStatus");
     const replayArtifactsBody = document.querySelector("#replayArtifactsBody");
+    const discordGrantForm = document.querySelector("#discordGrantForm");
     const discordPermissionsBody = document.querySelector("#discordPermissionsBody");
     const discordPermissionGroup = document.querySelector("#discordPermissionGroup");
     const discordScopeForm = document.querySelector("#discordScopeForm");
@@ -2265,6 +2266,7 @@ _INDEX_HTML = """<!doctype html>
     let activeRecommendationShard = "steam";
     let replayArtifactFilter = { match_id: "", account_id: "", artifact_id: "" };
     let registeredPlayerHighlight = { shard: "", account_id: "", name: "" };
+    let discordSettingsPrefill = { permission_group: "" };
     let alertHistoryPage = {
       source: "all",
       state: "all",
@@ -2927,6 +2929,10 @@ _INDEX_HTML = """<!doctype html>
       discordPermissionGroup.innerHTML = groupNames.map((group) => (
         `<option value="${attr(group)}">${escapeHtml(group)}</option>`
       )).join("");
+      if (discordSettingsPrefill.permission_group) {
+        setFormElementValue(discordGrantForm, "group", discordSettingsPrefill.permission_group);
+        discordSettingsPrefill.permission_group = "";
+      }
 
       const rows = [];
       for (const userId of settings.global_admin_user_ids || []) {
@@ -3118,6 +3124,11 @@ _INDEX_HTML = """<!doctype html>
         "ranking_shard",
         "ranking_guild_id",
         "ranking_limit",
+        "discord_permission_user_id",
+        "discord_permission_group",
+        "discord_permission_guild_id",
+        "discord_scope_guild_id",
+        "discord_scope_value",
       ];
       if (!lookupKeys.some((key) => params.has(key))) return false;
 
@@ -3137,6 +3148,25 @@ _INDEX_HTML = """<!doctype html>
       const rankingMetric = firstUrlParam(params, ["ranking_metric", "metric"]) || "kda";
       const rankingGuildId = firstUrlParam(params, ["ranking_guild_id", "guild_id"]);
       const rankingLimit = lookupUrlBoundedNumber(firstUrlParam(params, ["ranking_limit", "limit"]), 10, 1, 100);
+      const discordPermissionUserId = firstUrlParam(params, ["discord_permission_user_id"]);
+      const discordPermissionGroupValue = firstUrlParam(params, ["discord_permission_group"]);
+      const discordPermissionGuildId = firstUrlParam(params, ["discord_permission_guild_id"]);
+      const discordScopeGuildId = firstUrlParam(params, ["discord_scope_guild_id"]);
+      const discordScopeValue = lookupUrlChoice(
+        firstUrlParam(params, ["discord_scope_value"]),
+        ["guild", "global"],
+        "guild",
+      );
+
+      if (shouldPrefillSection(hash, "discord-permissions")) {
+        setFormElementValue(discordGrantForm, "user_id", discordPermissionUserId);
+        setFormElementValue(discordGrantForm, "guild_id", discordPermissionGuildId);
+        discordSettingsPrefill.permission_group = discordPermissionGroupValue;
+      }
+      if (shouldPrefillSection(hash, "discord-scopes")) {
+        setFormElementValue(discordScopeForm, "guild_id", discordScopeGuildId);
+        setFormElementValue(discordScopeForm, "scope", discordScopeValue);
+      }
 
       if (shouldPrefillSection(hash, "registered-players")) {
         registeredPlayerHighlight = {
@@ -5477,7 +5507,7 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
-    document.querySelector("#discordGrantForm").addEventListener("submit", async (event) => {
+    discordGrantForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
       try {

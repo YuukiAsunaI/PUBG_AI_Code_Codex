@@ -152,6 +152,10 @@ Implemented behavior:
   responses include ranking links, with row highlighting and ranking form pre-fill support on the local page.
 - Current admin-link coverage leaves permission-denied and server-channel-required responses as the only intentional
   plain-text admin cases because they are not tied to a local object.
+- The local Discord settings sections have stable `#discord-permissions` and `#discord-scopes` anchors. Authorized
+  `pubg-permission` and global-admin-only `pubg-ranking-scope` success, usage, and settings-error responses include
+  contextual links that pre-fill the affected user/group/guild or guild/ranking-scope form. Blocked privilege-boundary
+  attempts remain plain text.
 
 ## Duplicate Match Handling
 

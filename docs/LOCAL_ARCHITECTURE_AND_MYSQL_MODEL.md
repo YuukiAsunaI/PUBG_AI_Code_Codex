@@ -471,7 +471,10 @@ Completed slices:
     can highlight linked registered-player rows and pre-fill ranking controls from URL parameters.
 98. Discord `유저등록` and `유저삭제` success responses include contextual registered-player links that highlight
     the affected active or inactive row in the local manager.
+99. Discord admins can grant/revoke current-guild command groups with `pubg-permission`; global admins can target
+    other guilds/global grants and change guild ranking scope with `pubg-ranking-scope`. Responses link to stable local
+    settings sections with pre-filled context, and gated commands reload local permission changes without a bot restart.
 
 Next slice:
 
-1. Review Discord permission and guild-scope mutation responses for contextual local settings links.
+1. Review the reserved `settings_write` / `pubg-settings` command gap and define a non-secret Discord settings surface.

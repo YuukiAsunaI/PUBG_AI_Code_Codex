@@ -29,6 +29,7 @@ from pubg_ai.alert_history import (
 )
 from pubg_ai.config import RuntimeConfig
 from pubg_ai.database import connect_mysql
+from pubg_ai.discord_permission_manager import DiscordPermissionManager
 from pubg_ai.discord_permissions import DiscordCommandIdentity, DiscordPermissionChecker
 from pubg_ai.local_settings import LocalSettingsError, LocalSettingsStore
 from pubg_ai.player_rankings import PlayerRanking, PlayerRankingService
@@ -161,6 +162,98 @@ def format_registered_player_command_reply(
         "registered-players",
         detail_base_url=detail_base_url,
         query_params=_registered_players_query_params([player]),
+    )
+
+
+def format_discord_permission_command_reply(
+    message: str,
+    *,
+    user_id: str | None = None,
+    group: str | None = None,
+    guild_id: str | None = None,
+    detail_base_url: str | None = None,
+) -> str:
+    return format_local_section_command_reply(
+        message,
+        "local_discord_permissions",
+        "discord-permissions",
+        detail_base_url=detail_base_url,
+        query_params={
+            "discord_permission_user_id": user_id,
+            "discord_permission_group": group,
+            "discord_permission_guild_id": guild_id,
+        },
+    )
+
+
+def format_discord_permission_change_result(
+    *,
+    action: str,
+    user_id: str,
+    group: str,
+    guild_id: str | None,
+    changed: bool,
+    detail_base_url: str | None = None,
+) -> str:
+    action_label = "부여" if action == "grant" else "회수"
+    scope_label = "global" if guild_id is None else f"guild:{guild_id}"
+    result_label = "변경됨" if changed else "이미 적용됨"
+    return format_discord_permission_command_reply(
+        "\n".join(
+            [
+                f"Discord 권한 {action_label} 완료",
+                f"- user_id: {user_id}",
+                f"- group: {group}",
+                f"- scope: {scope_label}",
+                f"- result: {result_label}",
+            ]
+        ),
+        user_id=user_id,
+        group=group,
+        guild_id=guild_id,
+        detail_base_url=detail_base_url,
+    )
+
+
+def format_discord_scope_command_reply(
+    message: str,
+    *,
+    guild_id: str | None = None,
+    ranking_scope: str | None = None,
+    detail_base_url: str | None = None,
+) -> str:
+    return format_local_section_command_reply(
+        message,
+        "local_discord_scopes",
+        "discord-scopes",
+        detail_base_url=detail_base_url,
+        query_params={
+            "discord_scope_guild_id": guild_id,
+            "discord_scope_value": ranking_scope,
+        },
+    )
+
+
+def format_discord_scope_change_result(
+    *,
+    guild_id: str,
+    ranking_scope: str,
+    changed: bool,
+    detail_base_url: str | None = None,
+) -> str:
+    result_label = "변경됨" if changed else "이미 적용됨"
+    return format_discord_scope_command_reply(
+        "\n".join(
+            [
+                "Discord 랭킹 범위 저장 완료",
+                f"- guild_id: {guild_id}",
+                f"- ranking_scope: {ranking_scope}",
+                f"- result: {result_label}",
+            ]
+        ),
+        guild_id=guild_id,
+        ranking_scope=ranking_scope,
+        detail_base_url=detail_base_url,
     )
 
 
@@ -734,6 +827,7 @@ def create_discord_bot(
     intents = discord.Intents.default()
     intents.message_content = True
     bot = commands.Bot(command_prefix=command_prefix, intents=intents)
+    permission_manager = DiscordPermissionManager(scope_settings_store) if scope_settings_store is not None else None
     alert_task_started = False
     alert_last_worker_run_id: int | None = None
     sent_storage_alert_keys: set[str] = set()
@@ -750,6 +844,15 @@ def create_discord_bot(
 
     def has_global_scope(ctx: Any) -> bool:
         return permission_checker.is_global_admin(identity_for(ctx))
+
+    def refresh_permission_settings() -> bool:
+        if scope_settings_store is None:
+            return True
+        try:
+            permission_checker.settings = scope_settings_store.load_discord_permission_settings()
+        except LocalSettingsError:
+            return False
+        return True
 
     def guild_ranking_scope(ctx: Any) -> str:
         guild_id = guild_id_for(ctx)
@@ -771,6 +874,9 @@ def create_discord_bot(
         return settings.public_profile_default
 
     async def require_permission(ctx: Any, command_group: str) -> bool:
+        if not refresh_permission_settings():
+            await ctx.reply("Discord 권한 설정을 불러오지 못했습니다.", mention_author=False)
+            return False
         if permission_checker.is_allowed(identity_for(ctx), command_group):
             return True
         await ctx.reply("이 명령어를 사용할 권한이 없습니다.", mention_author=False)
@@ -898,6 +1004,8 @@ def create_discord_bot(
                     f"- `{command_prefix}pubg-alert-history [preset|filters]`",
                     f"- `{command_prefix}pubg-worker-runs [collector|post_processing|all] [status=succeeded|failed|all] [limit] [range=last24h|today|yesterday|last7d]`",
                     f"- `{command_prefix}pubg-worker-run run_id`",
+                    f"- `{command_prefix}pubg-permission user_id group allow|deny [guild_id|global]`",
+                    f"- `{command_prefix}pubg-ranking-scope guild|global [guild_id]`",
                     f"- `{command_prefix}유저삭제 steam 닉네임또는accountId`",
                 ]
             ),
@@ -1343,6 +1451,195 @@ def create_discord_bot(
         await ctx.reply(
             format_replay_artifact_summary(artifact, detail_base_url=config.app.local_web_base_url),
             file=discord.File(Path(path), filename=path.name),
+            mention_author=False,
+        )
+
+    @bot.command(name="pubg-permission")
+    async def discord_permission_command(
+        ctx: Any,
+        user_id: str | None = None,
+        group: str | None = None,
+        action: str | None = None,
+        target_scope: str | None = None,
+    ) -> None:
+        if not await require_permission(ctx, "admin"):
+            return
+
+        parsed_user_id = _discord_user_id(user_id)
+        parsed_action = _discord_permission_action(action)
+        requested_scope = (target_scope or "").strip()
+        if parsed_user_id is None or not group or parsed_action is None:
+            await ctx.reply(
+                format_discord_permission_command_reply(
+                    (
+                        f"Usage: `{command_prefix}pubg-permission "
+                        "user_id group allow|deny [guild_id|global]`"
+                    ),
+                    user_id=parsed_user_id,
+                    group=group,
+                    guild_id=requested_scope if requested_scope.isdigit() else None,
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
+            return
+
+        global_admin = has_global_scope(ctx)
+        current_guild_id = guild_id_for(ctx)
+        if requested_scope and _is_scope_token(requested_scope):
+            if not global_admin:
+                await ctx.reply("전역 권한은 글로벌 관리자만 변경할 수 있습니다.", mention_author=False)
+                return
+            target_guild_id = None
+        else:
+            target_guild_id = requested_scope or current_guild_id
+            if target_guild_id is None:
+                await ctx.reply(
+                    format_discord_permission_command_reply(
+                        "Guild ID를 지정하거나 Discord 서버 채널에서 사용해 주세요.",
+                        user_id=parsed_user_id,
+                        group=group,
+                        detail_base_url=config.app.local_web_base_url,
+                    ),
+                    mention_author=False,
+                )
+                return
+            if not target_guild_id.isdigit():
+                await ctx.reply(
+                    format_discord_permission_command_reply(
+                        "Guild ID는 숫자여야 합니다.",
+                        user_id=parsed_user_id,
+                        group=group,
+                        detail_base_url=config.app.local_web_base_url,
+                    ),
+                    mention_author=False,
+                )
+                return
+            if not global_admin and target_guild_id != current_guild_id:
+                await ctx.reply(
+                    "다른 Discord 서버의 권한은 글로벌 관리자만 변경할 수 있습니다.",
+                    mention_author=False,
+                )
+                return
+
+        if permission_manager is None:
+            await ctx.reply(
+                format_discord_permission_command_reply(
+                    "Discord 권한 설정 저장소를 사용할 수 없습니다.",
+                    user_id=parsed_user_id,
+                    group=group,
+                    guild_id=target_guild_id,
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
+            return
+
+        try:
+            if parsed_action == "grant":
+                change = permission_manager.grant(
+                    user_id=parsed_user_id,
+                    group=group,
+                    guild_id=target_guild_id,
+                )
+            else:
+                change = permission_manager.revoke(
+                    user_id=parsed_user_id,
+                    group=group,
+                    guild_id=target_guild_id,
+                )
+        except LocalSettingsError as exc:
+            await ctx.reply(
+                format_discord_permission_command_reply(
+                    f"Discord 권한 변경 실패: {exc}",
+                    user_id=parsed_user_id,
+                    group=group,
+                    guild_id=target_guild_id,
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
+            return
+
+        permission_checker.settings = change.settings
+        await ctx.reply(
+            format_discord_permission_change_result(
+                action=parsed_action,
+                user_id=parsed_user_id,
+                group=group,
+                guild_id=target_guild_id,
+                changed=change.changed,
+                detail_base_url=config.app.local_web_base_url,
+            ),
+            mention_author=False,
+        )
+
+    @bot.command(name="pubg-ranking-scope", aliases=["pubg-guild-scope"])
+    async def discord_ranking_scope_command(
+        ctx: Any,
+        ranking_scope: str | None = None,
+        guild_id: str | None = None,
+    ) -> None:
+        if not await require_permission(ctx, "admin"):
+            return
+        if not has_global_scope(ctx):
+            await ctx.reply("랭킹 범위는 글로벌 관리자만 변경할 수 있습니다.", mention_author=False)
+            return
+
+        parsed_scope = _discord_ranking_scope(ranking_scope)
+        target_guild_id = (guild_id or guild_id_for(ctx) or "").strip()
+        if parsed_scope is None or not target_guild_id or not target_guild_id.isdigit():
+            await ctx.reply(
+                format_discord_scope_command_reply(
+                    f"Usage: `{command_prefix}pubg-ranking-scope guild|global [guild_id]`",
+                    guild_id=target_guild_id if target_guild_id.isdigit() else None,
+                    ranking_scope=parsed_scope,
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
+            return
+        if scope_settings_store is None:
+            await ctx.reply(
+                format_discord_scope_command_reply(
+                    "Discord 범위 설정 저장소를 사용할 수 없습니다.",
+                    guild_id=target_guild_id,
+                    ranking_scope=parsed_scope,
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
+            return
+
+        try:
+            settings = scope_settings_store.load_discord_scope_settings()
+            changed = settings.guild_ranking_scopes.get(target_guild_id) != parsed_scope
+            if changed:
+                next_scopes = dict(settings.guild_ranking_scopes)
+                next_scopes[target_guild_id] = parsed_scope
+                scope_settings_store.save_discord_scope_settings(
+                    guild_ranking_scopes=next_scopes,
+                    public_profile_default=settings.public_profile_default,
+                )
+        except LocalSettingsError as exc:
+            await ctx.reply(
+                format_discord_scope_command_reply(
+                    f"Discord 랭킹 범위 변경 실패: {exc}",
+                    guild_id=target_guild_id,
+                    ranking_scope=parsed_scope,
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
+            return
+
+        await ctx.reply(
+            format_discord_scope_change_result(
+                guild_id=target_guild_id,
+                ranking_scope=parsed_scope,
+                changed=changed,
+                detail_base_url=config.app.local_web_base_url,
+            ),
             mention_author=False,
         )
 
@@ -1827,6 +2124,46 @@ def _short_account_id(account_id: str) -> str:
     if account_id.startswith("account.") and len(account_id) > 20:
         return f"{account_id[:15]}...{account_id[-4:]}"
     return account_id
+
+
+def _discord_user_id(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if text.startswith("<@") and text.endswith(">"):
+        text = text[2:-1]
+        if text.startswith("!"):
+            text = text[1:]
+    return text if text.isdigit() else None
+
+
+def _discord_permission_action(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return {
+        "allow": "grant",
+        "grant": "grant",
+        "add": "grant",
+        "허용": "grant",
+        "deny": "revoke",
+        "revoke": "revoke",
+        "remove": "revoke",
+        "회수": "revoke",
+        "해제": "revoke",
+    }.get(value.strip().lower())
+
+
+def _discord_ranking_scope(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return {
+        "guild": "guild",
+        "server": "guild",
+        "서버": "guild",
+        "global": "global",
+        "all": "global",
+        "전체": "global",
+    }.get(value.strip().lower())
 
 
 def _recommendation_evidence_link(

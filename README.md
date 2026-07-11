@@ -306,6 +306,8 @@ Discord's message content intent to be enabled for the bot application. Initial 
 !pubg-alert-history source=storage state=current severity=error search="drive" limit=5
 !pubg-worker-runs [collector|post_processing|all] [status=succeeded|failed|all] [limit] [offset=0] [range=last24h|today|yesterday|last7d] [from=KST] [to=KST]
 !pubg-worker-run run_id
+!pubg-permission user_id group allow|deny [guild_id|global]
+!pubg-ranking-scope guild|global [guild_id]
 !유저삭제 steam 닉네임또는accountId
 ```
 
@@ -324,6 +326,13 @@ python -m pubg_ai.cli add-discord-global-admin 123456789012345678
 python -m pubg_ai.cli grant-discord-permission 123456789012345678 register --guild-id 987654321098765432
 python -m pubg_ai.cli discord-permissions
 ```
+
+After bootstrap, an admin can grant or revoke a command group with
+`!pubg-permission @user group allow|deny [guild_id|global]`. With no final argument, the command targets the current
+Discord server. Guild admins can only change their current guild; explicit other-guild or `global` grants require a
+global admin. Only global admins can run `!pubg-ranking-scope guild|global [guild_id]`. Global-admin membership itself
+remains local-program/CLI managed. The running bot reloads permission settings before each gated command, so local
+manager and CLI changes apply without restarting the bot.
 
 Permission groups currently include `register`, `profile_read`, `ranking_read`, `replay_read`, `settings_write`, and
 `admin`.
@@ -371,8 +380,9 @@ and the local page pre-fills the matching form or replay artifact filter from th
 `local_recommendations`, `local_match`, or `local_replay` links when the base URL is configured.
 `유저등록`, `유저조회`, and `유저삭제` success responses include contextual `local_registered_players` links,
 while `랭킹` success responses include `local_ranking` links. The local page can highlight a linked registered player
-row or pre-fill the ranking form from those URLs. Current admin-link coverage leaves permission/scope failures as plain
-text by design.
+row or pre-fill the ranking form from those URLs. Authorized `pubg-permission` and `pubg-ranking-scope` success,
+usage, and settings-error responses include contextual `#discord-permissions` or `#discord-scopes` links that pre-fill
+the local forms. Permission-denied and blocked cross-guild/global-scope attempts remain plain text by design.
 
 Run the local management app:
 

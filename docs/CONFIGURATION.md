@@ -54,7 +54,7 @@ Recommended JSON shape:
       "ranking_read": ["랭킹", "pubg-ranking"],
       "replay_read": ["pubg-replay"],
       "settings_write": ["pubg-settings"],
-      "admin": ["유저삭제", "pubg-permission", "pubg-unregister", "pubg-delete-data"]
+      "admin": ["유저삭제", "pubg-permission", "pubg-ranking-scope", "pubg-guild-scope", "pubg-unregister", "pubg-delete-data"]
     },
     "user_grants": {
       "discord-user-id": ["profile_read", "ranking_read"]
@@ -88,8 +88,9 @@ Runtime priority:
 
 The current built-in `admin` command group also includes `pubg-alerts`, `pubg-alert-ack`, `pubg-alert-snooze`,
 `pubg-alert-note`, `pubg-alert-resolution`, `pubg-alert-notes`, `pubg-alert-history`, `pubg-worker-runs`, and
-`pubg-worker-run` for alert report lookup, suppression, annotation, note review, filtered alert history review, and
-worker-run history/detail review from Discord.
+`pubg-worker-run`, plus `pubg-permission` and `pubg-ranking-scope`, for alert report lookup, suppression, annotation,
+note review, filtered alert history review, worker-run inspection, permission grants, and guild ranking-scope changes
+from Discord.
 
 1. Built-in defaults: `./data/raw`, `./data/replays`
 2. `.env` values: `PUBG_RAW_DATA_DIR`, `PUBG_REPLAY_DATA_DIR`

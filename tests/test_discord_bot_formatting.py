@@ -4,6 +4,9 @@ from datetime import datetime
 import unittest
 
 from pubg_ai.discord_bot import (
+    _discord_permission_action,
+    _discord_ranking_scope,
+    _discord_user_id,
     _parse_alert_history_filters,
     _parse_worker_run_filters,
     _player_visible_to_scope,
@@ -14,6 +17,9 @@ from pubg_ai.discord_bot import (
     format_alert_history_result,
     format_alert_note_result,
     format_alert_notes_result,
+    format_discord_permission_change_result,
+    format_discord_permission_command_reply,
+    format_discord_scope_change_result,
     format_player_list,
     format_local_section_command_reply,
     format_player_match_detail,
@@ -717,6 +723,58 @@ class DiscordBotFormattingTests(unittest.TestCase):
             "- local_registered_players: [open](http://127.0.0.1:8000/?registered_shard=steam&registered_account_id=account.1234567890abcdef&registered_name=Yuuki_Asuna---#registered-players)",
             linked,
         )
+
+    def test_discord_permission_change_result_adds_prefilled_local_link(self) -> None:
+        body = format_discord_permission_change_result(
+            action="grant",
+            user_id="123456789012345678",
+            group="register",
+            guild_id="987654321098765432",
+            changed=True,
+            detail_base_url="http://127.0.0.1:8000/",
+        )
+
+        self.assertIn("Discord 권한 부여 완료", body)
+        self.assertIn("- scope: guild:987654321098765432", body)
+        self.assertIn(
+            "- local_discord_permissions: [open](http://127.0.0.1:8000/?discord_permission_user_id=123456789012345678&discord_permission_group=register&discord_permission_guild_id=987654321098765432#discord-permissions)",
+            body,
+        )
+
+    def test_discord_permission_command_reply_preserves_plain_text_without_base_url(self) -> None:
+        message = "Discord 권한 설정 저장소를 사용할 수 없습니다."
+
+        self.assertEqual(
+            format_discord_permission_command_reply(
+                message,
+                user_id="123456789012345678",
+                group="register",
+            ),
+            message,
+        )
+
+    def test_discord_scope_change_result_adds_prefilled_local_link(self) -> None:
+        body = format_discord_scope_change_result(
+            guild_id="987654321098765432",
+            ranking_scope="global",
+            changed=False,
+            detail_base_url="http://127.0.0.1:8000/",
+        )
+
+        self.assertIn("Discord 랭킹 범위 저장 완료", body)
+        self.assertIn("- result: 이미 적용됨", body)
+        self.assertIn(
+            "- local_discord_scopes: [open](http://127.0.0.1:8000/?discord_scope_guild_id=987654321098765432&discord_scope_value=global#discord-scopes)",
+            body,
+        )
+
+    def test_discord_permission_arguments_accept_mentions_and_korean_aliases(self) -> None:
+        self.assertEqual(_discord_user_id("<@!123456789012345678>"), "123456789012345678")
+        self.assertIsNone(_discord_user_id("not-a-user"))
+        self.assertEqual(_discord_permission_action("허용"), "grant")
+        self.assertEqual(_discord_permission_action("해제"), "revoke")
+        self.assertEqual(_discord_ranking_scope("서버"), "guild")
+        self.assertEqual(_discord_ranking_scope("전체"), "global")
 
     def test_local_section_command_reply_adds_section_link_when_url_is_available(self) -> None:
         message = "조회 가능한 등록 유저를 찾지 못했습니다."
