@@ -18,11 +18,11 @@ class DiscordPermissionChecker:
     def is_global_admin(self, identity: DiscordCommandIdentity) -> bool:
         return identity.user_id in self.settings.global_admin_user_ids
 
-    def is_allowed(self, identity: DiscordCommandIdentity, command_group: str) -> bool:
-        if self.is_global_admin(identity):
-            return True
+    def is_globally_allowed(self, identity: DiscordCommandIdentity, command_group: str) -> bool:
+        return self.is_global_admin(identity) or command_group in self.settings.user_grants.get(identity.user_id, [])
 
-        if command_group in self.settings.user_grants.get(identity.user_id, []):
+    def is_allowed(self, identity: DiscordCommandIdentity, command_group: str) -> bool:
+        if self.is_globally_allowed(identity, command_group):
             return True
 
         if identity.guild_id:

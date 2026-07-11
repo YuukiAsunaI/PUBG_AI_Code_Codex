@@ -31,7 +31,7 @@ from pubg_ai.config import RuntimeConfig
 from pubg_ai.database import connect_mysql
 from pubg_ai.discord_permission_manager import DiscordPermissionManager
 from pubg_ai.discord_permissions import DiscordCommandIdentity, DiscordPermissionChecker
-from pubg_ai.local_settings import LocalSettingsError, LocalSettingsStore
+from pubg_ai.local_settings import CollectorSettings, LocalSettingsError, LocalSettingsStore
 from pubg_ai.player_rankings import PlayerRanking, PlayerRankingService
 from pubg_ai.player_recommendations import PlayerRecommendationReport, PlayerRecommendationService
 from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry, RegisteredPlayer
@@ -254,6 +254,92 @@ def format_discord_scope_change_result(
         guild_id=guild_id,
         ranking_scope=ranking_scope,
         detail_base_url=detail_base_url,
+    )
+
+
+def format_discord_settings_command_reply(
+    message: str,
+    *,
+    detail_base_url: str | None = None,
+) -> str:
+    lines = [message]
+    for label, anchor in [
+        ("local_collector_settings", "collector-settings"),
+        ("local_storage_settings", "storage-settings"),
+        ("local_discord_scopes", "discord-scopes"),
+    ]:
+        local_link = _local_section_url(detail_base_url, anchor)
+        if local_link:
+            lines.append(f"- {label}: [open]({local_link})")
+    return "\n".join(lines)
+
+
+def format_discord_settings_summary(
+    *,
+    poll_interval_seconds: int,
+    cycle_player_limit: int,
+    player_lookup_chunk_size: int,
+    raw_compression: str,
+    public_profile_default: bool,
+    guild_ranking_scope: str | None,
+    detail_base_url: str | None = None,
+) -> str:
+    return format_discord_settings_command_reply(
+        "\n".join(
+            [
+                "PUBG AI 안전 설정",
+                f"- collector_poll_seconds: {poll_interval_seconds}",
+                f"- collector_player_limit: {cycle_player_limit}",
+                f"- player_lookup_chunk: {player_lookup_chunk_size}",
+                f"- raw_compression: {raw_compression}",
+                f"- public_profile_default: {'public' if public_profile_default else 'private'}",
+                f"- guild_ranking_scope: {guild_ranking_scope or '-'}",
+                "- hidden: secrets, database, storage paths",
+            ]
+        ),
+        detail_base_url=detail_base_url,
+    )
+
+
+def format_discord_collector_settings_result(
+    *,
+    poll_interval_seconds: int,
+    cycle_player_limit: int,
+    player_lookup_chunk_size: int,
+    detail_base_url: str | None = None,
+) -> str:
+    return format_local_section_command_reply(
+        "\n".join(
+            [
+                "Discord 수집 설정 저장 완료",
+                f"- poll_interval_seconds: {poll_interval_seconds}",
+                f"- cycle_player_limit: {cycle_player_limit}",
+                f"- player_lookup_chunk_size: {player_lookup_chunk_size}",
+            ]
+        ),
+        "local_collector_settings",
+        "collector-settings",
+        detail_base_url=detail_base_url,
+        query_params={
+            "collector_poll_interval_seconds": poll_interval_seconds,
+            "collector_cycle_player_limit": cycle_player_limit,
+            "collector_player_lookup_chunk_size": player_lookup_chunk_size,
+        },
+    )
+
+
+def format_discord_public_profile_settings_result(
+    *,
+    public_profile_default: bool,
+    detail_base_url: str | None = None,
+) -> str:
+    value = "public" if public_profile_default else "private"
+    return format_local_section_command_reply(
+        f"Discord 공개 프로필 기본값 저장 완료\n- public_profile_default: {value}",
+        "local_discord_scopes",
+        "discord-scopes",
+        detail_base_url=detail_base_url,
+        query_params={"discord_public_profile_default": str(public_profile_default).lower()},
     )
 
 
@@ -1004,6 +1090,9 @@ def create_discord_bot(
                     f"- `{command_prefix}pubg-alert-history [preset|filters]`",
                     f"- `{command_prefix}pubg-worker-runs [collector|post_processing|all] [status=succeeded|failed|all] [limit] [range=last24h|today|yesterday|last7d]`",
                     f"- `{command_prefix}pubg-worker-run run_id`",
+                    f"- `{command_prefix}pubg-settings`",
+                    f"- `{command_prefix}pubg-settings collector 180 100 10`",
+                    f"- `{command_prefix}pubg-settings public-profile public|private`",
                     f"- `{command_prefix}pubg-permission user_id group allow|deny [guild_id|global]`",
                     f"- `{command_prefix}pubg-ranking-scope guild|global [guild_id]`",
                     f"- `{command_prefix}유저삭제 steam 닉네임또는accountId`",
@@ -1451,6 +1540,218 @@ def create_discord_bot(
         await ctx.reply(
             format_replay_artifact_summary(artifact, detail_base_url=config.app.local_web_base_url),
             file=discord.File(Path(path), filename=path.name),
+            mention_author=False,
+        )
+
+    @bot.command(name="pubg-settings")
+    async def discord_settings_command(
+        ctx: Any,
+        section: str | None = None,
+        value1: str | None = None,
+        value2: str | None = None,
+        value3: str | None = None,
+    ) -> None:
+        if not await require_permission(ctx, "settings_write"):
+            return
+        if scope_settings_store is None:
+            await ctx.reply(
+                format_discord_settings_command_reply(
+                    "로컬 설정 저장소를 사용할 수 없습니다.",
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
+            return
+
+        normalized_section = (section or "status").strip().lower()
+        if normalized_section in {"status", "show", "조회"}:
+            try:
+                collector = scope_settings_store.load_collector_settings(
+                    default=CollectorSettings(
+                        poll_interval_seconds=config.app.collector_poll_interval_seconds,
+                        cycle_player_limit=config.app.collector_cycle_player_limit,
+                        player_lookup_chunk_size=config.app.player_lookup_chunk_size,
+                    )
+                )
+                scopes = scope_settings_store.load_discord_scope_settings()
+                storage = scope_settings_store.load_storage_settings()
+            except LocalSettingsError:
+                await ctx.reply(
+                    format_discord_settings_command_reply(
+                        "로컬 설정을 불러오지 못했습니다. 로컬 프로그램에서 확인해 주세요.",
+                        detail_base_url=config.app.local_web_base_url,
+                    ),
+                    mention_author=False,
+                )
+                return
+
+            guild_id = guild_id_for(ctx)
+            ranking_scope = scopes.guild_ranking_scopes.get(guild_id, "guild") if guild_id else None
+            await ctx.reply(
+                format_discord_settings_summary(
+                    poll_interval_seconds=collector.poll_interval_seconds,
+                    cycle_player_limit=collector.cycle_player_limit,
+                    player_lookup_chunk_size=collector.player_lookup_chunk_size,
+                    raw_compression=storage.raw_compression if storage is not None else config.app.raw_compression,
+                    public_profile_default=scopes.public_profile_default,
+                    guild_ranking_scope=ranking_scope,
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
+            return
+
+        if normalized_section in {"secret", "secrets", "token", "api", "database", "db"}:
+            await ctx.reply(
+                "비밀정보와 데이터베이스 설정은 Discord에서 조회하거나 변경하지 않습니다.",
+                mention_author=False,
+            )
+            return
+        if normalized_section in {"storage", "path", "paths"}:
+            await ctx.reply(
+                format_local_section_command_reply(
+                    "저장 경로와 압축 설정은 로컬 프로그램에서만 변경할 수 있습니다.",
+                    "local_storage_settings",
+                    "storage-settings",
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
+            return
+
+        if not permission_checker.is_globally_allowed(identity_for(ctx), "settings_write"):
+            await ctx.reply(
+                "전역 settings_write 권한 또는 글로벌 관리자 권한이 있어야 설정을 변경할 수 있습니다.",
+                mention_author=False,
+            )
+            return
+
+        if normalized_section in {"collector", "수집"}:
+            poll_interval_seconds = _positive_int(value1)
+            cycle_player_limit = _positive_int(value2)
+            player_lookup_chunk_size = _positive_int(value3)
+            if None in {poll_interval_seconds, cycle_player_limit, player_lookup_chunk_size}:
+                await ctx.reply(
+                    format_local_section_command_reply(
+                        f"Usage: `{command_prefix}pubg-settings collector poll_seconds player_limit chunk_size`",
+                        "local_collector_settings",
+                        "collector-settings",
+                        detail_base_url=config.app.local_web_base_url,
+                        query_params={
+                            "collector_poll_interval_seconds": poll_interval_seconds,
+                            "collector_cycle_player_limit": cycle_player_limit,
+                            "collector_player_lookup_chunk_size": player_lookup_chunk_size,
+                        },
+                    ),
+                    mention_author=False,
+                )
+                return
+            if not (
+                60 <= poll_interval_seconds <= 300
+                and 1 <= cycle_player_limit <= 100
+                and 1 <= player_lookup_chunk_size <= 10
+            ):
+                await ctx.reply(
+                    format_local_section_command_reply(
+                        "수집 설정 범위: poll_seconds 60~300, player_limit 1~100, chunk_size 1~10.",
+                        "local_collector_settings",
+                        "collector-settings",
+                        detail_base_url=config.app.local_web_base_url,
+                        query_params={
+                            "collector_poll_interval_seconds": poll_interval_seconds,
+                            "collector_cycle_player_limit": cycle_player_limit,
+                            "collector_player_lookup_chunk_size": player_lookup_chunk_size,
+                        },
+                    ),
+                    mention_author=False,
+                )
+                return
+            try:
+                saved = scope_settings_store.save_collector_settings(
+                    poll_interval_seconds,
+                    cycle_player_limit,
+                    player_lookup_chunk_size,
+                )
+            except LocalSettingsError:
+                await ctx.reply(
+                    format_local_section_command_reply(
+                        "수집 설정을 저장하지 못했습니다. 로컬 프로그램에서 확인해 주세요.",
+                        "local_collector_settings",
+                        "collector-settings",
+                        detail_base_url=config.app.local_web_base_url,
+                        query_params={
+                            "collector_poll_interval_seconds": poll_interval_seconds,
+                            "collector_cycle_player_limit": cycle_player_limit,
+                            "collector_player_lookup_chunk_size": player_lookup_chunk_size,
+                        },
+                    ),
+                    mention_author=False,
+                )
+                return
+
+            await ctx.reply(
+                format_discord_collector_settings_result(
+                    poll_interval_seconds=saved.poll_interval_seconds,
+                    cycle_player_limit=saved.cycle_player_limit,
+                    player_lookup_chunk_size=saved.player_lookup_chunk_size,
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
+            return
+
+        if normalized_section in {"public-profile", "public_profile", "profile", "공개프로필"}:
+            public_profile_default = _discord_public_profile_default(value1)
+            if public_profile_default is None:
+                await ctx.reply(
+                    format_local_section_command_reply(
+                        f"Usage: `{command_prefix}pubg-settings public-profile public|private`",
+                        "local_discord_scopes",
+                        "discord-scopes",
+                        detail_base_url=config.app.local_web_base_url,
+                    ),
+                    mention_author=False,
+                )
+                return
+            try:
+                scopes = scope_settings_store.load_discord_scope_settings()
+                scope_settings_store.save_discord_scope_settings(
+                    guild_ranking_scopes=scopes.guild_ranking_scopes,
+                    public_profile_default=public_profile_default,
+                )
+            except LocalSettingsError:
+                await ctx.reply(
+                    format_local_section_command_reply(
+                        "공개 프로필 기본값을 저장하지 못했습니다. 로컬 프로그램에서 확인해 주세요.",
+                        "local_discord_scopes",
+                        "discord-scopes",
+                        detail_base_url=config.app.local_web_base_url,
+                        query_params={
+                            "discord_public_profile_default": str(public_profile_default).lower(),
+                        },
+                    ),
+                    mention_author=False,
+                )
+                return
+
+            await ctx.reply(
+                format_discord_public_profile_settings_result(
+                    public_profile_default=public_profile_default,
+                    detail_base_url=config.app.local_web_base_url,
+                ),
+                mention_author=False,
+            )
+            return
+
+        await ctx.reply(
+            format_discord_settings_command_reply(
+                (
+                    f"Usage: `{command_prefix}pubg-settings`, "
+                    f"`{command_prefix}pubg-settings collector 180 100 10`, or "
+                    f"`{command_prefix}pubg-settings public-profile public|private`"
+                ),
+                detail_base_url=config.app.local_web_base_url,
+            ),
             mention_author=False,
         )
 
@@ -2164,6 +2465,17 @@ def _discord_ranking_scope(value: str | None) -> str | None:
         "all": "global",
         "전체": "global",
     }.get(value.strip().lower())
+
+
+def _discord_public_profile_default(value: str | None) -> bool | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"public", "true", "yes", "공개"}:
+        return True
+    if normalized in {"private", "false", "no", "비공개"}:
+        return False
+    return None
 
 
 def _recommendation_evidence_link(

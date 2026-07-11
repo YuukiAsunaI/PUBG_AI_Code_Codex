@@ -92,6 +92,11 @@ The current built-in `admin` command group also includes `pubg-alerts`, `pubg-al
 note review, filtered alert history review, worker-run inspection, permission grants, and guild ranking-scope changes
 from Discord.
 
+The `settings_write` group enables `pubg-settings`. Guild-scoped grants may read only a restricted summary. Global
+admins and globally granted `settings_write` users may change collector limits and the default `public_profile` value.
+Discord never returns API keys, bot tokens, database settings, or storage paths, and it never changes raw compression;
+those remain `.env` or localhost-manager concerns.
+
 1. Built-in defaults: `./data/raw`, `./data/replays`
 2. `.env` values: `PUBG_RAW_DATA_DIR`, `PUBG_REPLAY_DATA_DIR`
 3. Local program values in `PUBG_LOCAL_SETTINGS_FILE`

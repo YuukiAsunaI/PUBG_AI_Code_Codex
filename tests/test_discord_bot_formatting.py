@@ -5,6 +5,7 @@ import unittest
 
 from pubg_ai.discord_bot import (
     _discord_permission_action,
+    _discord_public_profile_default,
     _discord_ranking_scope,
     _discord_user_id,
     _parse_alert_history_filters,
@@ -19,7 +20,10 @@ from pubg_ai.discord_bot import (
     format_alert_notes_result,
     format_discord_permission_change_result,
     format_discord_permission_command_reply,
+    format_discord_collector_settings_result,
+    format_discord_public_profile_settings_result,
     format_discord_scope_change_result,
+    format_discord_settings_summary,
     format_player_list,
     format_local_section_command_reply,
     format_player_match_detail,
@@ -775,6 +779,55 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertEqual(_discord_permission_action("해제"), "revoke")
         self.assertEqual(_discord_ranking_scope("서버"), "guild")
         self.assertEqual(_discord_ranking_scope("전체"), "global")
+        self.assertTrue(_discord_public_profile_default("공개"))
+        self.assertFalse(_discord_public_profile_default("private"))
+        self.assertIsNone(_discord_public_profile_default("secret"))
+
+    def test_discord_settings_summary_excludes_secret_and_path_values(self) -> None:
+        body = format_discord_settings_summary(
+            poll_interval_seconds=180,
+            cycle_player_limit=100,
+            player_lookup_chunk_size=10,
+            raw_compression="gzip",
+            public_profile_default=True,
+            guild_ranking_scope="guild",
+            detail_base_url="http://127.0.0.1:8000/",
+        )
+
+        self.assertIn("PUBG AI 안전 설정", body)
+        self.assertIn("- hidden: secrets, database, storage paths", body)
+        self.assertIn("#collector-settings", body)
+        self.assertIn("#storage-settings", body)
+        self.assertIn("#discord-scopes", body)
+        self.assertNotIn("PUBG_API_KEY", body)
+        self.assertNotIn("DISCORD_BOT_TOKEN", body)
+        self.assertNotIn("D:\\BackUP", body)
+
+    def test_discord_collector_settings_result_adds_prefilled_local_link(self) -> None:
+        body = format_discord_collector_settings_result(
+            poll_interval_seconds=120,
+            cycle_player_limit=50,
+            player_lookup_chunk_size=5,
+            detail_base_url="http://127.0.0.1:8000/",
+        )
+
+        self.assertIn("Discord 수집 설정 저장 완료", body)
+        self.assertIn(
+            "- local_collector_settings: [open](http://127.0.0.1:8000/?collector_poll_interval_seconds=120&collector_cycle_player_limit=50&collector_player_lookup_chunk_size=5#collector-settings)",
+            body,
+        )
+
+    def test_discord_public_profile_settings_result_adds_prefilled_local_link(self) -> None:
+        body = format_discord_public_profile_settings_result(
+            public_profile_default=False,
+            detail_base_url="http://127.0.0.1:8000/",
+        )
+
+        self.assertIn("public_profile_default: private", body)
+        self.assertIn(
+            "- local_discord_scopes: [open](http://127.0.0.1:8000/?discord_public_profile_default=false#discord-scopes)",
+            body,
+        )
 
     def test_local_section_command_reply_adds_section_link_when_url_is_available(self) -> None:
         message = "조회 가능한 등록 유저를 찾지 못했습니다."

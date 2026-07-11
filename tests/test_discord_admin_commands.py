@@ -94,6 +94,115 @@ class DiscordAdminCommandTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Discord 랭킹 범위 저장 완료", ctx.replies[-1])
             self.assertIn("#discord-scopes", ctx.replies[-1])
 
+    async def test_global_settings_grant_updates_collector_settings(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            store, _, bot = _bot_fixture(
+                base_dir,
+                user_grants={"100": ["settings_write"]},
+            )
+            ctx = FakeContext(user_id=100, guild_id=10)
+            try:
+                await bot.get_command("pubg-settings").callback(
+                    ctx,
+                    "collector",
+                    "120",
+                    "50",
+                    "5",
+                )
+                success_reply = ctx.replies[-1]
+                await bot.get_command("pubg-settings").callback(
+                    ctx,
+                    "collector",
+                    "30",
+                    "101",
+                    "11",
+                )
+            finally:
+                await bot.close()
+
+            settings = store.load_collector_settings()
+            self.assertEqual(settings.poll_interval_seconds, 120)
+            self.assertEqual(settings.cycle_player_limit, 50)
+            self.assertEqual(settings.player_lookup_chunk_size, 5)
+            self.assertIn("Discord 수집 설정 저장 완료", success_reply)
+            self.assertIn("#collector-settings", success_reply)
+            self.assertIn("poll_seconds 60~300", ctx.replies[-1])
+            self.assertNotIn(str(base_dir), ctx.replies[-1])
+
+    async def test_guild_settings_grant_can_read_safe_summary_but_cannot_mutate(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            _, _, bot = _bot_fixture(
+                base_dir,
+                guild_user_grants={"10": {"100": ["settings_write"]}},
+            )
+            ctx = FakeContext(user_id=100, guild_id=10)
+            try:
+                await bot.get_command("pubg-settings").callback(ctx)
+                summary = ctx.replies[-1]
+                await bot.get_command("pubg-settings").callback(
+                    ctx,
+                    "collector",
+                    "120",
+                    "50",
+                    "5",
+                )
+            finally:
+                await bot.close()
+
+            self.assertIn("PUBG AI 안전 설정", summary)
+            self.assertNotIn("dummy-pubg-secret", summary)
+            self.assertNotIn("dummy-discord-secret", summary)
+            self.assertNotIn(str(base_dir), summary)
+            self.assertEqual(
+                ctx.replies[-1],
+                "전역 settings_write 권한 또는 글로벌 관리자 권한이 있어야 설정을 변경할 수 있습니다.",
+            )
+
+    async def test_global_admin_updates_public_profile_default(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            store, _, bot = _bot_fixture(base_dir, global_admin_user_ids=["100"])
+            ctx = FakeContext(user_id=100, guild_id=10)
+            try:
+                await bot.get_command("pubg-settings").callback(
+                    ctx,
+                    "public-profile",
+                    "private",
+                    None,
+                    None,
+                )
+            finally:
+                await bot.close()
+
+            settings = store.load_discord_scope_settings()
+            self.assertFalse(settings.public_profile_default)
+            self.assertIn("public_profile_default: private", ctx.replies[-1])
+            self.assertIn("#discord-scopes", ctx.replies[-1])
+
+    async def test_discord_settings_refuses_secret_and_storage_path_surfaces(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            _, _, bot = _bot_fixture(base_dir, global_admin_user_ids=["100"])
+            ctx = FakeContext(user_id=100, guild_id=10)
+            try:
+                await bot.get_command("pubg-settings").callback(ctx, "secrets")
+                secret_reply = ctx.replies[-1]
+                await bot.get_command("pubg-settings").callback(ctx, "storage")
+                storage_reply = ctx.replies[-1]
+            finally:
+                await bot.close()
+
+            self.assertEqual(
+                secret_reply,
+                "비밀정보와 데이터베이스 설정은 Discord에서 조회하거나 변경하지 않습니다.",
+            )
+            self.assertNotIn("dummy-pubg-secret", secret_reply)
+            self.assertNotIn("dummy-discord-secret", secret_reply)
+            self.assertIn("로컬 프로그램에서만 변경", storage_reply)
+            self.assertIn("#storage-settings", storage_reply)
+
 
 class FakeContext:
     def __init__(self, *, user_id: int, guild_id: int | None) -> None:
@@ -114,12 +223,13 @@ def _bot_fixture(
     base_dir: Path,
     *,
     global_admin_user_ids: list[str] | None = None,
+    user_grants: dict[str, list[str]] | None = None,
     guild_user_grants: dict[str, dict[str, list[str]]] | None = None,
 ) -> tuple[LocalSettingsStore, DiscordPermissionChecker, object]:
     store = LocalSettingsStore(base_dir / "config" / "local_settings.json", base_dir=base_dir)
     settings = store.save_discord_permission_settings(
         command_groups=DEFAULT_COMMAND_GROUPS,
-        user_grants={},
+        user_grants=user_grants or {},
         guild_user_grants=guild_user_grants or {},
         global_admin_user_ids=global_admin_user_ids or [],
     )
@@ -131,7 +241,10 @@ def _bot_fixture(
             local_web_base_url="http://127.0.0.1:8000",
         ),
         database=DatabaseConfig(),
-        secrets=SecretConfig(),
+        secrets=SecretConfig(
+            pubg_api_key="dummy-pubg-secret",
+            discord_bot_token="dummy-discord-secret",
+        ),
     )
     bot = create_discord_bot(
         config=config,

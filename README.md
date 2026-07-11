@@ -306,6 +306,9 @@ Discord's message content intent to be enabled for the bot application. Initial 
 !pubg-alert-history source=storage state=current severity=error search="drive" limit=5
 !pubg-worker-runs [collector|post_processing|all] [status=succeeded|failed|all] [limit] [offset=0] [range=last24h|today|yesterday|last7d] [from=KST] [to=KST]
 !pubg-worker-run run_id
+!pubg-settings
+!pubg-settings collector 180 100 10
+!pubg-settings public-profile public|private
 !pubg-permission user_id group allow|deny [guild_id|global]
 !pubg-ranking-scope guild|global [guild_id]
 !유저삭제 steam 닉네임또는accountId
@@ -336,6 +339,11 @@ manager and CLI changes apply without restarting the bot.
 
 Permission groups currently include `register`, `profile_read`, `ranking_read`, `replay_read`, `settings_write`, and
 `admin`.
+`!pubg-settings` returns a deliberately restricted summary: collector limits, raw compression mode, public-profile
+default, and the current guild ranking scope. It never returns API keys, bot tokens, database details, or storage
+paths. Global admins and users with a global `settings_write` grant can update collector limits or the public-profile
+default. A guild-only `settings_write` grant is read-only. Storage-path and compression changes remain
+local-program-only.
 The `admin` group includes `pubg-alerts`, which returns current storage and worker alerts. When
 `PUBG_LOCAL_WEB_BASE_URL` is set, that response includes a local current-alert list link. When Discord alert channel
 IDs are configured from the local manager, the running Discord bot also sends new worker failures and active storage
@@ -382,7 +390,9 @@ and the local page pre-fills the matching form or replay artifact filter from th
 while `랭킹` success responses include `local_ranking` links. The local page can highlight a linked registered player
 row or pre-fill the ranking form from those URLs. Authorized `pubg-permission` and `pubg-ranking-scope` success,
 usage, and settings-error responses include contextual `#discord-permissions` or `#discord-scopes` links that pre-fill
-the local forms. Permission-denied and blocked cross-guild/global-scope attempts remain plain text by design.
+the local forms. `pubg-settings` responses link to stable `#collector-settings`, `#storage-settings`, and
+`#discord-scopes` sections; successful collector/public-profile updates pre-fill the affected local controls.
+Permission-denied and blocked privilege-boundary attempts remain plain text by design.
 
 Run the local management app:
 

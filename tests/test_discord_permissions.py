@@ -40,6 +40,9 @@ class DiscordPermissionCheckerTests(unittest.TestCase):
         self.assertTrue(
             checker.is_allowed(DiscordCommandIdentity(user_id="user-1"), "profile_read")
         )
+        self.assertTrue(
+            checker.is_globally_allowed(DiscordCommandIdentity(user_id="user-1"), "profile_read")
+        )
         self.assertFalse(
             checker.is_allowed(DiscordCommandIdentity(user_id="user-1"), "register")
         )
@@ -56,6 +59,12 @@ class DiscordPermissionCheckerTests(unittest.TestCase):
 
         self.assertTrue(
             checker.is_allowed(
+                DiscordCommandIdentity(user_id="user-1", guild_id="guild-1"),
+                "register",
+            )
+        )
+        self.assertFalse(
+            checker.is_globally_allowed(
                 DiscordCommandIdentity(user_id="user-1", guild_id="guild-1"),
                 "register",
             )

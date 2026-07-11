@@ -155,11 +155,18 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn('id="discordScopesBody"', body)
         self.assertIn('id="discord-permissions"', body)
         self.assertIn('id="discord-scopes"', body)
+        self.assertIn('id="storage-settings"', body)
+        self.assertIn('id="collector-settings"', body)
         self.assertIn("discord_permission_user_id", body)
         self.assertIn("discord_permission_group", body)
         self.assertIn("discord_permission_guild_id", body)
         self.assertIn("discord_scope_guild_id", body)
         self.assertIn("discord_scope_value", body)
+        self.assertIn("collector_poll_interval_seconds", body)
+        self.assertIn("collector_cycle_player_limit", body)
+        self.assertIn("collector_player_lookup_chunk_size", body)
+        self.assertIn("discord_public_profile_default", body)
+        self.assertIn("applyCollectorSettingsPrefill", body)
         self.assertIn("/discord/scopes", body)
 
     def test_web_settings_endpoint_updates_local_settings_file(self) -> None:

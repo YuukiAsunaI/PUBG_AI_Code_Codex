@@ -1526,7 +1526,7 @@ _INDEX_HTML = """<!doctype html>
       <h2>상태</h2>
       <div class="grid" id="statusGrid"></div>
     </section>
-    <section>
+    <section id="storage-settings">
       <h2>Storage Settings</h2>
       <form id="storageSettingsForm">
         <label>Raw directory
@@ -1658,7 +1658,7 @@ _INDEX_HTML = """<!doctype html>
         Select an alert history row.
       </div>
     </section>
-    <section>
+    <section id="collector-settings">
       <h2>Collector Settings</h2>
       <form id="collectorSettingsForm">
         <label>Poll seconds
@@ -2266,7 +2266,12 @@ _INDEX_HTML = """<!doctype html>
     let activeRecommendationShard = "steam";
     let replayArtifactFilter = { match_id: "", account_id: "", artifact_id: "" };
     let registeredPlayerHighlight = { shard: "", account_id: "", name: "" };
-    let discordSettingsPrefill = { permission_group: "" };
+    let discordSettingsPrefill = { permission_group: "", public_profile_default: "" };
+    let localSettingsPrefill = {
+      collector_poll_interval_seconds: "",
+      collector_cycle_player_limit: "",
+      collector_player_lookup_chunk_size: "",
+    };
     let alertHistoryPage = {
       source: "all",
       state: "all",
@@ -2352,6 +2357,36 @@ _INDEX_HTML = """<!doctype html>
       webSettingsStatus.textContent = settings.local_web_base_url
         ? `Enabled: ${settings.local_web_base_url}`
         : "Disabled";
+      applyCollectorSettingsPrefill();
+    }
+
+    function applyCollectorSettingsPrefill() {
+      if (localSettingsPrefill.collector_poll_interval_seconds) {
+        setFormElementValue(
+          collectorSettingsForm,
+          "poll_interval_seconds",
+          localSettingsPrefill.collector_poll_interval_seconds,
+        );
+      }
+      if (localSettingsPrefill.collector_cycle_player_limit) {
+        setFormElementValue(
+          collectorSettingsForm,
+          "cycle_player_limit",
+          localSettingsPrefill.collector_cycle_player_limit,
+        );
+      }
+      if (localSettingsPrefill.collector_player_lookup_chunk_size) {
+        setFormElementValue(
+          collectorSettingsForm,
+          "player_lookup_chunk_size",
+          localSettingsPrefill.collector_player_lookup_chunk_size,
+        );
+      }
+      localSettingsPrefill = {
+        collector_poll_interval_seconds: "",
+        collector_cycle_player_limit: "",
+        collector_player_lookup_chunk_size: "",
+      };
     }
 
     function formatStoragePathStatus(status) {
@@ -3002,6 +3037,14 @@ _INDEX_HTML = """<!doctype html>
       }
       renderDiscordScopes();
       applyPublicProfileDefault();
+      if (discordSettingsPrefill.public_profile_default) {
+        setFormElementValue(
+          publicProfileDefaultForm,
+          "public_profile_default",
+          discordSettingsPrefill.public_profile_default,
+        );
+        discordSettingsPrefill.public_profile_default = "";
+      }
     }
 
     function renderDiscordScopes() {
@@ -3129,6 +3172,10 @@ _INDEX_HTML = """<!doctype html>
         "discord_permission_guild_id",
         "discord_scope_guild_id",
         "discord_scope_value",
+        "collector_poll_interval_seconds",
+        "collector_cycle_player_limit",
+        "collector_player_lookup_chunk_size",
+        "discord_public_profile_default",
       ];
       if (!lookupKeys.some((key) => params.has(key))) return false;
 
@@ -3157,6 +3204,28 @@ _INDEX_HTML = """<!doctype html>
         ["guild", "global"],
         "guild",
       );
+      const collectorPollInterval = firstUrlParam(params, ["collector_poll_interval_seconds"]);
+      const collectorCyclePlayerLimit = firstUrlParam(params, ["collector_cycle_player_limit"]);
+      const collectorLookupChunkSize = firstUrlParam(params, ["collector_player_lookup_chunk_size"]);
+      const discordPublicProfileDefault = lookupUrlChoice(
+        firstUrlParam(params, ["discord_public_profile_default"]),
+        ["true", "false"],
+        "",
+      );
+
+      if (shouldPrefillSection(hash, "collector-settings")) {
+        localSettingsPrefill = {
+          collector_poll_interval_seconds: collectorPollInterval
+            ? String(lookupUrlBoundedNumber(collectorPollInterval, 180, 60, 300))
+            : "",
+          collector_cycle_player_limit: collectorCyclePlayerLimit
+            ? String(lookupUrlBoundedNumber(collectorCyclePlayerLimit, 100, 1, 100))
+            : "",
+          collector_player_lookup_chunk_size: collectorLookupChunkSize
+            ? String(lookupUrlBoundedNumber(collectorLookupChunkSize, 10, 1, 10))
+            : "",
+        };
+      }
 
       if (shouldPrefillSection(hash, "discord-permissions")) {
         setFormElementValue(discordGrantForm, "user_id", discordPermissionUserId);
@@ -3166,6 +3235,7 @@ _INDEX_HTML = """<!doctype html>
       if (shouldPrefillSection(hash, "discord-scopes")) {
         setFormElementValue(discordScopeForm, "guild_id", discordScopeGuildId);
         setFormElementValue(discordScopeForm, "scope", discordScopeValue);
+        discordSettingsPrefill.public_profile_default = discordPublicProfileDefault;
       }
 
       if (shouldPrefillSection(hash, "registered-players")) {

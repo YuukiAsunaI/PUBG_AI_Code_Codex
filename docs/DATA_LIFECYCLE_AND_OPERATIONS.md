@@ -156,6 +156,10 @@ Implemented behavior:
   `pubg-permission` and global-admin-only `pubg-ranking-scope` success, usage, and settings-error responses include
   contextual links that pre-fill the affected user/group/guild or guild/ranking-scope form. Blocked privilege-boundary
   attempts remain plain text.
+- `pubg-settings` exposes only collector limits, compression mode, public-profile default, and the current guild
+  ranking scope. Global `settings_write` grants can change collector limits or the public-profile default; guild-only
+  grants are read-only. Secrets, database details, and storage paths are never returned, and storage/compression
+  changes remain local-program-only. Responses link to stable local settings anchors with safe form pre-fill values.
 
 ## Duplicate Match Handling
 

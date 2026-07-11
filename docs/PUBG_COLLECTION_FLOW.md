@@ -358,6 +358,13 @@ The current Discord bot slice is intentionally small and reuses the same local M
 - `!pubg-ranking-scope guild|global [guild_id]` is global-admin-only and changes the ranking visibility override for
   the current or explicitly selected guild. Both admin commands include contextual local settings links when
   `PUBG_LOCAL_WEB_BASE_URL` is configured.
+- `!pubg-settings` returns a non-secret operational summary. `!pubg-settings collector 180 100 10` changes polling
+  seconds, per-cycle player limit, and lookup chunk size; `!pubg-settings public-profile public|private` changes the
+  default for future registrations. Mutations require a global `settings_write` grant or global-admin status, while a
+  guild-only grant is read-only.
+- Discord settings output omits secret values, database configuration, and local storage paths. Storage paths and raw
+  compression remain editable only in the localhost manager, and contextual responses link back to the safe local
+  controls.
 - The bot reloads local Discord permission settings before every gated command, so local web/CLI changes take effect
   without a bot restart. Global-admin membership remains editable only from the local web UI or CLI.
 - The local web UI and CLI can now add/revoke user command-group grants and add/remove global Discord admins without

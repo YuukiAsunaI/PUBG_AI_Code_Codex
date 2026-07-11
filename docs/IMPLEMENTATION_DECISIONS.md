@@ -121,7 +121,7 @@ Suggested command groups:
 | `profile_read` | profile, recent matches, match details, weapon stats |
 | `ranking_read` | server ranking, global ranking for admins, map ranking, weapon ranking |
 | `replay_read` | replay link, replay summary |
-| `settings_write` | storage paths, polling interval, API settings |
+| `settings_write` | restricted Discord summary; global grants may change polling limits and public-profile default |
 | `admin` | grant permissions, unregister players, delete data |
 
 ## Secret Handling
@@ -130,6 +130,8 @@ Suggested command groups:
 - `DISCORD_BOT_TOKEN` stays only in `.env`.
 - The local program can show configured/missing/masked status, but must not store or display raw secret values.
 - `config/local_settings.json` must reject token/API-key fields.
+- Discord settings commands must not return or mutate secret values, database details, or storage paths. They may
+  report the raw compression mode, but all storage configuration changes remain localhost-manager-only.
 
 ## Team and Visibility
 

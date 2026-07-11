@@ -474,7 +474,11 @@ Completed slices:
 99. Discord admins can grant/revoke current-guild command groups with `pubg-permission`; global admins can target
     other guilds/global grants and change guild ranking scope with `pubg-ranking-scope`. Responses link to stable local
     settings sections with pre-filled context, and gated commands reload local permission changes without a bot restart.
+100. `pubg-settings` provides a non-secret operational summary; global `settings_write` grants can change collector
+     limits or the public-profile default, while guild-only grants are read-only. Secrets, database details, storage
+     paths, and storage mutations remain excluded, and safe responses pre-fill stable local settings sections.
 
 Next slice:
 
-1. Review the reserved `settings_write` / `pubg-settings` command gap and define a non-secret Discord settings surface.
+1. Review the reserved destructive `pubg-delete-data` command gap and define a two-step, locally auditable deletion
+   workflow before enabling any Discord-side deletion.
