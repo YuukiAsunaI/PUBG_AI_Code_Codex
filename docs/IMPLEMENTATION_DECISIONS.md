@@ -179,8 +179,12 @@ Suggested command groups:
 - The scoped impact preview is read-only and is generated on demand. It distinguishes player-owned rows from
   preserved cross-player/shared-match references, protects match-shared raw payloads, and checks file metadata without
   reading payload contents or recomputing hashes.
-- Approval still does not enable execution. An immutable preview fingerprint, explicit local confirmation contract,
-  and separately verified executor are required before destructive actions can be considered.
+- Approved requests can capture immutable versioned preview manifests and SHA-256 fingerprints. Confirmation requires
+  the latest complete, issue-free snapshot, a fresh matching fingerprint, and exact localhost entry of the full
+  fingerprint-bound text.
+- Confirmation is an immutable audit record and still does not enable execution. A separately reviewed dry-run plan,
+  live fingerprint revalidation, backup/rollback policy, and executor are required before destructive actions can be
+  considered.
 - Deletion should be split into options:
   - delete registration only
   - delete normalized DB data

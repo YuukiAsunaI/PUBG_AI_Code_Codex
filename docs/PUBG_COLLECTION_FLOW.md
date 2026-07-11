@@ -374,7 +374,11 @@ The current Discord bot slice is intentionally small and reuses the same local M
   target identity, cross-player and shared-match rows are shown as preserved, raw match/telemetry files are protected
   as match-shared, and replay files require an exact target account/shard match.
 - Preview file verification resolves only under configured roots and checks metadata without reading payload content.
-  The route has no write SQL, no file-removal operation, no confirmation mutation, and no execution counterpart.
+- The localhost manager can capture an immutable maximum-500-file manifest and its SHA-256 fingerprint. Confirmation
+  requires an approved request, latest complete issue-free snapshot, fresh matching preview, and exact full-fingerprint
+  text. Discord cannot capture or confirm these records.
+- Snapshot/confirmation writes append audit records only. They do not update the request status, run deletion SQL,
+  remove files, or expose any execution counterpart.
 - The bot reloads local Discord permission settings before every gated command, so local web/CLI changes take effect
   without a bot restart. Global-admin membership remains editable only from the local web UI or CLI.
 - The local web UI and CLI can now add/revoke user command-group grants and add/remove global Discord admins without

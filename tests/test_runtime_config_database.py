@@ -79,6 +79,8 @@ class DatabaseSchemaTests(unittest.TestCase):
             "system_alert_notes",
             "data_deletion_requests",
             "data_deletion_request_events",
+            "data_deletion_preview_snapshots",
+            "data_deletion_confirmations",
             "matches",
             "raw_match_payloads",
             "raw_telemetry_payloads",
@@ -98,8 +100,10 @@ class DatabaseSchemaTests(unittest.TestCase):
         ]:
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table_name}", schema)
 
-        self.assertEqual(SCHEMA_VERSION, 10)
+        self.assertEqual(SCHEMA_VERSION, 11)
         self.assertIn("fk_data_deletion_events_request", schema)
+        self.assertIn("fk_data_deletion_confirmation_snapshot", schema)
+        self.assertIn("uq_data_deletion_confirmation_snapshot", schema)
         self.assertIn("ON DELETE RESTRICT", schema)
 
     def test_schema_tracks_official_rate_limit_headers(self) -> None:

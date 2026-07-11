@@ -8,7 +8,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 class DatabaseError(RuntimeError):
@@ -76,7 +76,7 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 VALUES (%s, %s, NOW(6))
                 ON DUPLICATE KEY UPDATE description = VALUES(description)
                 """,
-                (SCHEMA_VERSION, "audited data deletion request schema"),
+                (SCHEMA_VERSION, "immutable deletion preview confirmation schema"),
             )
             applied += 1
     finally:
@@ -286,6 +286,56 @@ def schema_statements() -> list[str]:
             KEY idx_data_deletion_events_request_time (request_id, created_at_kst),
             CONSTRAINT fk_data_deletion_events_request
                 FOREIGN KEY (request_id) REFERENCES data_deletion_requests(id)
+                ON DELETE RESTRICT
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS data_deletion_preview_snapshots (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            request_id BIGINT UNSIGNED NOT NULL,
+            contract_version VARCHAR(64) NOT NULL,
+            fingerprint_sha256 CHAR(64) NOT NULL,
+            preview_json JSON NOT NULL,
+            manifest_json JSON NOT NULL,
+            catalog_complete TINYINT(1) NOT NULL,
+            filesystem_issue_count INT UNSIGNED NOT NULL,
+            candidate_row_count BIGINT UNSIGNED NOT NULL,
+            candidate_file_count BIGINT UNSIGNED NOT NULL,
+            captured_by VARCHAR(191) NOT NULL,
+            capture_note VARCHAR(1000) NULL,
+            captured_at_kst DATETIME(6) NOT NULL,
+            KEY idx_data_deletion_snapshots_request_time (request_id, captured_at_kst),
+            KEY idx_data_deletion_snapshots_fingerprint (fingerprint_sha256),
+            UNIQUE KEY uq_data_deletion_snapshot_contract (id, request_id, fingerprint_sha256),
+            CONSTRAINT fk_data_deletion_snapshot_request
+                FOREIGN KEY (request_id) REFERENCES data_deletion_requests(id)
+                ON DELETE RESTRICT
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS data_deletion_confirmations (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            request_id BIGINT UNSIGNED NOT NULL,
+            preview_snapshot_id BIGINT UNSIGNED NOT NULL,
+            contract_version VARCHAR(64) NOT NULL,
+            fingerprint_sha256 CHAR(64) NOT NULL,
+            confirmed_by VARCHAR(191) NOT NULL,
+            confirmation_text_sha256 CHAR(64) NOT NULL,
+            confirmation_note VARCHAR(1000) NULL,
+            confirmed_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_data_deletion_confirmation_snapshot (request_id, preview_snapshot_id),
+            KEY idx_data_deletion_confirmations_request_time (request_id, confirmed_at_kst),
+            KEY idx_data_deletion_confirmation_contract (
+                preview_snapshot_id,
+                request_id,
+                fingerprint_sha256
+            ),
+            CONSTRAINT fk_data_deletion_confirmation_request
+                FOREIGN KEY (request_id) REFERENCES data_deletion_requests(id)
+                ON DELETE RESTRICT,
+            CONSTRAINT fk_data_deletion_confirmation_snapshot
+                FOREIGN KEY (preview_snapshot_id, request_id, fingerprint_sha256)
+                REFERENCES data_deletion_preview_snapshots (id, request_id, fingerprint_sha256)
                 ON DELETE RESTRICT
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """,

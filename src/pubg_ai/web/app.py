@@ -28,6 +28,10 @@ from pubg_ai.alert_history import (
 )
 from pubg_ai.collector_worker import CollectorWorkerController, CollectorWorkerError, CollectorWorkerOptions
 from pubg_ai.config import RuntimeConfig, load_dotenv_values
+from pubg_ai.data_deletion_confirmation import (
+    DataDeletionConfirmationError,
+    DataDeletionConfirmationService,
+)
 from pubg_ai.data_deletion_preview import (
     DEFAULT_PREVIEW_FILE_LIMIT,
     MAX_PREVIEW_FILE_LIMIT,
@@ -150,6 +154,19 @@ class DataDeletionReviewRequest(BaseModel):
     note: str | None = Field(default=None, max_length=1000)
 
 
+class DataDeletionSnapshotCaptureRequest(BaseModel):
+    actor_id: str = Field(default="local-manager", min_length=1, max_length=191)
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class DataDeletionConfirmationCreateRequest(BaseModel):
+    snapshot_id: int = Field(gt=0)
+    fingerprint_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    confirmation_text: str = Field(min_length=1, max_length=512)
+    actor_id: str = Field(default="local-manager", min_length=1, max_length=191)
+    note: str | None = Field(default=None, max_length=1000)
+
+
 class WebSettingsRequest(BaseModel):
     local_web_base_url: str | None = None
 
@@ -207,6 +224,20 @@ def create_app() -> Any:
 
     def current_config() -> RuntimeConfig:
         return RuntimeConfig.from_sources(base_dir=base_dir)
+
+    def build_data_deletion_confirmation_service(
+        connection: Any,
+        runtime_config: RuntimeConfig,
+    ) -> DataDeletionConfirmationService:
+        return DataDeletionConfirmationService(
+            connection,
+            preview_service=DataDeletionImpactPreviewService(
+                connection,
+                raw_data_dir=runtime_config.app.raw_data_dir,
+                replay_data_dir=runtime_config.app.replay_data_dir,
+            ),
+        )
+
     collector_worker = CollectorWorkerController(config_loader=current_config)
     post_processing_worker = PostProcessingWorkerController(config_loader=current_config)
 
@@ -652,6 +683,9 @@ def create_app() -> Any:
             "request": request.to_record(),
             "events": [event.to_record() for event in events],
             "preview_url": f"/data-deletions/{request_id}/preview",
+            "confirmation_state_url": f"/data-deletions/{request_id}/confirmation-state",
+            "preview_snapshot_url": f"/data-deletions/{request_id}/preview-snapshots",
+            "confirmation_url": f"/data-deletions/{request_id}/confirmations",
             "execution_enabled": False,
         }
 
@@ -683,6 +717,86 @@ def create_app() -> Any:
             connection.close()
         return {
             "preview": preview.to_record(),
+            "execution_enabled": False,
+        }
+
+    @app.get("/data-deletions/{request_id}/confirmation-state")
+    def data_deletion_confirmation_state(request_id: int) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(runtime_config.database)
+        try:
+            try:
+                request = DataDeletionRequestService(connection).get_request(request_id)
+                state = build_data_deletion_confirmation_service(
+                    connection,
+                    runtime_config,
+                ).confirmation_state(request)
+            except DataDeletionRequestError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except DataDeletionConfirmationError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {"confirmation_state": state, "execution_enabled": False}
+
+    @app.post("/data-deletions/{request_id}/preview-snapshots")
+    def capture_data_deletion_preview_snapshot(
+        request_id: int,
+        capture: DataDeletionSnapshotCaptureRequest,
+    ) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(runtime_config.database)
+        try:
+            try:
+                request = DataDeletionRequestService(connection).get_request(request_id)
+                snapshot = build_data_deletion_confirmation_service(
+                    connection,
+                    runtime_config,
+                ).capture_snapshot(
+                    request,
+                    actor_id=capture.actor_id,
+                    note=capture.note,
+                )
+            except DataDeletionRequestError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except DataDeletionConfirmationError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {
+            "snapshot": snapshot.to_summary_record(),
+            "execution_enabled": False,
+        }
+
+    @app.post("/data-deletions/{request_id}/confirmations")
+    def confirm_data_deletion_preview_snapshot(
+        request_id: int,
+        confirmation_request: DataDeletionConfirmationCreateRequest,
+    ) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(runtime_config.database)
+        try:
+            try:
+                request = DataDeletionRequestService(connection).get_request(request_id)
+                confirmation = build_data_deletion_confirmation_service(
+                    connection,
+                    runtime_config,
+                ).confirm_snapshot(
+                    request,
+                    snapshot_id=confirmation_request.snapshot_id,
+                    fingerprint_sha256=confirmation_request.fingerprint_sha256,
+                    confirmation_text=confirmation_request.confirmation_text,
+                    actor_id=confirmation_request.actor_id,
+                    note=confirmation_request.note,
+                )
+            except DataDeletionRequestError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except DataDeletionConfirmationError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {
+            "confirmation": confirmation.to_record(),
             "execution_enabled": False,
         }
 
@@ -1565,6 +1679,9 @@ _INDEX_HTML = """<!doctype html>
     .table-badge-stack { display: grid; justify-items: start; gap: 5px; }
     .detail-table { margin-top: 8px; table-layout: auto; }
     .detail-table th, .detail-table td { font-size: 12px; padding: 7px; vertical-align: top; }
+    .confirmation-contract { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+    .confirmation-contract code { display: block; margin: 8px 0; overflow-wrap: anywhere; font-size: 12px; }
+    .confirmation-input-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
     .player-controls { display: grid; grid-template-columns: minmax(220px, 1fr) 110px auto auto; gap: 10px; align-items: end; }
     .toggle-row { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; color: var(--muted); font-size: 13px; }
     .toggle-row label { display: inline-flex; grid-template-columns: none; align-items: center; gap: 6px; }
@@ -1645,6 +1762,7 @@ _INDEX_HTML = """<!doctype html>
       .alert-history-filter { grid-template-columns: 1fr; }
       .worker-run-filter { grid-template-columns: 1fr; }
       .player-controls { grid-template-columns: 1fr; }
+      .confirmation-input-row { grid-template-columns: 1fr; }
       .timeline-range { grid-template-columns: 1fr; }
       .replay-detail-layout { grid-template-columns: 1fr; }
       header { align-items: flex-start; flex-direction: column; }
@@ -3405,6 +3523,105 @@ _INDEX_HTML = """<!doctype html>
         <ul>${(preview.warnings || []).map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul>`;
     }
 
+    function renderDataDeletionConfirmationState(state) {
+      const latest = state.latest_snapshot;
+      const blockers = state.confirmation_blockers || [];
+      const snapshotRows = (state.snapshots || []).map((snapshot) => `
+        <tr>
+          <td>${escapeHtml(snapshot.id)}</td>
+          <td>${escapeHtml(snapshot.captured_at_kst)}</td>
+          <td>${escapeHtml(snapshot.fingerprint_sha256)}</td>
+          <td>${snapshot.catalog_complete ? "complete" : "truncated"} / issues ${escapeHtml(snapshot.filesystem_issue_count)}</td>
+        </tr>`).join("") || `<tr><td colspan="4">No immutable snapshots.</td></tr>`;
+      const confirmationRows = (state.confirmations || []).map((confirmation) => `
+        <tr>
+          <td>${escapeHtml(confirmation.id)}</td>
+          <td>${escapeHtml(confirmation.preview_snapshot_id)}</td>
+          <td>${escapeHtml(confirmation.confirmed_by)}</td>
+          <td>${escapeHtml(confirmation.confirmed_at_kst)}</td>
+        </tr>`).join("") || `<tr><td colspan="4">No confirmation records.</td></tr>`;
+      const captureButton = state.snapshot_capture_enabled
+        ? `<button type="button" data-deletion-contract-action="capture" data-request-id="${escapeHtml(state.request_id)}">Capture immutable snapshot</button>`
+        : "";
+      const confirmationControl = state.confirmation_allowed && latest
+        ? `
+          <div>Expected confirmation text:</div>
+          <code>${escapeHtml(state.expected_confirmation_text)}</code>
+          <div class="confirmation-input-row">
+            <label>Confirmation text
+              <input id="dataDeletionConfirmationText-${escapeHtml(latest.id)}" autocomplete="off">
+            </label>
+            <button class="danger" type="button"
+              data-deletion-contract-action="confirm"
+              data-request-id="${escapeHtml(state.request_id)}"
+              data-snapshot-id="${escapeHtml(latest.id)}"
+              data-fingerprint="${escapeHtml(latest.fingerprint_sha256)}">Record confirmation</button>
+          </div>`
+        : "";
+      return `
+        <div class="confirmation-contract">
+          <h3>Immutable confirmation contract</h3>
+          <div class="status">Request ${escapeHtml(state.request_status)} / execution enabled: no</div>
+          <div class="actions">${captureButton}</div>
+          ${blockers.length ? `<ul>${blockers.map((blocker) => `<li>${escapeHtml(blocker)}</li>`).join("")}</ul>` : ""}
+          ${confirmationControl}
+          <h3>Snapshot history</h3>
+          <table class="detail-table">
+            <thead><tr><th>ID</th><th>Captured KST</th><th>SHA-256 fingerprint</th><th>Verification</th></tr></thead>
+            <tbody>${snapshotRows}</tbody>
+          </table>
+          <h3>Confirmation history</h3>
+          <table class="detail-table">
+            <thead><tr><th>ID</th><th>Snapshot</th><th>Actor</th><th>Confirmed KST</th></tr></thead>
+            <tbody>${confirmationRows}</tbody>
+          </table>
+        </div>`;
+    }
+
+    async function loadDataDeletionConfirmationState(requestId) {
+      const response = await fetch(`/data-deletions/${encodeURIComponent(requestId)}/confirmation-state`);
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const payload = await response.json();
+      const host = document.querySelector("#dataDeletionConfirmation");
+      host.innerHTML = renderDataDeletionConfirmationState(payload.confirmation_state);
+    }
+
+    async function captureDataDeletionSnapshot(requestId) {
+      const form = new FormData(dataDeletionFilterForm);
+      const actorId = String(form.get("actor_id") || "").trim();
+      const note = String(form.get("note") || "").trim();
+      if (!actorId) throw new Error("Local reviewer is required.");
+      await postJson(`/data-deletions/${encodeURIComponent(requestId)}/preview-snapshots`, {
+        actor_id: actorId,
+        note: note || null,
+      });
+      await loadDataDeletionRequestDetail(requestId);
+      dataDeletionStatus.textContent = "Immutable preview snapshot captured. Deletion execution remains disabled.";
+    }
+
+    async function confirmDataDeletionSnapshot(requestId, snapshotId, fingerprint) {
+      const form = new FormData(dataDeletionFilterForm);
+      const actorId = String(form.get("actor_id") || "").trim();
+      const note = String(form.get("note") || "").trim();
+      const input = document.querySelector(`#dataDeletionConfirmationText-${CSS.escape(String(snapshotId))}`);
+      const confirmationText = String(input?.value || "").trim();
+      if (!actorId) throw new Error("Local reviewer is required.");
+      if (!confirmationText) throw new Error("Full confirmation text is required.");
+      if (!window.confirm("Record this fingerprint-bound confirmation? This still does not delete data.")) return;
+      await postJson(`/data-deletions/${encodeURIComponent(requestId)}/confirmations`, {
+        snapshot_id: Number(snapshotId),
+        fingerprint_sha256: fingerprint,
+        confirmation_text: confirmationText,
+        actor_id: actorId,
+        note: note || null,
+      });
+      await loadDataDeletionRequestDetail(requestId);
+      dataDeletionStatus.textContent = "Fingerprint-bound confirmation recorded. Deletion execution remains disabled.";
+    }
+
     async function loadDataDeletionRequestDetail(requestId) {
       const response = await fetch(`/data-deletions/${encodeURIComponent(requestId)}`);
       if (!response.ok) {
@@ -3423,7 +3640,8 @@ _INDEX_HTML = """<!doctype html>
         <ul>
           ${events.map((event) => `<li>${escapeHtml(event.created_at_kst)} / ${escapeHtml(event.event_type)} / ${escapeHtml(event.actor_type)}:${escapeHtml(event.actor_id)} / ${escapeHtml(event.note || "-")}</li>`).join("")}
         </ul>
-        <div id="dataDeletionPreview" class="status">Loading read-only impact preview...</div>`;
+        <div id="dataDeletionPreview" class="status">Loading read-only impact preview...</div>
+        <div id="dataDeletionConfirmation" class="status">Loading immutable confirmation state...</div>`;
       const previewHost = document.querySelector("#dataDeletionPreview");
       try {
         const previewUrl = payload.preview_url || `/data-deletions/${encodeURIComponent(requestId)}/preview`;
@@ -3436,6 +3654,12 @@ _INDEX_HTML = """<!doctype html>
         previewHost.innerHTML = renderDataDeletionPreview(previewPayload.preview);
       } catch (error) {
         previewHost.textContent = `Preview error: ${error.message}`;
+      }
+      try {
+        await loadDataDeletionConfirmationState(requestId);
+      } catch (error) {
+        const confirmationHost = document.querySelector("#dataDeletionConfirmation");
+        confirmationHost.textContent = `Confirmation state error: ${error.message}`;
       }
     }
 
@@ -6039,6 +6263,27 @@ _INDEX_HTML = """<!doctype html>
         banner.textContent = "Discord 권한이 해제되었습니다.";
       } catch (error) {
         banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    dataDeletionDetail.addEventListener("click", async (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("button[data-deletion-contract-action]")
+        : null;
+      if (!button) return;
+      const requestId = button.dataset.requestId || "";
+      try {
+        if (button.dataset.deletionContractAction === "capture") {
+          await captureDataDeletionSnapshot(requestId);
+        } else if (button.dataset.deletionContractAction === "confirm") {
+          await confirmDataDeletionSnapshot(
+            requestId,
+            button.dataset.snapshotId || "",
+            button.dataset.fingerprint || "",
+          );
+        }
+      } catch (error) {
+        dataDeletionStatus.textContent = `Error: ${error.message}`;
       }
     });
 

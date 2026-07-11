@@ -76,6 +76,8 @@ Use a two-layer storage model:
 | `registered_players` | Admin-managed tracking targets: `account_id`, `current_name`, required `shard`, `active`, `public_profile` |
 | `data_deletion_requests` | Expiring scoped deletion-review requests with player identity snapshots and separate approval/execution states |
 | `data_deletion_request_events` | Immutable requested/approved/rejected/cancelled/expired/executed/failed audit events |
+| `data_deletion_preview_snapshots` | Immutable full preview JSON, canonical manifest, SHA-256 fingerprint, completeness, issue, candidate, actor, and KST evidence |
+| `data_deletion_confirmations` | Immutable latest-snapshot confirmations bound by composite request/snapshot/fingerprint foreign key |
 | `player_aliases` | Nickname history and lookup evidence |
 | `discord_users` | Discord user records; not assumed to own PUBG accounts |
 | `discord_guilds` | Guild-specific settings, ranking scope, and visibility defaults |
@@ -486,8 +488,12 @@ Completed slices:
      rows are counted separately from preserved references, raw match/telemetry payloads are protected as match-shared,
      and exact-account replay artifacts are cataloged. Root/path/existence/size checks use metadata only, catalog limits
      preserve complete totals, no checksum content is read, and every execution API remains disabled.
+103. Schema version 11 stores immutable preview JSON and canonical SHA-256 manifests plus composite-bound confirmation
+     records. Only an approved request's latest complete, issue-free maximum-500-file snapshot can be confirmed after a
+     fresh fingerprint match and exact full-fingerprint text entry. Confirmation remains audit-only and all deletion
+     execution APIs remain absent.
 
 Next slice:
 
-1. Persist an immutable preview snapshot and fingerprint, then require an explicit localhost confirmation contract
-   bound to that fingerprint; keep deletion execution disabled while the confirmation lifecycle is verified.
+1. Build a read-only deletion dry-run plan that expands a confirmed fingerprint into ordered SQL/file operations,
+   shared-data exclusions, backup prerequisites, and live revalidation checks; do not execute any operation yet.

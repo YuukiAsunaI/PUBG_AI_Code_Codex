@@ -41,6 +41,38 @@ class WebDataDeletionTests(unittest.TestCase):
         }
         preview_service = MagicMock()
         preview_service.build_preview.return_value = preview
+        fingerprint = "a" * 64
+        snapshot = MagicMock()
+        snapshot.to_summary_record.return_value = {
+            "id": 501,
+            "request_id": 17,
+            "fingerprint_sha256": fingerprint,
+            "catalog_complete": True,
+            "filesystem_issue_count": 0,
+        }
+        confirmation = MagicMock()
+        confirmation.to_record.return_value = {
+            "id": 701,
+            "request_id": 17,
+            "preview_snapshot_id": 501,
+            "fingerprint_sha256": fingerprint,
+            "confirmed_by": "local-owner",
+        }
+        confirmation_service = MagicMock()
+        confirmation_service.confirmation_state.return_value = {
+            "request_id": 17,
+            "request_status": "pending",
+            "snapshot_capture_enabled": True,
+            "confirmation_allowed": False,
+            "confirmation_blockers": ["request status must be approved, not pending"],
+            "expected_confirmation_text": None,
+            "latest_snapshot": None,
+            "snapshots": [],
+            "confirmations": [],
+            "execution_enabled": False,
+        }
+        confirmation_service.capture_snapshot.return_value = snapshot
+        confirmation_service.confirm_snapshot.return_value = confirmation
         connections: list[FakeConnection] = []
 
         def connection_factory(*_: object, **__: object) -> FakeConnection:
@@ -52,12 +84,38 @@ class WebDataDeletionTests(unittest.TestCase):
             patch("pubg_ai.web.app.connect_mysql", side_effect=connection_factory),
             patch("pubg_ai.web.app.DataDeletionRequestService", return_value=service),
             patch("pubg_ai.web.app.DataDeletionImpactPreviewService", return_value=preview_service),
+            patch("pubg_ai.web.app.DataDeletionConfirmationService", return_value=confirmation_service),
         ):
             client = TestClient(create_app())
             list_response = client.get("/data-deletions?status=pending&limit=50")
             detail_response = client.get("/data-deletions/17")
             preview_response = client.get("/data-deletions/17/preview?file_limit=25")
             invalid_preview_response = client.get("/data-deletions/17/preview?file_limit=0")
+            confirmation_state_response = client.get("/data-deletions/17/confirmation-state")
+            snapshot_response = client.post(
+                "/data-deletions/17/preview-snapshots",
+                json={"actor_id": "local-owner", "note": "impact captured"},
+            )
+            expected_confirmation_text = f"CONFIRM DELETE REQUEST 17 {fingerprint}"
+            confirmation_response = client.post(
+                "/data-deletions/17/confirmations",
+                json={
+                    "snapshot_id": 501,
+                    "fingerprint_sha256": fingerprint,
+                    "confirmation_text": expected_confirmation_text,
+                    "actor_id": "local-owner",
+                    "note": "typed full fingerprint",
+                },
+            )
+            invalid_confirmation_response = client.post(
+                "/data-deletions/17/confirmations",
+                json={
+                    "snapshot_id": 501,
+                    "fingerprint_sha256": "not-a-fingerprint",
+                    "confirmation_text": "invalid",
+                    "actor_id": "local-owner",
+                },
+            )
             approve_response = client.post(
                 "/data-deletions/17/approve",
                 json={"actor_id": "local-owner", "note": "대상 확인"},
@@ -73,11 +131,28 @@ class WebDataDeletionTests(unittest.TestCase):
         self.assertFalse(detail_response.json()["execution_enabled"])
         self.assertEqual(detail_response.json()["events"][0]["event_type"], "requested")
         self.assertEqual(detail_response.json()["preview_url"], "/data-deletions/17/preview")
+        self.assertEqual(
+            detail_response.json()["confirmation_state_url"],
+            "/data-deletions/17/confirmation-state",
+        )
         self.assertEqual(preview_response.status_code, 200)
         self.assertFalse(preview_response.json()["execution_enabled"])
         self.assertTrue(preview_response.json()["preview"]["verification"]["read_only"])
         self.assertFalse(preview_response.json()["preview"]["verification"]["ready_for_execution"])
         self.assertEqual(invalid_preview_response.status_code, 422)
+        self.assertEqual(confirmation_state_response.status_code, 200)
+        self.assertFalse(confirmation_state_response.json()["execution_enabled"])
+        self.assertFalse(
+            confirmation_state_response.json()["confirmation_state"]["confirmation_allowed"]
+        )
+        self.assertEqual(snapshot_response.status_code, 200)
+        self.assertEqual(snapshot_response.json()["snapshot"]["id"], 501)
+        self.assertNotIn("preview_json", snapshot_response.json()["snapshot"])
+        self.assertFalse(snapshot_response.json()["execution_enabled"])
+        self.assertEqual(confirmation_response.status_code, 200)
+        self.assertEqual(confirmation_response.json()["confirmation"]["id"], 701)
+        self.assertFalse(confirmation_response.json()["execution_enabled"])
+        self.assertEqual(invalid_confirmation_response.status_code, 422)
         self.assertEqual(approve_response.status_code, 200)
         self.assertEqual(approve_response.json()["request"]["status"], "approved")
         self.assertFalse(approve_response.json()["execution_enabled"])
@@ -88,6 +163,20 @@ class WebDataDeletionTests(unittest.TestCase):
             note="대상 확인",
         )
         preview_service.build_preview.assert_called_once_with(pending, file_limit=25)
+        confirmation_service.confirmation_state.assert_called_once_with(pending)
+        confirmation_service.capture_snapshot.assert_called_once_with(
+            pending,
+            actor_id="local-owner",
+            note="impact captured",
+        )
+        confirmation_service.confirm_snapshot.assert_called_once_with(
+            pending,
+            snapshot_id=501,
+            fingerprint_sha256=fingerprint,
+            confirmation_text=expected_confirmation_text,
+            actor_id="local-owner",
+            note="typed full fingerprint",
+        )
         self.assertTrue(all(connection.closed for connection in connections))
 
 

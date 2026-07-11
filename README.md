@@ -354,8 +354,11 @@ admins, or a global admin cancel a pending/approved request. The detail screen c
 `GET /data-deletions/{request_id}/preview` endpoint to count scoped rows and catalog configured raw/replay files.
 Raw match and telemetry payloads are marked as protected match-shared records; only replay artifacts with the target
 `account_id` and shard are classified as player artifact candidates. File checks resolve paths inside the configured
-root and compare existence and size without reading payload contents or recomputing checksums. Schema version 10 adds
-the request and immutable event tables; the preview requires no schema change. Rerun
+root and compare existence and size without reading payload contents or recomputing checksums. Schema version 11 adds
+immutable preview snapshot and confirmation tables on top of the version 10 request/event tables. A localhost reviewer
+may capture a maximum-500-file snapshot and record confirmation only for an approved request whose latest complete,
+issue-free fingerprint still matches a fresh preview. The required text includes the full SHA-256 fingerprint.
+Confirmation is an audit record only: no deletion endpoint, SQL executor, or file remover exists. Rerun
 `python -m pubg_ai.cli init-db` after updating from an earlier schema.
 The `admin` group includes `pubg-alerts`, which returns current storage and worker alerts. When
 `PUBG_LOCAL_WEB_BASE_URL` is set, that response includes a local current-alert list link. When Discord alert channel
@@ -406,8 +409,10 @@ usage, and settings-error responses include contextual `#discord-permissions` or
 the local forms. `pubg-settings` responses link to stable `#collector-settings`, `#storage-settings`, and
 `#discord-scopes` sections; successful collector/public-profile updates pre-fill the affected local controls.
 Deletion-request responses link to `#data-deletions` with the request ID highlighted; the local detail view shows the
-complete audit event history, scoped row counts, protected references, raw/replay file status, and explicitly reports
-that deletion execution is disabled. Catalog totals remain complete when the displayed file list is limited.
+complete audit event history, scoped row counts, protected references, raw/replay file status, immutable snapshot
+history, and fingerprint-bound confirmation history. Catalog totals remain complete when the displayed file list is
+limited, while confirmation is blocked unless the maximum-500-file snapshot is complete and issue-free. Every view
+and mutation response explicitly reports that deletion execution is disabled.
 Permission-denied and blocked privilege-boundary attempts remain plain text by design.
 
 Run the local management app:

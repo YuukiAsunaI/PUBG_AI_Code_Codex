@@ -174,6 +174,15 @@ Implemented behavior:
 - File verification accepts only `local_file` records under the expected configured root. It checks path safety,
   existence, file type, and declared size by metadata only; payload bytes and SHA-256 contents are not read during
   preview. Limited catalogs keep complete record/byte totals and report `truncated=true`.
+- A localhost reviewer may persist a maximum-500-file preview as an immutable versioned manifest plus SHA-256
+  fingerprint. Snapshot and confirmation rows reference the deletion request with `ON DELETE RESTRICT` and are never
+  updated by the application.
+- Confirmation is allowed only for the latest snapshot of an `approved` request when the catalog is complete,
+  filesystem issues are zero, at least one player-owned candidate exists, and a fresh preview produces the same
+  fingerprint. The reviewer must type the complete fingerprint-bound confirmation text exactly.
+- A confirmation stores the actor, KST time, snapshot/fingerprint, note, and confirmation-text hash. It does not change
+  request status, enable execution, run deletion SQL, remove files, or weaken the requirement for future live
+  revalidation.
 
 ## Duplicate Match Handling
 
