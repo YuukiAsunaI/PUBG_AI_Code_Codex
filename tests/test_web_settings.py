@@ -20,6 +20,7 @@ class WebSettingsTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.text
         self.assertIn('id="storageSettingsForm"', body)
+        self.assertIn('name="backup_data_dir"', body)
         self.assertIn('id="collectorSettingsForm"', body)
         self.assertIn("/settings/storage", body)
         self.assertIn("/settings/collector", body)
@@ -189,6 +190,14 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn("Generate read-only dry-run plan", body)
         self.assertIn("Read-only dry-run plan recorded", body)
         self.assertIn("renderDataDeletionBackupReadiness", body)
+        self.assertIn("Opt-in backup artifact builder", body)
+        self.assertIn("Build backup artifacts", body)
+        self.assertIn("data-backup-build-form", body)
+        self.assertIn("buildDataDeletionBackupArtifacts", body)
+        self.assertIn("/backup-builds", body)
+        self.assertIn("checksum calculation: yes", body)
+        self.assertIn("quarantine: no", body)
+        self.assertIn("deletion: no", body)
         self.assertIn("Record immutable evidence", body)
         self.assertIn("Run non-executing rehearsal", body)
         self.assertIn("Non-executing rehearsal recorded", body)
@@ -243,6 +252,7 @@ class WebSettingsTests(unittest.TestCase):
             settings_file = base_dir / "config" / "local_settings.json"
             raw_dir = base_dir / "raw-drive" / "raw"
             replay_dir = base_dir / "replay-drive" / "replay"
+            backup_dir = base_dir / "backup-drive" / "deletion-backups"
             with patch.dict(os.environ, {"PUBG_LOCAL_SETTINGS_FILE": str(settings_file)}):
                 client = TestClient(create_app())
                 response = client.post(
@@ -250,6 +260,7 @@ class WebSettingsTests(unittest.TestCase):
                     json={
                         "raw_data_dir": str(raw_dir),
                         "replay_data_dir": str(replay_dir),
+                        "backup_data_dir": str(backup_dir),
                         "raw_compression": "none",
                     },
                 )
@@ -259,13 +270,17 @@ class WebSettingsTests(unittest.TestCase):
             payload = response.json()
             self.assertEqual(payload["storage"]["raw_data_dir"], str(raw_dir))
             self.assertEqual(payload["storage"]["replay_data_dir"], str(replay_dir))
+            self.assertEqual(payload["storage"]["backup_data_dir"], str(backup_dir))
             self.assertEqual(payload["storage"]["raw_compression"], "none")
             self.assertTrue(payload["storage_status"]["raw_data_dir"]["writable"])
             self.assertTrue(payload["storage_status"]["replay_data_dir"]["writable"])
+            self.assertTrue(payload["storage_status"]["backup_data_dir"]["writable"])
             self.assertEqual(status.json()["raw_data_dir"], str(raw_dir))
+            self.assertEqual(status.json()["backup_data_dir"], str(backup_dir))
             self.assertEqual(status.json()["raw_compression"], "none")
             self.assertTrue(raw_dir.is_dir())
             self.assertTrue(replay_dir.is_dir())
+            self.assertTrue(backup_dir.is_dir())
 
     def test_collector_settings_endpoint_updates_limits(self) -> None:
         with TemporaryDirectory() as temp_dir:

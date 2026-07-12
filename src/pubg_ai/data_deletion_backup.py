@@ -134,6 +134,13 @@ class DataDeletionBackupService:
         self.preview_service = preview_service
         self.path_probe = path_probe or inspect_local_path
 
+    def require_latest_plan(
+        self,
+        request: DataDeletionRequest,
+        dry_run_plan_id: int,
+    ) -> DataDeletionDryRunPlan:
+        return self._latest_plan(request, dry_run_plan_id)
+
     def record_evidence(
         self,
         request: DataDeletionRequest,
@@ -206,6 +213,104 @@ class DataDeletionBackupService:
             _rollback(self.connection)
             raise
         return self.get_evidence(evidence_id)
+
+    def record_evidence_batch(
+        self,
+        request: DataDeletionRequest,
+        *,
+        dry_run_plan_id: int,
+        evidence_by_key: dict[str, dict[str, Any]],
+        actor_id: str,
+        note: str | None = None,
+        reference_kst: datetime | None = None,
+    ) -> dict[str, DataDeletionBackupEvidence]:
+        if not isinstance(evidence_by_key, dict) or not evidence_by_key:
+            raise DataDeletionBackupError("evidence_by_key must contain at least one record.")
+        actor_id = _required_text(actor_id, "actor_id", 191)
+        note = _optional_text(note, "note", 1000)
+        plan = self._latest_plan(request, dry_run_plan_id)
+        prerequisites = _plan_prerequisites(plan)
+        normalized_records: list[tuple[str, dict[str, Any], str]] = []
+        for prerequisite_key in BACKUP_PREREQUISITE_KEYS:
+            if prerequisite_key not in evidence_by_key:
+                continue
+            prerequisite = prerequisites.get(prerequisite_key)
+            if prerequisite is None:
+                raise DataDeletionBackupError(
+                    f"prerequisite {prerequisite_key} is not part of dry-run plan {plan.id}."
+                )
+            if not bool(prerequisite.get("required")):
+                raise DataDeletionBackupError(
+                    f"prerequisite {prerequisite_key} is not required for dry-run plan {plan.id}."
+                )
+            normalized = normalize_evidence_payload(
+                prerequisite_key,
+                evidence_by_key[prerequisite_key],
+            )
+            normalized_records.append(
+                (
+                    prerequisite_key,
+                    normalized,
+                    fingerprint_backup_evidence(
+                        request.id,
+                        plan,
+                        prerequisite_key,
+                        normalized,
+                    ),
+                )
+            )
+        unknown_keys = sorted(set(evidence_by_key) - set(BACKUP_PREREQUISITE_KEYS))
+        if unknown_keys:
+            raise DataDeletionBackupError(
+                "unsupported backup prerequisite keys: " + ", ".join(unknown_keys)
+            )
+        if len(normalized_records) != len(evidence_by_key):
+            raise DataDeletionBackupError("one or more backup evidence records are invalid.")
+        timestamp = _mysql_kst(reference_kst or now_kst())
+        evidence_ids: dict[str, int] = {}
+
+        _begin(self.connection)
+        try:
+            with self.connection.cursor() as cursor:
+                self._assert_latest_plan_locked(cursor, request, plan)
+                for prerequisite_key, normalized, evidence_fingerprint in normalized_records:
+                    cursor.execute(
+                        """
+                        INSERT INTO data_deletion_backup_evidence (
+                            request_id,
+                            dry_run_plan_id,
+                            contract_version,
+                            plan_fingerprint_sha256,
+                            prerequisite_key,
+                            evidence_fingerprint_sha256,
+                            evidence_json,
+                            recorded_by,
+                            evidence_note,
+                            recorded_at_kst
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            request.id,
+                            plan.id,
+                            BACKUP_EVIDENCE_CONTRACT_VERSION,
+                            plan.plan_fingerprint_sha256,
+                            prerequisite_key,
+                            evidence_fingerprint,
+                            _json_dump(normalized),
+                            actor_id,
+                            note,
+                            timestamp,
+                        ),
+                    )
+                    evidence_ids[prerequisite_key] = int(cursor.lastrowid)
+            _commit(self.connection)
+        except Exception:
+            _rollback(self.connection)
+            raise
+        return {
+            prerequisite_key: self.get_evidence(evidence_id)
+            for prerequisite_key, evidence_id in evidence_ids.items()
+        }
 
     def get_evidence(self, evidence_id: int) -> DataDeletionBackupEvidence:
         evidence_id = _positive_id(evidence_id, "evidence_id")

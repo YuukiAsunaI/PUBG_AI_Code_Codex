@@ -387,10 +387,14 @@ The current Discord bot slice is intentionally small and reuses the same local M
   route; backup evidence and an executor are explicitly absent blockers.
 - The localhost manager can append evidence for MySQL backup, replay backup, quarantine capacity, and checksum/restore
   attestation. Evidence corrections never overwrite earlier records and are bound to the latest plan fingerprint.
+- The opt-in localhost builder requires exact plan-fingerprint confirmation text. It exports only whitelisted target
+  rows to typed JSONL in `mysql-target-backup.zip`, copies verified player-owned files to
+  `replay-artifact-backup.zip`, calculates checksums, publishes through a temporary directory, and atomically appends
+  the two artifact evidence rows. It does not modify source rows/files or expose a Discord counterpart.
 - The non-executing rehearsal rechecks the live source fingerprint plus evidence/file metadata and current free space,
-  then appends a passed/blocked result. It does not create or open backups, calculate checksums, run a restore, move
-  replay artifacts, execute SQL mutations, or expose a Discord counterpart. New evidence makes prior rehearsal results
-  stale, and `executor_not_implemented` remains unconditional.
+  then appends a passed/blocked result. The rehearsal itself does not open backups, calculate checksums, run a restore,
+  move replay artifacts, execute SQL mutations, or expose a Discord counterpart. New evidence makes prior rehearsal
+  results stale, and missing capacity/restore evidence plus `executor_not_implemented` remain blockers.
 - The bot reloads local Discord permission settings before every gated command, so local web/CLI changes take effect
   without a bot restart. Global-admin membership remains editable only from the local web UI or CLI.
 - The local web UI and CLI can now add/revoke user command-group grants and add/remove global Discord admins without

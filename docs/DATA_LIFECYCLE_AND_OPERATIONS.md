@@ -196,6 +196,13 @@ Implemented behavior:
 - Backup evidence is append-only and bound to the latest dry-run plan fingerprint. The four supported keys cover the
   MySQL target backup, replay artifact backup, quarantine capacity, and checksum/restore attestation. Corrections add
   newer rows; prior evidence remains in history.
+- `PUBG_BACKUP_DATA_DIR` is a third source-disjoint local root. The localhost-only builder requires exact latest-plan
+  confirmation text, exports whitelisted candidate rows as typed JSONL in a ZIP, copies only verified player-owned
+  replay files to another ZIP, calculates archive/internal SHA-256 values, and atomically publishes a manifest-bound
+  build directory.
+- Successful artifact builds append MySQL and replay evidence together in one transaction. They do not append capacity
+  or integrity evidence because no quarantine destination or restore rehearsal exists yet. A database ZIP contains no
+  schema DDL and cannot currently be imported by the application.
 - A non-executing rehearsal rechecks the approved request, latest plan and evidence-set fingerprints, live deletion
   impact, backup artifact existence/declared size, covered row/file/byte counts, current free space, and evidence times.
   It records either `passed` or `blocked` as another immutable audit row.

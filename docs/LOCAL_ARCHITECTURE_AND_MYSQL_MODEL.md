@@ -175,6 +175,7 @@ unchanged so newly added PUBG content remains visible.
 - Store small player snapshots in MySQL `JSON` columns.
 - Store large match and telemetry JSON payloads as compressed files under `PUBG_RAW_DATA_DIR`.
 - Store generated 2D replay artifacts and static map images under `PUBG_REPLAY_DATA_DIR`.
+- Store opt-in deletion backup ZIPs and their build manifest under a non-overlapping `PUBG_BACKUP_DATA_DIR`.
 - Store only metadata for large raw files in MySQL: root key, relative path, compression, file size, `sha256`,
   source URL, fetched timestamp, and parser version.
 - Do not rely on telemetry JSON to contain `match_id`. The telemetry parser receives `match_id`, shard, and asset URL
@@ -503,8 +504,13 @@ Completed slices:
      source/plan/evidence fingerprints, artifact metadata, covered counts, free space, and KST evidence under locks.
      It never opens backup contents, recalculates checksums, restores data, or mutates targets. Dry-run contract v2
      explicitly protects the two new audit tables, and `executor_not_implemented` remains unconditional.
+106. A configurable `PUBG_BACKUP_DATA_DIR` and opt-in builder create a typed JSONL MySQL-row ZIP, a verified replay ZIP,
+     and a fingerprint-bound build manifest. The builder uses fixed table selectors, exact full-plan confirmation text,
+     temporary-directory publication, and atomic two-row evidence insertion. It never modifies source rows/files and
+     does not attest restore, capacity, quarantine, or deletion readiness.
 
 Next slice:
 
-1. Add a configurable localhost backup root and an opt-in backup artifact/checksum builder that can populate verified
-   evidence. Keep replay quarantine, database deletion, and every execution route disabled.
+1. Add a non-mutating artifact verifier that reopens both ZIPs and validates the build manifest plus internal and
+   whole-file checksums. Design an isolated disposable restore rehearsal separately; keep production restore,
+   quarantine, database deletion, and every execution route disabled.

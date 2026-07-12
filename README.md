@@ -36,6 +36,8 @@ MySQL data model direction, 2D replay/live-view feasibility, and reference proje
   `PUBG_RAW_DATA_DIR=E:\PUBG_AI_Data\raw`; MySQL stores metadata and relative paths.
 - Generated 2D replay files should use a separate configurable path such as
   `PUBG_REPLAY_DATA_DIR=E:\PUBG_AI_Data\replays`.
+- Opt-in deletion backup ZIP files use a third configurable root such as
+  `PUBG_BACKUP_DATA_DIR=D:\BackUP\deletion-backups`; it must not contain or sit inside either source root.
 - The local management app should save user-changed storage paths to `config/local_settings.json`, so paths can be
   changed from the program without editing `.env`. It also saves collector polling limits there.
 - Discord permissions and rankings are scoped by `guild_id`; global admins can view and manage all guilds.
@@ -364,10 +366,15 @@ match/telemetry evidence, lists backup prerequisites and postconditions, and sto
 generation writes only the audit plan row. Schema version 13 adds append-only backup-evidence and rehearsal tables.
 The localhost manager records corrected evidence as new rows and can run a non-executing rehearsal against the latest
 plan, latest evidence set, live source fingerprint, backup file existence/size, and current quarantine free space.
-Recorded SHA-256 and restore results are consistency-checked attestations: this slice does not read backup contents,
-recalculate checksums, create backups, or perform restores. A newer dry-run v2 plan explicitly protects both new audit
-tables. Even a passed rehearsal remains blocked by `executor_not_implemented`; no deletion endpoint, executable SQL,
-file remover, or execution button exists. Rerun `python -m pubg_ai.cli init-db` after updating from an earlier schema.
+`PUBG_BACKUP_DATA_DIR` and the Storage Settings screen now configure a source-disjoint backup root. After exact entry of
+`BUILD BACKUP ARTIFACTS REQUEST <request_id> <full_plan_fingerprint>`, the opt-in builder exports only whitelisted target
+rows to a compressed JSONL ZIP and copies verified player-owned replay files to a second ZIP. It calculates archive and
+per-entry SHA-256 values, finishes in a temporary directory, atomically renames the build directory, and appends the two
+artifact evidence rows in one transaction. The database archive intentionally contains no schema creation SQL and the
+current application has no restore importer. Quarantine capacity and checksum/restore-rehearsal evidence are therefore
+not auto-recorded. `executor_not_implemented` remains unconditional; no restore, quarantine, deletion endpoint,
+executable deletion SQL, file remover, or execution button exists. Rerun `python -m pubg_ai.cli init-db` after updating
+from an earlier schema.
 The `admin` group includes `pubg-alerts`, which returns current storage and worker alerts. When
 `PUBG_LOCAL_WEB_BASE_URL` is set, that response includes a local current-alert list link. When Discord alert channel
 IDs are configured from the local manager, the running Discord bot also sends new worker failures and active storage

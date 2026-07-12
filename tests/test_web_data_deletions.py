@@ -137,6 +137,31 @@ class WebDataDeletionTests(unittest.TestCase):
         }
         backup_service.record_evidence.return_value = backup_evidence
         backup_service.run_rehearsal.return_value = rehearsal
+        backup_build = MagicMock()
+        backup_build.to_record.return_value = {
+            "request_id": 17,
+            "dry_run_plan_id": 901,
+            "build_id": "build-1",
+            "artifacts": [],
+            "restore_test_performed": False,
+            "quarantine_performed": False,
+            "deletion_performed": False,
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+        builder_service = MagicMock()
+        builder_service.build_state.return_value = {
+            "request_id": 17,
+            "request_status": "pending",
+            "latest_plan_id": 901,
+            "backup_root": "D:/BackUP/deletion-backups",
+            "confirmation_text": "BUILD BACKUP ARTIFACTS REQUEST 17 " + "b" * 64,
+            "build_allowed": False,
+            "build_blockers": ["request status must be approved, not pending"],
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+        builder_service.build.return_value = backup_build
         connections: list[FakeConnection] = []
 
         def connection_factory(*_: object, **__: object) -> FakeConnection:
@@ -151,6 +176,10 @@ class WebDataDeletionTests(unittest.TestCase):
             patch("pubg_ai.web.app.DataDeletionConfirmationService", return_value=confirmation_service),
             patch("pubg_ai.web.app.DataDeletionDryRunService", return_value=dry_run_service),
             patch("pubg_ai.web.app.DataDeletionBackupService", return_value=backup_service),
+            patch(
+                "pubg_ai.web.app.DataDeletionBackupBuilderService",
+                return_value=builder_service,
+            ),
         ):
             client = TestClient(create_app())
             list_response = client.get("/data-deletions?status=pending&limit=50")
@@ -189,6 +218,16 @@ class WebDataDeletionTests(unittest.TestCase):
             )
             backup_state_response = client.get(
                 "/data-deletions/17/backup-readiness-state"
+            )
+            backup_build_confirmation = "BUILD BACKUP ARTIFACTS REQUEST 17 " + "b" * 64
+            backup_build_response = client.post(
+                "/data-deletions/17/backup-builds",
+                json={
+                    "dry_run_plan_id": 901,
+                    "confirmation_text": backup_build_confirmation,
+                    "actor_id": "local-owner",
+                    "note": "build local artifacts",
+                },
             )
             backup_evidence_response = client.post(
                 "/data-deletions/17/backup-evidence",
@@ -244,6 +283,10 @@ class WebDataDeletionTests(unittest.TestCase):
             "/data-deletions/17/backup-readiness-state",
         )
         self.assertEqual(
+            detail_response.json()["backup_build_url"],
+            "/data-deletions/17/backup-builds",
+        )
+        self.assertEqual(
             detail_response.json()["backup_evidence_url"],
             "/data-deletions/17/backup-evidence",
         )
@@ -287,6 +330,11 @@ class WebDataDeletionTests(unittest.TestCase):
             "rehearsal_not_passed",
             backup_state_response.json()["backup_readiness_state"]["execution_blockers"],
         )
+        self.assertFalse(backup_state_response.json()["backup_builder_state"]["build_allowed"])
+        self.assertEqual(backup_build_response.status_code, 200)
+        self.assertEqual(backup_build_response.json()["backup_build"]["build_id"], "build-1")
+        self.assertFalse(backup_build_response.json()["execution_enabled"])
+        self.assertFalse(backup_build_response.json()["execution_ready"])
         self.assertEqual(backup_evidence_response.status_code, 200)
         self.assertEqual(backup_evidence_response.json()["backup_evidence"]["id"], 801)
         self.assertFalse(backup_evidence_response.json()["execution_enabled"])
@@ -326,6 +374,14 @@ class WebDataDeletionTests(unittest.TestCase):
             note="plan reviewed",
         )
         backup_service.readiness_state.assert_called_once_with(pending)
+        builder_service.build_state.assert_called_once_with(pending)
+        builder_service.build.assert_called_once_with(
+            pending,
+            dry_run_plan_id=901,
+            confirmation_text=backup_build_confirmation,
+            actor_id="local-owner",
+            note="build local artifacts",
+        )
         backup_service.record_evidence.assert_called_once_with(
             pending,
             dry_run_plan_id=901,

@@ -197,6 +197,91 @@ class DataDeletionBackupTests(unittest.TestCase):
         self.assertEqual(len(mutation_queries), 1)
         self.assertIn("INSERT INTO data_deletion_backup_evidence", mutation_queries[0])
 
+    def test_record_evidence_batch_inserts_artifact_evidence_atomically(self) -> None:
+        plan = _plan()
+        mysql_payload = normalize_evidence_payload("mysql_target_backup", _mysql_payload())
+        replay_payload = normalize_evidence_payload(
+            "replay_artifact_backup",
+            {
+                "artifact_path": "D:/BackUP/audit/replay-plan-901.zip",
+                "artifact_sha256": "b" * 64,
+                "artifact_size_bytes": 80,
+                "covered_file_count": 2,
+                "covered_file_bytes": 30,
+                "backup_created_at_kst": "2026-07-12T12:05:00+09:00",
+            },
+        )
+        mysql_fingerprint = fingerprint_backup_evidence(
+            17, plan, "mysql_target_backup", mysql_payload
+        )
+        replay_fingerprint = fingerprint_backup_evidence(
+            17, plan, "replay_artifact_backup", replay_payload
+        )
+        connection = ScriptedConnection(
+            [
+                {"contains": "SELECT status FROM data_deletion_requests", "row": {"status": "approved"}},
+                {
+                    "contains": "SELECT id, plan_fingerprint_sha256 FROM data_deletion_dry_run_plans",
+                    "row": {"id": plan.id, "plan_fingerprint_sha256": plan.plan_fingerprint_sha256},
+                },
+                {"contains": "INSERT INTO data_deletion_backup_evidence", "lastrowid": 801},
+                {"contains": "INSERT INTO data_deletion_backup_evidence", "lastrowid": 802},
+                {
+                    "contains": "WHERE id = %s",
+                    "row": _evidence_row(
+                        plan,
+                        "mysql_target_backup",
+                        mysql_payload,
+                        evidence_id=801,
+                        evidence_fingerprint=mysql_fingerprint,
+                    ),
+                },
+                {
+                    "contains": "WHERE id = %s",
+                    "row": _evidence_row(
+                        plan,
+                        "replay_artifact_backup",
+                        replay_payload,
+                        evidence_id=802,
+                        evidence_fingerprint=replay_fingerprint,
+                    ),
+                },
+            ]
+        )
+        dry_run_service = MagicMock()
+        dry_run_service.list_plans.return_value = [plan]
+        service = DataDeletionBackupService(
+            connection,
+            dry_run_service=dry_run_service,
+            preview_service=MagicMock(),
+        )
+
+        recorded = service.record_evidence_batch(
+            _request(),
+            dry_run_plan_id=plan.id,
+            evidence_by_key={
+                "replay_artifact_backup": replay_payload,
+                "mysql_target_backup": mysql_payload,
+            },
+            actor_id="local-owner",
+            note="builder audit",
+            reference_kst=datetime(2026, 7, 12, 12, 6, 0),
+        )
+
+        self.assertEqual(list(recorded), ["mysql_target_backup", "replay_artifact_backup"])
+        self.assertEqual(connection.begin_count, 1)
+        self.assertEqual(connection.commit_count, 1)
+        self.assertEqual(connection.rollback_count, 0)
+        mutation_queries = [
+            query
+            for query, _ in connection.executed
+            if query.lstrip().upper().startswith(("INSERT ", "UPDATE ", "DELETE ", "REPLACE "))
+        ]
+        self.assertEqual(len(mutation_queries), 2)
+        self.assertTrue(
+            all("INSERT INTO data_deletion_backup_evidence" in query for query in mutation_queries)
+        )
+
     def test_record_evidence_rolls_back_when_request_changes(self) -> None:
         plan = _plan()
         connection = ScriptedConnection(

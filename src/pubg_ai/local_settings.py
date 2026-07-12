@@ -33,16 +33,20 @@ class StoragePathStatus:
 class StorageSettings:
     raw_data_dir: Path
     replay_data_dir: Path
+    backup_data_dir: Path | None = None
     raw_compression: str = "gzip"
     updated_at: str | None = None
 
     def to_record(self) -> dict[str, Any]:
-        return {
+        record = {
             "raw_data_dir": str(self.raw_data_dir),
             "replay_data_dir": str(self.replay_data_dir),
             "raw_compression": self.raw_compression,
             "updated_at": self.updated_at,
         }
+        if self.backup_data_dir is not None:
+            record["backup_data_dir"] = str(self.backup_data_dir)
+        return record
 
 
 @dataclass(frozen=True)
@@ -196,8 +200,11 @@ class LocalSettingsStore:
 
         raw_value = storage.get("raw_data_dir")
         replay_value = storage.get("replay_data_dir")
+        backup_value = storage.get("backup_data_dir")
         if not isinstance(raw_value, str) or not isinstance(replay_value, str):
             return None
+        if backup_value is not None and not isinstance(backup_value, str):
+            raise LocalSettingsError("backup_data_dir must be a path string.")
 
         compression = storage.get("raw_compression", "gzip")
         if compression not in {"gzip", "none"}:
@@ -210,6 +217,11 @@ class LocalSettingsStore:
         return StorageSettings(
             raw_data_dir=_resolve_config_path(raw_value, self.base_dir),
             replay_data_dir=_resolve_config_path(replay_value, self.base_dir),
+            backup_data_dir=(
+                _resolve_config_path(backup_value, self.base_dir)
+                if isinstance(backup_value, str) and backup_value.strip()
+                else None
+            ),
             raw_compression=compression,
             updated_at=updated_at,
         )
@@ -263,6 +275,7 @@ class LocalSettingsStore:
         self,
         raw_data_dir: str | Path,
         replay_data_dir: str | Path,
+        backup_data_dir: str | Path | None = None,
         raw_compression: str = "gzip",
         create_dirs: bool = True,
         require_writable: bool = True,
@@ -272,24 +285,33 @@ class LocalSettingsStore:
 
         raw_path = _resolve_config_path(raw_data_dir, self.base_dir)
         replay_path = _resolve_config_path(replay_data_dir, self.base_dir)
+        current = self.load_storage_settings()
+        backup_path = (
+            _resolve_config_path(backup_data_dir, self.base_dir)
+            if backup_data_dir is not None
+            else current.backup_data_dir if current is not None else None
+        )
+        paths = [raw_path, replay_path]
+        if backup_path is not None:
+            paths.append(backup_path)
 
         if require_writable:
-            raw_status = check_storage_path(raw_path, create=create_dirs)
-            replay_status = check_storage_path(replay_path, create=create_dirs)
+            statuses = [check_storage_path(path, create=create_dirs) for path in paths]
             errors = [
                 status.error or f"{status.path} is not writable"
-                for status in (raw_status, replay_status)
+                for status in statuses
                 if not status.writable
             ]
             if errors:
                 raise LocalSettingsError("; ".join(errors))
         elif create_dirs:
-            raw_path.mkdir(parents=True, exist_ok=True)
-            replay_path.mkdir(parents=True, exist_ok=True)
+            for path in paths:
+                path.mkdir(parents=True, exist_ok=True)
 
         settings = StorageSettings(
             raw_data_dir=raw_path,
             replay_data_dir=replay_path,
+            backup_data_dir=backup_path,
             raw_compression=raw_compression,
             updated_at=isoformat_kst(),
         )
@@ -386,10 +408,13 @@ class LocalSettingsStore:
         if settings is None:
             raise LocalSettingsError("storage settings have not been saved yet.")
 
-        return {
+        statuses = {
             "raw_data_dir": check_storage_path(settings.raw_data_dir),
             "replay_data_dir": check_storage_path(settings.replay_data_dir),
         }
+        if settings.backup_data_dir is not None:
+            statuses["backup_data_dir"] = check_storage_path(settings.backup_data_dir)
+        return statuses
 
     def _write_settings(self, payload: dict[str, Any]) -> None:
         _reject_forbidden_secret_keys(payload)

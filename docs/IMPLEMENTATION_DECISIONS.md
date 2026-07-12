@@ -191,8 +191,13 @@ Suggested command groups:
   results. Evidence and rehearsal rows remain bound to the latest plan and are rechecked under database locks.
 - The rehearsal validator reads live preview data and filesystem metadata only. It does not create backup artifacts,
   read backup contents, recalculate SHA-256, perform a restore, quarantine files, or mutate target rows.
-- `executor_not_implemented` remains mandatory even after complete evidence and a passed rehearsal. A configurable
-  backup root plus an explicit artifact/checksum builder must exist before any quarantine or executor design begins.
+- `PUBG_BACKUP_DATA_DIR` and local settings provide a third storage root that must not overlap raw or replay source
+  roots. The opt-in builder requires exact plan-fingerprint text, exports only a fixed table allowlist, copies only
+  verified player-owned replay files, calculates checksums, publishes atomically, and records both artifact evidence
+  rows in one transaction.
+- JSONL/ZIP artifacts deliberately contain no executable deletion SQL or schema DDL. The current application has no
+  restore importer, quarantine destination, or executor, so capacity and restore/integrity evidence remain separate
+  requirements and `executor_not_implemented` remains mandatory.
 - Deletion should be split into options:
   - delete registration only
   - delete normalized DB data

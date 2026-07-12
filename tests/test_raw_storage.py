@@ -30,6 +30,7 @@ class AppConfigTests(unittest.TestCase):
 
         self.assertEqual(str(config.raw_data_dir), "E:\\PUBG_AI_Data\\raw")
         self.assertEqual(config.replay_data_dir, Path("C:/workspace") / "data" / "replays")
+        self.assertEqual(config.backup_data_dir, Path("C:/workspace") / "data" / "backups")
         self.assertEqual(config.raw_compression, "gzip")
         self.assertFalse(config.allow_storage_fallback)
 
@@ -38,6 +39,15 @@ class AppConfigTests(unittest.TestCase):
 
         self.assertEqual(config.raw_data_dir, Path("C:/workspace") / "data" / "raw")
         self.assertEqual(config.replay_data_dir, Path("C:/workspace") / "data" / "replays")
+        self.assertEqual(config.backup_data_dir, Path("C:/workspace") / "data" / "backups")
+
+    def test_backup_data_dir_can_be_configured_from_env(self) -> None:
+        config = AppConfig.from_env(
+            {"PUBG_BACKUP_DATA_DIR": r"D:\BackUP\deletion-backups"},
+            base_dir=Path("C:/workspace"),
+        )
+
+        self.assertEqual(str(config.backup_data_dir), r"D:\BackUP\deletion-backups")
 
     def test_replay_data_dir_can_be_configured_from_env(self) -> None:
         config = AppConfig.from_env(
@@ -53,15 +63,18 @@ class AppConfigTests(unittest.TestCase):
             settings_file = base_dir / "config" / "local_settings.json"
             raw_dir = base_dir / "selected-raw"
             replay_dir = base_dir / "selected-replays"
+            backup_dir = base_dir / "selected-backups"
             LocalSettingsStore(settings_file, base_dir=base_dir).save_storage_settings(
                 raw_data_dir=raw_dir,
                 replay_data_dir=replay_dir,
+                backup_data_dir=backup_dir,
             )
 
             config = AppConfig.from_sources(
                 {
                     "PUBG_RAW_DATA_DIR": "env-raw",
                     "PUBG_REPLAY_DATA_DIR": "env-replays",
+                    "PUBG_BACKUP_DATA_DIR": "env-backups",
                     "PUBG_LOCAL_SETTINGS_FILE": str(settings_file),
                 },
                 base_dir=base_dir,
@@ -69,6 +82,35 @@ class AppConfigTests(unittest.TestCase):
 
             self.assertEqual(config.raw_data_dir, raw_dir)
             self.assertEqual(config.replay_data_dir, replay_dir)
+            self.assertEqual(config.backup_data_dir, backup_dir)
+
+    def test_legacy_local_storage_settings_fall_back_to_env_backup_root(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            settings_file = base_dir / "config" / "local_settings.json"
+            settings_file.parent.mkdir(parents=True)
+            settings_file.write_text(
+                json.dumps(
+                    {
+                        "storage": {
+                            "raw_data_dir": "selected-raw",
+                            "replay_data_dir": "selected-replays",
+                            "raw_compression": "gzip",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config = AppConfig.from_sources(
+                {
+                    "PUBG_BACKUP_DATA_DIR": "env-backups",
+                    "PUBG_LOCAL_SETTINGS_FILE": str(settings_file),
+                },
+                base_dir=base_dir,
+            )
+
+            self.assertEqual(config.backup_data_dir, base_dir / "env-backups")
 
     def test_local_program_collector_settings_override_env_values(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -207,18 +249,22 @@ class LocalSettingsStoreTests(unittest.TestCase):
             settings_file = base_dir / "config" / "local_settings.json"
             raw_dir = base_dir / "raw-drive" / "raw"
             replay_dir = base_dir / "replay-drive" / "replays"
+            backup_dir = base_dir / "backup-drive" / "deletion-backups"
 
             store = LocalSettingsStore(settings_file, base_dir=base_dir)
-            saved = store.save_storage_settings(raw_dir, replay_dir)
+            saved = store.save_storage_settings(raw_dir, replay_dir, backup_dir)
             loaded = store.load_storage_settings()
 
             self.assertEqual(saved.raw_data_dir, raw_dir)
             self.assertEqual(saved.replay_data_dir, replay_dir)
+            self.assertEqual(saved.backup_data_dir, backup_dir)
             self.assertTrue(raw_dir.is_dir())
             self.assertTrue(replay_dir.is_dir())
+            self.assertTrue(backup_dir.is_dir())
             self.assertIsNotNone(loaded)
             self.assertEqual(loaded.raw_data_dir, raw_dir)
             self.assertEqual(loaded.replay_data_dir, replay_dir)
+            self.assertEqual(loaded.backup_data_dir, backup_dir)
 
     def test_storage_settings_do_not_overwrite_collector_settings(self) -> None:
         with TemporaryDirectory() as temp_dir:

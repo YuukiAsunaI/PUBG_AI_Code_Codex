@@ -24,7 +24,7 @@ When the real storage drive is ready, the local management program should save t
 
 ## Local Program Storage Settings
 
-The local management program must be able to change both storage roots from a settings screen. The app should write
+The local management program must be able to change all three storage roots from a settings screen. The app should write
 those choices to this JSON file:
 
 ```env
@@ -38,6 +38,7 @@ Recommended JSON shape:
   "storage": {
     "raw_data_dir": "E:\\PUBG_AI_Data\\raw",
     "replay_data_dir": "E:\\PUBG_AI_Data\\replays",
+    "backup_data_dir": "D:\\BackUP\\deletion-backups",
     "raw_compression": "gzip",
     "updated_at": "2026-06-27T21:00:00+09:00"
   },
@@ -118,8 +119,16 @@ not independently recomputed or executed. Corrected evidence appends a new immut
 rehearsal stale. Run `python -m pubg_ai.cli init-db` after updating so the seven deletion workflow tables are created.
 No deletion executor or execution endpoint is enabled.
 
-1. Built-in defaults: `./data/raw`, `./data/replays`
-2. `.env` values: `PUBG_RAW_DATA_DIR`, `PUBG_REPLAY_DATA_DIR`
+The opt-in builder uses `PUBG_BACKUP_DATA_DIR` (default `./data/backups`). The backup root must be writable and must not
+equal, contain, or be contained by `PUBG_RAW_DATA_DIR` or `PUBG_REPLAY_DATA_DIR`. A build requires the exact latest-plan
+confirmation text. MySQL candidate rows are exported as typed JSONL entries in `mysql-target-backup.zip`; verified
+player-owned replay bytes are copied to `replay-artifact-backup.zip`. A `build-manifest.json` binds both artifacts to
+the request, plan, source fingerprint, actor, KST build time, and confirmation-text hash. Whole-file and internal
+checksums are calculated while building. The current format does not include schema creation SQL or a restore importer,
+so the builder never claims a successful restore rehearsal and does not populate quarantine-capacity evidence.
+
+1. Built-in defaults: `./data/raw`, `./data/replays`, `./data/backups`
+2. `.env` values: `PUBG_RAW_DATA_DIR`, `PUBG_REPLAY_DATA_DIR`, `PUBG_BACKUP_DATA_DIR`
 3. Local program values in `PUBG_LOCAL_SETTINGS_FILE`
 
 This means `.env` is still useful for first boot, but the local program can override the paths after the user changes
@@ -129,6 +138,7 @@ The current settings screen provides:
 
 - match/telemetry raw-data path editor
 - 2D replay artifact path editor
+- opt-in deletion backup path editor
 - raw compression selector
 - polling interval selector from 1 to 5 minutes
 - collection cycle player limit selector up to 100

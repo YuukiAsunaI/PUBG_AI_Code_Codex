@@ -33,6 +33,10 @@ from pubg_ai.data_deletion_backup import (
     DataDeletionBackupError,
     DataDeletionBackupService,
 )
+from pubg_ai.data_deletion_backup_builder import (
+    DataDeletionBackupBuilderError,
+    DataDeletionBackupBuilderService,
+)
 from pubg_ai.data_deletion_confirmation import (
     DataDeletionConfirmationError,
     DataDeletionConfirmationService,
@@ -206,6 +210,13 @@ class DataDeletionBackupEvidenceCreateRequest(BaseModel):
     note: str | None = Field(default=None, max_length=1000)
 
 
+class DataDeletionBackupBuildCreateRequest(BaseModel):
+    dry_run_plan_id: int = Field(gt=0)
+    confirmation_text: str = Field(min_length=1, max_length=500)
+    actor_id: str = Field(default="local-manager", min_length=1, max_length=191)
+    note: str | None = Field(default=None, max_length=500)
+
+
 class DataDeletionRehearsalCreateRequest(BaseModel):
     dry_run_plan_id: int = Field(gt=0)
     actor_id: str = Field(default="local-manager", min_length=1, max_length=191)
@@ -219,6 +230,7 @@ class WebSettingsRequest(BaseModel):
 class StorageSettingsRequest(BaseModel):
     raw_data_dir: str = Field(min_length=1)
     replay_data_dir: str = Field(min_length=1)
+    backup_data_dir: str = Field(min_length=1)
     raw_compression: str = "gzip"
 
 
@@ -326,6 +338,24 @@ def create_app() -> Any:
             preview_service=preview_service,
         )
 
+    def build_data_deletion_backup_builder_service(
+        connection: Any,
+        runtime_config: RuntimeConfig,
+        *,
+        backup_service: DataDeletionBackupService | None = None,
+    ) -> DataDeletionBackupBuilderService:
+        service = backup_service or build_data_deletion_backup_service(
+            connection,
+            runtime_config,
+        )
+        return DataDeletionBackupBuilderService(
+            connection,
+            backup_service=service,
+            backup_root=runtime_config.app.backup_data_dir,
+            raw_data_dir=runtime_config.app.raw_data_dir,
+            replay_data_dir=runtime_config.app.replay_data_dir,
+        )
+
     collector_worker = CollectorWorkerController(config_loader=current_config)
     post_processing_worker = PostProcessingWorkerController(config_loader=current_config)
 
@@ -382,6 +412,7 @@ def create_app() -> Any:
             storage_settings = settings_store.save_storage_settings(
                 raw_data_dir=request.raw_data_dir,
                 replay_data_dir=request.replay_data_dir,
+                backup_data_dir=request.backup_data_dir,
                 raw_compression=request.raw_compression,
             )
             storage_status = {
@@ -777,6 +808,7 @@ def create_app() -> Any:
             "dry_run_state_url": f"/data-deletions/{request_id}/dry-run-state",
             "dry_run_plan_url": f"/data-deletions/{request_id}/dry-run-plans",
             "backup_readiness_state_url": f"/data-deletions/{request_id}/backup-readiness-state",
+            "backup_build_url": f"/data-deletions/{request_id}/backup-builds",
             "backup_evidence_url": f"/data-deletions/{request_id}/backup-evidence",
             "rehearsal_url": f"/data-deletions/{request_id}/rehearsals",
             "execution_enabled": False,
@@ -953,18 +985,65 @@ def create_app() -> Any:
         try:
             try:
                 request = DataDeletionRequestService(connection).get_request(request_id)
-                state = build_data_deletion_backup_service(
+                backup_service = build_data_deletion_backup_service(
                     connection,
                     runtime_config,
-                ).readiness_state(request)
+                )
+                state = backup_service.readiness_state(request)
+                builder_state = build_data_deletion_backup_builder_service(
+                    connection,
+                    runtime_config,
+                    backup_service=backup_service,
+                ).build_state(request)
             except DataDeletionRequestError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
-            except (DataDeletionBackupError, DataDeletionDryRunError) as exc:
+            except (
+                DataDeletionBackupBuilderError,
+                DataDeletionBackupError,
+                DataDeletionDryRunError,
+            ) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
         finally:
             connection.close()
         return {
             "backup_readiness_state": state,
+            "backup_builder_state": builder_state,
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+
+    @app.post("/data-deletions/{request_id}/backup-builds")
+    def build_data_deletion_backup_artifacts(
+        request_id: int,
+        build_request: DataDeletionBackupBuildCreateRequest,
+    ) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(runtime_config.database)
+        try:
+            try:
+                request = DataDeletionRequestService(connection).get_request(request_id)
+                result = build_data_deletion_backup_builder_service(
+                    connection,
+                    runtime_config,
+                ).build(
+                    request,
+                    dry_run_plan_id=build_request.dry_run_plan_id,
+                    confirmation_text=build_request.confirmation_text,
+                    actor_id=build_request.actor_id,
+                    note=build_request.note,
+                )
+            except DataDeletionRequestError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except (
+                DataDeletionBackupBuilderError,
+                DataDeletionBackupError,
+                DataDeletionDryRunError,
+            ) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {
+            "backup_build": result.to_record(),
             "execution_enabled": False,
             "execution_ready": False,
         }
@@ -1593,11 +1672,13 @@ def _settings_status_record(config: RuntimeConfig) -> dict[str, Any]:
     return {
         "raw_data_dir": str(config.app.raw_data_dir),
         "replay_data_dir": str(config.app.replay_data_dir),
+        "backup_data_dir": str(config.app.backup_data_dir),
         "local_web_base_url": config.app.local_web_base_url,
         "raw_compression": config.app.raw_compression,
         "storage_status": {
             "raw_data_dir": check_storage_path(config.app.raw_data_dir).to_record(),
             "replay_data_dir": check_storage_path(config.app.replay_data_dir).to_record(),
+            "backup_data_dir": check_storage_path(config.app.backup_data_dir).to_record(),
         },
         "collector": {
             "poll_interval_seconds": config.app.collector_poll_interval_seconds,
@@ -1932,6 +2013,7 @@ _INDEX_HTML = """<!doctype html>
     .table-scroll { width: 100%; max-width: 100%; overflow-x: auto; }
     .table-scroll .detail-table { min-width: 680px; }
     .confirmation-contract, .dry-run-contract, .backup-readiness-contract { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+    .backup-builder-contract { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
     .confirmation-contract code, .dry-run-contract code, .backup-readiness-contract code { display: block; margin: 8px 0; overflow-wrap: anywhere; font-size: 12px; }
     .dry-run-contract, .backup-readiness-contract { min-width: 0; max-width: 100%; }
     .dry-run-contract .table-scroll, .backup-readiness-contract .table-scroll { margin-top: 8px; }
@@ -2047,6 +2129,9 @@ _INDEX_HTML = """<!doctype html>
         </label>
         <label>Replay directory
           <input name="replay_data_dir" autocomplete="off" required>
+        </label>
+        <label>Deletion backup directory
+          <input name="backup_data_dir" autocomplete="off" required>
         </label>
         <label>Compression
           <select name="raw_compression">
@@ -2894,16 +2979,19 @@ _INDEX_HTML = """<!doctype html>
         cell("Discord Token", settings.secrets.DISCORD_BOT_TOKEN.configured ? "설정됨" : "없음"),
         cell("Raw 저장소", settings.raw_data_dir),
         cell("Replay 저장소", settings.replay_data_dir),
+        cell("Backup 저장소", settings.backup_data_dir),
         cell("수집 주기", `${settings.collector.poll_interval_seconds}초`),
         cell("주기당 대상", `${settings.collector.cycle_player_limit}명`),
         cell("조회 chunk", `${settings.collector.player_lookup_chunk_size}명`),
       ].join("");
       storageSettingsForm.elements.raw_data_dir.value = settings.raw_data_dir || "";
       storageSettingsForm.elements.replay_data_dir.value = settings.replay_data_dir || "";
+      storageSettingsForm.elements.backup_data_dir.value = settings.backup_data_dir || "";
       storageSettingsForm.elements.raw_compression.value = settings.raw_compression || "gzip";
       storageSettingsStatus.textContent = [
         `Raw ${formatStoragePathStatus(settings.storage_status?.raw_data_dir)}`,
         `Replay ${formatStoragePathStatus(settings.storage_status?.replay_data_dir)}`,
+        `Backup ${formatStoragePathStatus(settings.storage_status?.backup_data_dir)}`,
       ].join(" / ");
       collectorSettingsForm.elements.poll_interval_seconds.value = settings.collector.poll_interval_seconds || 180;
       collectorSettingsForm.elements.cycle_player_limit.value = settings.collector.cycle_player_limit || 100;
@@ -3966,8 +4054,29 @@ _INDEX_HTML = """<!doctype html>
       dataDeletionStatus.textContent = "Read-only dry-run plan recorded. Deletion execution remains disabled.";
     }
 
-    function renderDataDeletionBackupReadiness(state) {
+    function renderDataDeletionBackupReadiness(state, builderState) {
       const plan = state.latest_plan;
+      const builderBlockers = (builderState?.build_blockers || [])
+        .map((blocker) => `<li>${escapeHtml(blocker)}</li>`)
+        .join("");
+      const builderForm = builderState?.confirmation_text ? `
+        <div class="backup-builder-contract">
+          <h3>Opt-in backup artifact builder</h3>
+          <div class="status">Root: ${escapeHtml(builderState.backup_root || "-")} / checksum calculation: yes / restore: no / quarantine: no / deletion: no</div>
+          <ul>${builderBlockers}</ul>
+          <code>${escapeHtml(builderState.confirmation_text)}</code>
+          <form class="confirmation-input-row backup-builder-form" data-backup-build-form data-request-id="${attr(state.request_id)}" data-plan-id="${attr(builderState.latest_plan_id || "")}">
+            <label>Exact build confirmation
+              <input name="confirmation_text" autocomplete="off" required>
+            </label>
+            <button type="submit" ${builderState.build_allowed ? "" : "disabled"}>Build backup artifacts</button>
+          </form>
+        </div>` : `
+        <div class="backup-builder-contract">
+          <h3>Opt-in backup artifact builder</h3>
+          <div class="status">Root: ${escapeHtml(builderState?.backup_root || "-")} / unavailable</div>
+          <ul>${builderBlockers}</ul>
+        </div>`;
       const prerequisiteRows = (state.prerequisites || []).map((item) => `
         <tr>
           <td>${escapeHtml(item.key)}</td>
@@ -4052,9 +4161,10 @@ _INDEX_HTML = """<!doctype html>
       return `
         <div class="backup-readiness-contract">
           <h3>Backup evidence and rehearsal</h3>
-          <div class="status">Execution enabled: no / execution ready: no / checksum recalculation: no / restore operation: no</div>
+          <div class="status">Execution enabled: no / execution ready: no / rehearsal checksum recalculation: no / restore operation: no</div>
           <ul>${(state.execution_blockers || []).map((blocker) => `<li>${escapeHtml(blocker)}</li>`).join("")}</ul>
           <div class="actions">${rehearsalButton}</div>
+          ${builderForm}
           <h3>Prerequisite evidence</h3>
           <div class="table-scroll">
             <table class="detail-table">
@@ -4111,7 +4221,10 @@ _INDEX_HTML = """<!doctype html>
       }
       const payload = await response.json();
       const host = document.querySelector("#dataDeletionBackupReadiness");
-      host.innerHTML = renderDataDeletionBackupReadiness(payload.backup_readiness_state);
+      host.innerHTML = renderDataDeletionBackupReadiness(
+        payload.backup_readiness_state,
+        payload.backup_builder_state,
+      );
       updateBackupEvidenceFields(host.querySelector("form[data-backup-evidence-form]"));
     }
 
@@ -4123,6 +4236,31 @@ _INDEX_HTML = """<!doctype html>
     function optionalFormNumber(form, name) {
       const value = optionalFormText(form, name);
       return value === null ? null : Number(value);
+    }
+
+    async function buildDataDeletionBackupArtifacts(formElement) {
+      const values = new FormData(formElement);
+      const reviewer = new FormData(dataDeletionFilterForm);
+      const requestId = formElement.dataset.requestId || "";
+      const actorId = String(reviewer.get("actor_id") || "").trim();
+      const note = String(reviewer.get("note") || "").trim();
+      const confirmationText = String(values.get("confirmation_text") || "").trim();
+      if (!actorId) throw new Error("Local reviewer is required.");
+      if (!confirmationText) throw new Error("Exact build confirmation is required.");
+      const button = formElement.querySelector("button[type='submit']");
+      if (button) button.disabled = true;
+      try {
+        await postJson(`/data-deletions/${encodeURIComponent(requestId)}/backup-builds`, {
+          dry_run_plan_id: Number(formElement.dataset.planId),
+          confirmation_text: confirmationText,
+          actor_id: actorId,
+          note: note || null,
+        });
+        await loadDataDeletionRequestDetail(requestId);
+        dataDeletionStatus.textContent = "Backup artifacts and immutable evidence recorded. No restore, quarantine, or deletion operation was run.";
+      } finally {
+        if (button) button.disabled = false;
+      }
     }
 
     async function recordDataDeletionBackupEvidence(formElement) {
@@ -6123,11 +6261,13 @@ _INDEX_HTML = """<!doctype html>
       const payload = await postJson("/settings/storage", {
         raw_data_dir: String(form.get("raw_data_dir") || "").trim(),
         replay_data_dir: String(form.get("replay_data_dir") || "").trim(),
+        backup_data_dir: String(form.get("backup_data_dir") || "").trim(),
         raw_compression: String(form.get("raw_compression") || "gzip"),
       });
       storageSettingsStatus.textContent = [
         `Raw ${formatStoragePathStatus(payload.storage_status?.raw_data_dir)}`,
         `Replay ${formatStoragePathStatus(payload.storage_status?.replay_data_dir)}`,
+        `Backup ${formatStoragePathStatus(payload.storage_status?.backup_data_dir)}`,
       ].join(" / ");
       await loadStatus();
       await loadAlerts({ renderHistory: false });
@@ -6893,6 +7033,19 @@ _INDEX_HTML = """<!doctype html>
         } else if (button.dataset.deletionContractAction === "rehearsal") {
           await runDataDeletionRehearsal(requestId, button.dataset.planId || "");
         }
+      } catch (error) {
+        dataDeletionStatus.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    dataDeletionDetail.addEventListener("submit", async (event) => {
+      const form = event.target instanceof Element
+        ? event.target.closest("form[data-backup-build-form]")
+        : null;
+      if (!form) return;
+      event.preventDefault();
+      try {
+        await buildDataDeletionBackupArtifacts(form);
       } catch (error) {
         dataDeletionStatus.textContent = `Error: ${error.message}`;
       }
