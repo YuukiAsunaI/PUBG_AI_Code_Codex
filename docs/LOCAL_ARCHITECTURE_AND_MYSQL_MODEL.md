@@ -78,6 +78,7 @@ Use a two-layer storage model:
 | `data_deletion_request_events` | Immutable requested/approved/rejected/cancelled/expired/executed/failed audit events |
 | `data_deletion_preview_snapshots` | Immutable full preview JSON, canonical manifest, SHA-256 fingerprint, completeness, issue, candidate, actor, and KST evidence |
 | `data_deletion_confirmations` | Immutable latest-snapshot confirmations bound by composite request/snapshot/fingerprint foreign key |
+| `data_deletion_dry_run_plans` | Immutable canonical plans with confirmed source fingerprint, ordered non-executable operations, protected exclusions, backup prerequisites, metrics, actor, and KST evidence |
 | `player_aliases` | Nickname history and lookup evidence |
 | `discord_users` | Discord user records; not assumed to own PUBG accounts |
 | `discord_guilds` | Guild-specific settings, ranking scope, and visibility defaults |
@@ -492,8 +493,12 @@ Completed slices:
      records. Only an approved request's latest complete, issue-free maximum-500-file snapshot can be confirmed after a
      fresh fingerprint match and exact full-fingerprint text entry. Confirmation remains audit-only and all deletion
      execution APIs remain absent.
+104. Schema version 12 stores immutable confirmed dry-run plans. Generation locks and rechecks the approved request,
+     latest snapshot, matching confirmation, and fresh fingerprint, then inserts one canonical plan audit row. Plans
+     order player row and replay quarantine descriptors, preserve raw/shared/audit data, require backup evidence, and
+     remain blocked by `executor_not_implemented`; no executable SQL, file mutation, or execution route exists.
 
 Next slice:
 
-1. Build a read-only deletion dry-run plan that expands a confirmed fingerprint into ordered SQL/file operations,
-   shared-data exclusions, backup prerequisites, and live revalidation checks; do not execute any operation yet.
+1. Add immutable backup-evidence records and a non-executing rehearsal validator for confirmed dry-run plans. Keep
+   target row/file mutations disabled.

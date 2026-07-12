@@ -379,6 +379,12 @@ The current Discord bot slice is intentionally small and reuses the same local M
   text. Discord cannot capture or confirm these records.
 - Snapshot/confirmation writes append audit records only. They do not update the request status, run deletion SQL,
   remove files, or expose any execution counterpart.
+- After confirmation, the localhost manager can generate a canonical read-only dry-run plan. It rechecks the latest
+  snapshot, confirmation, and live fingerprint, then records ordered row/file descriptors, shared-data exclusions,
+  backup prerequisites, candidate bytes, and postconditions.
+- Dry-run file candidates are player-owned replay artifacts only. Raw match/telemetry files and metadata remain
+  protected as shared evidence. Plan generation inserts one audit row and exposes no Discord command or execution
+  route; backup evidence and an executor are explicitly absent blockers.
 - The bot reloads local Discord permission settings before every gated command, so local web/CLI changes take effect
   without a bot restart. Global-admin membership remains editable only from the local web UI or CLI.
 - The local web UI and CLI can now add/revoke user command-group grants and add/remove global Discord admins without

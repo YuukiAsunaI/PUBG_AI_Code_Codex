@@ -107,8 +107,12 @@ Schema version 11 stores immutable maximum-500-file preview snapshots and SHA-25
 requires an `approved` request, the latest snapshot, a complete catalog, zero filesystem issues, at least one
 player-owned candidate, a fresh matching fingerprint, and exact text in the form
 `CONFIRM DELETE REQUEST <request_id> <full_fingerprint>`. Confirmation rows store only the text hash and audit
-metadata. No deletion executor or execution endpoint is enabled. Run `python -m pubg_ai.cli init-db` after updating so
-the four deletion workflow tables are created.
+metadata. Schema version 12 adds `data_deletion_dry_run_plans`; generation requires the confirmed latest fingerprint
+to match another maximum-500-file live preview. The immutable JSON plan contains non-executable row/file descriptors,
+shared-data exclusions, backup prerequisites, postcondition checks, and a canonical plan SHA-256. It always reports
+`execution_enabled=false`, `execution_ready=false`, `executor_not_implemented`, and
+`backup_evidence_not_recorded`. Run `python -m pubg_ai.cli init-db` after updating so the five deletion workflow tables
+are created. No deletion executor or execution endpoint is enabled.
 
 1. Built-in defaults: `./data/raw`, `./data/replays`
 2. `.env` values: `PUBG_RAW_DATA_DIR`, `PUBG_REPLAY_DATA_DIR`

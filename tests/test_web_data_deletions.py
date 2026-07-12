@@ -73,6 +73,32 @@ class WebDataDeletionTests(unittest.TestCase):
         }
         confirmation_service.capture_snapshot.return_value = snapshot
         confirmation_service.confirm_snapshot.return_value = confirmation
+        dry_run_plan = MagicMock()
+        dry_run_plan.to_record.return_value = {
+            "id": 901,
+            "request_id": 17,
+            "preview_snapshot_id": 501,
+            "confirmation_id": 701,
+            "plan_fingerprint_sha256": "b" * 64,
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+        dry_run_service = MagicMock()
+        dry_run_service.plan_state.return_value = {
+            "request_id": 17,
+            "request_status": "pending",
+            "generation_allowed": False,
+            "generation_blockers": ["request status must be approved, not pending"],
+            "latest_plan": None,
+            "plans": [],
+            "execution_blockers": [
+                "executor_not_implemented",
+                "backup_evidence_not_recorded",
+            ],
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+        dry_run_service.create_plan.return_value = dry_run_plan
         connections: list[FakeConnection] = []
 
         def connection_factory(*_: object, **__: object) -> FakeConnection:
@@ -85,6 +111,7 @@ class WebDataDeletionTests(unittest.TestCase):
             patch("pubg_ai.web.app.DataDeletionRequestService", return_value=service),
             patch("pubg_ai.web.app.DataDeletionImpactPreviewService", return_value=preview_service),
             patch("pubg_ai.web.app.DataDeletionConfirmationService", return_value=confirmation_service),
+            patch("pubg_ai.web.app.DataDeletionDryRunService", return_value=dry_run_service),
         ):
             client = TestClient(create_app())
             list_response = client.get("/data-deletions?status=pending&limit=50")
@@ -116,6 +143,11 @@ class WebDataDeletionTests(unittest.TestCase):
                     "actor_id": "local-owner",
                 },
             )
+            dry_run_state_response = client.get("/data-deletions/17/dry-run-state")
+            dry_run_plan_response = client.post(
+                "/data-deletions/17/dry-run-plans",
+                json={"actor_id": "local-owner", "note": "plan reviewed"},
+            )
             approve_response = client.post(
                 "/data-deletions/17/approve",
                 json={"actor_id": "local-owner", "note": "대상 확인"},
@@ -135,6 +167,14 @@ class WebDataDeletionTests(unittest.TestCase):
             detail_response.json()["confirmation_state_url"],
             "/data-deletions/17/confirmation-state",
         )
+        self.assertEqual(
+            detail_response.json()["dry_run_state_url"],
+            "/data-deletions/17/dry-run-state",
+        )
+        self.assertEqual(
+            detail_response.json()["dry_run_plan_url"],
+            "/data-deletions/17/dry-run-plans",
+        )
         self.assertEqual(preview_response.status_code, 200)
         self.assertFalse(preview_response.json()["execution_enabled"])
         self.assertTrue(preview_response.json()["preview"]["verification"]["read_only"])
@@ -153,6 +193,17 @@ class WebDataDeletionTests(unittest.TestCase):
         self.assertEqual(confirmation_response.json()["confirmation"]["id"], 701)
         self.assertFalse(confirmation_response.json()["execution_enabled"])
         self.assertEqual(invalid_confirmation_response.status_code, 422)
+        self.assertEqual(dry_run_state_response.status_code, 200)
+        self.assertFalse(dry_run_state_response.json()["execution_enabled"])
+        self.assertFalse(dry_run_state_response.json()["execution_ready"])
+        self.assertIn(
+            "executor_not_implemented",
+            dry_run_state_response.json()["dry_run_state"]["execution_blockers"],
+        )
+        self.assertEqual(dry_run_plan_response.status_code, 200)
+        self.assertEqual(dry_run_plan_response.json()["dry_run_plan"]["id"], 901)
+        self.assertFalse(dry_run_plan_response.json()["execution_enabled"])
+        self.assertFalse(dry_run_plan_response.json()["execution_ready"])
         self.assertEqual(approve_response.status_code, 200)
         self.assertEqual(approve_response.json()["request"]["status"], "approved")
         self.assertFalse(approve_response.json()["execution_enabled"])
@@ -176,6 +227,12 @@ class WebDataDeletionTests(unittest.TestCase):
             confirmation_text=expected_confirmation_text,
             actor_id="local-owner",
             note="typed full fingerprint",
+        )
+        dry_run_service.plan_state.assert_called_once_with(pending)
+        dry_run_service.create_plan.assert_called_once_with(
+            pending,
+            actor_id="local-owner",
+            note="plan reviewed",
         )
         self.assertTrue(all(connection.closed for connection in connections))
 

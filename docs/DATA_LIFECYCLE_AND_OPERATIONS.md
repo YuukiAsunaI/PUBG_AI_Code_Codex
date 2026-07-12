@@ -183,6 +183,16 @@ Implemented behavior:
 - A confirmation stores the actor, KST time, snapshot/fingerprint, note, and confirmation-text hash. It does not change
   request status, enable execution, run deletion SQL, remove files, or weaken the requirement for future live
   revalidation.
+- `GET /data-deletions/{request_id}/dry-run-state` returns immutable plan history and the latest full plan.
+  `POST /data-deletions/{request_id}/dry-run-plans` is available only through the localhost manager and writes one
+  audit-plan row after locking and rechecking the approved request, latest snapshot, matching confirmation, and fresh
+  maximum-500-file fingerprint.
+- A dry-run plan stores ordered non-executable database selectors and player-owned replay quarantine descriptors.
+  Player-specific derived rows precede participants, replay files precede replay metadata, and collection state,
+  aliases, and registration are last. It never stores executable `DELETE FROM` statements.
+- Match-shared raw metadata/files, shared match context, cross-player references, and every deletion audit table are
+  explicit exclusions. Backup creation, capacity, checksum, and restore-rehearsal evidence are prerequisites, while
+  `executor_not_implemented` and `backup_evidence_not_recorded` keep every plan non-ready and non-executable.
 
 ## Duplicate Match Handling
 

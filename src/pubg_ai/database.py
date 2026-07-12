@@ -8,7 +8,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 class DatabaseError(RuntimeError):
@@ -76,7 +76,7 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 VALUES (%s, %s, NOW(6))
                 ON DUPLICATE KEY UPDATE description = VALUES(description)
                 """,
-                (SCHEMA_VERSION, "immutable deletion preview confirmation schema"),
+                (SCHEMA_VERSION, "confirmed deletion dry-run plan schema"),
             )
             applied += 1
     finally:
@@ -336,6 +336,41 @@ def schema_statements() -> list[str]:
             CONSTRAINT fk_data_deletion_confirmation_snapshot
                 FOREIGN KEY (preview_snapshot_id, request_id, fingerprint_sha256)
                 REFERENCES data_deletion_preview_snapshots (id, request_id, fingerprint_sha256)
+                ON DELETE RESTRICT
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS data_deletion_dry_run_plans (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            request_id BIGINT UNSIGNED NOT NULL,
+            preview_snapshot_id BIGINT UNSIGNED NOT NULL,
+            confirmation_id BIGINT UNSIGNED NOT NULL,
+            contract_version VARCHAR(64) NOT NULL,
+            source_fingerprint_sha256 CHAR(64) NOT NULL,
+            plan_fingerprint_sha256 CHAR(64) NOT NULL,
+            plan_json JSON NOT NULL,
+            operation_count INT UNSIGNED NOT NULL,
+            candidate_row_count BIGINT UNSIGNED NOT NULL,
+            candidate_file_count BIGINT UNSIGNED NOT NULL,
+            candidate_file_bytes BIGINT UNSIGNED NOT NULL,
+            excluded_row_count BIGINT UNSIGNED NOT NULL,
+            excluded_file_count BIGINT UNSIGNED NOT NULL,
+            generated_by VARCHAR(191) NOT NULL,
+            generation_note VARCHAR(1000) NULL,
+            generated_at_kst DATETIME(6) NOT NULL,
+            KEY idx_data_deletion_dry_run_request_time (request_id, generated_at_kst),
+            KEY idx_data_deletion_dry_run_source (preview_snapshot_id, source_fingerprint_sha256),
+            KEY idx_data_deletion_dry_run_plan_fingerprint (plan_fingerprint_sha256),
+            KEY idx_data_deletion_dry_run_confirmation (confirmation_id),
+            CONSTRAINT fk_data_deletion_dry_run_request
+                FOREIGN KEY (request_id) REFERENCES data_deletion_requests(id)
+                ON DELETE RESTRICT,
+            CONSTRAINT fk_data_deletion_dry_run_snapshot
+                FOREIGN KEY (preview_snapshot_id, request_id, source_fingerprint_sha256)
+                REFERENCES data_deletion_preview_snapshots (id, request_id, fingerprint_sha256)
+                ON DELETE RESTRICT,
+            CONSTRAINT fk_data_deletion_dry_run_confirmation
+                FOREIGN KEY (confirmation_id) REFERENCES data_deletion_confirmations(id)
                 ON DELETE RESTRICT
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """,

@@ -32,6 +32,10 @@ from pubg_ai.data_deletion_confirmation import (
     DataDeletionConfirmationError,
     DataDeletionConfirmationService,
 )
+from pubg_ai.data_deletion_dry_run import (
+    DataDeletionDryRunError,
+    DataDeletionDryRunService,
+)
 from pubg_ai.data_deletion_preview import (
     DEFAULT_PREVIEW_FILE_LIMIT,
     MAX_PREVIEW_FILE_LIMIT,
@@ -167,6 +171,11 @@ class DataDeletionConfirmationCreateRequest(BaseModel):
     note: str | None = Field(default=None, max_length=1000)
 
 
+class DataDeletionDryRunCreateRequest(BaseModel):
+    actor_id: str = Field(default="local-manager", min_length=1, max_length=191)
+    note: str | None = Field(default=None, max_length=1000)
+
+
 class WebSettingsRequest(BaseModel):
     local_web_base_url: str | None = None
 
@@ -236,6 +245,25 @@ def create_app() -> Any:
                 raw_data_dir=runtime_config.app.raw_data_dir,
                 replay_data_dir=runtime_config.app.replay_data_dir,
             ),
+        )
+
+    def build_data_deletion_dry_run_service(
+        connection: Any,
+        runtime_config: RuntimeConfig,
+    ) -> DataDeletionDryRunService:
+        preview_service = DataDeletionImpactPreviewService(
+            connection,
+            raw_data_dir=runtime_config.app.raw_data_dir,
+            replay_data_dir=runtime_config.app.replay_data_dir,
+        )
+        confirmation_service = DataDeletionConfirmationService(
+            connection,
+            preview_service=preview_service,
+        )
+        return DataDeletionDryRunService(
+            connection,
+            preview_service=preview_service,
+            confirmation_service=confirmation_service,
         )
 
     collector_worker = CollectorWorkerController(config_loader=current_config)
@@ -686,6 +714,8 @@ def create_app() -> Any:
             "confirmation_state_url": f"/data-deletions/{request_id}/confirmation-state",
             "preview_snapshot_url": f"/data-deletions/{request_id}/preview-snapshots",
             "confirmation_url": f"/data-deletions/{request_id}/confirmations",
+            "dry_run_state_url": f"/data-deletions/{request_id}/dry-run-state",
+            "dry_run_plan_url": f"/data-deletions/{request_id}/dry-run-plans",
             "execution_enabled": False,
         }
 
@@ -798,6 +828,59 @@ def create_app() -> Any:
         return {
             "confirmation": confirmation.to_record(),
             "execution_enabled": False,
+        }
+
+    @app.get("/data-deletions/{request_id}/dry-run-state")
+    def data_deletion_dry_run_state(request_id: int) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(runtime_config.database)
+        try:
+            try:
+                request = DataDeletionRequestService(connection).get_request(request_id)
+                state = build_data_deletion_dry_run_service(
+                    connection,
+                    runtime_config,
+                ).plan_state(request)
+            except DataDeletionRequestError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except DataDeletionDryRunError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {
+            "dry_run_state": state,
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+
+    @app.post("/data-deletions/{request_id}/dry-run-plans")
+    def create_data_deletion_dry_run_plan(
+        request_id: int,
+        plan_request: DataDeletionDryRunCreateRequest,
+    ) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(runtime_config.database)
+        try:
+            try:
+                request = DataDeletionRequestService(connection).get_request(request_id)
+                plan = build_data_deletion_dry_run_service(
+                    connection,
+                    runtime_config,
+                ).create_plan(
+                    request,
+                    actor_id=plan_request.actor_id,
+                    note=plan_request.note,
+                )
+            except DataDeletionRequestError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except DataDeletionDryRunError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {
+            "dry_run_plan": plan.to_record(),
+            "execution_enabled": False,
+            "execution_ready": False,
         }
 
     @app.post("/data-deletions/{request_id}/approve")
@@ -1578,6 +1661,8 @@ _INDEX_HTML = """<!doctype html>
     h1 { margin: 0; font-size: 20px; letter-spacing: 0; }
     main { max-width: 1180px; margin: 0 auto; padding: 24px; display: grid; gap: 18px; }
     section {
+      min-width: 0;
+      overflow-x: auto;
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -1679,8 +1764,13 @@ _INDEX_HTML = """<!doctype html>
     .table-badge-stack { display: grid; justify-items: start; gap: 5px; }
     .detail-table { margin-top: 8px; table-layout: auto; }
     .detail-table th, .detail-table td { font-size: 12px; padding: 7px; vertical-align: top; }
-    .confirmation-contract { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
-    .confirmation-contract code { display: block; margin: 8px 0; overflow-wrap: anywhere; font-size: 12px; }
+    .deletion-request-table { min-width: 720px; table-layout: auto; }
+    .table-scroll { width: 100%; max-width: 100%; overflow-x: auto; }
+    .table-scroll .detail-table { min-width: 680px; }
+    .confirmation-contract, .dry-run-contract { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+    .confirmation-contract code, .dry-run-contract code { display: block; margin: 8px 0; overflow-wrap: anywhere; font-size: 12px; }
+    .dry-run-contract { min-width: 0; max-width: 100%; }
+    .dry-run-contract .table-scroll { margin-top: 8px; }
     .confirmation-input-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
     .player-controls { display: grid; grid-template-columns: minmax(220px, 1fr) 110px auto auto; gap: 10px; align-items: end; }
     .toggle-row { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; color: var(--muted); font-size: 13px; }
@@ -2090,7 +2180,7 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="dataDeletionStatus" style="margin: 10px 0;">
         Approval records authorization only. Deletion execution is disabled.
       </div>
-      <table>
+      <table class="deletion-request-table">
         <thead>
           <tr>
             <th>ID</th>
@@ -3578,6 +3668,134 @@ _INDEX_HTML = """<!doctype html>
         </div>`;
     }
 
+    function renderDataDeletionDryRunState(state) {
+      const latest = state.latest_plan;
+      const plan = latest?.plan_json || {};
+      const metrics = plan.metrics || {};
+      const databaseRows = (plan.database_operations || []).map((operation) => `
+        <tr>
+          <td>${escapeHtml(operation.sequence)}</td>
+          <td>${escapeHtml(operation.phase)}</td>
+          <td>${escapeHtml(operation.table)}</td>
+          <td>${escapeHtml(operation.estimated_rows)}</td>
+          <td>${escapeHtml(JSON.stringify(operation.selector || {}))}</td>
+        </tr>`).join("") || `<tr><td colspan="5">No planned database operations.</td></tr>`;
+      const fileRows = (plan.file_operations || []).map((operation) => `
+        <tr>
+          <td>${escapeHtml(operation.sequence)}</td>
+          <td>${escapeHtml(operation.artifact_type)}</td>
+          <td>${escapeHtml(operation.match_id)}</td>
+          <td>${formatBytes(operation.declared_size_bytes || 0)}</td>
+          <td>${escapeHtml(operation.relative_path)}</td>
+        </tr>`).join("") || `<tr><td colspan="5">No planned player-owned file operations.</td></tr>`;
+      const backupRows = (plan.backup_prerequisites || []).map((item) => `
+        <tr>
+          <td>${escapeHtml(item.key)}</td>
+          <td>${item.required ? "required" : "not required"}</td>
+          <td>${escapeHtml(item.evidence_status)}</td>
+          <td>${escapeHtml(item.description)}</td>
+        </tr>`).join("") || `<tr><td colspan="4">No backup prerequisites recorded.</td></tr>`;
+      const exclusionRows = (plan.row_exclusions || []).map((item) => `
+        <tr>
+          <td>database</td>
+          <td>${escapeHtml(item.table)}</td>
+          <td>${escapeHtml(item.row_count)}</td>
+          <td>${escapeHtml(item.reason)}</td>
+        </tr>`).join("") + (plan.file_exclusions || []).map((item) => `
+        <tr>
+          <td>file</td>
+          <td>${escapeHtml(item.category)}</td>
+          <td>${escapeHtml(item.file_count)}</td>
+          <td>${escapeHtml(item.reason)}</td>
+        </tr>`).join("");
+      const historyRows = (state.plans || []).map((item) => `
+        <tr>
+          <td>${escapeHtml(item.id)}</td>
+          <td>${escapeHtml(item.preview_snapshot_id)} / ${escapeHtml(item.confirmation_id)}</td>
+          <td>${escapeHtml(item.plan_fingerprint_sha256)}</td>
+          <td>${escapeHtml(item.generated_by)} / ${escapeHtml(item.generated_at_kst)}</td>
+        </tr>`).join("") || `<tr><td colspan="4">No dry-run plan records.</td></tr>`;
+      const generationButton = state.generation_allowed
+        ? `<button type="button" data-deletion-contract-action="dry-run" data-request-id="${escapeHtml(state.request_id)}">Generate read-only dry-run plan</button>`
+        : "";
+      const planDetail = latest ? `
+        <div class="status">
+          Plan #${escapeHtml(latest.id)} / operations ${escapeHtml(latest.operation_count)} /
+          candidate rows ${escapeHtml(metrics.candidate_row_count || 0)} / files ${escapeHtml(metrics.candidate_file_count || 0)} /
+          ${formatBytes(metrics.candidate_file_bytes || 0)}
+        </div>
+        <code>Plan SHA-256: ${escapeHtml(latest.plan_fingerprint_sha256)}</code>
+        <h3>Backup prerequisites</h3>
+        <div class="table-scroll">
+          <table class="detail-table">
+            <thead><tr><th>Key</th><th>Required</th><th>Evidence</th><th>Condition</th></tr></thead>
+            <tbody>${backupRows}</tbody>
+          </table>
+        </div>
+        <h3>Ordered database operations</h3>
+        <div class="table-scroll">
+          <table class="detail-table">
+            <thead><tr><th>Seq</th><th>Phase</th><th>Table</th><th>Rows</th><th>Selector contract</th></tr></thead>
+            <tbody>${databaseRows}</tbody>
+          </table>
+        </div>
+        <h3>Player-owned replay file operations</h3>
+        <div class="table-scroll">
+          <table class="detail-table">
+            <thead><tr><th>Seq</th><th>Type</th><th>Match</th><th>Size</th><th>Path</th></tr></thead>
+            <tbody>${fileRows}</tbody>
+          </table>
+        </div>
+        <h3>Protected exclusions</h3>
+        <div class="table-scroll">
+          <table class="detail-table">
+            <thead><tr><th>Type</th><th>Target</th><th>Count</th><th>Reason</th></tr></thead>
+            <tbody>${exclusionRows || `<tr><td colspan="4">No protected exclusions.</td></tr>`}</tbody>
+          </table>
+        </div>` : `<div class="status">No dry-run plan recorded.</div>`;
+      return `
+        <div class="dry-run-contract">
+          <h3>Confirmed deletion dry-run</h3>
+          <div class="status">Request ${escapeHtml(state.request_status)} / execution enabled: no / execution ready: no</div>
+          <div class="actions">${generationButton}</div>
+          ${(state.generation_blockers || []).length ? `<ul>${state.generation_blockers.map((blocker) => `<li>${escapeHtml(blocker)}</li>`).join("")}</ul>` : ""}
+          <ul>${(state.execution_blockers || []).map((blocker) => `<li>${escapeHtml(blocker)}</li>`).join("")}</ul>
+          ${planDetail}
+          <h3>Dry-run history</h3>
+          <div class="table-scroll">
+            <table class="detail-table">
+              <thead><tr><th>ID</th><th>Snapshot / Confirmation</th><th>Plan SHA-256</th><th>Generated</th></tr></thead>
+              <tbody>${historyRows}</tbody>
+            </table>
+          </div>
+        </div>`;
+    }
+
+    async function loadDataDeletionDryRunState(requestId) {
+      const response = await fetch(`/data-deletions/${encodeURIComponent(requestId)}/dry-run-state`);
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const payload = await response.json();
+      const host = document.querySelector("#dataDeletionDryRun");
+      host.innerHTML = renderDataDeletionDryRunState(payload.dry_run_state);
+    }
+
+    async function createDataDeletionDryRunPlan(requestId) {
+      const form = new FormData(dataDeletionFilterForm);
+      const actorId = String(form.get("actor_id") || "").trim();
+      const note = String(form.get("note") || "").trim();
+      if (!actorId) throw new Error("Local reviewer is required.");
+      if (!window.confirm("Generate an immutable read-only dry-run plan? No rows or files will be changed.")) return;
+      await postJson(`/data-deletions/${encodeURIComponent(requestId)}/dry-run-plans`, {
+        actor_id: actorId,
+        note: note || null,
+      });
+      await loadDataDeletionRequestDetail(requestId);
+      dataDeletionStatus.textContent = "Read-only dry-run plan recorded. Deletion execution remains disabled.";
+    }
+
     async function loadDataDeletionConfirmationState(requestId) {
       const response = await fetch(`/data-deletions/${encodeURIComponent(requestId)}/confirmation-state`);
       if (!response.ok) {
@@ -3641,7 +3859,8 @@ _INDEX_HTML = """<!doctype html>
           ${events.map((event) => `<li>${escapeHtml(event.created_at_kst)} / ${escapeHtml(event.event_type)} / ${escapeHtml(event.actor_type)}:${escapeHtml(event.actor_id)} / ${escapeHtml(event.note || "-")}</li>`).join("")}
         </ul>
         <div id="dataDeletionPreview" class="status">Loading read-only impact preview...</div>
-        <div id="dataDeletionConfirmation" class="status">Loading immutable confirmation state...</div>`;
+        <div id="dataDeletionConfirmation" class="status">Loading immutable confirmation state...</div>
+        <div id="dataDeletionDryRun" class="status">Loading confirmed deletion dry-run state...</div>`;
       const previewHost = document.querySelector("#dataDeletionPreview");
       try {
         const previewUrl = payload.preview_url || `/data-deletions/${encodeURIComponent(requestId)}/preview`;
@@ -3660,6 +3879,12 @@ _INDEX_HTML = """<!doctype html>
       } catch (error) {
         const confirmationHost = document.querySelector("#dataDeletionConfirmation");
         confirmationHost.textContent = `Confirmation state error: ${error.message}`;
+      }
+      try {
+        await loadDataDeletionDryRunState(requestId);
+      } catch (error) {
+        const dryRunHost = document.querySelector("#dataDeletionDryRun");
+        dryRunHost.textContent = `Dry-run state error: ${error.message}`;
       }
     }
 
@@ -6281,6 +6506,8 @@ _INDEX_HTML = """<!doctype html>
             button.dataset.snapshotId || "",
             button.dataset.fingerprint || "",
           );
+        } else if (button.dataset.deletionContractAction === "dry-run") {
+          await createDataDeletionDryRunPlan(requestId);
         }
       } catch (error) {
         dataDeletionStatus.textContent = `Error: ${error.message}`;

@@ -182,9 +182,13 @@ Suggested command groups:
 - Approved requests can capture immutable versioned preview manifests and SHA-256 fingerprints. Confirmation requires
   the latest complete, issue-free snapshot, a fresh matching fingerprint, and exact localhost entry of the full
   fingerprint-bound text.
-- Confirmation is an immutable audit record and still does not enable execution. A separately reviewed dry-run plan,
-  live fingerprint revalidation, backup/rollback policy, and executor are required before destructive actions can be
-  considered.
+- Confirmation is an immutable audit record and still does not enable execution. Schema version 12 can expand the
+  confirmed latest fingerprint into an immutable read-only dry-run plan after another live fingerprint match.
+- Dry-run plans contain ordered structured selectors, player-owned replay quarantine descriptors, protected shared
+  data, backup prerequisites, and postcondition checks. They deliberately contain no executable SQL or file mutation
+  function, and generation inserts only the plan audit row.
+- `executor_not_implemented` and `backup_evidence_not_recorded` are mandatory blockers. Immutable backup evidence and
+  a separately reviewed non-executing rehearsal validator are required before an executor can even be designed.
 - Deletion should be split into options:
   - delete registration only
   - delete normalized DB data
