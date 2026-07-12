@@ -193,6 +193,15 @@ Implemented behavior:
 - Match-shared raw metadata/files, shared match context, cross-player references, and every deletion audit table are
   explicit exclusions. Backup creation, capacity, checksum, and restore-rehearsal evidence are prerequisites, while
   `executor_not_implemented` and `backup_evidence_not_recorded` keep every plan non-ready and non-executable.
+- Backup evidence is append-only and bound to the latest dry-run plan fingerprint. The four supported keys cover the
+  MySQL target backup, replay artifact backup, quarantine capacity, and checksum/restore attestation. Corrections add
+  newer rows; prior evidence remains in history.
+- A non-executing rehearsal rechecks the approved request, latest plan and evidence-set fingerprints, live deletion
+  impact, backup artifact existence/declared size, covered row/file/byte counts, current free space, and evidence times.
+  It records either `passed` or `blocked` as another immutable audit row.
+- Rehearsal path checks use filesystem metadata only. Backup bytes are not opened, SHA-256 is not recalculated, a
+  restore is not run, and no target row or file is changed. New evidence after a passed rehearsal marks that rehearsal
+  stale. `executor_not_implemented` remains even after every rehearsal check passes.
 
 ## Duplicate Match Handling
 

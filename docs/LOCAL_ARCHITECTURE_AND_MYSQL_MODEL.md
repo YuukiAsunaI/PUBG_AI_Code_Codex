@@ -79,6 +79,8 @@ Use a two-layer storage model:
 | `data_deletion_preview_snapshots` | Immutable full preview JSON, canonical manifest, SHA-256 fingerprint, completeness, issue, candidate, actor, and KST evidence |
 | `data_deletion_confirmations` | Immutable latest-snapshot confirmations bound by composite request/snapshot/fingerprint foreign key |
 | `data_deletion_dry_run_plans` | Immutable canonical plans with confirmed source fingerprint, ordered non-executable operations, protected exclusions, backup prerequisites, metrics, actor, and KST evidence |
+| `data_deletion_backup_evidence` | Append-only per-prerequisite evidence bound to a dry-run plan fingerprint, with canonical evidence JSON/fingerprint, actor, note, and KST time |
+| `data_deletion_rehearsal_runs` | Immutable metadata-only rehearsal checks, evidence-set/result fingerprints, passed/blocked metrics, actor, note, and KST time |
 | `player_aliases` | Nickname history and lookup evidence |
 | `discord_users` | Discord user records; not assumed to own PUBG accounts |
 | `discord_guilds` | Guild-specific settings, ranking scope, and visibility defaults |
@@ -497,8 +499,12 @@ Completed slices:
      latest snapshot, matching confirmation, and fresh fingerprint, then inserts one canonical plan audit row. Plans
      order player row and replay quarantine descriptors, preserve raw/shared/audit data, require backup evidence, and
      remain blocked by `executor_not_implemented`; no executable SQL, file mutation, or execution route exists.
+105. Schema version 13 stores append-only backup evidence and non-executing rehearsal results. Rehearsal rechecks live
+     source/plan/evidence fingerprints, artifact metadata, covered counts, free space, and KST evidence under locks.
+     It never opens backup contents, recalculates checksums, restores data, or mutates targets. Dry-run contract v2
+     explicitly protects the two new audit tables, and `executor_not_implemented` remains unconditional.
 
 Next slice:
 
-1. Add immutable backup-evidence records and a non-executing rehearsal validator for confirmed dry-run plans. Keep
-   target row/file mutations disabled.
+1. Add a configurable localhost backup root and an opt-in backup artifact/checksum builder that can populate verified
+   evidence. Keep replay quarantine, database deletion, and every execution route disabled.

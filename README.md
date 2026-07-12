@@ -361,9 +361,13 @@ issue-free fingerprint still matches a fresh preview. The required text includes
 Schema version 12 adds immutable read-only dry-run plans for a confirmed latest snapshot. Each plan revalidates the
 live fingerprint, records ordered database and player-owned replay-file operation descriptors, preserves shared raw
 match/telemetry evidence, lists backup prerequisites and postconditions, and stores its own canonical SHA-256. Plan
-generation writes only the audit plan row. `executor_not_implemented` and `backup_evidence_not_recorded` remain hard
-blockers: no deletion endpoint, executable SQL, file remover, or execution button exists. Rerun
-`python -m pubg_ai.cli init-db` after updating from an earlier schema.
+generation writes only the audit plan row. Schema version 13 adds append-only backup-evidence and rehearsal tables.
+The localhost manager records corrected evidence as new rows and can run a non-executing rehearsal against the latest
+plan, latest evidence set, live source fingerprint, backup file existence/size, and current quarantine free space.
+Recorded SHA-256 and restore results are consistency-checked attestations: this slice does not read backup contents,
+recalculate checksums, create backups, or perform restores. A newer dry-run v2 plan explicitly protects both new audit
+tables. Even a passed rehearsal remains blocked by `executor_not_implemented`; no deletion endpoint, executable SQL,
+file remover, or execution button exists. Rerun `python -m pubg_ai.cli init-db` after updating from an earlier schema.
 The `admin` group includes `pubg-alerts`, which returns current storage and worker alerts. When
 `PUBG_LOCAL_WEB_BASE_URL` is set, that response includes a local current-alert list link. When Discord alert channel
 IDs are configured from the local manager, the running Discord bot also sends new worker failures and active storage
@@ -415,10 +419,11 @@ the local forms. `pubg-settings` responses link to stable `#collector-settings`,
 Deletion-request responses link to `#data-deletions` with the request ID highlighted; the local detail view shows the
 complete audit event history, scoped row counts, protected references, raw/replay file status, immutable snapshot
 history, fingerprint-bound confirmation history, and confirmed dry-run plan history. The latest plan exposes ordered
-row/file descriptors, backup prerequisites, protected exclusions, candidate bytes, and its plan fingerprint. Catalog
-totals remain complete when the displayed file list is limited, while confirmation and plan generation require the
-maximum-500-file snapshot to be complete, issue-free, latest, and live-fingerprint matched. Every view and mutation
-response explicitly reports that deletion execution is disabled and not ready.
+row/file descriptors, backup prerequisites, protected exclusions, candidate bytes, and its plan fingerprint. It also
+shows prerequisite evidence history, latest metadata-only rehearsal checks, rehearsal history, and stale/invalid audit
+blockers. Catalog totals remain complete when the displayed file list is limited, while confirmation, plan generation,
+and rehearsal require current plan/fingerprint bindings. Every view and mutation response explicitly reports that
+deletion execution is disabled and not ready.
 Permission-denied and blocked privilege-boundary attempts remain plain text by design.
 
 Run the local management app:

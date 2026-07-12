@@ -111,8 +111,12 @@ metadata. Schema version 12 adds `data_deletion_dry_run_plans`; generation requi
 to match another maximum-500-file live preview. The immutable JSON plan contains non-executable row/file descriptors,
 shared-data exclusions, backup prerequisites, postcondition checks, and a canonical plan SHA-256. It always reports
 `execution_enabled=false`, `execution_ready=false`, `executor_not_implemented`, and
-`backup_evidence_not_recorded`. Run `python -m pubg_ai.cli init-db` after updating so the five deletion workflow tables
-are created. No deletion executor or execution endpoint is enabled.
+`backup_evidence_not_recorded`. Schema version 13 adds `data_deletion_backup_evidence` and
+`data_deletion_rehearsal_runs`. Evidence paths must be absolute local paths; backup artifacts are checked by metadata
+only, capacity evidence is compared with current free space, and operator-recorded checksum/restore attestations are
+not independently recomputed or executed. Corrected evidence appends a new immutable row and makes an older passed
+rehearsal stale. Run `python -m pubg_ai.cli init-db` after updating so the seven deletion workflow tables are created.
+No deletion executor or execution endpoint is enabled.
 
 1. Built-in defaults: `./data/raw`, `./data/replays`
 2. `.env` values: `PUBG_RAW_DATA_DIR`, `PUBG_REPLAY_DATA_DIR`

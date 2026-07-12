@@ -187,8 +187,12 @@ Suggested command groups:
 - Dry-run plans contain ordered structured selectors, player-owned replay quarantine descriptors, protected shared
   data, backup prerequisites, and postcondition checks. They deliberately contain no executable SQL or file mutation
   function, and generation inserts only the plan audit row.
-- `executor_not_implemented` and `backup_evidence_not_recorded` are mandatory blockers. Immutable backup evidence and
-  a separately reviewed non-executing rehearsal validator are required before an executor can even be designed.
+- Schema version 13 stores immutable evidence corrections per prerequisite and immutable `passed`/`blocked` rehearsal
+  results. Evidence and rehearsal rows remain bound to the latest plan and are rechecked under database locks.
+- The rehearsal validator reads live preview data and filesystem metadata only. It does not create backup artifacts,
+  read backup contents, recalculate SHA-256, perform a restore, quarantine files, or mutate target rows.
+- `executor_not_implemented` remains mandatory even after complete evidence and a passed rehearsal. A configurable
+  backup root plus an explicit artifact/checksum builder must exist before any quarantine or executor design begins.
 - Deletion should be split into options:
   - delete registration only
   - delete normalized DB data

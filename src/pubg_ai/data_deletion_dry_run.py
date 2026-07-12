@@ -23,7 +23,7 @@ from pubg_ai.data_deletion_requests import DataDeletionRequest
 from pubg_ai.time_utils import now_kst, to_kst
 
 
-DRY_RUN_CONTRACT_VERSION = "deletion-dry-run-v1"
+DRY_RUN_CONTRACT_VERSION = "deletion-dry-run-v2"
 DRY_RUN_REQUEST_STATUSES = {"approved"}
 EXECUTION_BLOCKERS = (
     "executor_not_implemented",
@@ -54,6 +54,8 @@ _AUDIT_TABLE_EXCLUSIONS = (
     "data_deletion_preview_snapshots",
     "data_deletion_confirmations",
     "data_deletion_dry_run_plans",
+    "data_deletion_backup_evidence",
+    "data_deletion_rehearsal_runs",
 )
 
 

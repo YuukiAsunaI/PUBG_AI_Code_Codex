@@ -61,9 +61,12 @@ class DataDeletionDryRunTests(unittest.TestCase):
                 for exclusion in first["row_exclusions"]
             )
         )
-        self.assertIn("data_deletion_dry_run_plans", {
+        audit_exclusions = {
             exclusion["table"] for exclusion in first["audit_table_exclusions"]
-        })
+        }
+        self.assertIn("data_deletion_dry_run_plans", audit_exclusions)
+        self.assertIn("data_deletion_backup_evidence", audit_exclusions)
+        self.assertIn("data_deletion_rehearsal_runs", audit_exclusions)
         serialized = json.dumps(first, ensure_ascii=False)
         self.assertNotIn("DELETE FROM", serialized.upper())
         self.assertTrue(

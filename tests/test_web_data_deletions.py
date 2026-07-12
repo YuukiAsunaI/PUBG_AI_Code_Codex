@@ -99,6 +99,44 @@ class WebDataDeletionTests(unittest.TestCase):
             "execution_ready": False,
         }
         dry_run_service.create_plan.return_value = dry_run_plan
+        backup_evidence = MagicMock()
+        backup_evidence.to_record.return_value = {
+            "id": 801,
+            "request_id": 17,
+            "dry_run_plan_id": 901,
+            "prerequisite_key": "mysql_target_backup",
+            "execution_enabled": False,
+        }
+        rehearsal = MagicMock()
+        rehearsal.to_record.return_value = {
+            "id": 1001,
+            "request_id": 17,
+            "dry_run_plan_id": 901,
+            "result_status": "blocked",
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+        backup_service = MagicMock()
+        backup_service.readiness_state.return_value = {
+            "request_id": 17,
+            "request_status": "pending",
+            "latest_plan": None,
+            "evidence_recording_allowed": False,
+            "rehearsal_allowed": False,
+            "prerequisites": [],
+            "evidence_history": [],
+            "latest_rehearsal": None,
+            "rehearsals": [],
+            "execution_blockers": [
+                "executor_not_implemented",
+                "backup_evidence_not_recorded",
+                "rehearsal_not_passed",
+            ],
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+        backup_service.record_evidence.return_value = backup_evidence
+        backup_service.run_rehearsal.return_value = rehearsal
         connections: list[FakeConnection] = []
 
         def connection_factory(*_: object, **__: object) -> FakeConnection:
@@ -112,6 +150,7 @@ class WebDataDeletionTests(unittest.TestCase):
             patch("pubg_ai.web.app.DataDeletionImpactPreviewService", return_value=preview_service),
             patch("pubg_ai.web.app.DataDeletionConfirmationService", return_value=confirmation_service),
             patch("pubg_ai.web.app.DataDeletionDryRunService", return_value=dry_run_service),
+            patch("pubg_ai.web.app.DataDeletionBackupService", return_value=backup_service),
         ):
             client = TestClient(create_app())
             list_response = client.get("/data-deletions?status=pending&limit=50")
@@ -148,6 +187,31 @@ class WebDataDeletionTests(unittest.TestCase):
                 "/data-deletions/17/dry-run-plans",
                 json={"actor_id": "local-owner", "note": "plan reviewed"},
             )
+            backup_state_response = client.get(
+                "/data-deletions/17/backup-readiness-state"
+            )
+            backup_evidence_response = client.post(
+                "/data-deletions/17/backup-evidence",
+                json={
+                    "dry_run_plan_id": 901,
+                    "prerequisite_key": "mysql_target_backup",
+                    "artifact_path": "D:/BackUP/audit/mysql-plan-901.sql.gz",
+                    "artifact_sha256": "c" * 64,
+                    "artifact_size_bytes": 100,
+                    "covered_row_count": 10,
+                    "backup_created_at_kst": "2026-07-12T12:05:00",
+                    "actor_id": "local-owner",
+                    "note": "backup metadata",
+                },
+            )
+            rehearsal_response = client.post(
+                "/data-deletions/17/rehearsals",
+                json={
+                    "dry_run_plan_id": 901,
+                    "actor_id": "local-owner",
+                    "note": "metadata-only rehearsal",
+                },
+            )
             approve_response = client.post(
                 "/data-deletions/17/approve",
                 json={"actor_id": "local-owner", "note": "대상 확인"},
@@ -174,6 +238,18 @@ class WebDataDeletionTests(unittest.TestCase):
         self.assertEqual(
             detail_response.json()["dry_run_plan_url"],
             "/data-deletions/17/dry-run-plans",
+        )
+        self.assertEqual(
+            detail_response.json()["backup_readiness_state_url"],
+            "/data-deletions/17/backup-readiness-state",
+        )
+        self.assertEqual(
+            detail_response.json()["backup_evidence_url"],
+            "/data-deletions/17/backup-evidence",
+        )
+        self.assertEqual(
+            detail_response.json()["rehearsal_url"],
+            "/data-deletions/17/rehearsals",
         )
         self.assertEqual(preview_response.status_code, 200)
         self.assertFalse(preview_response.json()["execution_enabled"])
@@ -204,6 +280,21 @@ class WebDataDeletionTests(unittest.TestCase):
         self.assertEqual(dry_run_plan_response.json()["dry_run_plan"]["id"], 901)
         self.assertFalse(dry_run_plan_response.json()["execution_enabled"])
         self.assertFalse(dry_run_plan_response.json()["execution_ready"])
+        self.assertEqual(backup_state_response.status_code, 200)
+        self.assertFalse(backup_state_response.json()["execution_enabled"])
+        self.assertFalse(backup_state_response.json()["execution_ready"])
+        self.assertIn(
+            "rehearsal_not_passed",
+            backup_state_response.json()["backup_readiness_state"]["execution_blockers"],
+        )
+        self.assertEqual(backup_evidence_response.status_code, 200)
+        self.assertEqual(backup_evidence_response.json()["backup_evidence"]["id"], 801)
+        self.assertFalse(backup_evidence_response.json()["execution_enabled"])
+        self.assertFalse(backup_evidence_response.json()["execution_ready"])
+        self.assertEqual(rehearsal_response.status_code, 200)
+        self.assertEqual(rehearsal_response.json()["rehearsal"]["id"], 1001)
+        self.assertFalse(rehearsal_response.json()["execution_enabled"])
+        self.assertFalse(rehearsal_response.json()["execution_ready"])
         self.assertEqual(approve_response.status_code, 200)
         self.assertEqual(approve_response.json()["request"]["status"], "approved")
         self.assertFalse(approve_response.json()["execution_enabled"])
@@ -233,6 +324,35 @@ class WebDataDeletionTests(unittest.TestCase):
             pending,
             actor_id="local-owner",
             note="plan reviewed",
+        )
+        backup_service.readiness_state.assert_called_once_with(pending)
+        backup_service.record_evidence.assert_called_once_with(
+            pending,
+            dry_run_plan_id=901,
+            prerequisite_key="mysql_target_backup",
+            evidence={
+                "artifact_path": "D:/BackUP/audit/mysql-plan-901.sql.gz",
+                "artifact_sha256": "c" * 64,
+                "artifact_size_bytes": 100,
+                "covered_row_count": 10,
+                "covered_file_count": None,
+                "covered_file_bytes": None,
+                "checked_path": None,
+                "available_bytes": None,
+                "backup_created_at_kst": datetime(2026, 7, 12, 12, 5, 0),
+                "verified_at_kst": None,
+                "restore_tested_at_kst": None,
+                "checksums_verified": False,
+                "restore_test_passed": False,
+            },
+            actor_id="local-owner",
+            note="backup metadata",
+        )
+        backup_service.run_rehearsal.assert_called_once_with(
+            pending,
+            dry_run_plan_id=901,
+            actor_id="local-owner",
+            note="metadata-only rehearsal",
         )
         self.assertTrue(all(connection.closed for connection in connections))
 

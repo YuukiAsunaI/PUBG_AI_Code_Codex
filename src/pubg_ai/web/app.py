@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import csv
+from datetime import datetime
 import io
 import json
 import os
@@ -28,6 +29,10 @@ from pubg_ai.alert_history import (
 )
 from pubg_ai.collector_worker import CollectorWorkerController, CollectorWorkerError, CollectorWorkerOptions
 from pubg_ai.config import RuntimeConfig, load_dotenv_values
+from pubg_ai.data_deletion_backup import (
+    DataDeletionBackupError,
+    DataDeletionBackupService,
+)
 from pubg_ai.data_deletion_confirmation import (
     DataDeletionConfirmationError,
     DataDeletionConfirmationService,
@@ -176,6 +181,37 @@ class DataDeletionDryRunCreateRequest(BaseModel):
     note: str | None = Field(default=None, max_length=1000)
 
 
+class DataDeletionBackupEvidenceCreateRequest(BaseModel):
+    dry_run_plan_id: int = Field(gt=0)
+    prerequisite_key: str = Field(min_length=1, max_length=64)
+    artifact_path: str | None = Field(default=None, max_length=1000)
+    artifact_sha256: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-fA-F]{64}$",
+    )
+    artifact_size_bytes: int | None = Field(default=None, gt=0)
+    covered_row_count: int | None = Field(default=None, ge=0)
+    covered_file_count: int | None = Field(default=None, ge=0)
+    covered_file_bytes: int | None = Field(default=None, ge=0)
+    checked_path: str | None = Field(default=None, max_length=1000)
+    available_bytes: int | None = Field(default=None, ge=0)
+    backup_created_at_kst: datetime | None = None
+    verified_at_kst: datetime | None = None
+    restore_tested_at_kst: datetime | None = None
+    checksums_verified: bool = False
+    restore_test_passed: bool = False
+    actor_id: str = Field(default="local-manager", min_length=1, max_length=191)
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class DataDeletionRehearsalCreateRequest(BaseModel):
+    dry_run_plan_id: int = Field(gt=0)
+    actor_id: str = Field(default="local-manager", min_length=1, max_length=191)
+    note: str | None = Field(default=None, max_length=1000)
+
+
 class WebSettingsRequest(BaseModel):
     local_web_base_url: str | None = None
 
@@ -264,6 +300,30 @@ def create_app() -> Any:
             connection,
             preview_service=preview_service,
             confirmation_service=confirmation_service,
+        )
+
+    def build_data_deletion_backup_service(
+        connection: Any,
+        runtime_config: RuntimeConfig,
+    ) -> DataDeletionBackupService:
+        preview_service = DataDeletionImpactPreviewService(
+            connection,
+            raw_data_dir=runtime_config.app.raw_data_dir,
+            replay_data_dir=runtime_config.app.replay_data_dir,
+        )
+        confirmation_service = DataDeletionConfirmationService(
+            connection,
+            preview_service=preview_service,
+        )
+        dry_run_service = DataDeletionDryRunService(
+            connection,
+            preview_service=preview_service,
+            confirmation_service=confirmation_service,
+        )
+        return DataDeletionBackupService(
+            connection,
+            dry_run_service=dry_run_service,
+            preview_service=preview_service,
         )
 
     collector_worker = CollectorWorkerController(config_loader=current_config)
@@ -716,6 +776,9 @@ def create_app() -> Any:
             "confirmation_url": f"/data-deletions/{request_id}/confirmations",
             "dry_run_state_url": f"/data-deletions/{request_id}/dry-run-state",
             "dry_run_plan_url": f"/data-deletions/{request_id}/dry-run-plans",
+            "backup_readiness_state_url": f"/data-deletions/{request_id}/backup-readiness-state",
+            "backup_evidence_url": f"/data-deletions/{request_id}/backup-evidence",
+            "rehearsal_url": f"/data-deletions/{request_id}/rehearsals",
             "execution_enabled": False,
         }
 
@@ -879,6 +942,107 @@ def create_app() -> Any:
             connection.close()
         return {
             "dry_run_plan": plan.to_record(),
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+
+    @app.get("/data-deletions/{request_id}/backup-readiness-state")
+    def data_deletion_backup_readiness_state(request_id: int) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(runtime_config.database)
+        try:
+            try:
+                request = DataDeletionRequestService(connection).get_request(request_id)
+                state = build_data_deletion_backup_service(
+                    connection,
+                    runtime_config,
+                ).readiness_state(request)
+            except DataDeletionRequestError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except (DataDeletionBackupError, DataDeletionDryRunError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {
+            "backup_readiness_state": state,
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+
+    @app.post("/data-deletions/{request_id}/backup-evidence")
+    def record_data_deletion_backup_evidence(
+        request_id: int,
+        evidence_request: DataDeletionBackupEvidenceCreateRequest,
+    ) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(runtime_config.database)
+        try:
+            try:
+                request = DataDeletionRequestService(connection).get_request(request_id)
+                evidence = build_data_deletion_backup_service(
+                    connection,
+                    runtime_config,
+                ).record_evidence(
+                    request,
+                    dry_run_plan_id=evidence_request.dry_run_plan_id,
+                    prerequisite_key=evidence_request.prerequisite_key,
+                    evidence={
+                        "artifact_path": evidence_request.artifact_path,
+                        "artifact_sha256": evidence_request.artifact_sha256,
+                        "artifact_size_bytes": evidence_request.artifact_size_bytes,
+                        "covered_row_count": evidence_request.covered_row_count,
+                        "covered_file_count": evidence_request.covered_file_count,
+                        "covered_file_bytes": evidence_request.covered_file_bytes,
+                        "checked_path": evidence_request.checked_path,
+                        "available_bytes": evidence_request.available_bytes,
+                        "backup_created_at_kst": evidence_request.backup_created_at_kst,
+                        "verified_at_kst": evidence_request.verified_at_kst,
+                        "restore_tested_at_kst": evidence_request.restore_tested_at_kst,
+                        "checksums_verified": evidence_request.checksums_verified,
+                        "restore_test_passed": evidence_request.restore_test_passed,
+                    },
+                    actor_id=evidence_request.actor_id,
+                    note=evidence_request.note,
+                )
+            except DataDeletionRequestError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except (DataDeletionBackupError, DataDeletionDryRunError) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {
+            "backup_evidence": evidence.to_record(),
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+
+    @app.post("/data-deletions/{request_id}/rehearsals")
+    def run_data_deletion_rehearsal(
+        request_id: int,
+        rehearsal_request: DataDeletionRehearsalCreateRequest,
+    ) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(runtime_config.database)
+        try:
+            try:
+                request = DataDeletionRequestService(connection).get_request(request_id)
+                rehearsal = build_data_deletion_backup_service(
+                    connection,
+                    runtime_config,
+                ).run_rehearsal(
+                    request,
+                    dry_run_plan_id=rehearsal_request.dry_run_plan_id,
+                    actor_id=rehearsal_request.actor_id,
+                    note=rehearsal_request.note,
+                )
+            except DataDeletionRequestError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except (DataDeletionBackupError, DataDeletionDryRunError) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {
+            "rehearsal": rehearsal.to_record(),
             "execution_enabled": False,
             "execution_ready": False,
         }
@@ -1767,10 +1931,15 @@ _INDEX_HTML = """<!doctype html>
     .deletion-request-table { min-width: 720px; table-layout: auto; }
     .table-scroll { width: 100%; max-width: 100%; overflow-x: auto; }
     .table-scroll .detail-table { min-width: 680px; }
-    .confirmation-contract, .dry-run-contract { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
-    .confirmation-contract code, .dry-run-contract code { display: block; margin: 8px 0; overflow-wrap: anywhere; font-size: 12px; }
-    .dry-run-contract { min-width: 0; max-width: 100%; }
-    .dry-run-contract .table-scroll { margin-top: 8px; }
+    .confirmation-contract, .dry-run-contract, .backup-readiness-contract { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+    .confirmation-contract code, .dry-run-contract code, .backup-readiness-contract code { display: block; margin: 8px 0; overflow-wrap: anywhere; font-size: 12px; }
+    .dry-run-contract, .backup-readiness-contract { min-width: 0; max-width: 100%; }
+    .dry-run-contract .table-scroll, .backup-readiness-contract .table-scroll { margin-top: 8px; }
+    .backup-evidence-form { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 12px; align-items: end; }
+    .backup-evidence-form [hidden] { display: none !important; }
+    .backup-evidence-form .checkbox-field { display: inline-flex; align-items: center; gap: 8px; min-height: 38px; }
+    .backup-evidence-form .checkbox-field input { width: auto; min-height: 0; }
+    .backup-evidence-form button { align-self: end; }
     .confirmation-input-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
     .player-controls { display: grid; grid-template-columns: minmax(220px, 1fr) 110px auto auto; gap: 10px; align-items: end; }
     .toggle-row { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; color: var(--muted); font-size: 13px; }
@@ -1853,6 +2022,7 @@ _INDEX_HTML = """<!doctype html>
       .worker-run-filter { grid-template-columns: 1fr; }
       .player-controls { grid-template-columns: 1fr; }
       .confirmation-input-row { grid-template-columns: 1fr; }
+      .backup-evidence-form { grid-template-columns: 1fr; }
       .timeline-range { grid-template-columns: 1fr; }
       .replay-detail-layout { grid-template-columns: 1fr; }
       header { align-items: flex-start; flex-direction: column; }
@@ -3796,6 +3966,211 @@ _INDEX_HTML = """<!doctype html>
       dataDeletionStatus.textContent = "Read-only dry-run plan recorded. Deletion execution remains disabled.";
     }
 
+    function renderDataDeletionBackupReadiness(state) {
+      const plan = state.latest_plan;
+      const prerequisiteRows = (state.prerequisites || []).map((item) => `
+        <tr>
+          <td>${escapeHtml(item.key)}</td>
+          <td>${item.required ? "required" : "not required"}</td>
+          <td>${escapeHtml(item.evidence_status)}</td>
+          <td>${item.latest_evidence ? `#${escapeHtml(item.latest_evidence.id)} / ${escapeHtml(item.latest_evidence.recorded_at_kst)}` : "-"}</td>
+        </tr>`).join("") || `<tr><td colspan="4">No dry-run backup prerequisites.</td></tr>`;
+      const evidenceRows = (state.evidence_history || []).map((item) => `
+        <tr>
+          <td>${escapeHtml(item.id)}</td>
+          <td>${escapeHtml(item.prerequisite_key)}</td>
+          <td>${escapeHtml(item.recorded_by)} / ${escapeHtml(item.recorded_at_kst)}</td>
+          <td>${escapeHtml(JSON.stringify(item.evidence_json || {}))}</td>
+        </tr>`).join("") || `<tr><td colspan="4">No immutable backup evidence.</td></tr>`;
+      const latestResult = state.latest_rehearsal?.result_json || {};
+      const checkRows = (latestResult.checks || []).map((check) => `
+        <tr>
+          <td>${escapeHtml(check.key)}</td>
+          <td>${escapeHtml(check.status)}</td>
+          <td>${escapeHtml(check.message)}</td>
+        </tr>`).join("") || `<tr><td colspan="3">No rehearsal checks recorded.</td></tr>`;
+      const rehearsalRows = (state.rehearsals || []).map((item) => `
+        <tr>
+          <td>${escapeHtml(item.id)}</td>
+          <td>${escapeHtml(item.result_status)}</td>
+          <td>${escapeHtml(item.passed_check_count)} / ${escapeHtml(item.check_count)}</td>
+          <td>${escapeHtml(item.run_by)} / ${escapeHtml(item.run_at_kst)}</td>
+        </tr>`).join("") || `<tr><td colspan="4">No non-executing rehearsal records.</td></tr>`;
+      const evidenceOptions = (state.prerequisites || [])
+        .filter((item) => item.required)
+        .map((item) => `<option value="${attr(item.key)}">${escapeHtml(item.key)}</option>`)
+        .join("");
+      const evidenceForm = plan && state.evidence_recording_allowed && evidenceOptions ? `
+        <form class="backup-evidence-form" data-backup-evidence-form data-request-id="${attr(state.request_id)}" data-plan-id="${attr(plan.id)}">
+          <label>Prerequisite
+            <select name="prerequisite_key">${evidenceOptions}</select>
+          </label>
+          <label data-evidence-field="artifact_path">Backup artifact path
+            <input name="artifact_path" autocomplete="off">
+          </label>
+          <label data-evidence-field="artifact_sha256">Artifact SHA-256
+            <input name="artifact_sha256" autocomplete="off" minlength="64" maxlength="64">
+          </label>
+          <label data-evidence-field="artifact_size_bytes">Artifact bytes
+            <input name="artifact_size_bytes" type="number" min="1" step="1">
+          </label>
+          <label data-evidence-field="covered_row_count">Covered rows
+            <input name="covered_row_count" type="number" min="0" step="1">
+          </label>
+          <label data-evidence-field="covered_file_count">Covered files
+            <input name="covered_file_count" type="number" min="0" step="1">
+          </label>
+          <label data-evidence-field="covered_file_bytes">Covered source bytes
+            <input name="covered_file_bytes" type="number" min="0" step="1">
+          </label>
+          <label data-evidence-field="checked_path">Capacity path
+            <input name="checked_path" autocomplete="off">
+          </label>
+          <label data-evidence-field="available_bytes">Available bytes
+            <input name="available_bytes" type="number" min="0" step="1">
+          </label>
+          <label data-evidence-field="backup_created_at_kst">Backup created KST
+            <input name="backup_created_at_kst" type="datetime-local">
+          </label>
+          <label data-evidence-field="verified_at_kst">Verified KST
+            <input name="verified_at_kst" type="datetime-local">
+          </label>
+          <label data-evidence-field="restore_tested_at_kst">Restore tested KST
+            <input name="restore_tested_at_kst" type="datetime-local">
+          </label>
+          <label class="checkbox-field" data-evidence-field="checksums_verified">
+            <input name="checksums_verified" type="checkbox"> Checksums verified
+          </label>
+          <label class="checkbox-field" data-evidence-field="restore_test_passed">
+            <input name="restore_test_passed" type="checkbox"> Restore rehearsal passed
+          </label>
+          <button type="submit">Record immutable evidence</button>
+        </form>` : "";
+      const rehearsalButton = plan && state.rehearsal_allowed
+        ? `<button class="secondary" type="button" data-deletion-contract-action="rehearsal" data-request-id="${attr(state.request_id)}" data-plan-id="${attr(plan.id)}">Run non-executing rehearsal</button>`
+        : "";
+      return `
+        <div class="backup-readiness-contract">
+          <h3>Backup evidence and rehearsal</h3>
+          <div class="status">Execution enabled: no / execution ready: no / checksum recalculation: no / restore operation: no</div>
+          <ul>${(state.execution_blockers || []).map((blocker) => `<li>${escapeHtml(blocker)}</li>`).join("")}</ul>
+          <div class="actions">${rehearsalButton}</div>
+          <h3>Prerequisite evidence</h3>
+          <div class="table-scroll">
+            <table class="detail-table">
+              <thead><tr><th>Key</th><th>Required</th><th>Status</th><th>Latest evidence</th></tr></thead>
+              <tbody>${prerequisiteRows}</tbody>
+            </table>
+          </div>
+          ${evidenceForm}
+          <h3>Latest rehearsal checks</h3>
+          <div class="table-scroll">
+            <table class="detail-table">
+              <thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>
+              <tbody>${checkRows}</tbody>
+            </table>
+          </div>
+          <h3>Evidence history</h3>
+          <div class="table-scroll">
+            <table class="detail-table">
+              <thead><tr><th>ID</th><th>Prerequisite</th><th>Recorded</th><th>Evidence</th></tr></thead>
+              <tbody>${evidenceRows}</tbody>
+            </table>
+          </div>
+          <h3>Rehearsal history</h3>
+          <div class="table-scroll">
+            <table class="detail-table">
+              <thead><tr><th>ID</th><th>Status</th><th>Passed checks</th><th>Run</th></tr></thead>
+              <tbody>${rehearsalRows}</tbody>
+            </table>
+          </div>
+        </div>`;
+    }
+
+    function updateBackupEvidenceFields(form) {
+      const key = String(form?.elements.prerequisite_key?.value || "");
+      const fields = {
+        mysql_target_backup: ["artifact_path", "artifact_sha256", "artifact_size_bytes", "covered_row_count", "backup_created_at_kst"],
+        replay_artifact_backup: ["artifact_path", "artifact_sha256", "artifact_size_bytes", "covered_file_count", "covered_file_bytes", "backup_created_at_kst"],
+        quarantine_capacity_check: ["checked_path", "available_bytes", "verified_at_kst"],
+        backup_integrity_verification: ["verified_at_kst", "restore_tested_at_kst", "checksums_verified", "restore_test_passed"],
+      };
+      const enabled = new Set(fields[key] || []);
+      for (const label of form?.querySelectorAll("[data-evidence-field]") || []) {
+        const active = enabled.has(label.dataset.evidenceField || "");
+        label.hidden = !active;
+        for (const input of label.querySelectorAll("input,select")) input.disabled = !active;
+      }
+    }
+
+    async function loadDataDeletionBackupReadiness(requestId) {
+      const response = await fetch(`/data-deletions/${encodeURIComponent(requestId)}/backup-readiness-state`);
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const payload = await response.json();
+      const host = document.querySelector("#dataDeletionBackupReadiness");
+      host.innerHTML = renderDataDeletionBackupReadiness(payload.backup_readiness_state);
+      updateBackupEvidenceFields(host.querySelector("form[data-backup-evidence-form]"));
+    }
+
+    function optionalFormText(form, name) {
+      const value = String(form.get(name) || "").trim();
+      return value || null;
+    }
+
+    function optionalFormNumber(form, name) {
+      const value = optionalFormText(form, name);
+      return value === null ? null : Number(value);
+    }
+
+    async function recordDataDeletionBackupEvidence(formElement) {
+      const values = new FormData(formElement);
+      const reviewer = new FormData(dataDeletionFilterForm);
+      const requestId = formElement.dataset.requestId || "";
+      const actorId = String(reviewer.get("actor_id") || "").trim();
+      const note = String(reviewer.get("note") || "").trim();
+      if (!actorId) throw new Error("Local reviewer is required.");
+      if (!window.confirm("Record immutable backup evidence? This does not create or verify backup contents.")) return;
+      await postJson(`/data-deletions/${encodeURIComponent(requestId)}/backup-evidence`, {
+        dry_run_plan_id: Number(formElement.dataset.planId),
+        prerequisite_key: String(values.get("prerequisite_key") || ""),
+        artifact_path: optionalFormText(values, "artifact_path"),
+        artifact_sha256: optionalFormText(values, "artifact_sha256"),
+        artifact_size_bytes: optionalFormNumber(values, "artifact_size_bytes"),
+        covered_row_count: optionalFormNumber(values, "covered_row_count"),
+        covered_file_count: optionalFormNumber(values, "covered_file_count"),
+        covered_file_bytes: optionalFormNumber(values, "covered_file_bytes"),
+        checked_path: optionalFormText(values, "checked_path"),
+        available_bytes: optionalFormNumber(values, "available_bytes"),
+        backup_created_at_kst: optionalFormText(values, "backup_created_at_kst"),
+        verified_at_kst: optionalFormText(values, "verified_at_kst"),
+        restore_tested_at_kst: optionalFormText(values, "restore_tested_at_kst"),
+        checksums_verified: values.get("checksums_verified") === "on",
+        restore_test_passed: values.get("restore_test_passed") === "on",
+        actor_id: actorId,
+        note: note || null,
+      });
+      await loadDataDeletionRequestDetail(requestId);
+      dataDeletionStatus.textContent = "Immutable backup evidence recorded. No backup or deletion operation was run.";
+    }
+
+    async function runDataDeletionRehearsal(requestId, planId) {
+      const reviewer = new FormData(dataDeletionFilterForm);
+      const actorId = String(reviewer.get("actor_id") || "").trim();
+      const note = String(reviewer.get("note") || "").trim();
+      if (!actorId) throw new Error("Local reviewer is required.");
+      if (!window.confirm("Run a metadata-only rehearsal? No backup, checksum, restore, or deletion operation will run.")) return;
+      await postJson(`/data-deletions/${encodeURIComponent(requestId)}/rehearsals`, {
+        dry_run_plan_id: Number(planId),
+        actor_id: actorId,
+        note: note || null,
+      });
+      await loadDataDeletionRequestDetail(requestId);
+      dataDeletionStatus.textContent = "Non-executing rehearsal recorded. Deletion execution remains disabled.";
+    }
+
     async function loadDataDeletionConfirmationState(requestId) {
       const response = await fetch(`/data-deletions/${encodeURIComponent(requestId)}/confirmation-state`);
       if (!response.ok) {
@@ -3860,7 +4235,8 @@ _INDEX_HTML = """<!doctype html>
         </ul>
         <div id="dataDeletionPreview" class="status">Loading read-only impact preview...</div>
         <div id="dataDeletionConfirmation" class="status">Loading immutable confirmation state...</div>
-        <div id="dataDeletionDryRun" class="status">Loading confirmed deletion dry-run state...</div>`;
+        <div id="dataDeletionDryRun" class="status">Loading confirmed deletion dry-run state...</div>
+        <div id="dataDeletionBackupReadiness" class="status">Loading backup evidence and rehearsal state...</div>`;
       const previewHost = document.querySelector("#dataDeletionPreview");
       try {
         const previewUrl = payload.preview_url || `/data-deletions/${encodeURIComponent(requestId)}/preview`;
@@ -3885,6 +4261,12 @@ _INDEX_HTML = """<!doctype html>
       } catch (error) {
         const dryRunHost = document.querySelector("#dataDeletionDryRun");
         dryRunHost.textContent = `Dry-run state error: ${error.message}`;
+      }
+      try {
+        await loadDataDeletionBackupReadiness(requestId);
+      } catch (error) {
+        const backupHost = document.querySelector("#dataDeletionBackupReadiness");
+        backupHost.textContent = `Backup readiness error: ${error.message}`;
       }
     }
 
@@ -6508,10 +6890,33 @@ _INDEX_HTML = """<!doctype html>
           );
         } else if (button.dataset.deletionContractAction === "dry-run") {
           await createDataDeletionDryRunPlan(requestId);
+        } else if (button.dataset.deletionContractAction === "rehearsal") {
+          await runDataDeletionRehearsal(requestId, button.dataset.planId || "");
         }
       } catch (error) {
         dataDeletionStatus.textContent = `Error: ${error.message}`;
       }
+    });
+
+    dataDeletionDetail.addEventListener("submit", async (event) => {
+      const form = event.target instanceof Element
+        ? event.target.closest("form[data-backup-evidence-form]")
+        : null;
+      if (!form) return;
+      event.preventDefault();
+      try {
+        await recordDataDeletionBackupEvidence(form);
+      } catch (error) {
+        dataDeletionStatus.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    dataDeletionDetail.addEventListener("change", (event) => {
+      const select = event.target instanceof Element
+        ? event.target.closest("form[data-backup-evidence-form] select[name='prerequisite_key']")
+        : null;
+      if (!select) return;
+      updateBackupEvidenceFields(select.closest("form[data-backup-evidence-form]"));
     });
 
     dataDeletionFilterForm.addEventListener("submit", async (event) => {
