@@ -193,29 +193,30 @@ Implemented behavior:
 - Match-shared raw metadata/files, shared match context, cross-player references, and every deletion audit table are
   explicit exclusions. Backup creation, capacity, checksum, and restore-rehearsal evidence are prerequisites, while
   `executor_not_implemented` and `backup_evidence_not_recorded` keep every plan non-ready and non-executable.
-- Backup evidence is append-only and bound to the latest dry-run plan fingerprint. The four supported keys cover the
-  MySQL target backup, replay artifact backup, quarantine capacity, and checksum/restore attestation. Corrections add
-  newer rows; prior evidence remains in history.
+- Backup evidence is append-only and bound to the latest dry-run plan fingerprint. The four keys cover MySQL artifacts,
+  replay artifacts, quarantine capacity, and checksum/restore integrity. Artifact evidence comes from the builder;
+  integrity evidence can only come from a passed isolated restore rehearsal. Corrections append new rows.
 - `PUBG_BACKUP_DATA_DIR` is a third source-disjoint local root. The localhost-only builder requires exact latest-plan
-  confirmation text, exports whitelisted candidate rows as typed JSONL in a ZIP, copies only verified player-owned
-  replay files to another ZIP, calculates archive/internal SHA-256 values, and atomically publishes a manifest-bound
-  build directory.
-- Successful artifact builds append one evidence row per required generated artifact in a single transaction. They do not append capacity
-  or integrity evidence because no quarantine destination or restore rehearsal exists yet. A database ZIP contains no
-  schema DDL and cannot currently be imported by the application.
-- The localhost artifact verifier discovers only manifests whose path, build ID, manifest SHA-256, artifact metadata,
-  actor, KST time, and confirmation hash match an intact builder-generated artifact-evidence set. It then reopens the build
-  and every declared ZIP read-only, checks safe unique declared paths and bounded expansion, and streams every JSONL/replay entry to verify
-  internal/whole-file hashes, byte counts, row/file counts, JSON structure, and typed value wrappers.
-- Verification appends one immutable `passed` or `blocked` row with the evidence IDs, evidence-set fingerprint, result
-  fingerprint, actor, note, and KST time. It writes no backup/source bytes, performs no restore, and deliberately does
-  not satisfy `backup_integrity_verification`, which also requires a separate successful restore rehearsal.
-- A non-executing rehearsal rechecks the approved request, latest plan and evidence-set fingerprints, live deletion
-  impact, backup artifact existence/declared size, covered row/file/byte counts, current free space, and evidence times.
-  It records either `passed` or `blocked` as another immutable audit row.
-- Rehearsal path checks use filesystem metadata only. Backup bytes are not opened, SHA-256 is not recalculated, a
-  restore is not run, and no target row or file is changed. New evidence after a passed rehearsal marks that rehearsal
-  stale. `executor_not_implemented` remains even after every rehearsal check passes.
+  confirmation text, exports whitelisted candidate rows as typed JSONL, copies only verified player-owned replay files,
+  calculates archive/internal SHA-256 values, and atomically publishes a manifest-bound build directory. One evidence
+  row per required generated artifact is appended in a single transaction; capacity and integrity are not claimed.
+- The localhost artifact verifier accepts only a build whose path, ID, manifest SHA-256, metadata, actor, KST time, and
+  confirmation hash match an intact builder-generated artifact-evidence set. It rejects unsafe, duplicate, encrypted,
+  oversized, or undeclared entries and streams every declared JSONL/replay entry to verify CRC, hashes, counts, bytes,
+  JSON structure, and typed wrappers. Its immutable result is not a restore attestation.
+- The isolated restore endpoint requires a passed verification and exact confirmation text containing the full
+  verification-result fingerprint. It revalidates the backup, uses a dedicated MySQL connection with random temporary
+  table names, verifies that `CREATE TEMPORARY TABLE ... LIKE` copied no foreign keys, restores every typed row, and
+  compares normalized source/readback row-set fingerprints. It writes no production table.
+- Replay files are restored only below a random direct child of the backup root after a free-space check. Each file is
+  hashed while copying and after readback. Temporary tables are explicitly dropped, the dedicated connection is closed,
+  and the scratch directory is removed on both success and failure; cleanup failure blocks the run.
+- A passed isolated restore atomically appends its audit row and `backup_integrity_verification` evidence bound to the
+  build ID, manifest SHA-256, verification ID/result fingerprint, artifact-evidence-set fingerprint, and restore-result
+  fingerprint. Manual integrity evidence is rejected. New artifact evidence makes an older restore attestation stale.
+- The earlier non-executing rehearsal still rechecks live deletion impact, evidence times, artifact metadata, and
+  quarantine free space without opening bytes or changing targets. `executor_not_implemented` remains even after every
+  available rehearsal passes; production restore, quarantine, and deletion are absent.
 
 ## Duplicate Match Handling
 

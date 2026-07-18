@@ -507,15 +507,19 @@ Completed slices:
      explicitly protects the two new audit tables, and `executor_not_implemented` remains unconditional.
 106. A configurable `PUBG_BACKUP_DATA_DIR` and opt-in builder create a typed JSONL MySQL-row ZIP, a verified replay ZIP,
      and a fingerprint-bound build manifest. The builder uses fixed table selectors, exact full-plan confirmation text,
-     temporary-directory publication, and atomic two-row evidence insertion. It never modifies source rows/files and
+     temporary-directory publication, and one atomic evidence row per generated artifact. It never modifies source rows/files and
      does not attest restore, capacity, quarantine, or deletion readiness.
 107. Schema version 14 adds immutable read-only backup verification runs. Candidate discovery and execution require the
-     intact builder-generated artifact-evidence set; verification locks those rows, validates build/evidence identities, and
-     streams every declared ZIP through path, duplication, encryption, expansion, manifest, JSONL/type, count, CRC, and SHA-256
-     checks. Passed and blocked outcomes are fingerprinted, while restore/integrity evidence and execution stay absent.
+     intact builder-generated artifact-evidence set; verification locks those rows, validates build/evidence identities,
+     and streams every declared ZIP through path, duplication, encryption, expansion, manifest, JSONL/type, count, CRC,
+     and SHA-256 checks. Passed and blocked outcomes are fingerprinted but do not attest restore by themselves.
+108. Schema version 15 adds immutable isolated restore rehearsal runs. Exact full-fingerprint opt-in triggers current
+     artifact revalidation, row round trips through a separate connection's random temporary tables, replay round trips
+     through a random backup-root scratch directory, mandatory cleanup, and atomic bound integrity evidence on pass.
+     Production rows/files remain unchanged and production restore, quarantine, deletion, and execution routes stay absent.
 
 Next slice:
 
-1. Design an isolated disposable restore rehearsal for the typed MySQL rows and replay artifacts. Keep production
-   restore, quarantine, database deletion, and every execution route disabled until restore isolation, capacity,
-   rollback, and postcondition contracts are implemented and independently verified.
+1. Add a configurable source-disjoint quarantine destination contract and a read-only capacity/postcondition planner.
+   Keep actual quarantine moves, database deletion, production restore, and every execution route disabled until the
+   destination, rollback, shared-data preservation, and crash-recovery contracts are independently verified.

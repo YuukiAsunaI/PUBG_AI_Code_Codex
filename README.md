@@ -366,21 +366,22 @@ match/telemetry evidence, lists backup prerequisites and postconditions, and sto
 generation writes only the audit plan row. Schema version 13 adds append-only backup-evidence and rehearsal tables.
 The localhost manager records corrected evidence as new rows and can run a non-executing rehearsal against the latest
 plan, latest evidence set, live source fingerprint, backup file existence/size, and current quarantine free space.
-`PUBG_BACKUP_DATA_DIR` and the Storage Settings screen now configure a source-disjoint backup root. After exact entry of
-`BUILD BACKUP ARTIFACTS REQUEST <request_id> <full_plan_fingerprint>`, the opt-in builder exports only whitelisted target
-rows to a compressed JSONL ZIP and, when the plan includes player-owned replay files, copies those verified files to a
-second ZIP. It calculates archive and per-entry SHA-256 values, finishes in a temporary directory, atomically renames the
-build directory, and appends one evidence row per generated artifact in a single transaction. The database archive intentionally contains no schema creation SQL and the
-current application has no restore importer. Quarantine capacity and checksum/restore-rehearsal evidence are therefore
-not auto-recorded. Schema version 14 adds append-only backup verification runs. The localhost verifier accepts only a
-direct build manifest under the configured request/plan backup directory and requires the matching immutable
-builder-generated artifact evidence set. It reopens every declared ZIP read-only and rejects unsafe, duplicate,
-encrypted, oversized, or undeclared entries,
-and checks whole-file hashes, internal manifests, JSONL row framing/types/counts/hashes, and replay bytes. `passed` and
-`blocked` results retain the builder evidence IDs and evidence/result fingerprints. This is not a restore test and does
-not create `backup_integrity_verification` evidence. `executor_not_implemented` remains unconditional; no restore,
-quarantine, deletion endpoint, executable deletion SQL, file remover, or execution button exists. Rerun
-`python -m pubg_ai.cli init-db` after updating from an earlier schema.
+`PUBG_BACKUP_DATA_DIR` and the Storage Settings screen configure a source-disjoint backup root. Exact entry of
+`BUILD BACKUP ARTIFACTS REQUEST <request_id> <full_plan_fingerprint>` lets the opt-in builder export required
+whitelisted rows as typed JSONL and copy required player-owned replay files. It calculates archive and entry SHA-256
+values, publishes the build directory atomically, and appends one evidence row per generated artifact in one
+transaction. Schema version 14 adds append-only read-only verification runs that reopen every declared ZIP, reject
+unsafe or undeclared content, and verify manifests, JSONL framing/types/counts, CRC, byte totals, and SHA-256 values.
+Schema version 15 adds the opt-in isolated restore rehearsal. The exact confirmation starts with
+`RUN ISOLATED RESTORE REHEARSAL REQUEST`, then includes the request ID, verification ID, and full verification-result
+fingerprint. The rehearsal revalidates every backup byte, restores MySQL rows only into random connection-scoped temporary tables, restores replay files only into
+a random temporary directory under the backup root, reads both back, and removes all scratch resources. A passed run
+atomically appends its immutable audit row and a `backup_integrity_verification` evidence row bound to the build,
+verification run, artifact-evidence set, manifest, and restore-result fingerprints. Manual integrity attestation is
+rejected, and a later artifact build makes older integrity evidence stale. The database archive still contains no
+schema DDL, and there is no production restore, quarantine, deletion endpoint, executable deletion SQL, file remover,
+or execution button. `executor_not_implemented` remains unconditional. Rerun `python -m pubg_ai.cli init-db` after
+updating from an earlier schema.
 The `admin` group includes `pubg-alerts`, which returns current storage and worker alerts. When
 `PUBG_LOCAL_WEB_BASE_URL` is set, that response includes a local current-alert list link. When Discord alert channel
 IDs are configured from the local manager, the running Discord bot also sends new worker failures and active storage

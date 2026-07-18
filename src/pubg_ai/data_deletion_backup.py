@@ -156,6 +156,10 @@ class DataDeletionBackupService:
         note = _optional_text(note, "note", 1000)
         plan = self._latest_plan(request, dry_run_plan_id)
         prerequisite_key = _prerequisite_key(prerequisite_key)
+        if prerequisite_key == "backup_integrity_verification":
+            raise DataDeletionBackupError(
+                "backup integrity evidence is created only by a passed isolated restore rehearsal."
+            )
         prerequisites = _plan_prerequisites(plan)
         prerequisite = prerequisites.get(prerequisite_key)
         if prerequisite is None:
@@ -234,6 +238,10 @@ class DataDeletionBackupService:
         for prerequisite_key in BACKUP_PREREQUISITE_KEYS:
             if prerequisite_key not in evidence_by_key:
                 continue
+            if prerequisite_key == "backup_integrity_verification":
+                raise DataDeletionBackupError(
+                    "backup integrity evidence is created only by a passed isolated restore rehearsal."
+                )
             prerequisite = prerequisites.get(prerequisite_key)
             if prerequisite is None:
                 raise DataDeletionBackupError(
@@ -690,7 +698,7 @@ def normalize_evidence_payload(
             ),
             "verified_at_kst": _iso_kst(_datetime_value(value.get("verified_at_kst"))),
         }
-    return {
+    record = {
         "checksums_verified": bool(value.get("checksums_verified")),
         "restore_test_passed": bool(value.get("restore_test_passed")),
         "restore_tested_at_kst": _iso_kst(
@@ -698,6 +706,40 @@ def normalize_evidence_payload(
         ),
         "verified_at_kst": _iso_kst(_datetime_value(value.get("verified_at_kst"))),
     }
+    binding_keys = (
+        "artifact_evidence_set_fingerprint_sha256",
+        "backup_verification_run_id",
+        "backup_verification_result_fingerprint_sha256",
+        "restore_rehearsal_result_fingerprint_sha256",
+        "build_id",
+        "manifest_sha256",
+    )
+    supplied = [value.get(key) not in {None, ""} for key in binding_keys]
+    if any(supplied):
+        if not all(supplied):
+            raise DataDeletionBackupError(
+                "restore integrity evidence bindings must be supplied together."
+            )
+        record.update(
+            {
+                "artifact_evidence_set_fingerprint_sha256": _fingerprint(
+                    value.get("artifact_evidence_set_fingerprint_sha256")
+                ),
+                "backup_verification_run_id": _positive_id(
+                    value.get("backup_verification_run_id"),
+                    "backup_verification_run_id",
+                ),
+                "backup_verification_result_fingerprint_sha256": _fingerprint(
+                    value.get("backup_verification_result_fingerprint_sha256")
+                ),
+                "restore_rehearsal_result_fingerprint_sha256": _fingerprint(
+                    value.get("restore_rehearsal_result_fingerprint_sha256")
+                ),
+                "build_id": _required_text(value.get("build_id"), "build_id", 64),
+                "manifest_sha256": _fingerprint(value.get("manifest_sha256")),
+            }
+        )
+    return record
 
 
 def fingerprint_backup_evidence(
@@ -748,6 +790,15 @@ def build_rehearsal_result(
     probe = path_probe or inspect_local_path
     _assert_plan_integrity(plan)
     live_fingerprint = _fingerprint(live_fingerprint_sha256)
+    artifact_evidence = {
+        key: evidence[key]
+        for key in ("mysql_target_backup", "replay_artifact_backup")
+        if key in evidence
+    }
+    artifact_evidence_set_fingerprint = fingerprint_evidence_set(
+        plan,
+        artifact_evidence,
+    )
     checks: list[dict[str, Any]] = [
         _check(
             "request_status",
@@ -799,7 +850,14 @@ def build_rehearsal_result(
                 )
             )
             continue
-        checks.append(_evaluate_evidence(plan, item, probe))
+        check = _evaluate_evidence(plan, item, probe)
+        if key == "backup_integrity_verification":
+            check = _bind_integrity_evidence_to_artifacts(
+                check,
+                item,
+                artifact_evidence_set_fingerprint,
+            )
+        checks.append(check)
 
     blockers = [str(check["key"]) for check in checks if check["status"] == "blocked"]
     evidence_set_fingerprint = fingerprint_evidence_set(plan, evidence)
@@ -970,6 +1028,47 @@ def _evaluate_evidence(
         "observed": observed,
         "message": "evidence is consistent" if not issues else "; ".join(issues),
     }
+
+
+def _bind_integrity_evidence_to_artifacts(
+    check: dict[str, Any],
+    evidence: DataDeletionBackupEvidence,
+    artifact_evidence_set_fingerprint: str,
+) -> dict[str, Any]:
+    result = deepcopy(check)
+    observed = dict(result.get("observed") or {})
+    binding = evidence.evidence_json.get(
+        "artifact_evidence_set_fingerprint_sha256"
+    )
+    observed["artifact_evidence_set_fingerprint_sha256"] = binding
+    observed["current_artifact_evidence_set_fingerprint_sha256"] = (
+        artifact_evidence_set_fingerprint
+    )
+    result["observed"] = observed
+    issues: list[str] = []
+    required_binding_keys = (
+        "artifact_evidence_set_fingerprint_sha256",
+        "backup_verification_run_id",
+        "backup_verification_result_fingerprint_sha256",
+        "restore_rehearsal_result_fingerprint_sha256",
+        "build_id",
+        "manifest_sha256",
+    )
+    if any(evidence.evidence_json.get(key) in {None, ""} for key in required_binding_keys):
+        issues.append("integrity evidence is not bound to an isolated restore rehearsal")
+    elif not hmac.compare_digest(
+        str(binding),
+        artifact_evidence_set_fingerprint,
+    ):
+        issues.append("integrity evidence belongs to a different artifact evidence set")
+    if result.get("status") == "blocked":
+        existing = str(result.get("message") or "").strip()
+        if existing:
+            issues.insert(0, existing)
+    if issues:
+        result["status"] = "blocked"
+        result["message"] = "; ".join(issues)
+    return result
 
 
 def _readiness_prerequisites(

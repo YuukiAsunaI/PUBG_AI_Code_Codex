@@ -41,6 +41,10 @@ from pubg_ai.data_deletion_backup_verifier import (
     DataDeletionBackupVerifierError,
     DataDeletionBackupVerifierService,
 )
+from pubg_ai.data_deletion_restore_rehearsal import (
+    DataDeletionBackupRestoreRehearsalService,
+    DataDeletionRestoreRehearsalError,
+)
 from pubg_ai.data_deletion_confirmation import (
     DataDeletionConfirmationError,
     DataDeletionConfirmationService,
@@ -233,6 +237,13 @@ class DataDeletionBackupVerificationCreateRequest(BaseModel):
     note: str | None = Field(default=None, max_length=1000)
 
 
+class DataDeletionBackupRestoreRehearsalCreateRequest(BaseModel):
+    backup_verification_run_id: int = Field(gt=0)
+    confirmation_text: str = Field(min_length=1, max_length=500)
+    actor_id: str = Field(default="local-manager", min_length=1, max_length=191)
+    note: str | None = Field(default=None, max_length=1000)
+
+
 class DataDeletionRehearsalCreateRequest(BaseModel):
     dry_run_plan_id: int = Field(gt=0)
     actor_id: str = Field(default="local-manager", min_length=1, max_length=191)
@@ -388,6 +399,31 @@ def create_app() -> Any:
             backup_root=runtime_config.app.backup_data_dir,
             raw_data_dir=runtime_config.app.raw_data_dir,
             replay_data_dir=runtime_config.app.replay_data_dir,
+        )
+
+    def build_data_deletion_restore_rehearsal_service(
+        connection: Any,
+        runtime_config: RuntimeConfig,
+        *,
+        backup_service: DataDeletionBackupService | None = None,
+        verifier_service: DataDeletionBackupVerifierService | None = None,
+    ) -> DataDeletionBackupRestoreRehearsalService:
+        backup = backup_service or build_data_deletion_backup_service(
+            connection,
+            runtime_config,
+        )
+        verifier = verifier_service or build_data_deletion_backup_verifier_service(
+            connection,
+            runtime_config,
+            backup_service=backup,
+        )
+        return DataDeletionBackupRestoreRehearsalService(
+            connection,
+            backup_service=backup,
+            verifier_service=verifier,
+            scratch_connection_factory=lambda: connect_mysql(runtime_config.database),
+            backup_root=runtime_config.app.backup_data_dir,
+            expected_database_name=runtime_config.database.database,
         )
 
     collector_worker = CollectorWorkerController(config_loader=current_config)
@@ -844,6 +880,7 @@ def create_app() -> Any:
             "backup_readiness_state_url": f"/data-deletions/{request_id}/backup-readiness-state",
             "backup_build_url": f"/data-deletions/{request_id}/backup-builds",
             "backup_verification_url": f"/data-deletions/{request_id}/backup-verifications",
+            "backup_restore_rehearsal_url": f"/data-deletions/{request_id}/backup-restore-rehearsals",
             "backup_evidence_url": f"/data-deletions/{request_id}/backup-evidence",
             "rehearsal_url": f"/data-deletions/{request_id}/rehearsals",
             "execution_enabled": False,
@@ -1030,16 +1067,24 @@ def create_app() -> Any:
                     runtime_config,
                     backup_service=backup_service,
                 ).build_state(request)
-                verifier_state = build_data_deletion_backup_verifier_service(
+                verifier_service = build_data_deletion_backup_verifier_service(
                     connection,
                     runtime_config,
                     backup_service=backup_service,
-                ).verification_state(request)
+                )
+                verifier_state = verifier_service.verification_state(request)
+                restore_rehearsal_state = build_data_deletion_restore_rehearsal_service(
+                    connection,
+                    runtime_config,
+                    backup_service=backup_service,
+                    verifier_service=verifier_service,
+                ).rehearsal_state(request)
             except DataDeletionRequestError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
             except (
                 DataDeletionBackupBuilderError,
                 DataDeletionBackupVerifierError,
+                DataDeletionRestoreRehearsalError,
                 DataDeletionBackupError,
                 DataDeletionDryRunError,
             ) as exc:
@@ -1050,6 +1095,7 @@ def create_app() -> Any:
             "backup_readiness_state": state,
             "backup_builder_state": builder_state,
             "backup_verifier_state": verifier_state,
+            "backup_restore_rehearsal_state": restore_rehearsal_state,
             "execution_enabled": False,
             "execution_ready": False,
         }
@@ -1123,6 +1169,45 @@ def create_app() -> Any:
             connection.close()
         return {
             "backup_verification": verification.to_record(),
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+
+    @app.post("/data-deletions/{request_id}/backup-restore-rehearsals")
+    def run_data_deletion_backup_restore_rehearsal(
+        request_id: int,
+        rehearsal_request: DataDeletionBackupRestoreRehearsalCreateRequest,
+    ) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(runtime_config.database)
+        try:
+            try:
+                request = DataDeletionRequestService(connection).get_request(request_id)
+                rehearsal = build_data_deletion_restore_rehearsal_service(
+                    connection,
+                    runtime_config,
+                ).run(
+                    request,
+                    backup_verification_run_id=(
+                        rehearsal_request.backup_verification_run_id
+                    ),
+                    confirmation_text=rehearsal_request.confirmation_text,
+                    actor_id=rehearsal_request.actor_id,
+                    note=rehearsal_request.note,
+                )
+            except DataDeletionRequestError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except (
+                DataDeletionRestoreRehearsalError,
+                DataDeletionBackupVerifierError,
+                DataDeletionBackupError,
+                DataDeletionDryRunError,
+            ) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {
+            "backup_restore_rehearsal": rehearsal.to_record(),
             "execution_enabled": False,
             "execution_ready": False,
         }
@@ -4133,7 +4218,7 @@ _INDEX_HTML = """<!doctype html>
       dataDeletionStatus.textContent = "Read-only dry-run plan recorded. Deletion execution remains disabled.";
     }
 
-    function renderDataDeletionBackupReadiness(state, builderState, verifierState) {
+    function renderDataDeletionBackupReadiness(state, builderState, verifierState, restoreState) {
       const plan = state.latest_plan;
       const builderBlockers = (builderState?.build_blockers || [])
         .map((blocker) => `<li>${escapeHtml(blocker)}</li>`)
@@ -4212,6 +4297,65 @@ _INDEX_HTML = """<!doctype html>
             </table>
           </div>
         </div>`;
+      const restoreBlockers = (restoreState?.restore_rehearsal_blockers || [])
+        .map((blocker) => `<li>${escapeHtml(blocker)}</li>`)
+        .join("");
+      const restoreCandidateRows = (restoreState?.verification_candidates || []).map((candidate) => `
+        <tr>
+          <td>#${escapeHtml(candidate.id)} / ${escapeHtml(candidate.build_id || "-")}</td>
+          <td>${escapeHtml(candidate.verified_by)} / ${escapeHtml(candidate.verified_at_kst)}</td>
+          <td><code>${escapeHtml(candidate.confirmation_text || "-")}</code></td>
+          <td>
+            <form class="confirmation-input-row restore-rehearsal-form" data-restore-rehearsal-form data-request-id="${attr(state.request_id)}" data-verification-id="${attr(candidate.id)}">
+              <label>Exact rehearsal confirmation
+                <input name="confirmation_text" autocomplete="off" required>
+              </label>
+              <button class="secondary" type="submit" ${restoreState?.restore_rehearsal_allowed ? "" : "disabled"}>Run</button>
+            </form>
+          </td>
+        </tr>`).join("") || `<tr><td colspan="4">No passed backup verification is available.</td></tr>`;
+      const latestRestore = restoreState?.latest_restore_rehearsal || null;
+      const restoreCheckRows = (latestRestore?.result_json?.checks || []).map((check) => `
+        <tr>
+          <td>${escapeHtml(check.key)}</td>
+          <td>${escapeHtml(check.status)}</td>
+          <td>${escapeHtml(check.message)}</td>
+        </tr>`).join("") || `<tr><td colspan="3">No isolated restore checks recorded.</td></tr>`;
+      const restoreHistoryRows = (restoreState?.restore_rehearsal_history || []).map((item) => `
+        <tr>
+          <td>${escapeHtml(item.id)}</td>
+          <td>${escapeHtml(item.result_status)}</td>
+          <td>${escapeHtml(item.mysql_restored_row_count)} / ${escapeHtml(item.mysql_row_count)}</td>
+          <td>${escapeHtml(item.replay_restored_file_count)} / ${escapeHtml(item.replay_file_count)}</td>
+          <td>${item.backup_integrity_evidence_id ? `#${escapeHtml(item.backup_integrity_evidence_id)}` : "-"}</td>
+          <td>${escapeHtml(item.run_by)} / ${escapeHtml(item.run_at_kst)}</td>
+        </tr>`).join("") || `<tr><td colspan="6">No isolated restore rehearsal records.</td></tr>`;
+      const restorePanel = `
+        <div class="backup-builder-contract">
+          <h3>Isolated backup restore rehearsal</h3>
+          <div class="status">MySQL: dedicated temporary tables / replay: temporary backup-volume directory / production restore: no / quarantine: no / deletion: no</div>
+          <ul>${restoreBlockers}</ul>
+          <div class="table-scroll">
+            <table class="detail-table">
+              <thead><tr><th>Verification</th><th>Verified</th><th>Required text</th><th>Action</th></tr></thead>
+              <tbody>${restoreCandidateRows}</tbody>
+            </table>
+          </div>
+          <h3>Latest isolated restore checks</h3>
+          <div class="table-scroll">
+            <table class="detail-table">
+              <thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>
+              <tbody>${restoreCheckRows}</tbody>
+            </table>
+          </div>
+          <h3>Isolated restore history</h3>
+          <div class="table-scroll">
+            <table class="detail-table">
+              <thead><tr><th>ID</th><th>Status</th><th>MySQL rows</th><th>Replay files</th><th>Integrity evidence</th><th>Run</th></tr></thead>
+              <tbody>${restoreHistoryRows}</tbody>
+            </table>
+          </div>
+        </div>`;
       const prerequisiteRows = (state.prerequisites || []).map((item) => `
         <tr>
           <td>${escapeHtml(item.key)}</td>
@@ -4241,7 +4385,7 @@ _INDEX_HTML = """<!doctype html>
           <td>${escapeHtml(item.run_by)} / ${escapeHtml(item.run_at_kst)}</td>
         </tr>`).join("") || `<tr><td colspan="4">No non-executing rehearsal records.</td></tr>`;
       const evidenceOptions = (state.prerequisites || [])
-        .filter((item) => item.required)
+        .filter((item) => item.required && item.key !== "backup_integrity_verification")
         .map((item) => `<option value="${attr(item.key)}">${escapeHtml(item.key)}</option>`)
         .join("");
       const evidenceForm = plan && state.evidence_recording_allowed && evidenceOptions ? `
@@ -4301,6 +4445,7 @@ _INDEX_HTML = """<!doctype html>
           <div class="actions">${rehearsalButton}</div>
           ${builderForm}
           ${verifierPanel}
+          ${restorePanel}
           <h3>Prerequisite evidence</h3>
           <div class="table-scroll">
             <table class="detail-table">
@@ -4361,6 +4506,7 @@ _INDEX_HTML = """<!doctype html>
         payload.backup_readiness_state,
         payload.backup_builder_state,
         payload.backup_verifier_state,
+        payload.backup_restore_rehearsal_state,
       );
       updateBackupEvidenceFields(host.querySelector("form[data-backup-evidence-form]"));
     }
@@ -4421,6 +4567,33 @@ _INDEX_HTML = """<!doctype html>
         dataDeletionStatus.textContent = `Backup artifact verification ${status}. No restore, quarantine, or deletion operation was run.`;
       } finally {
         button.disabled = false;
+      }
+    }
+
+    async function runDataDeletionBackupRestoreRehearsal(formElement) {
+      const values = new FormData(formElement);
+      const reviewer = new FormData(dataDeletionFilterForm);
+      const requestId = formElement.dataset.requestId || "";
+      const actorId = String(reviewer.get("actor_id") || "").trim();
+      const note = String(reviewer.get("note") || "").trim();
+      const confirmationText = String(values.get("confirmation_text") || "").trim();
+      if (!actorId) throw new Error("Local reviewer is required.");
+      if (!confirmationText) throw new Error("Exact restore rehearsal confirmation is required.");
+      if (!window.confirm("Run an isolated restore rehearsal using connection-scoped MySQL tables and temporary replay files? Production restore, quarantine, and deletion remain disabled.")) return;
+      const button = formElement.querySelector("button[type='submit']");
+      if (button) button.disabled = true;
+      try {
+        const payload = await postJson(`/data-deletions/${encodeURIComponent(requestId)}/backup-restore-rehearsals`, {
+          backup_verification_run_id: Number(formElement.dataset.verificationId),
+          confirmation_text: confirmationText,
+          actor_id: actorId,
+          note: note || null,
+        });
+        const run = payload.backup_restore_rehearsal || {};
+        await loadDataDeletionRequestDetail(requestId);
+        dataDeletionStatus.textContent = `Isolated restore rehearsal ${run.result_status || "unknown"}. Integrity evidence: ${run.backup_integrity_evidence_id || "not recorded"}. Production restore and deletion remain disabled.`;
+      } finally {
+        if (button) button.disabled = false;
       }
     }
 
@@ -7209,6 +7382,19 @@ _INDEX_HTML = """<!doctype html>
       event.preventDefault();
       try {
         await buildDataDeletionBackupArtifacts(form);
+      } catch (error) {
+        dataDeletionStatus.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    dataDeletionDetail.addEventListener("submit", async (event) => {
+      const form = event.target instanceof Element
+        ? event.target.closest("form[data-restore-rehearsal-form]")
+        : null;
+      if (!form) return;
+      event.preventDefault();
+      try {
+        await runDataDeletionBackupRestoreRehearsal(form);
       } catch (error) {
         dataDeletionStatus.textContent = `Error: ${error.message}`;
       }

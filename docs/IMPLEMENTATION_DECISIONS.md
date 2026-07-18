@@ -195,14 +195,20 @@ Suggested command groups:
   roots. The opt-in builder requires exact plan-fingerprint text, exports only a fixed table allowlist, copies only
   verified player-owned replay files, calculates checksums, publishes atomically, and records one evidence row per
   generated artifact in a single transaction.
-- JSONL/ZIP artifacts deliberately contain no executable deletion SQL or schema DDL. The current application has no
-  restore importer, quarantine destination, or executor, so capacity and restore/integrity evidence remain separate
-  requirements and `executor_not_implemented` remains mandatory.
+- JSONL/ZIP artifacts deliberately contain no executable deletion SQL or schema DDL. The application has no production
+  restore importer, quarantine destination, or executor, so quarantine capacity remains separate and
+  `executor_not_implemented` remains mandatory.
 - Schema version 14 stores append-only read-only artifact-verification results. A candidate must match the immutable
   builder-generated artifact-evidence set before the verifier streams every declared ZIP and validates build/internal
   manifests, safe unique entries, expansion limits, CRC, JSONL rows/type wrappers, byte/count totals, and SHA-256.
 - Artifact verification is intentionally not a restore rehearsal. It records checksum findings and evidence/result
-  fingerprints but never creates `backup_integrity_verification` evidence or enables quarantine/deletion execution.
+  fingerprints but never creates `backup_integrity_verification` evidence by itself.
+- Schema version 15 stores isolated restore rehearsal audits. A run requires exact confirmation bound to a passed
+  verification, revalidates all bytes, restores rows only to random connection-scoped MySQL temporary tables, restores
+  replay files only to a random backup-root scratch directory, reads both back, and treats cleanup as a required check.
+- Passed restore rehearsals append integrity evidence and the audit row atomically. The integrity payload binds the build,
+  manifest, verification run/result, artifact-evidence set, and restore result. Manual integrity attestation is rejected,
+  and later artifact evidence invalidates the older binding. Production restore, quarantine, and deletion remain absent.
 - Deletion should be split into options:
   - delete registration only
   - delete normalized DB data

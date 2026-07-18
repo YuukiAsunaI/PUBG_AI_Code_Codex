@@ -113,12 +113,13 @@ to match another maximum-500-file live preview. The immutable JSON plan contains
 shared-data exclusions, backup prerequisites, postcondition checks, and a canonical plan SHA-256. It always reports
 `execution_enabled=false`, `execution_ready=false`, `executor_not_implemented`, and
 `backup_evidence_not_recorded`. Schema version 13 adds `data_deletion_backup_evidence` and
-`data_deletion_rehearsal_runs`. Evidence paths must be absolute local paths; backup artifacts are checked by metadata
-only, capacity evidence is compared with current free space, and operator-recorded checksum/restore attestations are
-not independently recomputed or executed. Corrected evidence appends a new immutable row and makes an older passed
-rehearsal stale. Schema version 14 adds `data_deletion_backup_verification_runs`; each result is bound to the builder-generated
-artifact-evidence IDs and evidence-set fingerprint. Run `python -m pubg_ai.cli init-db` after updating so the eight deletion
-workflow tables are created. No deletion executor or execution endpoint is enabled.
+`data_deletion_rehearsal_runs`. Evidence paths must be absolute local paths; this first rehearsal checks artifact
+metadata and current capacity without opening backup bytes or performing a restore. Corrected evidence appends a new
+immutable row and makes an older passed rehearsal stale. Schema version 14 adds `data_deletion_backup_verification_runs`; each result is bound to the
+builder-generated artifact-evidence IDs and evidence-set fingerprint. Schema version 15 adds
+`data_deletion_backup_restore_rehearsal_runs`; passed rows reference the selected verification and the automatically
+created integrity-evidence row. Run `python -m pubg_ai.cli init-db` after updating so the nine deletion workflow tables
+are created. No deletion executor or execution endpoint is enabled.
 
 The opt-in builder uses `PUBG_BACKUP_DATA_DIR` (default `./data/backups`). The backup root must be writable and must not
 equal, contain, or be contained by `PUBG_RAW_DATA_DIR` or `PUBG_REPLAY_DATA_DIR`. A build requires the exact latest-plan
@@ -131,8 +132,14 @@ checksums are calculated while building. The localhost review screen can run a r
 builder-generated artifact-evidence set, rejects build-directory extras and unsafe/duplicate/encrypted/undeclared ZIP
 entries, and streams all declared JSONL/replay entries to verify counts, byte sizes, typed wrappers, CRC, and SHA-256 values. Build manifests
 are limited to 4 MiB, internal manifests to 8 MiB, and a JSONL row to 64 MiB; archive expansion limits also guard against
-ZIP bombs. The current format does not include schema creation SQL or a restore importer, so neither the builder nor the
-verifier claims a successful restore rehearsal or populates quarantine-capacity/integrity evidence.
+ZIP bombs. The format contains no schema creation SQL. The
+`POST /data-deletions/{request_id}/backup-restore-rehearsals` endpoint requires a passed verification and exact
+full-fingerprint confirmation text. It opens a second MySQL connection, creates random `TEMPORARY TABLE ... LIKE` copies, rejects copied
+foreign keys or live-schema column drift, inserts typed rows only into those temporary names, and compares normalized
+row-set fingerprints after readback. Replay bytes are restored and rehashed in a random temporary directory directly
+under `PUBG_BACKUP_DATA_DIR`; free space is checked first and cleanup is mandatory. Only a passed run creates bound
+`backup_integrity_verification` evidence. Quarantine-capacity evidence remains separate, and production restore,
+quarantine, and deletion remain unavailable.
 
 1. Built-in defaults: `./data/raw`, `./data/replays`, `./data/backups`
 2. `.env` values: `PUBG_RAW_DATA_DIR`, `PUBG_REPLAY_DATA_DIR`, `PUBG_BACKUP_DATA_DIR`

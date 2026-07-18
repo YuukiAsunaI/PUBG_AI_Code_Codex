@@ -130,6 +130,58 @@ class DataDeletionBackupVerifierTests(unittest.TestCase):
             },
         )
 
+    def test_passed_run_revalidates_current_bytes_without_new_audit_insert(self) -> None:
+        connection = AuditConnection(self.plan)
+        run = self._verify(connection)
+        connection.verification_row = _verification_row(run)
+        mutations_before = [
+            statement
+            for statement in connection.statements
+            if statement.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE", "REPLACE"))
+        ]
+
+        revalidated = self._service(connection).revalidate_passed_run(
+            self.request,
+            run.id,
+            reference_kst=datetime(2026, 7, 12, 12, 20, 0),
+        )
+
+        self.assertEqual(revalidated.verification_run.id, run.id)
+        self.assertEqual(revalidated.plan.id, self.plan.id)
+        self.assertEqual(revalidated.manifest_path, self.build_result.manifest_path)
+        self.assertEqual(
+            set(revalidated.artifact_paths),
+            {"mysql_target_backup", "replay_artifact_backup"},
+        )
+        self.assertRegex(revalidated.current_result_fingerprint_sha256, r"^[0-9a-f]{64}$")
+        mutations_after = [
+            statement
+            for statement in connection.statements
+            if statement.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE", "REPLACE"))
+        ]
+        self.assertEqual(mutations_after, mutations_before)
+
+    def test_passed_run_revalidation_rejects_post_verification_archive_tamper(self) -> None:
+        connection = AuditConnection(self.plan)
+        run = self._verify(connection)
+        connection.verification_row = _verification_row(run)
+        with self._artifact_path("mysql_target_backup").open("ab") as target:
+            target.write(b"tamper-after-pass")
+
+        with self.assertRaises(DataDeletionBackupVerifierError):
+            self._service(connection).revalidate_passed_run(
+                self.request,
+                run.id,
+                reference_kst=datetime(2026, 7, 12, 12, 20, 0),
+            )
+
+        mutations = [
+            statement
+            for statement in connection.statements
+            if statement.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE", "REPLACE"))
+        ]
+        self.assertEqual(len(mutations), 1)
+
     def test_state_discovers_only_fingerprint_bound_build_candidate(self) -> None:
         state = self._service(AuditConnection(self.plan)).verification_state(self.request)
 
@@ -369,6 +421,7 @@ class AuditConnection:
         self.begin_count = 0
         self.commit_count = 0
         self.rollback_count = 0
+        self.verification_row: dict[str, object] | None = None
 
     def cursor(self) -> "AuditCursor":
         return AuditCursor(self)
@@ -420,6 +473,11 @@ class AuditCursor:
         elif "INSERT INTO data_deletion_backup_verification_runs" in normalized:
             self.lastrowid = 1201
             self._row = None
+        elif (
+            "FROM data_deletion_backup_verification_runs" in normalized
+            and "WHERE id = %s" in normalized
+        ):
+            self._row = self.connection.verification_row
         elif "FROM data_deletion_backup_verification_runs" in normalized:
             self._rows = []
         else:
@@ -430,6 +488,34 @@ class AuditCursor:
 
     def fetchall(self):
         return self._rows
+
+
+def _verification_row(run) -> dict[str, object]:
+    return {
+        "id": run.id,
+        "request_id": run.request_id,
+        "dry_run_plan_id": run.dry_run_plan_id,
+        "contract_version": run.contract_version,
+        "plan_fingerprint_sha256": run.plan_fingerprint_sha256,
+        "evidence_set_fingerprint_sha256": run.evidence_set_fingerprint_sha256,
+        "evidence_record_ids_json": json.dumps(run.evidence_record_ids),
+        "build_id": run.build_id,
+        "manifest_path": run.manifest_path,
+        "expected_manifest_sha256": run.expected_manifest_sha256,
+        "observed_manifest_sha256": run.observed_manifest_sha256,
+        "manifest_fingerprint_sha256": run.manifest_fingerprint_sha256,
+        "result_fingerprint_sha256": run.result_fingerprint_sha256,
+        "result_status": run.result_status,
+        "result_json": run.result_json,
+        "artifact_count": run.artifact_count,
+        "verified_artifact_count": run.verified_artifact_count,
+        "check_count": run.check_count,
+        "passed_check_count": run.passed_check_count,
+        "blocker_count": run.blocker_count,
+        "verified_by": run.verified_by,
+        "verification_note": run.verification_note,
+        "verified_at_kst": run.verified_at_kst,
+    }
 
 
 def _request() -> DataDeletionRequest:

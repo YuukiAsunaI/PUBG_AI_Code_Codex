@@ -58,6 +58,93 @@ class DataDeletionBackupTests(unittest.TestCase):
             fingerprint_backup_evidence(17, plan, "mysql_target_backup", second),
         )
 
+    def test_restore_integrity_evidence_requires_complete_artifact_bindings(self) -> None:
+        plan = _plan()
+        payload = normalize_evidence_payload(
+            "backup_integrity_verification",
+            {
+                "checksums_verified": True,
+                "restore_test_passed": True,
+                "restore_tested_at_kst": "2026-07-12T12:07:00+09:00",
+                "verified_at_kst": "2026-07-12T12:08:00+09:00",
+                "artifact_evidence_set_fingerprint_sha256": "a" * 64,
+                "backup_verification_run_id": 1201,
+                "backup_verification_result_fingerprint_sha256": "b" * 64,
+                "restore_rehearsal_result_fingerprint_sha256": "c" * 64,
+                "build_id": "1" * 32,
+                "manifest_sha256": "d" * 64,
+            },
+        )
+
+        self.assertEqual(payload["backup_verification_run_id"], 1201)
+        self.assertEqual(payload["build_id"], "1" * 32)
+        with self.assertRaisesRegex(DataDeletionBackupError, "bindings must be supplied together"):
+            normalize_evidence_payload(
+                "backup_integrity_verification",
+                {
+                    "checksums_verified": True,
+                    "restore_test_passed": True,
+                    "restore_tested_at_kst": "2026-07-12T12:07:00+09:00",
+                    "verified_at_kst": "2026-07-12T12:08:00+09:00",
+                    "artifact_evidence_set_fingerprint_sha256": "a" * 64,
+                },
+            )
+
+    def test_manual_restore_integrity_evidence_is_rejected_before_transaction(self) -> None:
+        plan = _plan()
+        connection = ScriptedConnection([])
+        dry_run_service = MagicMock()
+        dry_run_service.list_plans.return_value = [plan]
+        service = DataDeletionBackupService(
+            connection,
+            dry_run_service=dry_run_service,
+            preview_service=MagicMock(),
+        )
+
+        with self.assertRaisesRegex(DataDeletionBackupError, "only by a passed isolated restore rehearsal"):
+            service.record_evidence(
+                _request(),
+                dry_run_plan_id=plan.id,
+                prerequisite_key="backup_integrity_verification",
+                evidence={
+                    "checksums_verified": True,
+                    "restore_test_passed": True,
+                    "restore_tested_at_kst": "2026-07-12T12:07:00+09:00",
+                    "verified_at_kst": "2026-07-12T12:08:00+09:00",
+                },
+                actor_id="local-owner",
+            )
+
+        self.assertEqual(connection.begin_count, 0)
+        self.assertEqual(connection.executed, [])
+
+    def test_restore_integrity_evidence_becomes_stale_after_artifact_set_changes(self) -> None:
+        plan = _plan()
+        evidence = _evidence_set(plan)
+        mysql = evidence["mysql_target_backup"]
+        evidence["mysql_target_backup"] = _evidence(
+            plan,
+            "mysql_target_backup",
+            mysql.evidence_json,
+            evidence_id=1801,
+        )
+
+        result = build_rehearsal_result(
+            _request(),
+            plan,
+            evidence,
+            live_fingerprint_sha256=plan.source_fingerprint_sha256,
+            path_probe=_path_probe,
+        )
+
+        integrity = next(
+            item
+            for item in result["checks"]
+            if item["key"] == "backup_integrity_verification"
+        )
+        self.assertEqual(integrity["status"], "blocked")
+        self.assertIn("different artifact evidence set", integrity["message"])
+
     def test_rehearsal_result_passes_complete_consistent_evidence_without_mutation(self) -> None:
         plan = _plan()
         evidence = _evidence_set(plan)
@@ -595,17 +682,45 @@ def _evidence_set(plan: DataDeletionDryRunPlan) -> dict[str, DataDeletionBackupE
             "available_bytes": 1000,
             "verified_at_kst": "2026-07-12T12:06:00+09:00",
         },
-        "backup_integrity_verification": {
+    }
+    records = {
+        key: _evidence(
+            plan,
+            key,
+            normalize_evidence_payload(key, payload),
+            evidence_id=801 + index,
+        )
+        for index, (key, payload) in enumerate(payloads.items())
+    }
+    artifact_fingerprint = fingerprint_evidence_set(
+        plan,
+        {
+            key: records[key]
+            for key in ("mysql_target_backup", "replay_artifact_backup")
+        },
+    )
+    integrity_payload = normalize_evidence_payload(
+        "backup_integrity_verification",
+        {
             "checksums_verified": True,
             "restore_test_passed": True,
             "restore_tested_at_kst": "2026-07-12T12:07:00+09:00",
             "verified_at_kst": "2026-07-12T12:08:00+09:00",
+            "artifact_evidence_set_fingerprint_sha256": artifact_fingerprint,
+            "backup_verification_run_id": 1201,
+            "backup_verification_result_fingerprint_sha256": "c" * 64,
+            "restore_rehearsal_result_fingerprint_sha256": "d" * 64,
+            "build_id": "1" * 32,
+            "manifest_sha256": "e" * 64,
         },
-    }
-    return {
-        key: _evidence(plan, key, normalize_evidence_payload(key, payload), evidence_id=801 + index)
-        for index, (key, payload) in enumerate(payloads.items())
-    }
+    )
+    records["backup_integrity_verification"] = _evidence(
+        plan,
+        "backup_integrity_verification",
+        integrity_payload,
+        evidence_id=804,
+    )
+    return records
 
 
 def _evidence(

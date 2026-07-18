@@ -68,6 +68,7 @@ class DataDeletionDryRunTests(unittest.TestCase):
         self.assertIn("data_deletion_backup_evidence", audit_exclusions)
         self.assertIn("data_deletion_rehearsal_runs", audit_exclusions)
         self.assertIn("data_deletion_backup_verification_runs", audit_exclusions)
+        self.assertIn("data_deletion_backup_restore_rehearsal_runs", audit_exclusions)
         serialized = json.dumps(first, ensure_ascii=False)
         self.assertNotIn("DELETE FROM", serialized.upper())
         self.assertTrue(

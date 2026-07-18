@@ -227,6 +227,16 @@ class DataDeletionBackupVerificationRun:
         return {**self.to_summary_record(), "result_json": self.result_json}
 
 
+@dataclass(frozen=True)
+class RevalidatedBackupBuild:
+    verification_run: DataDeletionBackupVerificationRun
+    plan: DataDeletionDryRunPlan
+    manifest_path: Path
+    manifest: dict[str, Any]
+    artifact_paths: dict[str, Path]
+    current_result_fingerprint_sha256: str
+
+
 class DataDeletionBackupVerifierService:
     def __init__(
         self,
@@ -404,6 +414,144 @@ class DataDeletionBackupVerifierService:
             )
             rows = cursor.fetchall()
         return [_verification_from_row(row) for row in rows]
+
+    def revalidate_passed_run(
+        self,
+        request: DataDeletionRequest,
+        verification_id: int,
+        *,
+        reference_kst: datetime | None = None,
+    ) -> RevalidatedBackupBuild:
+        run = self.get_run(verification_id)
+        if run.request_id != request.id:
+            raise DataDeletionBackupVerifierError(
+                "backup verification belongs to another deletion request."
+            )
+        if run.contract_version != BACKUP_VERIFIER_CONTRACT_VERSION:
+            raise DataDeletionBackupVerifierError(
+                "backup verification contract version is unsupported."
+            )
+        if run.result_status != "passed":
+            raise DataDeletionBackupVerifierError(
+                "backup verification must have passed before restore revalidation."
+            )
+        if request.status != "approved":
+            raise DataDeletionBackupVerifierError("request must remain approved.")
+        plan = self.backup_service.require_latest_plan(
+            request,
+            run.dry_run_plan_id,
+        )
+        _assert_plan_integrity(plan, request)
+        if not hmac.compare_digest(
+            run.plan_fingerprint_sha256,
+            plan.plan_fingerprint_sha256,
+        ):
+            raise DataDeletionBackupVerifierError(
+                "backup verification plan fingerprint is stale."
+            )
+        safe_manifest = _resolve_manifest_path(
+            self.backup_root,
+            request,
+            plan,
+            run.manifest_path,
+        )
+        evidence_records = self.backup_service.list_evidence(plan.id, limit=500)
+        anchors = _evidence_anchors(request, plan, evidence_records)
+        anchor = _select_evidence_anchor(
+            safe_manifest,
+            anchors,
+            manifest_sha256=run.expected_manifest_sha256,
+        )
+        if anchor is None:
+            raise DataDeletionBackupVerifierError(
+                "backup verification no longer has an intact builder evidence set."
+            )
+        if (
+            anchor.record_ids != run.evidence_record_ids
+            or not hmac.compare_digest(
+                anchor.evidence_set_fingerprint_sha256,
+                run.evidence_set_fingerprint_sha256,
+            )
+        ):
+            raise DataDeletionBackupVerifierError(
+                "backup verification builder evidence binding is stale."
+            )
+        verifier = _BuildArtifactVerifier(
+            request=request,
+            plan=plan,
+            manifest_path=safe_manifest,
+            expected_manifest_sha256=run.expected_manifest_sha256,
+            evidence_anchor=anchor,
+            verified_at_kst=to_kst(reference_kst or now_kst()),
+        )
+        current_result = verifier.run()
+        if current_result.get("verification_status") != "passed":
+            blockers = current_result.get("verification_blockers") or []
+            message = "; ".join(str(item) for item in blockers) or "unknown blocker"
+            raise DataDeletionBackupVerifierError(
+                f"backup artifacts no longer pass read-only verification: {message}"
+            )
+        if (
+            current_result.get("build_id") != run.build_id
+            or current_result.get("observed_manifest_sha256")
+            != run.expected_manifest_sha256
+            or current_result.get("manifest_fingerprint_sha256")
+            != run.manifest_fingerprint_sha256
+            or current_result.get("evidence_set", {}).get("record_ids")
+            != run.evidence_record_ids
+        ):
+            raise DataDeletionBackupVerifierError(
+                "current backup verification bindings differ from the immutable passed run."
+            )
+        manifest_body = _read_limited_file(safe_manifest, _MAX_BUILD_MANIFEST_BYTES)
+        if not hmac.compare_digest(
+            hashlib.sha256(manifest_body).hexdigest(),
+            run.expected_manifest_sha256,
+        ):
+            raise DataDeletionBackupVerifierError(
+                "build manifest changed after read-only revalidation."
+            )
+        manifest = _json_object_bytes(manifest_body, "build manifest")
+        artifact_records = manifest.get("artifacts")
+        if not isinstance(artifact_records, list):
+            raise DataDeletionBackupVerifierError(
+                "build manifest artifact records are unavailable."
+            )
+        artifact_paths: dict[str, Path] = {}
+        for value in artifact_records:
+            if not isinstance(value, dict):
+                raise DataDeletionBackupVerifierError(
+                    "build manifest contains an invalid artifact record."
+                )
+            key = str(value.get("prerequisite_key") or "")
+            expected_name = _ARTIFACT_FILENAMES.get(key)
+            if expected_name is None or value.get("path") != expected_name:
+                raise DataDeletionBackupVerifierError(
+                    "build manifest contains an unsupported artifact record."
+                )
+            artifact_path = (safe_manifest.parent / expected_name).resolve(strict=True)
+            if (
+                artifact_path.parent != safe_manifest.parent
+                or not artifact_path.is_file()
+                or artifact_path.is_symlink()
+                or key in artifact_paths
+            ):
+                raise DataDeletionBackupVerifierError(
+                    "revalidated artifact path is unsafe."
+                )
+            artifact_paths[key] = artifact_path
+        if set(artifact_paths) != set(run.evidence_record_ids):
+            raise DataDeletionBackupVerifierError(
+                "revalidated artifact set differs from immutable verification evidence."
+            )
+        return RevalidatedBackupBuild(
+            verification_run=run,
+            plan=plan,
+            manifest_path=safe_manifest,
+            manifest=manifest,
+            artifact_paths=artifact_paths,
+            current_result_fingerprint_sha256=_canonical_sha256(current_result),
+        )
 
     def _discover_candidates(
         self,

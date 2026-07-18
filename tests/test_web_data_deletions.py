@@ -193,6 +193,43 @@ class WebDataDeletionTests(unittest.TestCase):
             "execution_ready": False,
         }
         verifier_service.verify.return_value = backup_verification
+        restore_rehearsal = MagicMock()
+        restore_rehearsal.to_record.return_value = {
+            "id": 1301,
+            "request_id": 17,
+            "dry_run_plan_id": 901,
+            "backup_verification_run_id": 1201,
+            "result_status": "passed",
+            "mysql_row_count": 10,
+            "mysql_restored_row_count": 10,
+            "replay_file_count": 2,
+            "replay_restored_file_count": 2,
+            "backup_integrity_evidence_id": 1401,
+            "production_restore_performed": False,
+            "quarantine_performed": False,
+            "deletion_performed": False,
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+        restore_service = MagicMock()
+        restore_service.rehearsal_state.return_value = {
+            "request_id": 17,
+            "request_status": "pending",
+            "latest_plan_id": 901,
+            "verification_candidates": [],
+            "latest_restore_rehearsal": None,
+            "restore_rehearsal_history": [],
+            "restore_rehearsal_allowed": False,
+            "restore_rehearsal_blockers": [
+                "request status must be approved, not pending"
+            ],
+            "production_restore_performed": False,
+            "quarantine_performed": False,
+            "deletion_performed": False,
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+        restore_service.run.return_value = restore_rehearsal
         connections: list[FakeConnection] = []
 
         def connection_factory(*_: object, **__: object) -> FakeConnection:
@@ -214,6 +251,10 @@ class WebDataDeletionTests(unittest.TestCase):
             patch(
                 "pubg_ai.web.app.DataDeletionBackupVerifierService",
                 return_value=verifier_service,
+            ),
+            patch(
+                "pubg_ai.web.app.DataDeletionBackupRestoreRehearsalService",
+                return_value=restore_service,
             ),
         ):
             client = TestClient(create_app())
@@ -283,6 +324,27 @@ class WebDataDeletionTests(unittest.TestCase):
                     "actor_id": "local-owner",
                 },
             )
+            restore_confirmation = (
+                "RUN ISOLATED RESTORE REHEARSAL REQUEST 17 VERIFICATION 1201 "
+                + "e" * 64
+            )
+            restore_response = client.post(
+                "/data-deletions/17/backup-restore-rehearsals",
+                json={
+                    "backup_verification_run_id": 1201,
+                    "confirmation_text": restore_confirmation,
+                    "actor_id": "local-owner",
+                    "note": "temporary table and file restore",
+                },
+            )
+            invalid_restore_response = client.post(
+                "/data-deletions/17/backup-restore-rehearsals",
+                json={
+                    "backup_verification_run_id": 0,
+                    "confirmation_text": "invalid",
+                    "actor_id": "local-owner",
+                },
+            )
             backup_evidence_response = client.post(
                 "/data-deletions/17/backup-evidence",
                 json={
@@ -345,6 +407,10 @@ class WebDataDeletionTests(unittest.TestCase):
             "/data-deletions/17/backup-verifications",
         )
         self.assertEqual(
+            detail_response.json()["backup_restore_rehearsal_url"],
+            "/data-deletions/17/backup-restore-rehearsals",
+        )
+        self.assertEqual(
             detail_response.json()["backup_evidence_url"],
             "/data-deletions/17/backup-evidence",
         )
@@ -392,6 +458,10 @@ class WebDataDeletionTests(unittest.TestCase):
         self.assertFalse(
             backup_state_response.json()["backup_verifier_state"]["verification_allowed"]
         )
+        self.assertFalse(
+            backup_state_response.json()["backup_restore_rehearsal_state"]
+            ["restore_rehearsal_allowed"]
+        )
         self.assertEqual(backup_build_response.status_code, 200)
         self.assertEqual(backup_build_response.json()["backup_build"]["build_id"], "build-1")
         self.assertFalse(backup_build_response.json()["execution_enabled"])
@@ -404,6 +474,19 @@ class WebDataDeletionTests(unittest.TestCase):
         self.assertFalse(backup_verification_response.json()["execution_enabled"])
         self.assertFalse(backup_verification_response.json()["execution_ready"])
         self.assertEqual(invalid_backup_verification_response.status_code, 422)
+        self.assertEqual(restore_response.status_code, 200)
+        self.assertEqual(
+            restore_response.json()["backup_restore_rehearsal"]["id"],
+            1301,
+        )
+        self.assertEqual(
+            restore_response.json()["backup_restore_rehearsal"]
+            ["backup_integrity_evidence_id"],
+            1401,
+        )
+        self.assertFalse(restore_response.json()["execution_enabled"])
+        self.assertFalse(restore_response.json()["execution_ready"])
+        self.assertEqual(invalid_restore_response.status_code, 422)
         self.assertEqual(backup_evidence_response.status_code, 200)
         self.assertEqual(backup_evidence_response.json()["backup_evidence"]["id"], 801)
         self.assertFalse(backup_evidence_response.json()["execution_enabled"])
@@ -459,6 +542,14 @@ class WebDataDeletionTests(unittest.TestCase):
             expected_manifest_sha256="d" * 64,
             actor_id="local-owner",
             note="read-only artifact verification",
+        )
+        restore_service.rehearsal_state.assert_called_once_with(pending)
+        restore_service.run.assert_called_once_with(
+            pending,
+            backup_verification_run_id=1201,
+            confirmation_text=restore_confirmation,
+            actor_id="local-owner",
+            note="temporary table and file restore",
         )
         backup_service.record_evidence.assert_called_once_with(
             pending,
