@@ -8,7 +8,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 
 class DatabaseError(RuntimeError):
@@ -76,7 +76,7 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 VALUES (%s, %s, NOW(6))
                 ON DUPLICATE KEY UPDATE description = VALUES(description)
                 """,
-                (SCHEMA_VERSION, "deletion backup evidence and rehearsal schema"),
+                (SCHEMA_VERSION, "read-only deletion backup verification audit schema"),
             )
             applied += 1
     finally:
@@ -432,6 +432,58 @@ def schema_statements() -> list[str]:
                 FOREIGN KEY (request_id) REFERENCES data_deletion_requests(id)
                 ON DELETE RESTRICT,
             CONSTRAINT fk_data_deletion_rehearsal_plan
+                FOREIGN KEY (dry_run_plan_id) REFERENCES data_deletion_dry_run_plans(id)
+                ON DELETE RESTRICT
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS data_deletion_backup_verification_runs (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            request_id BIGINT UNSIGNED NOT NULL,
+            dry_run_plan_id BIGINT UNSIGNED NOT NULL,
+            contract_version VARCHAR(64) NOT NULL,
+            plan_fingerprint_sha256 CHAR(64) NOT NULL,
+            evidence_set_fingerprint_sha256 CHAR(64) NOT NULL,
+            evidence_record_ids_json JSON NOT NULL,
+            build_id VARCHAR(64) NULL,
+            manifest_path VARCHAR(1000) NOT NULL,
+            expected_manifest_sha256 CHAR(64) NOT NULL,
+            observed_manifest_sha256 CHAR(64) NULL,
+            manifest_fingerprint_sha256 CHAR(64) NULL,
+            result_fingerprint_sha256 CHAR(64) NOT NULL,
+            result_status ENUM('passed', 'blocked') NOT NULL,
+            result_json JSON NOT NULL,
+            artifact_count INT UNSIGNED NOT NULL,
+            verified_artifact_count INT UNSIGNED NOT NULL,
+            check_count INT UNSIGNED NOT NULL,
+            passed_check_count INT UNSIGNED NOT NULL,
+            blocker_count INT UNSIGNED NOT NULL,
+            verified_by VARCHAR(191) NOT NULL,
+            verification_note VARCHAR(1000) NULL,
+            verified_at_kst DATETIME(6) NOT NULL,
+            KEY idx_data_deletion_backup_verification_plan_time (
+                dry_run_plan_id,
+                verified_at_kst
+            ),
+            KEY idx_data_deletion_backup_verification_request_time (
+                request_id,
+                verified_at_kst
+            ),
+            KEY idx_data_deletion_backup_verification_status (
+                result_status,
+                verified_at_kst
+            ),
+            KEY idx_data_deletion_backup_verification_result (
+                result_fingerprint_sha256
+            ),
+            KEY idx_data_deletion_backup_verification_evidence (
+                evidence_set_fingerprint_sha256
+            ),
+            KEY idx_data_deletion_backup_verification_build (build_id),
+            CONSTRAINT fk_data_deletion_backup_verification_request
+                FOREIGN KEY (request_id) REFERENCES data_deletion_requests(id)
+                ON DELETE RESTRICT,
+            CONSTRAINT fk_data_deletion_backup_verification_plan
                 FOREIGN KEY (dry_run_plan_id) REFERENCES data_deletion_dry_run_plans(id)
                 ON DELETE RESTRICT
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci

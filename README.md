@@ -368,13 +368,19 @@ The localhost manager records corrected evidence as new rows and can run a non-e
 plan, latest evidence set, live source fingerprint, backup file existence/size, and current quarantine free space.
 `PUBG_BACKUP_DATA_DIR` and the Storage Settings screen now configure a source-disjoint backup root. After exact entry of
 `BUILD BACKUP ARTIFACTS REQUEST <request_id> <full_plan_fingerprint>`, the opt-in builder exports only whitelisted target
-rows to a compressed JSONL ZIP and copies verified player-owned replay files to a second ZIP. It calculates archive and
-per-entry SHA-256 values, finishes in a temporary directory, atomically renames the build directory, and appends the two
-artifact evidence rows in one transaction. The database archive intentionally contains no schema creation SQL and the
+rows to a compressed JSONL ZIP and, when the plan includes player-owned replay files, copies those verified files to a
+second ZIP. It calculates archive and per-entry SHA-256 values, finishes in a temporary directory, atomically renames the
+build directory, and appends one evidence row per generated artifact in a single transaction. The database archive intentionally contains no schema creation SQL and the
 current application has no restore importer. Quarantine capacity and checksum/restore-rehearsal evidence are therefore
-not auto-recorded. `executor_not_implemented` remains unconditional; no restore, quarantine, deletion endpoint,
-executable deletion SQL, file remover, or execution button exists. Rerun `python -m pubg_ai.cli init-db` after updating
-from an earlier schema.
+not auto-recorded. Schema version 14 adds append-only backup verification runs. The localhost verifier accepts only a
+direct build manifest under the configured request/plan backup directory and requires the matching immutable
+builder-generated artifact evidence set. It reopens every declared ZIP read-only and rejects unsafe, duplicate,
+encrypted, oversized, or undeclared entries,
+and checks whole-file hashes, internal manifests, JSONL row framing/types/counts/hashes, and replay bytes. `passed` and
+`blocked` results retain the builder evidence IDs and evidence/result fingerprints. This is not a restore test and does
+not create `backup_integrity_verification` evidence. `executor_not_implemented` remains unconditional; no restore,
+quarantine, deletion endpoint, executable deletion SQL, file remover, or execution button exists. Rerun
+`python -m pubg_ai.cli init-db` after updating from an earlier schema.
 The `admin` group includes `pubg-alerts`, which returns current storage and worker alerts. When
 `PUBG_LOCAL_WEB_BASE_URL` is set, that response includes a local current-alert list link. When Discord alert channel
 IDs are configured from the local manager, the running Discord bot also sends new worker failures and active storage

@@ -116,16 +116,23 @@ shared-data exclusions, backup prerequisites, postcondition checks, and a canoni
 `data_deletion_rehearsal_runs`. Evidence paths must be absolute local paths; backup artifacts are checked by metadata
 only, capacity evidence is compared with current free space, and operator-recorded checksum/restore attestations are
 not independently recomputed or executed. Corrected evidence appends a new immutable row and makes an older passed
-rehearsal stale. Run `python -m pubg_ai.cli init-db` after updating so the seven deletion workflow tables are created.
-No deletion executor or execution endpoint is enabled.
+rehearsal stale. Schema version 14 adds `data_deletion_backup_verification_runs`; each result is bound to the builder-generated
+artifact-evidence IDs and evidence-set fingerprint. Run `python -m pubg_ai.cli init-db` after updating so the eight deletion
+workflow tables are created. No deletion executor or execution endpoint is enabled.
 
 The opt-in builder uses `PUBG_BACKUP_DATA_DIR` (default `./data/backups`). The backup root must be writable and must not
 equal, contain, or be contained by `PUBG_RAW_DATA_DIR` or `PUBG_REPLAY_DATA_DIR`. A build requires the exact latest-plan
-confirmation text. MySQL candidate rows are exported as typed JSONL entries in `mysql-target-backup.zip`; verified
-player-owned replay bytes are copied to `replay-artifact-backup.zip`. A `build-manifest.json` binds both artifacts to
+confirmation text. For each prerequisite required by the latest plan, MySQL candidate rows are exported as typed JSONL
+entries in `mysql-target-backup.zip`, and verified player-owned replay bytes are copied to
+`replay-artifact-backup.zip`. A `build-manifest.json` binds every generated artifact to
 the request, plan, source fingerprint, actor, KST build time, and confirmation-text hash. Whole-file and internal
-checksums are calculated while building. The current format does not include schema creation SQL or a restore importer,
-so the builder never claims a successful restore rehearsal and does not populate quarantine-capacity evidence.
+checksums are calculated while building. The localhost review screen can run a read-only verifier through
+`POST /data-deletions/{request_id}/backup-verifications`. It requires the selected manifest SHA-256 and an intact
+builder-generated artifact-evidence set, rejects build-directory extras and unsafe/duplicate/encrypted/undeclared ZIP
+entries, and streams all declared JSONL/replay entries to verify counts, byte sizes, typed wrappers, CRC, and SHA-256 values. Build manifests
+are limited to 4 MiB, internal manifests to 8 MiB, and a JSONL row to 64 MiB; archive expansion limits also guard against
+ZIP bombs. The current format does not include schema creation SQL or a restore importer, so neither the builder nor the
+verifier claims a successful restore rehearsal or populates quarantine-capacity/integrity evidence.
 
 1. Built-in defaults: `./data/raw`, `./data/replays`, `./data/backups`
 2. `.env` values: `PUBG_RAW_DATA_DIR`, `PUBG_REPLAY_DATA_DIR`, `PUBG_BACKUP_DATA_DIR`

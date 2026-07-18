@@ -162,6 +162,37 @@ class WebDataDeletionTests(unittest.TestCase):
             "execution_ready": False,
         }
         builder_service.build.return_value = backup_build
+        backup_verification = MagicMock()
+        backup_verification.to_record.return_value = {
+            "id": 1201,
+            "request_id": 17,
+            "dry_run_plan_id": 901,
+            "result_status": "passed",
+            "artifact_count": 2,
+            "verified_artifact_count": 2,
+            "restore_test_performed": False,
+            "quarantine_performed": False,
+            "deletion_performed": False,
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+        verifier_service = MagicMock()
+        verifier_service.verification_state.return_value = {
+            "request_id": 17,
+            "request_status": "pending",
+            "latest_plan_id": 901,
+            "backup_root": "D:/BackUP/deletion-backups",
+            "candidates": [],
+            "selectable_candidate_count": 0,
+            "latest_verification": None,
+            "verification_history": [],
+            "verification_allowed": False,
+            "verification_blockers": ["request status must be approved, not pending"],
+            "restore_test_performed": False,
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+        verifier_service.verify.return_value = backup_verification
         connections: list[FakeConnection] = []
 
         def connection_factory(*_: object, **__: object) -> FakeConnection:
@@ -179,6 +210,10 @@ class WebDataDeletionTests(unittest.TestCase):
             patch(
                 "pubg_ai.web.app.DataDeletionBackupBuilderService",
                 return_value=builder_service,
+            ),
+            patch(
+                "pubg_ai.web.app.DataDeletionBackupVerifierService",
+                return_value=verifier_service,
             ),
         ):
             client = TestClient(create_app())
@@ -227,6 +262,25 @@ class WebDataDeletionTests(unittest.TestCase):
                     "confirmation_text": backup_build_confirmation,
                     "actor_id": "local-owner",
                     "note": "build local artifacts",
+                },
+            )
+            backup_verification_response = client.post(
+                "/data-deletions/17/backup-verifications",
+                json={
+                    "dry_run_plan_id": 901,
+                    "manifest_path": "D:/BackUP/deletion-backups/build-manifest.json",
+                    "expected_manifest_sha256": "d" * 64,
+                    "actor_id": "local-owner",
+                    "note": "read-only artifact verification",
+                },
+            )
+            invalid_backup_verification_response = client.post(
+                "/data-deletions/17/backup-verifications",
+                json={
+                    "dry_run_plan_id": 901,
+                    "manifest_path": "D:/BackUP/deletion-backups/build-manifest.json",
+                    "expected_manifest_sha256": "short",
+                    "actor_id": "local-owner",
                 },
             )
             backup_evidence_response = client.post(
@@ -287,6 +341,10 @@ class WebDataDeletionTests(unittest.TestCase):
             "/data-deletions/17/backup-builds",
         )
         self.assertEqual(
+            detail_response.json()["backup_verification_url"],
+            "/data-deletions/17/backup-verifications",
+        )
+        self.assertEqual(
             detail_response.json()["backup_evidence_url"],
             "/data-deletions/17/backup-evidence",
         )
@@ -331,10 +389,21 @@ class WebDataDeletionTests(unittest.TestCase):
             backup_state_response.json()["backup_readiness_state"]["execution_blockers"],
         )
         self.assertFalse(backup_state_response.json()["backup_builder_state"]["build_allowed"])
+        self.assertFalse(
+            backup_state_response.json()["backup_verifier_state"]["verification_allowed"]
+        )
         self.assertEqual(backup_build_response.status_code, 200)
         self.assertEqual(backup_build_response.json()["backup_build"]["build_id"], "build-1")
         self.assertFalse(backup_build_response.json()["execution_enabled"])
         self.assertFalse(backup_build_response.json()["execution_ready"])
+        self.assertEqual(backup_verification_response.status_code, 200)
+        self.assertEqual(
+            backup_verification_response.json()["backup_verification"]["id"],
+            1201,
+        )
+        self.assertFalse(backup_verification_response.json()["execution_enabled"])
+        self.assertFalse(backup_verification_response.json()["execution_ready"])
+        self.assertEqual(invalid_backup_verification_response.status_code, 422)
         self.assertEqual(backup_evidence_response.status_code, 200)
         self.assertEqual(backup_evidence_response.json()["backup_evidence"]["id"], 801)
         self.assertFalse(backup_evidence_response.json()["execution_enabled"])
@@ -381,6 +450,15 @@ class WebDataDeletionTests(unittest.TestCase):
             confirmation_text=backup_build_confirmation,
             actor_id="local-owner",
             note="build local artifacts",
+        )
+        verifier_service.verification_state.assert_called_once_with(pending)
+        verifier_service.verify.assert_called_once_with(
+            pending,
+            dry_run_plan_id=901,
+            manifest_path="D:/BackUP/deletion-backups/build-manifest.json",
+            expected_manifest_sha256="d" * 64,
+            actor_id="local-owner",
+            note="read-only artifact verification",
         )
         backup_service.record_evidence.assert_called_once_with(
             pending,

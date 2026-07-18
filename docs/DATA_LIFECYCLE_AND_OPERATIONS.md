@@ -200,9 +200,16 @@ Implemented behavior:
   confirmation text, exports whitelisted candidate rows as typed JSONL in a ZIP, copies only verified player-owned
   replay files to another ZIP, calculates archive/internal SHA-256 values, and atomically publishes a manifest-bound
   build directory.
-- Successful artifact builds append MySQL and replay evidence together in one transaction. They do not append capacity
+- Successful artifact builds append one evidence row per required generated artifact in a single transaction. They do not append capacity
   or integrity evidence because no quarantine destination or restore rehearsal exists yet. A database ZIP contains no
   schema DDL and cannot currently be imported by the application.
+- The localhost artifact verifier discovers only manifests whose path, build ID, manifest SHA-256, artifact metadata,
+  actor, KST time, and confirmation hash match an intact builder-generated artifact-evidence set. It then reopens the build
+  and every declared ZIP read-only, checks safe unique declared paths and bounded expansion, and streams every JSONL/replay entry to verify
+  internal/whole-file hashes, byte counts, row/file counts, JSON structure, and typed value wrappers.
+- Verification appends one immutable `passed` or `blocked` row with the evidence IDs, evidence-set fingerprint, result
+  fingerprint, actor, note, and KST time. It writes no backup/source bytes, performs no restore, and deliberately does
+  not satisfy `backup_integrity_verification`, which also requires a separate successful restore rehearsal.
 - A non-executing rehearsal rechecks the approved request, latest plan and evidence-set fingerprints, live deletion
   impact, backup artifact existence/declared size, covered row/file/byte counts, current free space, and evidence times.
   It records either `passed` or `blocked` as another immutable audit row.

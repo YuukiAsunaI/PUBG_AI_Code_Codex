@@ -81,6 +81,7 @@ Use a two-layer storage model:
 | `data_deletion_dry_run_plans` | Immutable canonical plans with confirmed source fingerprint, ordered non-executable operations, protected exclusions, backup prerequisites, metrics, actor, and KST evidence |
 | `data_deletion_backup_evidence` | Append-only per-prerequisite evidence bound to a dry-run plan fingerprint, with canonical evidence JSON/fingerprint, actor, note, and KST time |
 | `data_deletion_rehearsal_runs` | Immutable metadata-only rehearsal checks, evidence-set/result fingerprints, passed/blocked metrics, actor, note, and KST time |
+| `data_deletion_backup_verification_runs` | Immutable read-only artifact checks bound to builder evidence IDs/set fingerprint, manifest/result fingerprints, passed/blocked metrics, actor, note, and KST time |
 | `player_aliases` | Nickname history and lookup evidence |
 | `discord_users` | Discord user records; not assumed to own PUBG accounts |
 | `discord_guilds` | Guild-specific settings, ranking scope, and visibility defaults |
@@ -508,9 +509,13 @@ Completed slices:
      and a fingerprint-bound build manifest. The builder uses fixed table selectors, exact full-plan confirmation text,
      temporary-directory publication, and atomic two-row evidence insertion. It never modifies source rows/files and
      does not attest restore, capacity, quarantine, or deletion readiness.
+107. Schema version 14 adds immutable read-only backup verification runs. Candidate discovery and execution require the
+     intact builder-generated artifact-evidence set; verification locks those rows, validates build/evidence identities, and
+     streams every declared ZIP through path, duplication, encryption, expansion, manifest, JSONL/type, count, CRC, and SHA-256
+     checks. Passed and blocked outcomes are fingerprinted, while restore/integrity evidence and execution stay absent.
 
 Next slice:
 
-1. Add a non-mutating artifact verifier that reopens both ZIPs and validates the build manifest plus internal and
-   whole-file checksums. Design an isolated disposable restore rehearsal separately; keep production restore,
-   quarantine, database deletion, and every execution route disabled.
+1. Design an isolated disposable restore rehearsal for the typed MySQL rows and replay artifacts. Keep production
+   restore, quarantine, database deletion, and every execution route disabled until restore isolation, capacity,
+   rollback, and postcondition contracts are implemented and independently verified.

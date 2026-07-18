@@ -56,6 +56,7 @@ _AUDIT_TABLE_EXCLUSIONS = (
     "data_deletion_dry_run_plans",
     "data_deletion_backup_evidence",
     "data_deletion_rehearsal_runs",
+    "data_deletion_backup_verification_runs",
 )
 
 

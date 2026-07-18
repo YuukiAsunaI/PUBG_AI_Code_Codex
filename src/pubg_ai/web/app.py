@@ -37,6 +37,10 @@ from pubg_ai.data_deletion_backup_builder import (
     DataDeletionBackupBuilderError,
     DataDeletionBackupBuilderService,
 )
+from pubg_ai.data_deletion_backup_verifier import (
+    DataDeletionBackupVerifierError,
+    DataDeletionBackupVerifierService,
+)
 from pubg_ai.data_deletion_confirmation import (
     DataDeletionConfirmationError,
     DataDeletionConfirmationService,
@@ -217,6 +221,18 @@ class DataDeletionBackupBuildCreateRequest(BaseModel):
     note: str | None = Field(default=None, max_length=500)
 
 
+class DataDeletionBackupVerificationCreateRequest(BaseModel):
+    dry_run_plan_id: int = Field(gt=0)
+    manifest_path: str = Field(min_length=1, max_length=1000)
+    expected_manifest_sha256: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    actor_id: str = Field(default="local-manager", min_length=1, max_length=191)
+    note: str | None = Field(default=None, max_length=1000)
+
+
 class DataDeletionRehearsalCreateRequest(BaseModel):
     dry_run_plan_id: int = Field(gt=0)
     actor_id: str = Field(default="local-manager", min_length=1, max_length=191)
@@ -349,6 +365,24 @@ def create_app() -> Any:
             runtime_config,
         )
         return DataDeletionBackupBuilderService(
+            connection,
+            backup_service=service,
+            backup_root=runtime_config.app.backup_data_dir,
+            raw_data_dir=runtime_config.app.raw_data_dir,
+            replay_data_dir=runtime_config.app.replay_data_dir,
+        )
+
+    def build_data_deletion_backup_verifier_service(
+        connection: Any,
+        runtime_config: RuntimeConfig,
+        *,
+        backup_service: DataDeletionBackupService | None = None,
+    ) -> DataDeletionBackupVerifierService:
+        service = backup_service or build_data_deletion_backup_service(
+            connection,
+            runtime_config,
+        )
+        return DataDeletionBackupVerifierService(
             connection,
             backup_service=service,
             backup_root=runtime_config.app.backup_data_dir,
@@ -809,6 +843,7 @@ def create_app() -> Any:
             "dry_run_plan_url": f"/data-deletions/{request_id}/dry-run-plans",
             "backup_readiness_state_url": f"/data-deletions/{request_id}/backup-readiness-state",
             "backup_build_url": f"/data-deletions/{request_id}/backup-builds",
+            "backup_verification_url": f"/data-deletions/{request_id}/backup-verifications",
             "backup_evidence_url": f"/data-deletions/{request_id}/backup-evidence",
             "rehearsal_url": f"/data-deletions/{request_id}/rehearsals",
             "execution_enabled": False,
@@ -995,10 +1030,16 @@ def create_app() -> Any:
                     runtime_config,
                     backup_service=backup_service,
                 ).build_state(request)
+                verifier_state = build_data_deletion_backup_verifier_service(
+                    connection,
+                    runtime_config,
+                    backup_service=backup_service,
+                ).verification_state(request)
             except DataDeletionRequestError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
             except (
                 DataDeletionBackupBuilderError,
+                DataDeletionBackupVerifierError,
                 DataDeletionBackupError,
                 DataDeletionDryRunError,
             ) as exc:
@@ -1008,6 +1049,7 @@ def create_app() -> Any:
         return {
             "backup_readiness_state": state,
             "backup_builder_state": builder_state,
+            "backup_verifier_state": verifier_state,
             "execution_enabled": False,
             "execution_ready": False,
         }
@@ -1044,6 +1086,43 @@ def create_app() -> Any:
             connection.close()
         return {
             "backup_build": result.to_record(),
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+
+    @app.post("/data-deletions/{request_id}/backup-verifications")
+    def verify_data_deletion_backup_artifacts(
+        request_id: int,
+        verification_request: DataDeletionBackupVerificationCreateRequest,
+    ) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(runtime_config.database)
+        try:
+            try:
+                request = DataDeletionRequestService(connection).get_request(request_id)
+                verification = build_data_deletion_backup_verifier_service(
+                    connection,
+                    runtime_config,
+                ).verify(
+                    request,
+                    dry_run_plan_id=verification_request.dry_run_plan_id,
+                    manifest_path=verification_request.manifest_path,
+                    expected_manifest_sha256=verification_request.expected_manifest_sha256,
+                    actor_id=verification_request.actor_id,
+                    note=verification_request.note,
+                )
+            except DataDeletionRequestError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except (
+                DataDeletionBackupVerifierError,
+                DataDeletionBackupError,
+                DataDeletionDryRunError,
+            ) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {
+            "backup_verification": verification.to_record(),
             "execution_enabled": False,
             "execution_ready": False,
         }
@@ -4054,7 +4133,7 @@ _INDEX_HTML = """<!doctype html>
       dataDeletionStatus.textContent = "Read-only dry-run plan recorded. Deletion execution remains disabled.";
     }
 
-    function renderDataDeletionBackupReadiness(state, builderState) {
+    function renderDataDeletionBackupReadiness(state, builderState, verifierState) {
       const plan = state.latest_plan;
       const builderBlockers = (builderState?.build_blockers || [])
         .map((blocker) => `<li>${escapeHtml(blocker)}</li>`)
@@ -4076,6 +4155,62 @@ _INDEX_HTML = """<!doctype html>
           <h3>Opt-in backup artifact builder</h3>
           <div class="status">Root: ${escapeHtml(builderState?.backup_root || "-")} / unavailable</div>
           <ul>${builderBlockers}</ul>
+        </div>`;
+      const verifierBlockers = (verifierState?.verification_blockers || [])
+        .map((blocker) => `<li>${escapeHtml(blocker)}</li>`)
+        .join("");
+      const candidateRows = (verifierState?.candidates || []).map((candidate) => {
+        const action = candidate.selectable && verifierState.verification_allowed
+          ? `<button class="secondary" type="button" data-deletion-contract-action="verify-backup" data-request-id="${attr(state.request_id)}" data-plan-id="${attr(verifierState.latest_plan_id || "")}" data-manifest-path="${attr(candidate.manifest_path || "")}" data-manifest-sha256="${attr(candidate.manifest_sha256 || "")}">Verify</button>`
+          : "-";
+        return `<tr>
+          <td>${escapeHtml(candidate.build_id || "-")}<br>${escapeHtml(candidate.built_at_kst || "-")}</td>
+          <td><code>${escapeHtml(candidate.manifest_path || "-")}</code></td>
+          <td><code>${escapeHtml(candidate.manifest_sha256 || "-")}</code></td>
+          <td>${candidate.selectable ? "selectable" : escapeHtml(candidate.inspection_error || "blocked")}</td>
+          <td>${action}</td>
+        </tr>`;
+      }).join("") || `<tr><td colspan="5">No fingerprint-bound backup builds.</td></tr>`;
+      const latestVerification = verifierState?.latest_verification || null;
+      const verificationCheckRows = (latestVerification?.result_json?.checks || []).map((check) => `
+        <tr>
+          <td>${escapeHtml(check.key)}</td>
+          <td>${escapeHtml(check.status)}</td>
+          <td>${escapeHtml(check.message)}</td>
+        </tr>`).join("") || `<tr><td colspan="3">No artifact verification checks recorded.</td></tr>`;
+      const verificationHistoryRows = (verifierState?.verification_history || []).map((item) => `
+        <tr>
+          <td>${escapeHtml(item.id)}</td>
+          <td>${escapeHtml(item.result_status)}</td>
+          <td>${escapeHtml(item.verified_artifact_count)} / ${escapeHtml(item.artifact_count)}</td>
+          <td>${escapeHtml(item.passed_check_count)} / ${escapeHtml(item.check_count)}</td>
+          <td>${escapeHtml(item.verified_by)} / ${escapeHtml(item.verified_at_kst)}</td>
+        </tr>`).join("") || `<tr><td colspan="5">No immutable artifact verification records.</td></tr>`;
+      const verifierPanel = `
+        <div class="backup-builder-contract">
+          <h3>Read-only backup artifact verification</h3>
+          <div class="status">Root: ${escapeHtml(verifierState?.backup_root || "-")} / ZIP and JSONL checksums: yes / restore: no / quarantine: no / deletion: no</div>
+          <ul>${verifierBlockers}</ul>
+          <div class="table-scroll">
+            <table class="detail-table">
+              <thead><tr><th>Build</th><th>Manifest</th><th>Selected SHA-256</th><th>State</th><th>Action</th></tr></thead>
+              <tbody>${candidateRows}</tbody>
+            </table>
+          </div>
+          <h3>Latest artifact verification checks</h3>
+          <div class="table-scroll">
+            <table class="detail-table">
+              <thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>
+              <tbody>${verificationCheckRows}</tbody>
+            </table>
+          </div>
+          <h3>Artifact verification history</h3>
+          <div class="table-scroll">
+            <table class="detail-table">
+              <thead><tr><th>ID</th><th>Status</th><th>Artifacts</th><th>Checks</th><th>Verified</th></tr></thead>
+              <tbody>${verificationHistoryRows}</tbody>
+            </table>
+          </div>
         </div>`;
       const prerequisiteRows = (state.prerequisites || []).map((item) => `
         <tr>
@@ -4165,6 +4300,7 @@ _INDEX_HTML = """<!doctype html>
           <ul>${(state.execution_blockers || []).map((blocker) => `<li>${escapeHtml(blocker)}</li>`).join("")}</ul>
           <div class="actions">${rehearsalButton}</div>
           ${builderForm}
+          ${verifierPanel}
           <h3>Prerequisite evidence</h3>
           <div class="table-scroll">
             <table class="detail-table">
@@ -4224,6 +4360,7 @@ _INDEX_HTML = """<!doctype html>
       host.innerHTML = renderDataDeletionBackupReadiness(
         payload.backup_readiness_state,
         payload.backup_builder_state,
+        payload.backup_verifier_state,
       );
       updateBackupEvidenceFields(host.querySelector("form[data-backup-evidence-form]"));
     }
@@ -4260,6 +4397,30 @@ _INDEX_HTML = """<!doctype html>
         dataDeletionStatus.textContent = "Backup artifacts and immutable evidence recorded. No restore, quarantine, or deletion operation was run.";
       } finally {
         if (button) button.disabled = false;
+      }
+    }
+
+    async function runDataDeletionBackupVerification(button) {
+      const reviewer = new FormData(dataDeletionFilterForm);
+      const requestId = button.dataset.requestId || "";
+      const actorId = String(reviewer.get("actor_id") || "").trim();
+      const note = String(reviewer.get("note") || "").trim();
+      if (!actorId) throw new Error("Local reviewer is required.");
+      if (!window.confirm("Reopen and verify this backup build read-only? One immutable audit row will be appended; no restore or deletion will run.")) return;
+      button.disabled = true;
+      try {
+        const payload = await postJson(`/data-deletions/${encodeURIComponent(requestId)}/backup-verifications`, {
+          dry_run_plan_id: Number(button.dataset.planId),
+          manifest_path: button.dataset.manifestPath || "",
+          expected_manifest_sha256: button.dataset.manifestSha256 || "",
+          actor_id: actorId,
+          note: note || null,
+        });
+        const status = payload.backup_verification?.result_status || "unknown";
+        await loadDataDeletionRequestDetail(requestId);
+        dataDeletionStatus.textContent = `Backup artifact verification ${status}. No restore, quarantine, or deletion operation was run.`;
+      } finally {
+        button.disabled = false;
       }
     }
 
@@ -7032,6 +7193,8 @@ _INDEX_HTML = """<!doctype html>
           await createDataDeletionDryRunPlan(requestId);
         } else if (button.dataset.deletionContractAction === "rehearsal") {
           await runDataDeletionRehearsal(requestId, button.dataset.planId || "");
+        } else if (button.dataset.deletionContractAction === "verify-backup") {
+          await runDataDeletionBackupVerification(button);
         }
       } catch (error) {
         dataDeletionStatus.textContent = `Error: ${error.message}`;

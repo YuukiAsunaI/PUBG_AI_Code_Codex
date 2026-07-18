@@ -193,11 +193,16 @@ Suggested command groups:
   read backup contents, recalculate SHA-256, perform a restore, quarantine files, or mutate target rows.
 - `PUBG_BACKUP_DATA_DIR` and local settings provide a third storage root that must not overlap raw or replay source
   roots. The opt-in builder requires exact plan-fingerprint text, exports only a fixed table allowlist, copies only
-  verified player-owned replay files, calculates checksums, publishes atomically, and records both artifact evidence
-  rows in one transaction.
+  verified player-owned replay files, calculates checksums, publishes atomically, and records one evidence row per
+  generated artifact in a single transaction.
 - JSONL/ZIP artifacts deliberately contain no executable deletion SQL or schema DDL. The current application has no
   restore importer, quarantine destination, or executor, so capacity and restore/integrity evidence remain separate
   requirements and `executor_not_implemented` remains mandatory.
+- Schema version 14 stores append-only read-only artifact-verification results. A candidate must match the immutable
+  builder-generated artifact-evidence set before the verifier streams every declared ZIP and validates build/internal
+  manifests, safe unique entries, expansion limits, CRC, JSONL rows/type wrappers, byte/count totals, and SHA-256.
+- Artifact verification is intentionally not a restore rehearsal. It records checksum findings and evidence/result
+  fingerprints but never creates `backup_integrity_verification` evidence or enables quarantine/deletion execution.
 - Deletion should be split into options:
   - delete registration only
   - delete normalized DB data
