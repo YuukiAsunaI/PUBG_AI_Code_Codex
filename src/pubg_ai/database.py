@@ -8,7 +8,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 
 class DatabaseError(RuntimeError):
@@ -76,7 +76,7 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 VALUES (%s, %s, NOW(6))
                 ON DUPLICATE KEY UPDATE description = VALUES(description)
                 """,
-                (SCHEMA_VERSION, "read-only deletion quarantine planning audit schema"),
+                (SCHEMA_VERSION, "isolated deletion quarantine rehearsal audit schema"),
             )
             applied += 1
     finally:
@@ -596,6 +596,66 @@ def schema_statements() -> list[str]:
             CONSTRAINT fk_data_deletion_quarantine_capacity_evidence
                 FOREIGN KEY (capacity_evidence_id)
                 REFERENCES data_deletion_backup_evidence(id)
+                ON DELETE RESTRICT
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS data_deletion_quarantine_rehearsal_runs (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            request_id BIGINT UNSIGNED NOT NULL,
+            dry_run_plan_id BIGINT UNSIGNED NOT NULL,
+            quarantine_planning_run_id BIGINT UNSIGNED NOT NULL,
+            contract_version VARCHAR(64) NOT NULL,
+            plan_fingerprint_sha256 CHAR(64) NOT NULL,
+            destination_contract_fingerprint_sha256 CHAR(64) NOT NULL,
+            planning_result_fingerprint_sha256 CHAR(64) NOT NULL,
+            result_fingerprint_sha256 CHAR(64) NOT NULL,
+            result_status ENUM('passed', 'blocked') NOT NULL,
+            result_json JSON NOT NULL,
+            scratch_directory VARCHAR(1000) NOT NULL,
+            scratch_directory_removed TINYINT(1) NOT NULL,
+            fixture_file_count INT UNSIGNED NOT NULL,
+            fixture_bytes BIGINT UNSIGNED NOT NULL,
+            normal_committed_count INT UNSIGNED NOT NULL,
+            normal_rolled_back_count INT UNSIGNED NOT NULL,
+            recovery_case_count INT UNSIGNED NOT NULL,
+            recovered_case_count INT UNSIGNED NOT NULL,
+            ambiguous_case_count INT UNSIGNED NOT NULL,
+            ambiguous_case_blocked_count INT UNSIGNED NOT NULL,
+            journal_transition_count INT UNSIGNED NOT NULL,
+            check_count INT UNSIGNED NOT NULL,
+            passed_check_count INT UNSIGNED NOT NULL,
+            blocker_count INT UNSIGNED NOT NULL,
+            run_by VARCHAR(191) NOT NULL,
+            rehearsal_note VARCHAR(1000) NULL,
+            run_at_kst DATETIME(6) NOT NULL,
+            KEY idx_data_deletion_quarantine_rehearsal_plan_time (
+                dry_run_plan_id,
+                run_at_kst
+            ),
+            KEY idx_data_deletion_quarantine_rehearsal_request_time (
+                request_id,
+                run_at_kst
+            ),
+            KEY idx_data_deletion_quarantine_rehearsal_status (
+                result_status,
+                run_at_kst
+            ),
+            KEY idx_data_deletion_quarantine_rehearsal_planning (
+                quarantine_planning_run_id
+            ),
+            KEY idx_data_deletion_quarantine_rehearsal_result (
+                result_fingerprint_sha256
+            ),
+            CONSTRAINT fk_data_deletion_quarantine_rehearsal_request
+                FOREIGN KEY (request_id) REFERENCES data_deletion_requests(id)
+                ON DELETE RESTRICT,
+            CONSTRAINT fk_data_deletion_quarantine_rehearsal_plan
+                FOREIGN KEY (dry_run_plan_id) REFERENCES data_deletion_dry_run_plans(id)
+                ON DELETE RESTRICT,
+            CONSTRAINT fk_data_deletion_quarantine_rehearsal_planning
+                FOREIGN KEY (quarantine_planning_run_id)
+                REFERENCES data_deletion_quarantine_planning_runs(id)
                 ON DELETE RESTRICT
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """,

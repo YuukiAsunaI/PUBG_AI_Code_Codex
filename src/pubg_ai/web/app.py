@@ -45,6 +45,10 @@ from pubg_ai.data_deletion_quarantine_planner import (
     DataDeletionQuarantinePlannerError,
     DataDeletionQuarantinePlannerService,
 )
+from pubg_ai.data_deletion_quarantine_rehearsal import (
+    DataDeletionQuarantineRehearsalError,
+    DataDeletionQuarantineRehearsalService,
+)
 from pubg_ai.data_deletion_restore_rehearsal import (
     DataDeletionBackupRestoreRehearsalService,
     DataDeletionRestoreRehearsalError,
@@ -255,6 +259,13 @@ class DataDeletionQuarantinePlanningCreateRequest(BaseModel):
     note: str | None = Field(default=None, max_length=1000)
 
 
+class DataDeletionQuarantineRehearsalCreateRequest(BaseModel):
+    quarantine_planning_run_id: int = Field(gt=0)
+    confirmation_text: str = Field(min_length=1, max_length=500)
+    actor_id: str = Field(default="local-manager", min_length=1, max_length=191)
+    note: str | None = Field(default=None, max_length=1000)
+
+
 class DataDeletionRehearsalCreateRequest(BaseModel):
     dry_run_plan_id: int = Field(gt=0)
     actor_id: str = Field(default="local-manager", min_length=1, max_length=191)
@@ -452,6 +463,32 @@ def create_app() -> Any:
         return DataDeletionQuarantinePlannerService(
             connection,
             backup_service=backup,
+            quarantine_root=runtime_config.app.quarantine_data_dir,
+            raw_data_dir=runtime_config.app.raw_data_dir,
+            replay_data_dir=runtime_config.app.replay_data_dir,
+            backup_root=runtime_config.app.backup_data_dir,
+        )
+
+    def build_data_deletion_quarantine_rehearsal_service(
+        connection: Any,
+        runtime_config: RuntimeConfig,
+        *,
+        backup_service: DataDeletionBackupService | None = None,
+        planner_service: DataDeletionQuarantinePlannerService | None = None,
+    ) -> DataDeletionQuarantineRehearsalService:
+        backup = backup_service or build_data_deletion_backup_service(
+            connection,
+            runtime_config,
+        )
+        planner = planner_service or build_data_deletion_quarantine_planner_service(
+            connection,
+            runtime_config,
+            backup_service=backup,
+        )
+        return DataDeletionQuarantineRehearsalService(
+            connection,
+            backup_service=backup,
+            planner_service=planner,
             quarantine_root=runtime_config.app.quarantine_data_dir,
             raw_data_dir=runtime_config.app.raw_data_dir,
             replay_data_dir=runtime_config.app.replay_data_dir,
@@ -915,6 +952,7 @@ def create_app() -> Any:
             "backup_verification_url": f"/data-deletions/{request_id}/backup-verifications",
             "backup_restore_rehearsal_url": f"/data-deletions/{request_id}/backup-restore-rehearsals",
             "quarantine_planning_url": f"/data-deletions/{request_id}/quarantine-plans",
+            "quarantine_rehearsal_url": f"/data-deletions/{request_id}/quarantine-rehearsals",
             "backup_evidence_url": f"/data-deletions/{request_id}/backup-evidence",
             "rehearsal_url": f"/data-deletions/{request_id}/rehearsals",
             "execution_enabled": False,
@@ -1113,11 +1151,22 @@ def create_app() -> Any:
                     backup_service=backup_service,
                     verifier_service=verifier_service,
                 ).rehearsal_state(request)
-                quarantine_planner_state = build_data_deletion_quarantine_planner_service(
+                quarantine_planner_service = build_data_deletion_quarantine_planner_service(
                     connection,
                     runtime_config,
                     backup_service=backup_service,
-                ).planning_state(request)
+                )
+                quarantine_planner_state = quarantine_planner_service.planning_state(
+                    request
+                )
+                quarantine_rehearsal_state = (
+                    build_data_deletion_quarantine_rehearsal_service(
+                        connection,
+                        runtime_config,
+                        backup_service=backup_service,
+                        planner_service=quarantine_planner_service,
+                    ).rehearsal_state(request)
+                )
             except DataDeletionRequestError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
             except (
@@ -1125,6 +1174,7 @@ def create_app() -> Any:
                 DataDeletionBackupVerifierError,
                 DataDeletionRestoreRehearsalError,
                 DataDeletionQuarantinePlannerError,
+                DataDeletionQuarantineRehearsalError,
                 DataDeletionBackupError,
                 DataDeletionDryRunError,
             ) as exc:
@@ -1137,6 +1187,7 @@ def create_app() -> Any:
             "backup_verifier_state": verifier_state,
             "backup_restore_rehearsal_state": restore_rehearsal_state,
             "quarantine_planner_state": quarantine_planner_state,
+            "quarantine_rehearsal_state": quarantine_rehearsal_state,
             "execution_enabled": False,
             "execution_ready": False,
         }
@@ -1285,6 +1336,45 @@ def create_app() -> Any:
             connection.close()
         return {
             "quarantine_planning": planning.to_record(),
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+
+    @app.post("/data-deletions/{request_id}/quarantine-rehearsals")
+    def run_data_deletion_quarantine_rehearsal(
+        request_id: int,
+        rehearsal_request: DataDeletionQuarantineRehearsalCreateRequest,
+    ) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(runtime_config.database)
+        try:
+            try:
+                request = DataDeletionRequestService(connection).get_request(request_id)
+                rehearsal = build_data_deletion_quarantine_rehearsal_service(
+                    connection,
+                    runtime_config,
+                ).run(
+                    request,
+                    quarantine_planning_run_id=(
+                        rehearsal_request.quarantine_planning_run_id
+                    ),
+                    confirmation_text=rehearsal_request.confirmation_text,
+                    actor_id=rehearsal_request.actor_id,
+                    note=rehearsal_request.note,
+                )
+            except DataDeletionRequestError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except (
+                DataDeletionQuarantineRehearsalError,
+                DataDeletionQuarantinePlannerError,
+                DataDeletionBackupError,
+                DataDeletionDryRunError,
+            ) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {
+            "quarantine_rehearsal": rehearsal.to_record(),
             "execution_enabled": False,
             "execution_ready": False,
         }
@@ -4303,7 +4393,7 @@ _INDEX_HTML = """<!doctype html>
       dataDeletionStatus.textContent = "Read-only dry-run plan recorded. Deletion execution remains disabled.";
     }
 
-    function renderDataDeletionBackupReadiness(state, builderState, verifierState, restoreState, plannerState) {
+    function renderDataDeletionBackupReadiness(state, builderState, verifierState, restoreState, plannerState, quarantineRehearsalState) {
       const plan = state.latest_plan;
       const builderBlockers = (builderState?.build_blockers || [])
         .map((blocker) => `<li>${escapeHtml(blocker)}</li>`)
@@ -4510,6 +4600,56 @@ _INDEX_HTML = """<!doctype html>
             </table>
           </div>
         </div>`;
+      const quarantineRehearsalBlockers = (quarantineRehearsalState?.rehearsal_blockers || [])
+        .map((blocker) => `<li>${escapeHtml(blocker)}</li>`)
+        .join("");
+      const quarantineRehearsalCandidate = quarantineRehearsalState?.planning_candidate || null;
+      const quarantineRehearsalForm = quarantineRehearsalCandidate?.confirmation_text ? `
+        <code>${escapeHtml(quarantineRehearsalCandidate.confirmation_text)}</code>
+        <form class="confirmation-input-row quarantine-rehearsal-form" data-quarantine-rehearsal-form data-request-id="${attr(state.request_id)}" data-planning-run-id="${attr(quarantineRehearsalCandidate.id || "")}">
+          <label>Exact isolated rehearsal confirmation
+            <input name="confirmation_text" autocomplete="off" required>
+          </label>
+          <button class="secondary" type="submit" ${quarantineRehearsalState?.rehearsal_allowed ? "" : "disabled"}>Run isolated rehearsal</button>
+        </form>` : "";
+      const latestQuarantineRehearsal = quarantineRehearsalState?.latest_quarantine_rehearsal || null;
+      const quarantineRehearsalCheckRows = (latestQuarantineRehearsal?.result_json?.checks || []).map((check) => `
+        <tr>
+          <td>${escapeHtml(check.key)}</td>
+          <td>${escapeHtml(check.status)}</td>
+          <td>${escapeHtml(check.message)}</td>
+        </tr>`).join("") || `<tr><td colspan="3">No isolated quarantine rehearsal checks recorded.</td></tr>`;
+      const quarantineRehearsalHistoryRows = (quarantineRehearsalState?.quarantine_rehearsal_history || []).map((item) => `
+        <tr>
+          <td>${escapeHtml(item.id)}</td>
+          <td>${escapeHtml(item.result_status)}</td>
+          <td>${escapeHtml(item.normal_rolled_back_count)} / ${escapeHtml(item.fixture_file_count)}</td>
+          <td>${escapeHtml(item.recovered_case_count)} + ambiguous ${escapeHtml(item.ambiguous_case_blocked_count)} / ${escapeHtml(item.recovery_case_count)}</td>
+          <td>${item.scratch_directory_removed ? "removed" : "cleanup blocked"}</td>
+          <td>${escapeHtml(item.run_by)} / ${escapeHtml(item.run_at_kst)}</td>
+        </tr>`).join("") || `<tr><td colspan="6">No isolated quarantine rehearsal records.</td></tr>`;
+      const quarantineRehearsalPanel = `
+        <div class="backup-builder-contract">
+          <h3>Isolated quarantine rehearsal</h3>
+          <div class="status">Root: ${escapeHtml(quarantineRehearsalState?.quarantine_root || "-")} / synthetic fixtures only: yes / production source access: no / production quarantine: no / deletion: no</div>
+          <ul>${quarantineRehearsalBlockers}</ul>
+          ${quarantineRehearsalForm}
+          <div class="status">Latest: ${escapeHtml(latestQuarantineRehearsal?.result_status || "none")} / scratch cleanup: ${latestQuarantineRehearsal ? (latestQuarantineRehearsal.scratch_directory_removed ? "removed" : "blocked") : "not run"} / journal transitions: ${escapeHtml(latestQuarantineRehearsal?.journal_transition_count || 0)}</div>
+          <h3>Latest isolated quarantine checks</h3>
+          <div class="table-scroll">
+            <table class="detail-table">
+              <thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>
+              <tbody>${quarantineRehearsalCheckRows}</tbody>
+            </table>
+          </div>
+          <h3>Isolated quarantine history</h3>
+          <div class="table-scroll">
+            <table class="detail-table">
+              <thead><tr><th>ID</th><th>Status</th><th>Rollback fixtures</th><th>Recovery cases</th><th>Scratch</th><th>Run</th></tr></thead>
+              <tbody>${quarantineRehearsalHistoryRows}</tbody>
+            </table>
+          </div>
+        </div>`;
       const prerequisiteRows = (state.prerequisites || []).map((item) => `
         <tr>
           <td>${escapeHtml(item.key)}</td>
@@ -4583,6 +4723,7 @@ _INDEX_HTML = """<!doctype html>
           ${verifierPanel}
           ${restorePanel}
           ${plannerPanel}
+          ${quarantineRehearsalPanel}
           <h3>Prerequisite evidence</h3>
           <div class="table-scroll">
             <table class="detail-table">
@@ -4643,6 +4784,7 @@ _INDEX_HTML = """<!doctype html>
         payload.backup_verifier_state,
         payload.backup_restore_rehearsal_state,
         payload.quarantine_planner_state,
+        payload.quarantine_rehearsal_state,
       );
       updateBackupEvidenceFields(host.querySelector("form[data-backup-evidence-form]"));
     }
@@ -4755,6 +4897,33 @@ _INDEX_HTML = """<!doctype html>
         const run = payload.quarantine_planning || {};
         await loadDataDeletionRequestDetail(requestId);
         dataDeletionStatus.textContent = `Read-only quarantine planning ${run.result_status || "unknown"}. Capacity evidence: ${run.capacity_evidence_id || "not recorded"}. No directory, file, source row, quarantine, or deletion mutation was performed.`;
+      } finally {
+        if (button) button.disabled = false;
+      }
+    }
+
+    async function runDataDeletionQuarantineRehearsal(formElement) {
+      const values = new FormData(formElement);
+      const reviewer = new FormData(dataDeletionFilterForm);
+      const requestId = formElement.dataset.requestId || "";
+      const actorId = String(reviewer.get("actor_id") || "").trim();
+      const note = String(reviewer.get("note") || "").trim();
+      const confirmationText = String(values.get("confirmation_text") || "").trim();
+      if (!actorId) throw new Error("Local reviewer is required.");
+      if (!confirmationText) throw new Error("Exact isolated quarantine rehearsal confirmation is required.");
+      if (!window.confirm("Run an isolated quarantine rehearsal? Small deterministic synthetic fixtures and journals are created only inside a random owned scratch directory under the quarantine root, then removed. Production replay files are not opened or changed. No production quarantine, database deletion, or restore operation will run.")) return;
+      const button = formElement.querySelector("button[type='submit']");
+      if (button) button.disabled = true;
+      try {
+        const payload = await postJson(`/data-deletions/${encodeURIComponent(requestId)}/quarantine-rehearsals`, {
+          quarantine_planning_run_id: Number(formElement.dataset.planningRunId),
+          confirmation_text: confirmationText,
+          actor_id: actorId,
+          note: note || null,
+        });
+        const run = payload.quarantine_rehearsal || {};
+        await loadDataDeletionRequestDetail(requestId);
+        dataDeletionStatus.textContent = `Isolated quarantine rehearsal ${run.result_status || "unknown"}. Scratch cleanup: ${run.scratch_directory_removed ? "removed" : "blocked"}. Production source access, quarantine, and deletion remained disabled.`;
       } finally {
         if (button) button.disabled = false;
       }
@@ -7573,6 +7742,19 @@ _INDEX_HTML = """<!doctype html>
       event.preventDefault();
       try {
         await runDataDeletionQuarantinePlanning(form);
+      } catch (error) {
+        dataDeletionStatus.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    dataDeletionDetail.addEventListener("submit", async (event) => {
+      const form = event.target instanceof Element
+        ? event.target.closest("form[data-quarantine-rehearsal-form]")
+        : null;
+      if (!form) return;
+      event.preventDefault();
+      try {
+        await runDataDeletionQuarantineRehearsal(form);
       } catch (error) {
         dataDeletionStatus.textContent = `Error: ${error.message}`;
       }

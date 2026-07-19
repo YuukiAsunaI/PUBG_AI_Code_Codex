@@ -214,7 +214,12 @@ Suggested command groups:
   identity/size/SHA-256 checks precede deterministic target-absence and reserve-aware capacity checks. Passed runs
   atomically create planner-bound capacity evidence; blocked runs create only an audit row. Manual capacity attestation
   is rejected, and the planner records but does not execute postcondition, rollback, and crash-recovery contracts.
-  Production restore, actual quarantine moves, and deletion remain absent.
+- Schema version 17 stores immutable isolated quarantine-rehearsal runs. A run must bind to the latest passed planning
+  result and exact destination fingerprint. It uses only metadata-derived synthetic fixtures in a random owned scratch
+  directory, exercises commit, reverse no-overwrite rollback, four known recovery states, and an ambiguous-state
+  no-mutation block, and treats cleanup as mandatory. Platform-specific durable journal replacement is recorded.
+  Production source bytes are not opened, no readiness evidence is appended, and production restore, actual
+  quarantine moves, and deletion remain absent.
 - Deletion should be split into options:
   - delete registration only
   - delete normalized DB data

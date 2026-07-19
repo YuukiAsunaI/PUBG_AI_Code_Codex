@@ -398,6 +398,11 @@ The current Discord bot slice is intentionally small and reuses the same local M
   capacity plus reserve, and future postcondition/rollback/crash-recovery contracts. A pass atomically appends bound
   capacity evidence and audit; a block appends audit only. It creates no directory or journal and performs no move,
   copy, removal, restore, or source-database mutation.
+- The isolated quarantine rehearsal requires exact confirmation bound to the newest passed planner result. It creates
+  only deterministic synthetic fixtures in a random owned quarantine-root scratch directory, then exercises normal
+  commit postconditions, reverse no-overwrite rollback, durable journals, known interrupted states, and ambiguous-state
+  blocking. Production replay files are not opened; cleanup is mandatory and audited; no readiness evidence or
+  execution capability is created.
 - The non-executing rehearsal rechecks the live source fingerprint plus evidence/file metadata, planner-bound capacity
   evidence, and current free space, then appends a passed/blocked result. The rehearsal itself does not open backups,
   calculate checksums, run a restore, move replay artifacts, execute SQL mutations, or expose a Discord counterpart.

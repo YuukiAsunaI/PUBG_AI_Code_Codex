@@ -223,6 +223,17 @@ Implemented behavior:
 - A passed planner run appends `quarantine_capacity_check` evidence and its immutable audit row atomically. A blocked
   run appends only its audit row. Neither outcome creates directories or journals, copies or moves bytes, removes
   source files, restores data, or mutates deletion targets.
+- Schema version 17 requires exact confirmation bound to the latest passed planning run. It derives small deterministic
+  fixture bytes from planning metadata, not production replay content, and creates them only below a random owned
+  direct child of the configured quarantine root.
+- The isolated rehearsal executes the planned copy/verify/remove ordering against synthetic sources, checks committed
+  postconditions, reverses every item without overwrite, and verifies the original fixture-tree fingerprint. Separate
+  cases recover `copying`, `copied_and_verified`, `source_removal_committing`, and `committed` states; corrupt ambiguous
+  bytes must be blocked without mutation.
+- Journal updates use fsynced temporary files and durable replacement: write-through `MoveFileExW` on Windows and
+  atomic replace plus parent-directory `fsync` on POSIX. Recursive cleanup is allowed only after the random name,
+  exact parent, resolved path, and non-symlink ownership contract are rechecked. Cleanup failure makes the audit result
+  blocked. The rehearsal adds no evidence and never enables execution.
 - The earlier non-executing rehearsal still rechecks live deletion impact, evidence times, artifact metadata, bound
   planner-generated capacity evidence, and current quarantine free space without changing targets.
   `executor_not_implemented` remains even after every available rehearsal passes; production restore, actual

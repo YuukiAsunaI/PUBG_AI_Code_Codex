@@ -122,8 +122,12 @@ builder-generated artifact-evidence IDs and evidence-set fingerprint. Schema ver
 created integrity-evidence row. Schema version 16 adds `data_deletion_quarantine_planning_runs`. Its read-only planner
 requires exact confirmation, revalidates source bytes and deterministic target absence, and checks the configured
 quarantine root with a capacity reserve. A passed run creates planner-bound capacity evidence; manual capacity or
-integrity evidence is rejected. Run `python -m pubg_ai.cli init-db` after updating so the ten deletion workflow tables
-are created. No deletion executor or execution endpoint is enabled.
+integrity evidence is rejected. Schema version 17 adds `data_deletion_quarantine_rehearsal_runs`. The exact-confirmation
+endpoint creates deterministic synthetic fixtures only in a random owned quarantine-root scratch directory, rehearses
+normal postconditions, reverse no-overwrite rollback, known interruption recovery, and ambiguous-state blocking, then
+requires cleanup. It never opens production replay bytes and creates no readiness evidence. Run
+`python -m pubg_ai.cli init-db` after updating so the eleven deletion workflow tables are created. No deletion executor
+or execution endpoint is enabled.
 
 The opt-in builder uses `PUBG_BACKUP_DATA_DIR` (default `./data/backups`). The backup root must be writable and must not
 equal, contain, or be contained by `PUBG_RAW_DATA_DIR` or `PUBG_REPLAY_DATA_DIR`. A build requires the exact latest-plan
@@ -151,6 +155,14 @@ with `RUN READ-ONLY QUARANTINE PLAN`. It checks source identity/size/SHA-256, de
 with a `max(64 MiB, 5%)` reserve, and future rollback/crash-recovery contracts. It never creates the root or journal and
 never copies, moves, deletes, restores, or changes source rows/files. Production restore, actual quarantine moves,
 and deletion remain unavailable.
+
+`POST /data-deletions/{request_id}/quarantine-rehearsals` requires the latest passed quarantine-planning run and exact
+text beginning with `RUN ISOLATED QUARANTINE REHEARSAL`. It creates a random `.pubg-ai-quarantine-rehearsal-*` direct
+child only below the existing quarantine root. Synthetic fixture files and durable journals exercise commit,
+reverse-order rollback, interrupted `copying`, `copied_and_verified`, `source_removal_committing`, and `committed`
+states, plus a deliberately ambiguous state that must be detected without mutation. The exact owned scratch directory
+is removed after every outcome; cleanup failure blocks the run and is audited. Production source paths are metadata
+only and are never opened by this rehearsal.
 
 1. Built-in defaults: `./data/raw`, `./data/replays`, `./data/backups`, `./data/quarantine`
 2. `.env` values: `PUBG_RAW_DATA_DIR`, `PUBG_REPLAY_DATA_DIR`, `PUBG_BACKUP_DATA_DIR`,

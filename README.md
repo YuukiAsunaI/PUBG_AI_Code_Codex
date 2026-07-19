@@ -387,8 +387,15 @@ the latest dry-run plan, source identity/size/SHA-256, deterministic target abse
 quarantine root, and free capacity with a `max(64 MiB, 5%)` reserve. Passed runs atomically append planner-generated
 `quarantine_capacity_check` evidence and an audit row; blocked runs append only the audit row. The plan records future
 postconditions, rollback steps, and crash-recovery journal requirements but creates no directory or journal and does
-not copy, move, remove, restore, or mutate source data. Manual capacity attestation is rejected. The database archive
-still contains no schema DDL, and there is no production restore, quarantine mover, deletion endpoint, executable
+not copy, move, remove, restore, or mutate source data. Manual capacity attestation is rejected. Schema version 17
+adds immutable isolated quarantine-rehearsal runs. Exact confirmation starts with
+`RUN ISOLATED QUARANTINE REHEARSAL` and binds the latest passed planning-result and destination fingerprints. The
+rehearsal creates only deterministic synthetic fixtures inside a random owned direct child of the configured
+quarantine root, exercises copy/verify/source-removal postconditions, no-overwrite rollback, known interrupted states,
+and ambiguous-state blocking, then requires complete scratch cleanup. Production replay files are not opened or
+modified. Windows journal replacement uses write-through `MoveFileExW`; POSIX uses atomic replace plus parent `fsync`.
+Cleanup failure records a blocked immutable audit. No outcome creates readiness evidence or enables execution. The
+database archive still contains no schema DDL, and there is no production restore, quarantine mover, deletion endpoint, executable
 deletion SQL, file remover, or execution button. `executor_not_implemented` remains unconditional. Rerun
 `python -m pubg_ai.cli init-db` after updating from an earlier schema.
 The `admin` group includes `pubg-alerts`, which returns current storage and worker alerts. When

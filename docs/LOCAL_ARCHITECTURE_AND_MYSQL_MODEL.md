@@ -523,9 +523,15 @@ Completed slices:
      planner revalidates source identity/size/SHA-256, deterministic target absence, pairwise root separation, capacity
      plus reserve, and future recovery contracts. Passed runs atomically append bound capacity evidence and audit;
      blocked runs append audit only. No directory, journal, file, or source-row mutation is implemented.
+110. Schema version 17 adds immutable isolated quarantine-rehearsal runs. Exact confirmation binds the latest passed
+     planning result; metadata-derived synthetic fixtures exercise copy/verify/remove postconditions, reverse
+     no-overwrite rollback, durable journal transitions, four known interruption states, and an ambiguous no-mutation
+     block. A random owned quarantine-root scratch directory is mandatory and cleanup failure blocks the audit.
+     Production source bytes, target paths, database rows, and execution routes remain untouched.
 
 Next slice:
 
-1. Build an isolated disposable quarantine rehearsal that copies fixtures into a scratch workspace and validates
-   postconditions, rollback, and interrupted-run recovery without moving production sources. Keep actual quarantine
-   moves, database deletion, production restore, and every execution route disabled.
+1. Build an isolated combined deletion rehearsal that restores backed-up candidate rows into connection-scoped MySQL
+   temporary tables, applies the ordered deletion selectors only there, and combines those results with the synthetic
+   quarantine state machine. Verify shared-data and audit-table preservation plus complete rollback while keeping
+   production database rows, source files, actual quarantine moves, restore, and every execution route disabled.
