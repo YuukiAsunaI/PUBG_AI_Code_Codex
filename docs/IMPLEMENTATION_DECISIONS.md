@@ -192,12 +192,13 @@ Suggested command groups:
 - The rehearsal validator reads live preview data and filesystem metadata only. It does not create backup artifacts,
   read backup contents, recalculate SHA-256, perform a restore, quarantine files, or mutate target rows.
 - `PUBG_BACKUP_DATA_DIR` and local settings provide a third storage root that must not overlap raw or replay source
-  roots. The opt-in builder requires exact plan-fingerprint text, exports only a fixed table allowlist, copies only
-  verified player-owned replay files, calculates checksums, publishes atomically, and records one evidence row per
+  roots. `PUBG_QUARANTINE_DATA_DIR` provides a fourth root for read-only quarantine planning, and local settings require
+  all four roots to be pairwise disjoint. The opt-in builder requires exact plan-fingerprint text, exports only a
+  fixed table allowlist, copies only verified player-owned replay files, calculates checksums, publishes atomically, and records one evidence row per
   generated artifact in a single transaction.
 - JSONL/ZIP artifacts deliberately contain no executable deletion SQL or schema DDL. The application has no production
-  restore importer, quarantine destination, or executor, so quarantine capacity remains separate and
-  `executor_not_implemented` remains mandatory.
+  restore importer, quarantine mover, or executor. The configured quarantine destination is inspected only by the
+  read-only planner, and `executor_not_implemented` remains mandatory.
 - Schema version 14 stores append-only read-only artifact-verification results. A candidate must match the immutable
   builder-generated artifact-evidence set before the verifier streams every declared ZIP and validates build/internal
   manifests, safe unique entries, expansion limits, CRC, JSONL rows/type wrappers, byte/count totals, and SHA-256.
@@ -208,7 +209,12 @@ Suggested command groups:
   replay files only to a random backup-root scratch directory, reads both back, and treats cleanup as a required check.
 - Passed restore rehearsals append integrity evidence and the audit row atomically. The integrity payload binds the build,
   manifest, verification run/result, artifact-evidence set, and restore result. Manual integrity attestation is rejected,
-  and later artifact evidence invalidates the older binding. Production restore, quarantine, and deletion remain absent.
+  and later artifact evidence invalidates the older binding.
+- Schema version 16 stores immutable read-only quarantine-planning runs. Exact confirmation and fresh source
+  identity/size/SHA-256 checks precede deterministic target-absence and reserve-aware capacity checks. Passed runs
+  atomically create planner-bound capacity evidence; blocked runs create only an audit row. Manual capacity attestation
+  is rejected, and the planner records but does not execute postcondition, rollback, and crash-recovery contracts.
+  Production restore, actual quarantine moves, and deletion remain absent.
 - Deletion should be split into options:
   - delete registration only
   - delete normalized DB data

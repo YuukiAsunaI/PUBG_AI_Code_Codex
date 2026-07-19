@@ -128,11 +128,17 @@ class DataDeletionBackupService:
         dry_run_service: DataDeletionDryRunService,
         preview_service: DataDeletionImpactPreviewService,
         path_probe: Callable[[str], dict[str, Any]] | None = None,
+        quarantine_data_dir: Path | None = None,
     ) -> None:
         self.connection = connection
         self.dry_run_service = dry_run_service
         self.preview_service = preview_service
         self.path_probe = path_probe or inspect_local_path
+        self.quarantine_data_dir = (
+            quarantine_data_dir.expanduser().resolve(strict=False)
+            if quarantine_data_dir is not None
+            else None
+        )
 
     def require_latest_plan(
         self,
@@ -156,9 +162,12 @@ class DataDeletionBackupService:
         note = _optional_text(note, "note", 1000)
         plan = self._latest_plan(request, dry_run_plan_id)
         prerequisite_key = _prerequisite_key(prerequisite_key)
-        if prerequisite_key == "backup_integrity_verification":
+        if prerequisite_key in {
+            "quarantine_capacity_check",
+            "backup_integrity_verification",
+        }:
             raise DataDeletionBackupError(
-                "backup integrity evidence is created only by a passed isolated restore rehearsal."
+                "capacity and integrity evidence are created only by their verified local workflows."
             )
         prerequisites = _plan_prerequisites(plan)
         prerequisite = prerequisites.get(prerequisite_key)
@@ -238,9 +247,12 @@ class DataDeletionBackupService:
         for prerequisite_key in BACKUP_PREREQUISITE_KEYS:
             if prerequisite_key not in evidence_by_key:
                 continue
-            if prerequisite_key == "backup_integrity_verification":
+            if prerequisite_key in {
+                "quarantine_capacity_check",
+                "backup_integrity_verification",
+            }:
                 raise DataDeletionBackupError(
-                    "backup integrity evidence is created only by a passed isolated restore rehearsal."
+                    "capacity and integrity evidence are created only by their verified local workflows."
                 )
             prerequisite = prerequisites.get(prerequisite_key)
             if prerequisite is None:
@@ -404,6 +416,7 @@ class DataDeletionBackupService:
             evidence,
             live_fingerprint_sha256=live_fingerprint,
             path_probe=self.path_probe,
+            quarantine_data_dir=self.quarantine_data_dir,
         )
         evidence_set_fingerprint = str(result["evidence_set"]["fingerprint_sha256"])
         result_fingerprint = fingerprint_rehearsal_result(result)
@@ -691,13 +704,54 @@ def normalize_evidence_payload(
             )
         return record
     if key == "quarantine_capacity_check":
-        return {
+        record = {
             "checked_path": _absolute_path_text(value.get("checked_path"), "checked_path"),
             "available_bytes": _nonnegative_integer(
                 value.get("available_bytes"), "available_bytes"
             ),
             "verified_at_kst": _iso_kst(_datetime_value(value.get("verified_at_kst"))),
         }
+        binding_keys = (
+            "destination_contract_fingerprint_sha256",
+            "quarantine_planning_result_fingerprint_sha256",
+            "candidate_file_count",
+            "candidate_file_bytes",
+            "safety_reserve_bytes",
+            "required_free_bytes",
+            "source_disjoint_verified",
+        )
+        supplied = [value.get(binding_key) not in {None, ""} for binding_key in binding_keys]
+        if any(supplied):
+            if not all(supplied):
+                raise DataDeletionBackupError(
+                    "quarantine capacity evidence bindings must be supplied together."
+                )
+            record.update(
+                {
+                    "destination_contract_fingerprint_sha256": _fingerprint(
+                        value.get("destination_contract_fingerprint_sha256")
+                    ),
+                    "quarantine_planning_result_fingerprint_sha256": _fingerprint(
+                        value.get("quarantine_planning_result_fingerprint_sha256")
+                    ),
+                    "candidate_file_count": _nonnegative_integer(
+                        value.get("candidate_file_count"), "candidate_file_count"
+                    ),
+                    "candidate_file_bytes": _nonnegative_integer(
+                        value.get("candidate_file_bytes"), "candidate_file_bytes"
+                    ),
+                    "safety_reserve_bytes": _nonnegative_integer(
+                        value.get("safety_reserve_bytes"), "safety_reserve_bytes"
+                    ),
+                    "required_free_bytes": _nonnegative_integer(
+                        value.get("required_free_bytes"), "required_free_bytes"
+                    ),
+                    "source_disjoint_verified": bool(
+                        value.get("source_disjoint_verified")
+                    ),
+                }
+            )
+        return record
     record = {
         "checksums_verified": bool(value.get("checksums_verified")),
         "restore_test_passed": bool(value.get("restore_test_passed")),
@@ -786,6 +840,7 @@ def build_rehearsal_result(
     *,
     live_fingerprint_sha256: str,
     path_probe: Callable[[str], dict[str, Any]] = None,
+    quarantine_data_dir: Path | None = None,
 ) -> dict[str, Any]:
     probe = path_probe or inspect_local_path
     _assert_plan_integrity(plan)
@@ -851,6 +906,13 @@ def build_rehearsal_result(
             )
             continue
         check = _evaluate_evidence(plan, item, probe)
+        if key == "quarantine_capacity_check":
+            check = _bind_capacity_evidence_to_destination(
+                check,
+                plan,
+                item,
+                quarantine_data_dir,
+            )
         if key == "backup_integrity_verification":
             check = _bind_integrity_evidence_to_artifacts(
                 check,
@@ -1028,6 +1090,102 @@ def _evaluate_evidence(
         "observed": observed,
         "message": "evidence is consistent" if not issues else "; ".join(issues),
     }
+
+
+def _bind_capacity_evidence_to_destination(
+    check: dict[str, Any],
+    plan: DataDeletionDryRunPlan,
+    evidence: DataDeletionBackupEvidence,
+    quarantine_data_dir: Path | None,
+) -> dict[str, Any]:
+    result = deepcopy(check)
+    payload = evidence.evidence_json
+    observed = dict(result.get("observed") or {})
+    metrics = plan.plan_json.get("metrics") or {}
+    expected_count = _nonnegative_integer(
+        metrics.get("candidate_file_count"), "candidate_file_count"
+    )
+    expected_bytes = _nonnegative_integer(
+        metrics.get("candidate_file_bytes"), "candidate_file_bytes"
+    )
+    minimum_reserve = 0 if expected_bytes == 0 else max(
+        64 * 1024 * 1024,
+        (expected_bytes * 5 + 99) // 100,
+    )
+    required_binding_keys = (
+        "destination_contract_fingerprint_sha256",
+        "quarantine_planning_result_fingerprint_sha256",
+        "candidate_file_count",
+        "candidate_file_bytes",
+        "safety_reserve_bytes",
+        "required_free_bytes",
+        "source_disjoint_verified",
+    )
+    issues: list[str] = []
+    if any(payload.get(key) in {None, ""} for key in required_binding_keys):
+        issues.append("capacity evidence is not bound to a read-only quarantine plan")
+    else:
+        candidate_count = _nonnegative_integer(
+            payload.get("candidate_file_count"), "candidate_file_count"
+        )
+        candidate_bytes = _nonnegative_integer(
+            payload.get("candidate_file_bytes"), "candidate_file_bytes"
+        )
+        reserve_bytes = _nonnegative_integer(
+            payload.get("safety_reserve_bytes"), "safety_reserve_bytes"
+        )
+        required_bytes = _nonnegative_integer(
+            payload.get("required_free_bytes"), "required_free_bytes"
+        )
+        available_bytes = _nonnegative_integer(
+            payload.get("available_bytes"), "available_bytes"
+        )
+        observed.update(
+            {
+                "candidate_file_count": candidate_count,
+                "candidate_file_bytes": candidate_bytes,
+                "safety_reserve_bytes": reserve_bytes,
+                "required_free_bytes": required_bytes,
+                "destination_contract_fingerprint_sha256": payload.get(
+                    "destination_contract_fingerprint_sha256"
+                ),
+                "quarantine_planning_result_fingerprint_sha256": payload.get(
+                    "quarantine_planning_result_fingerprint_sha256"
+                ),
+            }
+        )
+        if candidate_count != expected_count or candidate_bytes != expected_bytes:
+            issues.append("capacity evidence candidate metrics differ from the plan")
+        if reserve_bytes < minimum_reserve:
+            issues.append("capacity evidence safety reserve is below the policy")
+        if required_bytes != candidate_bytes + reserve_bytes:
+            issues.append("capacity evidence required bytes are inconsistent")
+        if available_bytes < required_bytes:
+            issues.append("recorded available bytes are below the bound requirement")
+        live_free = (observed.get("path_state") or {}).get("free_bytes")
+        if not isinstance(live_free, int) or live_free < required_bytes:
+            issues.append("current free bytes are below the bound requirement")
+        if payload.get("source_disjoint_verified") is not True:
+            issues.append("source-disjoint destination was not verified")
+        if quarantine_data_dir is not None:
+            checked = os.path.normcase(
+                str(Path(str(payload.get("checked_path"))).resolve(strict=False))
+            )
+            configured = os.path.normcase(
+                str(quarantine_data_dir.resolve(strict=False))
+            )
+            observed["configured_quarantine_path"] = str(quarantine_data_dir)
+            if checked != configured:
+                issues.append("capacity evidence belongs to a different quarantine root")
+    result["observed"] = observed
+    if result.get("status") == "blocked":
+        existing = str(result.get("message") or "").strip()
+        if existing:
+            issues.insert(0, existing)
+    if issues:
+        result["status"] = "blocked"
+        result["message"] = "; ".join(issues)
+    return result
 
 
 def _bind_integrity_evidence_to_artifacts(

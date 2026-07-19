@@ -31,6 +31,10 @@ class AppConfigTests(unittest.TestCase):
         self.assertEqual(str(config.raw_data_dir), "E:\\PUBG_AI_Data\\raw")
         self.assertEqual(config.replay_data_dir, Path("C:/workspace") / "data" / "replays")
         self.assertEqual(config.backup_data_dir, Path("C:/workspace") / "data" / "backups")
+        self.assertEqual(
+            config.quarantine_data_dir,
+            Path("C:/workspace") / "data" / "quarantine",
+        )
         self.assertEqual(config.raw_compression, "gzip")
         self.assertFalse(config.allow_storage_fallback)
 
@@ -40,6 +44,10 @@ class AppConfigTests(unittest.TestCase):
         self.assertEqual(config.raw_data_dir, Path("C:/workspace") / "data" / "raw")
         self.assertEqual(config.replay_data_dir, Path("C:/workspace") / "data" / "replays")
         self.assertEqual(config.backup_data_dir, Path("C:/workspace") / "data" / "backups")
+        self.assertEqual(
+            config.quarantine_data_dir,
+            Path("C:/workspace") / "data" / "quarantine",
+        )
 
     def test_backup_data_dir_can_be_configured_from_env(self) -> None:
         config = AppConfig.from_env(
@@ -48,6 +56,14 @@ class AppConfigTests(unittest.TestCase):
         )
 
         self.assertEqual(str(config.backup_data_dir), r"D:\BackUP\deletion-backups")
+
+    def test_quarantine_data_dir_can_be_configured_from_env(self) -> None:
+        config = AppConfig.from_env(
+            {"PUBG_QUARANTINE_DATA_DIR": r"E:\PUBG_Quarantine"},
+            base_dir=Path("C:/workspace"),
+        )
+
+        self.assertEqual(str(config.quarantine_data_dir), r"E:\PUBG_Quarantine")
 
     def test_replay_data_dir_can_be_configured_from_env(self) -> None:
         config = AppConfig.from_env(
@@ -64,10 +80,12 @@ class AppConfigTests(unittest.TestCase):
             raw_dir = base_dir / "selected-raw"
             replay_dir = base_dir / "selected-replays"
             backup_dir = base_dir / "selected-backups"
+            quarantine_dir = base_dir / "selected-quarantine"
             LocalSettingsStore(settings_file, base_dir=base_dir).save_storage_settings(
                 raw_data_dir=raw_dir,
                 replay_data_dir=replay_dir,
                 backup_data_dir=backup_dir,
+                quarantine_data_dir=quarantine_dir,
             )
 
             config = AppConfig.from_sources(
@@ -75,6 +93,7 @@ class AppConfigTests(unittest.TestCase):
                     "PUBG_RAW_DATA_DIR": "env-raw",
                     "PUBG_REPLAY_DATA_DIR": "env-replays",
                     "PUBG_BACKUP_DATA_DIR": "env-backups",
+                    "PUBG_QUARANTINE_DATA_DIR": "env-quarantine",
                     "PUBG_LOCAL_SETTINGS_FILE": str(settings_file),
                 },
                 base_dir=base_dir,
@@ -83,8 +102,9 @@ class AppConfigTests(unittest.TestCase):
             self.assertEqual(config.raw_data_dir, raw_dir)
             self.assertEqual(config.replay_data_dir, replay_dir)
             self.assertEqual(config.backup_data_dir, backup_dir)
+            self.assertEqual(config.quarantine_data_dir, quarantine_dir)
 
-    def test_legacy_local_storage_settings_fall_back_to_env_backup_root(self) -> None:
+    def test_legacy_local_storage_settings_fall_back_to_env_roots(self) -> None:
         with TemporaryDirectory() as temp_dir:
             base_dir = Path(temp_dir)
             settings_file = base_dir / "config" / "local_settings.json"
@@ -105,12 +125,17 @@ class AppConfigTests(unittest.TestCase):
             config = AppConfig.from_sources(
                 {
                     "PUBG_BACKUP_DATA_DIR": "env-backups",
+                    "PUBG_QUARANTINE_DATA_DIR": "env-quarantine",
                     "PUBG_LOCAL_SETTINGS_FILE": str(settings_file),
                 },
                 base_dir=base_dir,
             )
 
             self.assertEqual(config.backup_data_dir, base_dir / "env-backups")
+            self.assertEqual(
+                config.quarantine_data_dir,
+                base_dir / "env-quarantine",
+            )
 
     def test_local_program_collector_settings_override_env_values(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -250,21 +275,51 @@ class LocalSettingsStoreTests(unittest.TestCase):
             raw_dir = base_dir / "raw-drive" / "raw"
             replay_dir = base_dir / "replay-drive" / "replays"
             backup_dir = base_dir / "backup-drive" / "deletion-backups"
+            quarantine_dir = base_dir / "quarantine-drive" / "quarantine"
 
             store = LocalSettingsStore(settings_file, base_dir=base_dir)
-            saved = store.save_storage_settings(raw_dir, replay_dir, backup_dir)
+            saved = store.save_storage_settings(
+                raw_dir,
+                replay_dir,
+                backup_dir,
+                quarantine_dir,
+            )
             loaded = store.load_storage_settings()
 
             self.assertEqual(saved.raw_data_dir, raw_dir)
             self.assertEqual(saved.replay_data_dir, replay_dir)
             self.assertEqual(saved.backup_data_dir, backup_dir)
+            self.assertEqual(saved.quarantine_data_dir, quarantine_dir)
             self.assertTrue(raw_dir.is_dir())
             self.assertTrue(replay_dir.is_dir())
             self.assertTrue(backup_dir.is_dir())
+            self.assertTrue(quarantine_dir.is_dir())
             self.assertIsNotNone(loaded)
             self.assertEqual(loaded.raw_data_dir, raw_dir)
             self.assertEqual(loaded.replay_data_dir, replay_dir)
             self.assertEqual(loaded.backup_data_dir, backup_dir)
+            self.assertEqual(loaded.quarantine_data_dir, quarantine_dir)
+
+    def test_storage_settings_reject_overlapping_quarantine_root_before_creation(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            store = LocalSettingsStore(
+                base_dir / "config" / "local_settings.json",
+                base_dir=base_dir,
+            )
+            raw_dir = base_dir / "raw"
+            nested_quarantine = raw_dir / "quarantine"
+
+            with self.assertRaisesRegex(LocalSettingsError, "overlaps"):
+                store.save_storage_settings(
+                    raw_dir,
+                    base_dir / "replays",
+                    base_dir / "backups",
+                    nested_quarantine,
+                )
+
+            self.assertFalse(raw_dir.exists())
+            self.assertFalse(nested_quarantine.exists())
 
     def test_storage_settings_do_not_overwrite_collector_settings(self) -> None:
         with TemporaryDirectory() as temp_dir:

@@ -38,6 +38,9 @@ MySQL data model direction, 2D replay/live-view feasibility, and reference proje
   `PUBG_REPLAY_DATA_DIR=E:\PUBG_AI_Data\replays`.
 - Opt-in deletion backup ZIP files use a third configurable root such as
   `PUBG_BACKUP_DATA_DIR=D:\BackUP\deletion-backups`; it must not contain or sit inside either source root.
+- Read-only deletion quarantine planning uses a fourth configurable root such as
+  `PUBG_QUARANTINE_DATA_DIR=E:\PUBG_Quarantine`. All four roots must be pairwise disjoint, and the read-only planner
+  requires this directory to exist without creating it or moving files into it.
 - The local management app should save user-changed storage paths to `config/local_settings.json`, so paths can be
   changed from the program without editing `.env`. It also saves collector polling limits there.
 - Discord permissions and rankings are scoped by `guild_id`; global admins can view and manage all guilds.
@@ -378,15 +381,21 @@ fingerprint. The rehearsal revalidates every backup byte, restores MySQL rows on
 a random temporary directory under the backup root, reads both back, and removes all scratch resources. A passed run
 atomically appends its immutable audit row and a `backup_integrity_verification` evidence row bound to the build,
 verification run, artifact-evidence set, manifest, and restore-result fingerprints. Manual integrity attestation is
-rejected, and a later artifact build makes older integrity evidence stale. The database archive still contains no
-schema DDL, and there is no production restore, quarantine, deletion endpoint, executable deletion SQL, file remover,
-or execution button. `executor_not_implemented` remains unconditional. Rerun `python -m pubg_ai.cli init-db` after
-updating from an earlier schema.
+rejected, and a later artifact build makes older integrity evidence stale. Schema version 16 adds immutable read-only
+quarantine-planning runs. Exact confirmation starts with `RUN READ-ONLY QUARANTINE PLAN`, and the planner revalidates
+the latest dry-run plan, source identity/size/SHA-256, deterministic target absence, a pre-existing source-disjoint
+quarantine root, and free capacity with a `max(64 MiB, 5%)` reserve. Passed runs atomically append planner-generated
+`quarantine_capacity_check` evidence and an audit row; blocked runs append only the audit row. The plan records future
+postconditions, rollback steps, and crash-recovery journal requirements but creates no directory or journal and does
+not copy, move, remove, restore, or mutate source data. Manual capacity attestation is rejected. The database archive
+still contains no schema DDL, and there is no production restore, quarantine mover, deletion endpoint, executable
+deletion SQL, file remover, or execution button. `executor_not_implemented` remains unconditional. Rerun
+`python -m pubg_ai.cli init-db` after updating from an earlier schema.
 The `admin` group includes `pubg-alerts`, which returns current storage and worker alerts. When
 `PUBG_LOCAL_WEB_BASE_URL` is set, that response includes a local current-alert list link. When Discord alert channel
-IDs are configured from the local manager, the running Discord bot also sends new worker failures and active storage
-capacity alerts to those channels. When `PUBG_LOCAL_WEB_BASE_URL` is set, automatic storage and worker alert messages
-include local `alert_id` detail links, and worker failure alerts also include a local `worker_run_id` detail link.
+IDs are configured from the local manager, the running Discord bot also sends new worker failures and active capacity
+alerts for all four configured storage roots to those channels. When `PUBG_LOCAL_WEB_BASE_URL` is set, automatic
+storage and worker alert messages include local `alert_id` detail links, and worker failure alerts also include a local `worker_run_id` detail link.
 Alerts are persisted in MySQL so the local manager can show alert history; using
 the local manager's acknowledge or one-hour snooze action suppresses repeated local/Discord notifications for that
 alert record. Admins can also run `pubg-alert-ack alert_id` or `pubg-alert-snooze alert_id [minutes]` directly in

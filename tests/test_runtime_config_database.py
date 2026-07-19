@@ -86,6 +86,7 @@ class DatabaseSchemaTests(unittest.TestCase):
             "data_deletion_rehearsal_runs",
             "data_deletion_backup_verification_runs",
             "data_deletion_backup_restore_rehearsal_runs",
+            "data_deletion_quarantine_planning_runs",
             "matches",
             "raw_match_payloads",
             "raw_telemetry_payloads",
@@ -105,7 +106,7 @@ class DatabaseSchemaTests(unittest.TestCase):
         ]:
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table_name}", schema)
 
-        self.assertEqual(SCHEMA_VERSION, 15)
+        self.assertEqual(SCHEMA_VERSION, 16)
         self.assertIn("fk_data_deletion_events_request", schema)
         self.assertIn("fk_data_deletion_confirmation_snapshot", schema)
         self.assertIn("uq_data_deletion_confirmation_snapshot", schema)
@@ -117,6 +118,9 @@ class DatabaseSchemaTests(unittest.TestCase):
         self.assertIn("fk_data_deletion_backup_verification_plan", schema)
         self.assertIn("fk_data_deletion_restore_verification", schema)
         self.assertIn("fk_data_deletion_restore_integrity_evidence", schema)
+        self.assertIn("fk_data_deletion_quarantine_plan", schema)
+        self.assertIn("fk_data_deletion_quarantine_capacity_evidence", schema)
+        self.assertIn("destination_contract_fingerprint_sha256", schema)
         self.assertIn("evidence_record_ids_json", schema)
         self.assertIn("evidence_set_fingerprint_sha256", schema)
         self.assertIn("result_status ENUM('passed', 'blocked')", schema)

@@ -8,7 +8,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 
 class DatabaseError(RuntimeError):
@@ -76,7 +76,7 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 VALUES (%s, %s, NOW(6))
                 ON DUPLICATE KEY UPDATE description = VALUES(description)
                 """,
-                (SCHEMA_VERSION, "isolated deletion backup restore rehearsal audit schema"),
+                (SCHEMA_VERSION, "read-only deletion quarantine planning audit schema"),
             )
             applied += 1
     finally:
@@ -539,6 +539,62 @@ def schema_statements() -> list[str]:
                 ON DELETE RESTRICT,
             CONSTRAINT fk_data_deletion_restore_integrity_evidence
                 FOREIGN KEY (backup_integrity_evidence_id)
+                REFERENCES data_deletion_backup_evidence(id)
+                ON DELETE RESTRICT
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS data_deletion_quarantine_planning_runs (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            request_id BIGINT UNSIGNED NOT NULL,
+            dry_run_plan_id BIGINT UNSIGNED NOT NULL,
+            contract_version VARCHAR(64) NOT NULL,
+            plan_fingerprint_sha256 CHAR(64) NOT NULL,
+            destination_contract_fingerprint_sha256 CHAR(64) NOT NULL,
+            quarantine_root VARCHAR(1000) NOT NULL,
+            result_fingerprint_sha256 CHAR(64) NOT NULL,
+            result_status ENUM('passed', 'blocked') NOT NULL,
+            result_json JSON NOT NULL,
+            candidate_file_count INT UNSIGNED NOT NULL,
+            candidate_file_bytes BIGINT UNSIGNED NOT NULL,
+            safety_reserve_bytes BIGINT UNSIGNED NOT NULL,
+            required_free_bytes BIGINT UNSIGNED NOT NULL,
+            observed_free_bytes BIGINT UNSIGNED NULL,
+            source_verified_file_count INT UNSIGNED NOT NULL,
+            source_verified_bytes BIGINT UNSIGNED NOT NULL,
+            target_conflict_count INT UNSIGNED NOT NULL,
+            check_count INT UNSIGNED NOT NULL,
+            passed_check_count INT UNSIGNED NOT NULL,
+            blocker_count INT UNSIGNED NOT NULL,
+            capacity_evidence_id BIGINT UNSIGNED NULL,
+            planned_by VARCHAR(191) NOT NULL,
+            planning_note VARCHAR(1000) NULL,
+            planned_at_kst DATETIME(6) NOT NULL,
+            KEY idx_data_deletion_quarantine_plan_time (
+                dry_run_plan_id,
+                planned_at_kst
+            ),
+            KEY idx_data_deletion_quarantine_request_time (
+                request_id,
+                planned_at_kst
+            ),
+            KEY idx_data_deletion_quarantine_status (
+                result_status,
+                planned_at_kst
+            ),
+            KEY idx_data_deletion_quarantine_destination (
+                destination_contract_fingerprint_sha256
+            ),
+            KEY idx_data_deletion_quarantine_result (result_fingerprint_sha256),
+            KEY idx_data_deletion_quarantine_evidence (capacity_evidence_id),
+            CONSTRAINT fk_data_deletion_quarantine_request
+                FOREIGN KEY (request_id) REFERENCES data_deletion_requests(id)
+                ON DELETE RESTRICT,
+            CONSTRAINT fk_data_deletion_quarantine_plan
+                FOREIGN KEY (dry_run_plan_id) REFERENCES data_deletion_dry_run_plans(id)
+                ON DELETE RESTRICT,
+            CONSTRAINT fk_data_deletion_quarantine_capacity_evidence
+                FOREIGN KEY (capacity_evidence_id)
                 REFERENCES data_deletion_backup_evidence(id)
                 ON DELETE RESTRICT
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci

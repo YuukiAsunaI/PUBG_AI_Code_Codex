@@ -58,6 +58,8 @@ def collect_system_alerts(
             collect_storage_alerts(
                 raw_data_dir=config.app.raw_data_dir,
                 replay_data_dir=config.app.replay_data_dir,
+                backup_data_dir=config.app.backup_data_dir,
+                quarantine_data_dir=config.app.quarantine_data_dir,
                 minimum_free_bytes=settings.minimum_free_bytes,
             )
         )
@@ -81,12 +83,16 @@ def collect_storage_alerts(
     *,
     raw_data_dir: str | Path,
     replay_data_dir: str | Path,
+    backup_data_dir: str | Path,
+    quarantine_data_dir: str | Path,
     minimum_free_bytes: int,
 ) -> list[SystemAlert]:
     alerts: list[SystemAlert] = []
     for role, path in (
         ("raw_data_dir", raw_data_dir),
         ("replay_data_dir", replay_data_dir),
+        ("backup_data_dir", backup_data_dir),
+        ("quarantine_data_dir", quarantine_data_dir),
     ):
         capacity = assess_storage_capacity(path, minimum_free_bytes=minimum_free_bytes)
         if capacity.should_notify:

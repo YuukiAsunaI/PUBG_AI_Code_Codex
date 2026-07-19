@@ -41,6 +41,10 @@ from pubg_ai.data_deletion_backup_verifier import (
     DataDeletionBackupVerifierError,
     DataDeletionBackupVerifierService,
 )
+from pubg_ai.data_deletion_quarantine_planner import (
+    DataDeletionQuarantinePlannerError,
+    DataDeletionQuarantinePlannerService,
+)
 from pubg_ai.data_deletion_restore_rehearsal import (
     DataDeletionBackupRestoreRehearsalService,
     DataDeletionRestoreRehearsalError,
@@ -244,6 +248,13 @@ class DataDeletionBackupRestoreRehearsalCreateRequest(BaseModel):
     note: str | None = Field(default=None, max_length=1000)
 
 
+class DataDeletionQuarantinePlanningCreateRequest(BaseModel):
+    dry_run_plan_id: int = Field(gt=0)
+    confirmation_text: str = Field(min_length=1, max_length=500)
+    actor_id: str = Field(default="local-manager", min_length=1, max_length=191)
+    note: str | None = Field(default=None, max_length=1000)
+
+
 class DataDeletionRehearsalCreateRequest(BaseModel):
     dry_run_plan_id: int = Field(gt=0)
     actor_id: str = Field(default="local-manager", min_length=1, max_length=191)
@@ -258,6 +269,7 @@ class StorageSettingsRequest(BaseModel):
     raw_data_dir: str = Field(min_length=1)
     replay_data_dir: str = Field(min_length=1)
     backup_data_dir: str = Field(min_length=1)
+    quarantine_data_dir: str = Field(min_length=1)
     raw_compression: str = "gzip"
 
 
@@ -363,6 +375,7 @@ def create_app() -> Any:
             connection,
             dry_run_service=dry_run_service,
             preview_service=preview_service,
+            quarantine_data_dir=runtime_config.app.quarantine_data_dir,
         )
 
     def build_data_deletion_backup_builder_service(
@@ -426,6 +439,25 @@ def create_app() -> Any:
             expected_database_name=runtime_config.database.database,
         )
 
+    def build_data_deletion_quarantine_planner_service(
+        connection: Any,
+        runtime_config: RuntimeConfig,
+        *,
+        backup_service: DataDeletionBackupService | None = None,
+    ) -> DataDeletionQuarantinePlannerService:
+        backup = backup_service or build_data_deletion_backup_service(
+            connection,
+            runtime_config,
+        )
+        return DataDeletionQuarantinePlannerService(
+            connection,
+            backup_service=backup,
+            quarantine_root=runtime_config.app.quarantine_data_dir,
+            raw_data_dir=runtime_config.app.raw_data_dir,
+            replay_data_dir=runtime_config.app.replay_data_dir,
+            backup_root=runtime_config.app.backup_data_dir,
+        )
+
     collector_worker = CollectorWorkerController(config_loader=current_config)
     post_processing_worker = PostProcessingWorkerController(config_loader=current_config)
 
@@ -483,6 +515,7 @@ def create_app() -> Any:
                 raw_data_dir=request.raw_data_dir,
                 replay_data_dir=request.replay_data_dir,
                 backup_data_dir=request.backup_data_dir,
+                quarantine_data_dir=request.quarantine_data_dir,
                 raw_compression=request.raw_compression,
             )
             storage_status = {
@@ -881,6 +914,7 @@ def create_app() -> Any:
             "backup_build_url": f"/data-deletions/{request_id}/backup-builds",
             "backup_verification_url": f"/data-deletions/{request_id}/backup-verifications",
             "backup_restore_rehearsal_url": f"/data-deletions/{request_id}/backup-restore-rehearsals",
+            "quarantine_planning_url": f"/data-deletions/{request_id}/quarantine-plans",
             "backup_evidence_url": f"/data-deletions/{request_id}/backup-evidence",
             "rehearsal_url": f"/data-deletions/{request_id}/rehearsals",
             "execution_enabled": False,
@@ -1079,12 +1113,18 @@ def create_app() -> Any:
                     backup_service=backup_service,
                     verifier_service=verifier_service,
                 ).rehearsal_state(request)
+                quarantine_planner_state = build_data_deletion_quarantine_planner_service(
+                    connection,
+                    runtime_config,
+                    backup_service=backup_service,
+                ).planning_state(request)
             except DataDeletionRequestError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
             except (
                 DataDeletionBackupBuilderError,
                 DataDeletionBackupVerifierError,
                 DataDeletionRestoreRehearsalError,
+                DataDeletionQuarantinePlannerError,
                 DataDeletionBackupError,
                 DataDeletionDryRunError,
             ) as exc:
@@ -1096,6 +1136,7 @@ def create_app() -> Any:
             "backup_builder_state": builder_state,
             "backup_verifier_state": verifier_state,
             "backup_restore_rehearsal_state": restore_rehearsal_state,
+            "quarantine_planner_state": quarantine_planner_state,
             "execution_enabled": False,
             "execution_ready": False,
         }
@@ -1208,6 +1249,42 @@ def create_app() -> Any:
             connection.close()
         return {
             "backup_restore_rehearsal": rehearsal.to_record(),
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+
+    @app.post("/data-deletions/{request_id}/quarantine-plans")
+    def plan_data_deletion_quarantine(
+        request_id: int,
+        planning_request: DataDeletionQuarantinePlanningCreateRequest,
+    ) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(runtime_config.database)
+        try:
+            try:
+                request = DataDeletionRequestService(connection).get_request(request_id)
+                planning = build_data_deletion_quarantine_planner_service(
+                    connection,
+                    runtime_config,
+                ).run(
+                    request,
+                    dry_run_plan_id=planning_request.dry_run_plan_id,
+                    confirmation_text=planning_request.confirmation_text,
+                    actor_id=planning_request.actor_id,
+                    note=planning_request.note,
+                )
+            except DataDeletionRequestError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except (
+                DataDeletionQuarantinePlannerError,
+                DataDeletionBackupError,
+                DataDeletionDryRunError,
+            ) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {
+            "quarantine_planning": planning.to_record(),
             "execution_enabled": False,
             "execution_ready": False,
         }
@@ -1837,12 +1914,14 @@ def _settings_status_record(config: RuntimeConfig) -> dict[str, Any]:
         "raw_data_dir": str(config.app.raw_data_dir),
         "replay_data_dir": str(config.app.replay_data_dir),
         "backup_data_dir": str(config.app.backup_data_dir),
+        "quarantine_data_dir": str(config.app.quarantine_data_dir),
         "local_web_base_url": config.app.local_web_base_url,
         "raw_compression": config.app.raw_compression,
         "storage_status": {
             "raw_data_dir": check_storage_path(config.app.raw_data_dir).to_record(),
             "replay_data_dir": check_storage_path(config.app.replay_data_dir).to_record(),
             "backup_data_dir": check_storage_path(config.app.backup_data_dir).to_record(),
+            "quarantine_data_dir": check_storage_path(config.app.quarantine_data_dir).to_record(),
         },
         "collector": {
             "poll_interval_seconds": config.app.collector_poll_interval_seconds,
@@ -2296,6 +2375,9 @@ _INDEX_HTML = """<!doctype html>
         </label>
         <label>Deletion backup directory
           <input name="backup_data_dir" autocomplete="off" required>
+        </label>
+        <label>Deletion quarantine directory
+          <input name="quarantine_data_dir" autocomplete="off" required>
         </label>
         <label>Compression
           <select name="raw_compression">
@@ -3144,6 +3226,7 @@ _INDEX_HTML = """<!doctype html>
         cell("Raw 저장소", settings.raw_data_dir),
         cell("Replay 저장소", settings.replay_data_dir),
         cell("Backup 저장소", settings.backup_data_dir),
+        cell("Quarantine 저장소", settings.quarantine_data_dir),
         cell("수집 주기", `${settings.collector.poll_interval_seconds}초`),
         cell("주기당 대상", `${settings.collector.cycle_player_limit}명`),
         cell("조회 chunk", `${settings.collector.player_lookup_chunk_size}명`),
@@ -3151,11 +3234,13 @@ _INDEX_HTML = """<!doctype html>
       storageSettingsForm.elements.raw_data_dir.value = settings.raw_data_dir || "";
       storageSettingsForm.elements.replay_data_dir.value = settings.replay_data_dir || "";
       storageSettingsForm.elements.backup_data_dir.value = settings.backup_data_dir || "";
+      storageSettingsForm.elements.quarantine_data_dir.value = settings.quarantine_data_dir || "";
       storageSettingsForm.elements.raw_compression.value = settings.raw_compression || "gzip";
       storageSettingsStatus.textContent = [
         `Raw ${formatStoragePathStatus(settings.storage_status?.raw_data_dir)}`,
         `Replay ${formatStoragePathStatus(settings.storage_status?.replay_data_dir)}`,
         `Backup ${formatStoragePathStatus(settings.storage_status?.backup_data_dir)}`,
+        `Quarantine ${formatStoragePathStatus(settings.storage_status?.quarantine_data_dir)}`,
       ].join(" / ");
       collectorSettingsForm.elements.poll_interval_seconds.value = settings.collector.poll_interval_seconds || 180;
       collectorSettingsForm.elements.cycle_player_limit.value = settings.collector.cycle_player_limit || 100;
@@ -4218,7 +4303,7 @@ _INDEX_HTML = """<!doctype html>
       dataDeletionStatus.textContent = "Read-only dry-run plan recorded. Deletion execution remains disabled.";
     }
 
-    function renderDataDeletionBackupReadiness(state, builderState, verifierState, restoreState) {
+    function renderDataDeletionBackupReadiness(state, builderState, verifierState, restoreState, plannerState) {
       const plan = state.latest_plan;
       const builderBlockers = (builderState?.build_blockers || [])
         .map((blocker) => `<li>${escapeHtml(blocker)}</li>`)
@@ -4356,6 +4441,75 @@ _INDEX_HTML = """<!doctype html>
             </table>
           </div>
         </div>`;
+      const plannerBlockers = (plannerState?.planning_blockers || [])
+        .map((blocker) => `<li>${escapeHtml(blocker)}</li>`)
+        .join("");
+      const latestPlanning = plannerState?.latest_planning_run || null;
+      const planningResult = latestPlanning?.result_json || {};
+      const planningCheckRows = (planningResult.checks || []).map((check) => `
+        <tr>
+          <td>${escapeHtml(check.key)}</td>
+          <td>${escapeHtml(check.status)}</td>
+          <td>${escapeHtml(check.message)}</td>
+        </tr>`).join("") || `<tr><td colspan="3">No read-only quarantine checks recorded.</td></tr>`;
+      const planningOperationRows = (planningResult.file_operations || []).map((item) => `
+        <tr>
+          <td>${escapeHtml(item.sequence)} / #${escapeHtml(item.record_id)}</td>
+          <td><code>${escapeHtml(item.source_relative_path || "-")}</code></td>
+          <td><code>${escapeHtml(item.target_relative_path || "-")}</code></td>
+          <td>${formatBytes(Number(item.declared_size_bytes || 0))}<br><code>${escapeHtml(item.sha256 || "-")}</code></td>
+          <td>${item.target_exists ? "conflict" : "absent"}</td>
+        </tr>`).join("") || `<tr><td colspan="5">No file operations were inspected.</td></tr>`;
+      const planningHistoryRows = (plannerState?.planning_history || []).map((item) => `
+        <tr>
+          <td>${escapeHtml(item.id)}</td>
+          <td>${escapeHtml(item.result_status)}</td>
+          <td>${escapeHtml(item.source_verified_file_count)} / ${formatBytes(Number(item.source_verified_bytes || 0))}</td>
+          <td>${formatBytes(Number(item.observed_free_bytes || 0))} / ${formatBytes(Number(item.required_free_bytes || 0))}</td>
+          <td>${item.capacity_evidence_id ? `#${escapeHtml(item.capacity_evidence_id)}` : "-"}</td>
+          <td>${escapeHtml(item.planned_by)} / ${escapeHtml(item.planned_at_kst)}</td>
+        </tr>`).join("") || `<tr><td colspan="6">No immutable quarantine planning records.</td></tr>`;
+      const postcondition = planningResult.postcondition_contract || {};
+      const rollback = planningResult.rollback_contract || {};
+      const crashRecovery = planningResult.crash_recovery_contract || {};
+      const plannerForm = plannerState?.confirmation_text ? `
+        <code>${escapeHtml(plannerState.confirmation_text)}</code>
+        <form class="confirmation-input-row quarantine-planner-form" data-quarantine-planner-form data-request-id="${attr(state.request_id)}" data-plan-id="${attr(plannerState.latest_plan_id || "")}">
+          <label>Exact read-only planning confirmation
+            <input name="confirmation_text" autocomplete="off" required>
+          </label>
+          <button class="secondary" type="submit" ${plannerState.planning_allowed ? "" : "disabled"}>Run read-only plan</button>
+        </form>` : "";
+      const plannerPanel = `
+        <div class="backup-builder-contract">
+          <h3>Read-only quarantine planning</h3>
+          <div class="status">Root: ${escapeHtml(plannerState?.quarantine_root || "-")} / source hashing: yes / capacity check: yes / directories and files created: no / database source mutation: no</div>
+          <ul>${plannerBlockers}</ul>
+          ${plannerForm}
+          <div class="status">Latest: ${escapeHtml(latestPlanning?.result_status || "none")} / candidate ${escapeHtml(latestPlanning?.candidate_file_count || 0)} files, ${formatBytes(Number(latestPlanning?.candidate_file_bytes || 0))} / bound capacity evidence ${latestPlanning?.capacity_evidence_id ? `#${escapeHtml(latestPlanning.capacity_evidence_id)}` : "none"}</div>
+          <h3>Latest read-only checks</h3>
+          <div class="table-scroll">
+            <table class="detail-table">
+              <thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>
+              <tbody>${planningCheckRows}</tbody>
+            </table>
+          </div>
+          <h3>Deterministic future operations</h3>
+          <div class="table-scroll">
+            <table class="detail-table">
+              <thead><tr><th>Item</th><th>Source</th><th>Target</th><th>Bytes / SHA-256</th><th>Target state</th></tr></thead>
+              <tbody>${planningOperationRows}</tbody>
+            </table>
+          </div>
+          <div class="status">Postconditions: ${(postcondition.item_checks || []).length} item checks / rollback: ${(rollback.item_actions || []).length} reverse actions, independently rehearsed ${rollback.independently_rehearsed === true ? "yes" : "no"} / crash journal: ${escapeHtml(crashRecovery.journal_relative_path || "-")}, independently rehearsed ${crashRecovery.independently_rehearsed === true ? "yes" : "no"}</div>
+          <h3>Quarantine planning history</h3>
+          <div class="table-scroll">
+            <table class="detail-table">
+              <thead><tr><th>ID</th><th>Status</th><th>Verified source</th><th>Free / required</th><th>Capacity evidence</th><th>Run</th></tr></thead>
+              <tbody>${planningHistoryRows}</tbody>
+            </table>
+          </div>
+        </div>`;
       const prerequisiteRows = (state.prerequisites || []).map((item) => `
         <tr>
           <td>${escapeHtml(item.key)}</td>
@@ -4385,7 +4539,7 @@ _INDEX_HTML = """<!doctype html>
           <td>${escapeHtml(item.run_by)} / ${escapeHtml(item.run_at_kst)}</td>
         </tr>`).join("") || `<tr><td colspan="4">No non-executing rehearsal records.</td></tr>`;
       const evidenceOptions = (state.prerequisites || [])
-        .filter((item) => item.required && item.key !== "backup_integrity_verification")
+        .filter((item) => item.required && !["quarantine_capacity_check", "backup_integrity_verification"].includes(item.key))
         .map((item) => `<option value="${attr(item.key)}">${escapeHtml(item.key)}</option>`)
         .join("");
       const evidenceForm = plan && state.evidence_recording_allowed && evidenceOptions ? `
@@ -4411,26 +4565,8 @@ _INDEX_HTML = """<!doctype html>
           <label data-evidence-field="covered_file_bytes">Covered source bytes
             <input name="covered_file_bytes" type="number" min="0" step="1">
           </label>
-          <label data-evidence-field="checked_path">Capacity path
-            <input name="checked_path" autocomplete="off">
-          </label>
-          <label data-evidence-field="available_bytes">Available bytes
-            <input name="available_bytes" type="number" min="0" step="1">
-          </label>
           <label data-evidence-field="backup_created_at_kst">Backup created KST
             <input name="backup_created_at_kst" type="datetime-local">
-          </label>
-          <label data-evidence-field="verified_at_kst">Verified KST
-            <input name="verified_at_kst" type="datetime-local">
-          </label>
-          <label data-evidence-field="restore_tested_at_kst">Restore tested KST
-            <input name="restore_tested_at_kst" type="datetime-local">
-          </label>
-          <label class="checkbox-field" data-evidence-field="checksums_verified">
-            <input name="checksums_verified" type="checkbox"> Checksums verified
-          </label>
-          <label class="checkbox-field" data-evidence-field="restore_test_passed">
-            <input name="restore_test_passed" type="checkbox"> Restore rehearsal passed
           </label>
           <button type="submit">Record immutable evidence</button>
         </form>` : "";
@@ -4446,6 +4582,7 @@ _INDEX_HTML = """<!doctype html>
           ${builderForm}
           ${verifierPanel}
           ${restorePanel}
+          ${plannerPanel}
           <h3>Prerequisite evidence</h3>
           <div class="table-scroll">
             <table class="detail-table">
@@ -4483,8 +4620,6 @@ _INDEX_HTML = """<!doctype html>
       const fields = {
         mysql_target_backup: ["artifact_path", "artifact_sha256", "artifact_size_bytes", "covered_row_count", "backup_created_at_kst"],
         replay_artifact_backup: ["artifact_path", "artifact_sha256", "artifact_size_bytes", "covered_file_count", "covered_file_bytes", "backup_created_at_kst"],
-        quarantine_capacity_check: ["checked_path", "available_bytes", "verified_at_kst"],
-        backup_integrity_verification: ["verified_at_kst", "restore_tested_at_kst", "checksums_verified", "restore_test_passed"],
       };
       const enabled = new Set(fields[key] || []);
       for (const label of form?.querySelectorAll("[data-evidence-field]") || []) {
@@ -4507,6 +4642,7 @@ _INDEX_HTML = """<!doctype html>
         payload.backup_builder_state,
         payload.backup_verifier_state,
         payload.backup_restore_rehearsal_state,
+        payload.quarantine_planner_state,
       );
       updateBackupEvidenceFields(host.querySelector("form[data-backup-evidence-form]"));
     }
@@ -4592,6 +4728,33 @@ _INDEX_HTML = """<!doctype html>
         const run = payload.backup_restore_rehearsal || {};
         await loadDataDeletionRequestDetail(requestId);
         dataDeletionStatus.textContent = `Isolated restore rehearsal ${run.result_status || "unknown"}. Integrity evidence: ${run.backup_integrity_evidence_id || "not recorded"}. Production restore and deletion remain disabled.`;
+      } finally {
+        if (button) button.disabled = false;
+      }
+    }
+
+    async function runDataDeletionQuarantinePlanning(formElement) {
+      const values = new FormData(formElement);
+      const reviewer = new FormData(dataDeletionFilterForm);
+      const requestId = formElement.dataset.requestId || "";
+      const actorId = String(reviewer.get("actor_id") || "").trim();
+      const note = String(reviewer.get("note") || "").trim();
+      const confirmationText = String(values.get("confirmation_text") || "").trim();
+      if (!actorId) throw new Error("Local reviewer is required.");
+      if (!confirmationText) throw new Error("Exact read-only planning confirmation is required.");
+      if (!window.confirm("Run a read-only quarantine plan? Source files are opened only for identity, size, and SHA-256 verification. Target absence and free space are checked. No directory, journal, copy, move, source removal, restore, quarantine, or deletion operation will run.")) return;
+      const button = formElement.querySelector("button[type='submit']");
+      if (button) button.disabled = true;
+      try {
+        const payload = await postJson(`/data-deletions/${encodeURIComponent(requestId)}/quarantine-plans`, {
+          dry_run_plan_id: Number(formElement.dataset.planId),
+          confirmation_text: confirmationText,
+          actor_id: actorId,
+          note: note || null,
+        });
+        const run = payload.quarantine_planning || {};
+        await loadDataDeletionRequestDetail(requestId);
+        dataDeletionStatus.textContent = `Read-only quarantine planning ${run.result_status || "unknown"}. Capacity evidence: ${run.capacity_evidence_id || "not recorded"}. No directory, file, source row, quarantine, or deletion mutation was performed.`;
       } finally {
         if (button) button.disabled = false;
       }
@@ -6596,12 +6759,14 @@ _INDEX_HTML = """<!doctype html>
         raw_data_dir: String(form.get("raw_data_dir") || "").trim(),
         replay_data_dir: String(form.get("replay_data_dir") || "").trim(),
         backup_data_dir: String(form.get("backup_data_dir") || "").trim(),
+        quarantine_data_dir: String(form.get("quarantine_data_dir") || "").trim(),
         raw_compression: String(form.get("raw_compression") || "gzip"),
       });
       storageSettingsStatus.textContent = [
         `Raw ${formatStoragePathStatus(payload.storage_status?.raw_data_dir)}`,
         `Replay ${formatStoragePathStatus(payload.storage_status?.replay_data_dir)}`,
         `Backup ${formatStoragePathStatus(payload.storage_status?.backup_data_dir)}`,
+        `Quarantine ${formatStoragePathStatus(payload.storage_status?.quarantine_data_dir)}`,
       ].join(" / ");
       await loadStatus();
       await loadAlerts({ renderHistory: false });
@@ -7395,6 +7560,19 @@ _INDEX_HTML = """<!doctype html>
       event.preventDefault();
       try {
         await runDataDeletionBackupRestoreRehearsal(form);
+      } catch (error) {
+        dataDeletionStatus.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    dataDeletionDetail.addEventListener("submit", async (event) => {
+      const form = event.target instanceof Element
+        ? event.target.closest("form[data-quarantine-planner-form]")
+        : null;
+      if (!form) return;
+      event.preventDefault();
+      try {
+        await runDataDeletionQuarantinePlanning(form);
       } catch (error) {
         dataDeletionStatus.textContent = `Error: ${error.message}`;
       }

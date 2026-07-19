@@ -7,7 +7,13 @@ import unittest
 from pubg_ai.alert_history import AlertHistoryRecord
 from pubg_ai.config import AppConfig, DatabaseConfig, RuntimeConfig, SecretConfig
 from pubg_ai.local_settings import AlertSettings
-from pubg_ai.system_alerts import collect_system_alerts, format_alert_report, format_discord_alert, worker_run_alert
+from pubg_ai.system_alerts import (
+    collect_storage_alerts,
+    collect_system_alerts,
+    format_alert_report,
+    format_discord_alert,
+    worker_run_alert,
+)
 from pubg_ai.worker_run_history import WorkerRunRecord
 
 
@@ -47,6 +53,22 @@ class SystemAlertsTests(unittest.TestCase):
         self.assertTrue(any(key.startswith("storage:raw_data_dir:") for key in keys))
         self.assertIn("worker:12", keys)
         self.assertIn("id > %s", connection.cursor_obj.executed[0][0])
+
+    def test_storage_alerts_cover_all_configured_roots(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            alerts = collect_storage_alerts(
+                raw_data_dir=base / "missing-raw",
+                replay_data_dir=base / "missing-replay",
+                backup_data_dir=base / "missing-backup",
+                quarantine_data_dir=base / "missing-quarantine",
+                minimum_free_bytes=1,
+            )
+
+        self.assertEqual(
+            {alert.metadata["role"] for alert in alerts},
+            {"raw_data_dir", "replay_data_dir", "backup_data_dir", "quarantine_data_dir"},
+        )
 
     def test_worker_alert_formats_for_discord(self) -> None:
         alert = worker_run_alert(

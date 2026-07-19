@@ -9,6 +9,7 @@ import shutil
 import tempfile
 
 from pubg_ai.storage_alerts import DEFAULT_MINIMUM_FREE_BYTES
+from pubg_ai.storage_contract import storage_root_contract_conflicts
 from pubg_ai.time_utils import isoformat_kst
 
 
@@ -34,6 +35,7 @@ class StorageSettings:
     raw_data_dir: Path
     replay_data_dir: Path
     backup_data_dir: Path | None = None
+    quarantine_data_dir: Path | None = None
     raw_compression: str = "gzip"
     updated_at: str | None = None
 
@@ -46,6 +48,8 @@ class StorageSettings:
         }
         if self.backup_data_dir is not None:
             record["backup_data_dir"] = str(self.backup_data_dir)
+        if self.quarantine_data_dir is not None:
+            record["quarantine_data_dir"] = str(self.quarantine_data_dir)
         return record
 
 
@@ -201,10 +205,13 @@ class LocalSettingsStore:
         raw_value = storage.get("raw_data_dir")
         replay_value = storage.get("replay_data_dir")
         backup_value = storage.get("backup_data_dir")
+        quarantine_value = storage.get("quarantine_data_dir")
         if not isinstance(raw_value, str) or not isinstance(replay_value, str):
             return None
         if backup_value is not None and not isinstance(backup_value, str):
             raise LocalSettingsError("backup_data_dir must be a path string.")
+        if quarantine_value is not None and not isinstance(quarantine_value, str):
+            raise LocalSettingsError("quarantine_data_dir must be a path string.")
 
         compression = storage.get("raw_compression", "gzip")
         if compression not in {"gzip", "none"}:
@@ -220,6 +227,11 @@ class LocalSettingsStore:
             backup_data_dir=(
                 _resolve_config_path(backup_value, self.base_dir)
                 if isinstance(backup_value, str) and backup_value.strip()
+                else None
+            ),
+            quarantine_data_dir=(
+                _resolve_config_path(quarantine_value, self.base_dir)
+                if isinstance(quarantine_value, str) and quarantine_value.strip()
                 else None
             ),
             raw_compression=compression,
@@ -276,6 +288,7 @@ class LocalSettingsStore:
         raw_data_dir: str | Path,
         replay_data_dir: str | Path,
         backup_data_dir: str | Path | None = None,
+        quarantine_data_dir: str | Path | None = None,
         raw_compression: str = "gzip",
         create_dirs: bool = True,
         require_writable: bool = True,
@@ -291,9 +304,23 @@ class LocalSettingsStore:
             if backup_data_dir is not None
             else current.backup_data_dir if current is not None else None
         )
-        paths = [raw_path, replay_path]
+        quarantine_path = (
+            _resolve_config_path(quarantine_data_dir, self.base_dir)
+            if quarantine_data_dir is not None
+            else current.quarantine_data_dir if current is not None else None
+        )
+        named_paths = [
+            ("raw_data_dir", raw_path),
+            ("replay_data_dir", replay_path),
+        ]
         if backup_path is not None:
-            paths.append(backup_path)
+            named_paths.append(("backup_data_dir", backup_path))
+        if quarantine_path is not None:
+            named_paths.append(("quarantine_data_dir", quarantine_path))
+        conflicts = storage_root_contract_conflicts(named_paths)
+        if conflicts:
+            raise LocalSettingsError("; ".join(conflicts))
+        paths = [path for _, path in named_paths]
 
         if require_writable:
             statuses = [check_storage_path(path, create=create_dirs) for path in paths]
@@ -312,6 +339,7 @@ class LocalSettingsStore:
             raw_data_dir=raw_path,
             replay_data_dir=replay_path,
             backup_data_dir=backup_path,
+            quarantine_data_dir=quarantine_path,
             raw_compression=raw_compression,
             updated_at=isoformat_kst(),
         )
@@ -414,6 +442,10 @@ class LocalSettingsStore:
         }
         if settings.backup_data_dir is not None:
             statuses["backup_data_dir"] = check_storage_path(settings.backup_data_dir)
+        if settings.quarantine_data_dir is not None:
+            statuses["quarantine_data_dir"] = check_storage_path(
+                settings.quarantine_data_dir
+            )
         return statuses
 
     def _write_settings(self, payload: dict[str, Any]) -> None:

@@ -385,16 +385,24 @@ The current Discord bot slice is intentionally small and reuses the same local M
 - Dry-run file candidates are player-owned replay artifacts only. Raw match/telemetry files and metadata remain
   protected as shared evidence. Plan generation inserts one audit row and exposes no Discord command or execution
   route; backup evidence and an executor are explicitly absent blockers.
-- The localhost manager can append evidence for MySQL backup, replay backup, quarantine capacity, and checksum/restore
-  attestation. Evidence corrections never overwrite earlier records and are bound to the latest plan fingerprint.
+- Builder-generated MySQL/replay artifact evidence is append-only and bound to the latest plan fingerprint.
+  Quarantine-capacity evidence can only come from a passed read-only quarantine plan, and checksum/restore integrity
+  evidence can only come from a passed isolated restore rehearsal. Manual capacity and integrity attestations are
+  rejected; artifact corrections never overwrite earlier records.
 - The opt-in localhost builder requires exact plan-fingerprint confirmation text. It exports only whitelisted target
   rows to typed JSONL in `mysql-target-backup.zip`, copies verified player-owned files to
   `replay-artifact-backup.zip`, calculates checksums, publishes through a temporary directory, and atomically appends
   the two artifact evidence rows. It does not modify source rows/files or expose a Discord counterpart.
-- The non-executing rehearsal rechecks the live source fingerprint plus evidence/file metadata and current free space,
-  then appends a passed/blocked result. The rehearsal itself does not open backups, calculate checksums, run a restore,
-  move replay artifacts, execute SQL mutations, or expose a Discord counterpart. New evidence makes prior rehearsal
-  results stale, and missing capacity/restore evidence plus `executor_not_implemented` remain blockers.
+- The read-only quarantine planner requires exact latest-plan confirmation and a pre-existing, non-symlink,
+  pairwise-disjoint quarantine root. It verifies source identity/size/SHA-256, deterministic target absence, free
+  capacity plus reserve, and future postcondition/rollback/crash-recovery contracts. A pass atomically appends bound
+  capacity evidence and audit; a block appends audit only. It creates no directory or journal and performs no move,
+  copy, removal, restore, or source-database mutation.
+- The non-executing rehearsal rechecks the live source fingerprint plus evidence/file metadata, planner-bound capacity
+  evidence, and current free space, then appends a passed/blocked result. The rehearsal itself does not open backups,
+  calculate checksums, run a restore, move replay artifacts, execute SQL mutations, or expose a Discord counterpart.
+  New evidence makes prior rehearsal results stale, and stale or missing capacity/integrity evidence plus
+  `executor_not_implemented` remain blockers.
 - The bot reloads local Discord permission settings before every gated command, so local web/CLI changes take effect
   without a bot restart. Global-admin membership remains editable only from the local web UI or CLI.
 - The local web UI and CLI can now add/revoke user command-group grants and add/remove global Discord admins without

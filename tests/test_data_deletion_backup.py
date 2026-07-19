@@ -101,7 +101,7 @@ class DataDeletionBackupTests(unittest.TestCase):
             preview_service=MagicMock(),
         )
 
-        with self.assertRaisesRegex(DataDeletionBackupError, "only by a passed isolated restore rehearsal"):
+        with self.assertRaisesRegex(DataDeletionBackupError, "verified local workflows"):
             service.record_evidence(
                 _request(),
                 dry_run_plan_id=plan.id,
@@ -111,6 +111,33 @@ class DataDeletionBackupTests(unittest.TestCase):
                     "restore_test_passed": True,
                     "restore_tested_at_kst": "2026-07-12T12:07:00+09:00",
                     "verified_at_kst": "2026-07-12T12:08:00+09:00",
+                },
+                actor_id="local-owner",
+            )
+
+        self.assertEqual(connection.begin_count, 0)
+        self.assertEqual(connection.executed, [])
+
+    def test_manual_quarantine_capacity_evidence_is_rejected_before_transaction(self) -> None:
+        plan = _plan()
+        connection = ScriptedConnection([])
+        dry_run_service = MagicMock()
+        dry_run_service.list_plans.return_value = [plan]
+        service = DataDeletionBackupService(
+            connection,
+            dry_run_service=dry_run_service,
+            preview_service=MagicMock(),
+        )
+
+        with self.assertRaisesRegex(DataDeletionBackupError, "verified local workflows"):
+            service.record_evidence(
+                _request(),
+                dry_run_plan_id=plan.id,
+                prerequisite_key="quarantine_capacity_check",
+                evidence={
+                    "checked_path": "D:/BackUP/replay",
+                    "available_bytes": 100_000_000,
+                    "verified_at_kst": "2026-07-12T12:06:00+09:00",
                 },
                 actor_id="local-owner",
             )
@@ -679,8 +706,15 @@ def _evidence_set(plan: DataDeletionDryRunPlan) -> dict[str, DataDeletionBackupE
         },
         "quarantine_capacity_check": {
             "checked_path": "D:/BackUP/replay",
-            "available_bytes": 1000,
+            "available_bytes": 100_000_000,
             "verified_at_kst": "2026-07-12T12:06:00+09:00",
+            "destination_contract_fingerprint_sha256": "f" * 64,
+            "quarantine_planning_result_fingerprint_sha256": "9" * 64,
+            "candidate_file_count": 2,
+            "candidate_file_bytes": 30,
+            "safety_reserve_bytes": 64 * 1024 * 1024,
+            "required_free_bytes": 64 * 1024 * 1024 + 30,
+            "source_disjoint_verified": True,
         },
     }
     records = {
@@ -751,7 +785,7 @@ def _path_probe(path: str) -> dict[str, object]:
         return {"path": path, "absolute": True, "exists": True, "is_file": True, "is_dir": False, "size_bytes": 100, "free_bytes": None, "error": None}
     if path.endswith("replay-plan-901.zip"):
         return {"path": path, "absolute": True, "exists": True, "is_file": True, "is_dir": False, "size_bytes": 80, "free_bytes": None, "error": None}
-    return {"path": path, "absolute": True, "exists": True, "is_file": False, "is_dir": True, "size_bytes": None, "free_bytes": 1000, "error": None}
+    return {"path": path, "absolute": True, "exists": True, "is_file": False, "is_dir": True, "size_bytes": None, "free_bytes": 100_000_000, "error": None}
 
 
 def _evidence_row(

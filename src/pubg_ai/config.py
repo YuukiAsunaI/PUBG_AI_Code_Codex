@@ -17,6 +17,7 @@ class AppConfig:
     raw_data_dir: Path
     replay_data_dir: Path
     backup_data_dir: Path = Path("./data/backups")
+    quarantine_data_dir: Path = Path("./data/quarantine")
     local_web_base_url: str | None = None
     raw_compression: str = "gzip"
     allow_storage_fallback: bool = False
@@ -42,6 +43,10 @@ class AppConfig:
             values.get("PUBG_BACKUP_DATA_DIR", "./data/backups"),
             base,
         )
+        quarantine_dir = _config_path(
+            values.get("PUBG_QUARANTINE_DATA_DIR", "./data/quarantine"),
+            base,
+        )
 
         compression = values.get("PUBG_RAW_COMPRESSION", "gzip").strip().lower()
         if compression not in {"gzip", "none"}:
@@ -51,6 +56,7 @@ class AppConfig:
             raw_data_dir=raw_dir,
             replay_data_dir=replay_dir,
             backup_data_dir=backup_dir,
+            quarantine_data_dir=quarantine_dir,
             local_web_base_url=_normalize_base_url(values.get("PUBG_LOCAL_WEB_BASE_URL")),
             raw_compression=compression,
             allow_storage_fallback=_env_bool(
@@ -112,6 +118,11 @@ class AppConfig:
                 storage_settings.backup_data_dir
                 if storage_settings and storage_settings.backup_data_dir
                 else config.backup_data_dir
+            ),
+            quarantine_data_dir=(
+                storage_settings.quarantine_data_dir
+                if storage_settings and storage_settings.quarantine_data_dir
+                else config.quarantine_data_dir
             ),
             local_web_base_url=web_settings.local_web_base_url if web_settings else config.local_web_base_url,
             raw_compression=storage_settings.raw_compression if storage_settings else config.raw_compression,

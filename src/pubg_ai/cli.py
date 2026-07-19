@@ -626,6 +626,8 @@ def _safe_config_status(config: RuntimeConfig) -> dict[str, Any]:
     return {
         "raw_data_dir": str(config.app.raw_data_dir),
         "replay_data_dir": str(config.app.replay_data_dir),
+        "backup_data_dir": str(config.app.backup_data_dir),
+        "quarantine_data_dir": str(config.app.quarantine_data_dir),
         "local_web_base_url": config.app.local_web_base_url,
         "raw_compression": config.app.raw_compression,
         "collector": {

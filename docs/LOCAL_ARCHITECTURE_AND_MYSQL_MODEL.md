@@ -177,6 +177,8 @@ unchanged so newly added PUBG content remains visible.
 - Store large match and telemetry JSON payloads as compressed files under `PUBG_RAW_DATA_DIR`.
 - Store generated 2D replay artifacts and static map images under `PUBG_REPLAY_DATA_DIR`.
 - Store opt-in deletion backup ZIPs and their build manifest under a non-overlapping `PUBG_BACKUP_DATA_DIR`.
+- Configure a pre-existing, non-symlink, pairwise-disjoint `PUBG_QUARANTINE_DATA_DIR` for read-only deletion
+  quarantine planning; the planner must not create or mutate that root.
 - Store only metadata for large raw files in MySQL: root key, relative path, compression, file size, `sha256`,
   source URL, fetched timestamp, and parser version.
 - Do not rely on telemetry JSON to contain `match_id`. The telemetry parser receives `match_id`, shard, and asset URL
@@ -517,9 +519,13 @@ Completed slices:
      artifact revalidation, row round trips through a separate connection's random temporary tables, replay round trips
      through a random backup-root scratch directory, mandatory cleanup, and atomic bound integrity evidence on pass.
      Production rows/files remain unchanged and production restore, quarantine, deletion, and execution routes stay absent.
+109. Schema version 16 adds immutable read-only quarantine-planning runs and a fourth configurable storage root. The
+     planner revalidates source identity/size/SHA-256, deterministic target absence, pairwise root separation, capacity
+     plus reserve, and future recovery contracts. Passed runs atomically append bound capacity evidence and audit;
+     blocked runs append audit only. No directory, journal, file, or source-row mutation is implemented.
 
 Next slice:
 
-1. Add a configurable source-disjoint quarantine destination contract and a read-only capacity/postcondition planner.
-   Keep actual quarantine moves, database deletion, production restore, and every execution route disabled until the
-   destination, rollback, shared-data preservation, and crash-recovery contracts are independently verified.
+1. Build an isolated disposable quarantine rehearsal that copies fixtures into a scratch workspace and validates
+   postconditions, rollback, and interrupted-run recovery without moving production sources. Keep actual quarantine
+   moves, database deletion, production restore, and every execution route disabled.

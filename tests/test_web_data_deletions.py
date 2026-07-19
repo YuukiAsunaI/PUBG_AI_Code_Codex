@@ -230,6 +230,51 @@ class WebDataDeletionTests(unittest.TestCase):
             "execution_ready": False,
         }
         restore_service.run.return_value = restore_rehearsal
+        quarantine_confirmation = (
+            "RUN READ-ONLY QUARANTINE PLAN REQUEST 17 PLAN 901 "
+            + "b" * 64
+            + " DESTINATION "
+            + "f" * 64
+        )
+        quarantine_planning = MagicMock()
+        quarantine_planning.to_record.return_value = {
+            "id": 1501,
+            "request_id": 17,
+            "dry_run_plan_id": 901,
+            "result_status": "passed",
+            "capacity_evidence_id": 1601,
+            "directories_created": False,
+            "files_copied": False,
+            "files_moved": False,
+            "source_files_removed": False,
+            "database_rows_modified": False,
+            "quarantine_performed": False,
+            "deletion_performed": False,
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+        quarantine_planner_service = MagicMock()
+        quarantine_planner_service.planning_state.return_value = {
+            "request_id": 17,
+            "request_status": "pending",
+            "latest_plan_id": 901,
+            "quarantine_root": "E:/PUBG_Quarantine",
+            "confirmation_text": quarantine_confirmation,
+            "planning_allowed": False,
+            "planning_blockers": ["request status must be approved, not pending"],
+            "latest_planning_run": None,
+            "planning_history": [],
+            "directories_created": False,
+            "files_copied": False,
+            "files_moved": False,
+            "source_files_removed": False,
+            "database_rows_modified": False,
+            "quarantine_performed": False,
+            "deletion_performed": False,
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+        quarantine_planner_service.run.return_value = quarantine_planning
         connections: list[FakeConnection] = []
 
         def connection_factory(*_: object, **__: object) -> FakeConnection:
@@ -255,6 +300,10 @@ class WebDataDeletionTests(unittest.TestCase):
             patch(
                 "pubg_ai.web.app.DataDeletionBackupRestoreRehearsalService",
                 return_value=restore_service,
+            ),
+            patch(
+                "pubg_ai.web.app.DataDeletionQuarantinePlannerService",
+                return_value=quarantine_planner_service,
             ),
         ):
             client = TestClient(create_app())
@@ -345,6 +394,23 @@ class WebDataDeletionTests(unittest.TestCase):
                     "actor_id": "local-owner",
                 },
             )
+            quarantine_planning_response = client.post(
+                "/data-deletions/17/quarantine-plans",
+                json={
+                    "dry_run_plan_id": 901,
+                    "confirmation_text": quarantine_confirmation,
+                    "actor_id": "local-owner",
+                    "note": "read-only source and destination checks",
+                },
+            )
+            invalid_quarantine_planning_response = client.post(
+                "/data-deletions/17/quarantine-plans",
+                json={
+                    "dry_run_plan_id": 0,
+                    "confirmation_text": "invalid",
+                    "actor_id": "local-owner",
+                },
+            )
             backup_evidence_response = client.post(
                 "/data-deletions/17/backup-evidence",
                 json={
@@ -411,6 +477,10 @@ class WebDataDeletionTests(unittest.TestCase):
             "/data-deletions/17/backup-restore-rehearsals",
         )
         self.assertEqual(
+            detail_response.json()["quarantine_planning_url"],
+            "/data-deletions/17/quarantine-plans",
+        )
+        self.assertEqual(
             detail_response.json()["backup_evidence_url"],
             "/data-deletions/17/backup-evidence",
         )
@@ -462,6 +532,10 @@ class WebDataDeletionTests(unittest.TestCase):
             backup_state_response.json()["backup_restore_rehearsal_state"]
             ["restore_rehearsal_allowed"]
         )
+        self.assertFalse(
+            backup_state_response.json()["quarantine_planner_state"]
+            ["planning_allowed"]
+        )
         self.assertEqual(backup_build_response.status_code, 200)
         self.assertEqual(backup_build_response.json()["backup_build"]["build_id"], "build-1")
         self.assertFalse(backup_build_response.json()["execution_enabled"])
@@ -487,6 +561,14 @@ class WebDataDeletionTests(unittest.TestCase):
         self.assertFalse(restore_response.json()["execution_enabled"])
         self.assertFalse(restore_response.json()["execution_ready"])
         self.assertEqual(invalid_restore_response.status_code, 422)
+        self.assertEqual(quarantine_planning_response.status_code, 200)
+        self.assertEqual(
+            quarantine_planning_response.json()["quarantine_planning"]["id"],
+            1501,
+        )
+        self.assertFalse(quarantine_planning_response.json()["execution_enabled"])
+        self.assertFalse(quarantine_planning_response.json()["execution_ready"])
+        self.assertEqual(invalid_quarantine_planning_response.status_code, 422)
         self.assertEqual(backup_evidence_response.status_code, 200)
         self.assertEqual(backup_evidence_response.json()["backup_evidence"]["id"], 801)
         self.assertFalse(backup_evidence_response.json()["execution_enabled"])
@@ -550,6 +632,14 @@ class WebDataDeletionTests(unittest.TestCase):
             confirmation_text=restore_confirmation,
             actor_id="local-owner",
             note="temporary table and file restore",
+        )
+        quarantine_planner_service.planning_state.assert_called_once_with(pending)
+        quarantine_planner_service.run.assert_called_once_with(
+            pending,
+            dry_run_plan_id=901,
+            confirmation_text=quarantine_confirmation,
+            actor_id="local-owner",
+            note="read-only source and destination checks",
         )
         backup_service.record_evidence.assert_called_once_with(
             pending,

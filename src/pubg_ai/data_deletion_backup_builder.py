@@ -29,6 +29,7 @@ from pubg_ai.data_deletion_preview import MAX_PREVIEW_FILE_LIMIT
 from pubg_ai.data_deletion_requests import DataDeletionRequest
 from pubg_ai.local_settings import check_storage_path
 from pubg_ai.replay_storage import ReplayArtifactStore, ReplayStorageError
+from pubg_ai.storage_contract import storage_paths_overlap
 from pubg_ai.time_utils import now_kst, to_kst
 
 
@@ -885,13 +886,7 @@ def _plan_metric(plan: DataDeletionDryRunPlan, key: str) -> int:
 
 
 def _paths_overlap(first: Path, second: Path) -> bool:
-    first_text = os.path.normcase(str(first.resolve(strict=False)))
-    second_text = os.path.normcase(str(second.resolve(strict=False)))
-    try:
-        common = os.path.normcase(os.path.commonpath((first_text, second_text)))
-    except ValueError:
-        return False
-    return common in {first_text, second_text}
+    return storage_paths_overlap(first, second)
 
 
 def _sha256_file(path: Path) -> str:

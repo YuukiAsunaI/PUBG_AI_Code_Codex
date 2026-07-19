@@ -194,8 +194,9 @@ Implemented behavior:
   explicit exclusions. Backup creation, capacity, checksum, and restore-rehearsal evidence are prerequisites, while
   `executor_not_implemented` and `backup_evidence_not_recorded` keep every plan non-ready and non-executable.
 - Backup evidence is append-only and bound to the latest dry-run plan fingerprint. The four keys cover MySQL artifacts,
-  replay artifacts, quarantine capacity, and checksum/restore integrity. Artifact evidence comes from the builder;
-  integrity evidence can only come from a passed isolated restore rehearsal. Corrections append new rows.
+  replay artifacts, quarantine capacity, and checksum/restore integrity. Artifact evidence comes from the builder,
+  capacity evidence only from a passed read-only quarantine plan, and integrity evidence only from a passed isolated
+  restore rehearsal. Manual capacity and integrity attestation are rejected; corrections append new artifact rows.
 - `PUBG_BACKUP_DATA_DIR` is a third source-disjoint local root. The localhost-only builder requires exact latest-plan
   confirmation text, exports whitelisted candidate rows as typed JSONL, copies only verified player-owned replay files,
   calculates archive/internal SHA-256 values, and atomically publishes a manifest-bound build directory. One evidence
@@ -214,9 +215,18 @@ Implemented behavior:
 - A passed isolated restore atomically appends its audit row and `backup_integrity_verification` evidence bound to the
   build ID, manifest SHA-256, verification ID/result fingerprint, artifact-evidence-set fingerprint, and restore-result
   fingerprint. Manual integrity evidence is rejected. New artifact evidence makes an older restore attestation stale.
-- The earlier non-executing rehearsal still rechecks live deletion impact, evidence times, artifact metadata, and
-  quarantine free space without opening bytes or changing targets. `executor_not_implemented` remains even after every
-  available rehearsal passes; production restore, quarantine, and deletion are absent.
+- `PUBG_QUARANTINE_DATA_DIR` is a fourth configurable root. It must already exist, be absolute, non-symlink,
+  source-disjoint, and pairwise non-overlapping with raw, replay, and backup roots. The planner never creates it.
+- The read-only quarantine planner requires exact confirmation bound to the latest plan. It verifies every source's
+  identity, declared size, and SHA-256; rejects existing deterministic destinations; checks free space with a
+  `max(64 MiB, 5%)` reserve; and records future postconditions, rollback steps, and crash-recovery journal contracts.
+- A passed planner run appends `quarantine_capacity_check` evidence and its immutable audit row atomically. A blocked
+  run appends only its audit row. Neither outcome creates directories or journals, copies or moves bytes, removes
+  source files, restores data, or mutates deletion targets.
+- The earlier non-executing rehearsal still rechecks live deletion impact, evidence times, artifact metadata, bound
+  planner-generated capacity evidence, and current quarantine free space without changing targets.
+  `executor_not_implemented` remains even after every available rehearsal passes; production restore, actual
+  quarantine moves, and deletion are absent.
 
 ## Duplicate Match Handling
 

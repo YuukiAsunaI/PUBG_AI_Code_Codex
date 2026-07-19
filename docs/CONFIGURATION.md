@@ -24,7 +24,7 @@ When the real storage drive is ready, the local management program should save t
 
 ## Local Program Storage Settings
 
-The local management program must be able to change all three storage roots from a settings screen. The app should write
+The local management program must be able to change all four storage roots from a settings screen. The app should write
 those choices to this JSON file:
 
 ```env
@@ -39,6 +39,7 @@ Recommended JSON shape:
     "raw_data_dir": "E:\\PUBG_AI_Data\\raw",
     "replay_data_dir": "E:\\PUBG_AI_Data\\replays",
     "backup_data_dir": "D:\\BackUP\\deletion-backups",
+    "quarantine_data_dir": "E:\\PUBG_Quarantine",
     "raw_compression": "gzip",
     "updated_at": "2026-06-27T21:00:00+09:00"
   },
@@ -118,7 +119,10 @@ metadata and current capacity without opening backup bytes or performing a resto
 immutable row and makes an older passed rehearsal stale. Schema version 14 adds `data_deletion_backup_verification_runs`; each result is bound to the
 builder-generated artifact-evidence IDs and evidence-set fingerprint. Schema version 15 adds
 `data_deletion_backup_restore_rehearsal_runs`; passed rows reference the selected verification and the automatically
-created integrity-evidence row. Run `python -m pubg_ai.cli init-db` after updating so the nine deletion workflow tables
+created integrity-evidence row. Schema version 16 adds `data_deletion_quarantine_planning_runs`. Its read-only planner
+requires exact confirmation, revalidates source bytes and deterministic target absence, and checks the configured
+quarantine root with a capacity reserve. A passed run creates planner-bound capacity evidence; manual capacity or
+integrity evidence is rejected. Run `python -m pubg_ai.cli init-db` after updating so the ten deletion workflow tables
 are created. No deletion executor or execution endpoint is enabled.
 
 The opt-in builder uses `PUBG_BACKUP_DATA_DIR` (default `./data/backups`). The backup root must be writable and must not
@@ -138,11 +142,19 @@ full-fingerprint confirmation text. It opens a second MySQL connection, creates 
 foreign keys or live-schema column drift, inserts typed rows only into those temporary names, and compares normalized
 row-set fingerprints after readback. Replay bytes are restored and rehashed in a random temporary directory directly
 under `PUBG_BACKUP_DATA_DIR`; free space is checked first and cleanup is mandatory. Only a passed run creates bound
-`backup_integrity_verification` evidence. Quarantine-capacity evidence remains separate, and production restore,
-quarantine, and deletion remain unavailable.
+`backup_integrity_verification` evidence.
 
-1. Built-in defaults: `./data/raw`, `./data/replays`, `./data/backups`
-2. `.env` values: `PUBG_RAW_DATA_DIR`, `PUBG_REPLAY_DATA_DIR`, `PUBG_BACKUP_DATA_DIR`
+The read-only quarantine planner uses `PUBG_QUARANTINE_DATA_DIR` (default `./data/quarantine`). The directory must
+already exist, be absolute, not be a symlink or filesystem root, and be pairwise disjoint from raw, replay, and backup
+roots. `POST /data-deletions/{request_id}/quarantine-plans` requires the exact fingerprint-bound confirmation beginning
+with `RUN READ-ONLY QUARANTINE PLAN`. It checks source identity/size/SHA-256, deterministic target absence, capacity
+with a `max(64 MiB, 5%)` reserve, and future rollback/crash-recovery contracts. It never creates the root or journal and
+never copies, moves, deletes, restores, or changes source rows/files. Production restore, actual quarantine moves,
+and deletion remain unavailable.
+
+1. Built-in defaults: `./data/raw`, `./data/replays`, `./data/backups`, `./data/quarantine`
+2. `.env` values: `PUBG_RAW_DATA_DIR`, `PUBG_REPLAY_DATA_DIR`, `PUBG_BACKUP_DATA_DIR`,
+   `PUBG_QUARANTINE_DATA_DIR`
 3. Local program values in `PUBG_LOCAL_SETTINGS_FILE`
 
 This means `.env` is still useful for first boot, but the local program can override the paths after the user changes
@@ -153,6 +165,7 @@ The current settings screen provides:
 - match/telemetry raw-data path editor
 - 2D replay artifact path editor
 - opt-in deletion backup path editor
+- read-only deletion quarantine planning path editor
 - raw compression selector
 - polling interval selector from 1 to 5 minutes
 - collection cycle player limit selector up to 100
