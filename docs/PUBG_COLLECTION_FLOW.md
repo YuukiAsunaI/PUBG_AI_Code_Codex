@@ -419,6 +419,11 @@ The current Discord bot slice is intentionally small and reuses the same local M
   validates the full chain and safety contract on every load/export, and appends one immutable audit row only when the
   exact input-bound confirmation is supplied. It creates no evidence or authorization, promotes no readiness, opens or
   changes no production source, and exposes no deletion execution route.
+- The exported-packet verification stage reads a selected JSON file into memory with a 2 MiB limit, rejects non-strict
+  JSON, canonicalizes it, and recomputes hashes, fixed shape, metrics, checks, scenarios, and safety invariants. Offline
+  mode establishes internal consistency without MySQL. The default database mode executes only parameterized `SELECT`
+  queries to require the exact immutable packet row and latest current chain. It records nothing and cannot authorize,
+  promote readiness, restore, quarantine, delete, or execute.
 - The non-executing rehearsal rechecks the live source fingerprint plus evidence/file metadata, planner-bound capacity
   evidence, and current free space, then appends a passed/blocked result. The rehearsal itself does not open backups,
   calculate checksums, run a restore, move replay artifacts, execute SQL mutations, or expose a Discord counterpart.

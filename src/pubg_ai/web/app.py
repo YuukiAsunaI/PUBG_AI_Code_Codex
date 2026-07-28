@@ -54,6 +54,11 @@ from pubg_ai.data_deletion_review_packet import (
     DataDeletionReviewPacketService,
     canonical_review_packet_bytes,
 )
+from pubg_ai.data_deletion_review_packet_verifier import (
+    MAX_EXPORTED_REVIEW_PACKET_BYTES,
+    ExportedReviewPacketVerifier,
+    ExportedReviewPacketVerifierError,
+)
 from pubg_ai.data_deletion_quarantine_planner import (
     DataDeletionQuarantinePlannerError,
     DataDeletionQuarantinePlannerService,
@@ -299,6 +304,14 @@ class DataDeletionReviewPacketCreateRequest(BaseModel):
     confirmation_text: str = Field(min_length=1, max_length=500)
     actor_id: str = Field(default="local-manager", min_length=1, max_length=191)
     note: str | None = Field(default=None, max_length=1000)
+
+
+class ExportedReviewPacketVerifyRequest(BaseModel):
+    packet_text: str = Field(
+        min_length=2,
+        max_length=MAX_EXPORTED_REVIEW_PACKET_BYTES,
+    )
+    cross_check_database: bool = True
 
 
 class DataDeletionRehearsalCreateRequest(BaseModel):
@@ -1710,6 +1723,44 @@ def create_app() -> Any:
             "execution_ready": False,
         }
 
+    @app.post("/data-deletion-review-packets/verify")
+    def verify_exported_data_deletion_review_packet(
+        verify_request: ExportedReviewPacketVerifyRequest,
+        response: Response,
+    ) -> dict[str, Any]:
+        verification_headers = {
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        }
+        response.headers.update(verification_headers)
+        connection = None
+        try:
+            if verify_request.cross_check_database:
+                connection = connect_mysql(current_config().database)
+            verification = ExportedReviewPacketVerifier(connection).verify_text(
+                verify_request.packet_text,
+                cross_check_database=verify_request.cross_check_database,
+            )
+        except ExportedReviewPacketVerifierError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=str(exc),
+                headers=verification_headers,
+            ) from exc
+        finally:
+            if connection is not None:
+                connection.close()
+        return {
+            "verification": verification.to_record(),
+            "uploaded_text_persisted": False,
+            "records_created": False,
+            "database_writes_performed": False,
+            "authorization_granted": False,
+            "readiness_promoted": False,
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+
     @app.post("/data-deletions/{request_id}/review-packets")
     def generate_data_deletion_review_packet(
         request_id: int,
@@ -2804,6 +2855,11 @@ _INDEX_HTML = """<!doctype html>
     .backup-evidence-form .checkbox-field { display: inline-flex; align-items: center; gap: 8px; min-height: 38px; }
     .backup-evidence-form .checkbox-field input { width: auto; min-height: 0; }
     .backup-evidence-form button { align-self: end; }
+    .review-packet-verifier-form { grid-template-columns: minmax(0, 1fr) auto auto; margin-top: 12px; }
+    .review-packet-verifier-form .checkbox-field { display: inline-flex; align-items: center; gap: 8px; min-height: 38px; }
+    .review-packet-verifier-form .checkbox-field input { width: auto; min-height: 0; }
+    .review-packet-verifier-result { min-width: 0; max-width: 100%; margin-top: 12px; }
+    .review-packet-verifier-result .status, .review-packet-verifier-result code { overflow-wrap: anywhere; word-break: break-word; }
     .confirmation-input-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
     .player-controls { display: grid; grid-template-columns: minmax(220px, 1fr) 110px auto auto; gap: 10px; align-items: end; }
     .toggle-row { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; color: var(--muted); font-size: 13px; }
@@ -2887,6 +2943,7 @@ _INDEX_HTML = """<!doctype html>
       .player-controls { grid-template-columns: 1fr; }
       .confirmation-input-row { grid-template-columns: 1fr; }
       .backup-evidence-form { grid-template-columns: 1fr; }
+      .review-packet-verifier-form { grid-template-columns: 1fr; }
       .timeline-range { grid-template-columns: 1fr; }
       .replay-detail-layout { grid-template-columns: 1fr; }
       header { align-items: flex-start; flex-direction: column; }
@@ -3220,6 +3277,23 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="dataDeletionStatus" style="margin: 10px 0;">
         Approval records authorization only. Deletion execution is disabled.
       </div>
+      <div class="backup-builder-contract" id="exportedReviewPacketVerifier">
+        <h3>Exported review packet verifier</h3>
+        <div class="status">Strict JSON and canonical hashes: checked / uploaded text persisted: no / authorization and execution: disabled</div>
+        <form class="review-packet-verifier-form" id="exportedReviewPacketVerifierForm">
+          <label>Packet JSON
+            <input name="packet_file" type="file" accept="application/json,.json" required>
+          </label>
+          <label class="checkbox-field">
+            <input name="cross_check_database" type="checkbox" checked>
+            Current MySQL chain
+          </label>
+          <button class="secondary" type="submit">Verify packet</button>
+        </form>
+        <div class="status" id="exportedReviewPacketVerifierStatus">No packet selected.</div>
+        <div class="review-packet-verifier-result" id="exportedReviewPacketVerifierResult"></div>
+      </div>
+      <div class="table-scroll">
       <table class="deletion-request-table">
         <thead>
           <tr>
@@ -3234,6 +3308,7 @@ _INDEX_HTML = """<!doctype html>
         </thead>
         <tbody id="dataDeletionBody"></tbody>
       </table>
+      </div>
       <div class="detail-panel" id="dataDeletionDetail">
         Select a request to inspect its audit history and read-only impact preview.
       </div>
@@ -3604,6 +3679,9 @@ _INDEX_HTML = """<!doctype html>
     const dataDeletionBody = document.querySelector("#dataDeletionBody");
     const dataDeletionStatus = document.querySelector("#dataDeletionStatus");
     const dataDeletionDetail = document.querySelector("#dataDeletionDetail");
+    const exportedReviewPacketVerifierForm = document.querySelector("#exportedReviewPacketVerifierForm");
+    const exportedReviewPacketVerifierStatus = document.querySelector("#exportedReviewPacketVerifierStatus");
+    const exportedReviewPacketVerifierResult = document.querySelector("#exportedReviewPacketVerifierResult");
     const profileBody = document.querySelector("#profileBody");
     const weaponBody = document.querySelector("#weaponBody");
     const recommendationBody = document.querySelector("#recommendationBody");
@@ -4564,6 +4642,59 @@ _INDEX_HTML = """<!doctype html>
         );
       }
       return buttons.join("");
+    }
+
+    function renderExportedReviewPacketVerification(verification) {
+      const checks = verification?.checks || [];
+      const checkRows = checks.map((check) => `
+        <tr>
+          <td>${escapeHtml(check.key)}</td>
+          <td>${escapeHtml(check.status)}</td>
+          <td>${escapeHtml(check.message)}</td>
+        </tr>`).join("") || `<tr><td colspan="3">No verification checks returned.</td></tr>`;
+      return `
+        <div class="grid">
+          <div class="kv"><span>Verification</span><strong>${escapeHtml(verification?.verification_status || "-")}</strong></div>
+          <div class="kv"><span>Assessment</span><strong>${escapeHtml(verification?.review_status || "-")}</strong></div>
+          <div class="kv"><span>Request / plan / matrix</span><strong>#${escapeHtml(verification?.request_id || "-")} / #${escapeHtml(verification?.dry_run_plan_id || "-")} / #${escapeHtml(verification?.fault_matrix_run_id || "-")}</strong></div>
+          <div class="kv"><span>Local packet row</span><strong>${verification?.matched_packet_id ? `#${escapeHtml(verification.matched_packet_id)}` : "not matched"}</strong></div>
+        </div>
+        <div class="status">Canonical bytes: ${formatBytes(Number(verification?.canonical_export_size_bytes || 0))} / SHA-256: <code>${escapeHtml(verification?.canonical_export_sha256 || "-")}</code> / DB current: ${verification?.database_cross_check_requested ? (verification.database_cross_check_passed ? "yes" : "no") : "not requested"} / records created: no</div>
+        <div class="table-scroll">
+          <table class="detail-table">
+            <thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>
+            <tbody>${checkRows}</tbody>
+          </table>
+        </div>`;
+    }
+
+    async function verifyExportedReviewPacket(formElement) {
+      const values = new FormData(formElement);
+      const fileInput = formElement.elements.packet_file;
+      const file = fileInput?.files?.[0] || null;
+      if (!file) throw new Error("Packet JSON file is required.");
+      if (file.size > 2097152) {
+        throw new Error("Packet JSON exceeds the 2 MiB verification limit.");
+      }
+      const packetText = await file.text();
+      if (new TextEncoder().encode(packetText).byteLength > 2097152) {
+        throw new Error("Packet JSON exceeds the 2 MiB verification limit.");
+      }
+      const button = formElement.querySelector("button[type='submit']");
+      if (button) button.disabled = true;
+      exportedReviewPacketVerifierResult.innerHTML = "";
+      exportedReviewPacketVerifierStatus.textContent = "Verifying packet in memory...";
+      try {
+        const payload = await postJson("/data-deletion-review-packets/verify", {
+          packet_text: packetText,
+          cross_check_database: values.get("cross_check_database") === "on",
+        });
+        const verification = payload.verification || {};
+        exportedReviewPacketVerifierResult.innerHTML = renderExportedReviewPacketVerification(verification);
+        exportedReviewPacketVerifierStatus.textContent = `${verification.verification_status || "unknown"}. Uploaded text was not persisted; authorization, readiness, and execution remain disabled.`;
+      } finally {
+        if (button) button.disabled = false;
+      }
     }
 
     async function loadDataDeletionRequests() {
@@ -8549,6 +8680,16 @@ _INDEX_HTML = """<!doctype html>
         : null;
       if (!select) return;
       updateBackupEvidenceFields(select.closest("form[data-backup-evidence-form]"));
+    });
+
+    exportedReviewPacketVerifierForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        await verifyExportedReviewPacket(exportedReviewPacketVerifierForm);
+      } catch (error) {
+        exportedReviewPacketVerifierResult.innerHTML = "";
+        exportedReviewPacketVerifierStatus.textContent = `Error: ${error.message}`;
+      }
     });
 
     dataDeletionFilterForm.addEventListener("submit", async (event) => {

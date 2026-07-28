@@ -247,6 +247,16 @@ Suggested command groups:
   authorization or readiness.
   Only one version 20 audit row is durable, protected by six `ON DELETE RESTRICT` foreign keys. No evidence, production
   mutation, source access, restore, quarantine movement, deletion, or executor is introduced.
+- Application version 21 accepts exported packet JSON as raw request text instead of multipart upload. This preserves
+  duplicate-key detection and avoids a multipart dependency or server-side temporary upload file. Both browser and
+  service enforce a 2 MiB UTF-8 limit, reject non-standard JSON and unsafe nesting, and rebuild canonical bytes only in
+  memory. Successful and rejected verification responses use `no-store`; packet text is never echoed by verifier
+  errors or persisted.
+- MySQL cross-checking is enabled by default in the local UI because a self-fingerprinted offline packet establishes
+  internal consistency, not provenance. Offline mode opens no connection. Database mode uses only parameterized
+  `SELECT` queries and requires exact equality with an immutable packet row plus the latest current input chain. It
+  performs no commit, rollback, DML, file access, audit append, authorization, readiness promotion, or execution. No
+  schema or configuration change is needed; schema version 20 remains current.
 - Deletion should be split into options:
   - delete registration only
   - delete normalized DB data

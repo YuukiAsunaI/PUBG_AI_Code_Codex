@@ -707,6 +707,22 @@ def expected_review_packet_confirmation(
     )
 
 
+def validate_exported_review_packet_payload(
+    payload: Mapping[str, Any],
+) -> DataDeletionReviewPacket:
+    """Validate an exported packet without trusting separately supplied row fields."""
+
+    return _review_packet_from_row(_exported_packet_as_synthetic_row(payload))
+
+
+def review_packet_from_database_row(
+    row: Mapping[str, Any],
+) -> DataDeletionReviewPacket:
+    """Validate and materialize one persisted review-packet audit row."""
+
+    return _review_packet_from_row(row)
+
+
 def canonical_review_packet_bytes(packet: DataDeletionReviewPacket) -> bytes:
     validated = _review_packet_from_row(_packet_as_row(packet))
     return (
@@ -1625,6 +1641,89 @@ def _review_packet_from_row(row: Mapping[str, Any]) -> DataDeletionReviewPacket:
         generation_note=generation_note,
         generated_at_kst=generated_at_kst,
     )
+
+
+def _exported_packet_as_synthetic_row(
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        raise DataDeletionReviewPacketError(
+            "exported review packet must be a JSON object."
+        )
+    packet_json = deepcopy(dict(payload))
+    input_contract = packet_json.get("input_contract")
+    assessment = packet_json.get("assessment")
+    metrics = packet_json.get("metrics")
+    generation = packet_json.get("generation")
+    input_contract = input_contract if isinstance(input_contract, dict) else {}
+    assessment = assessment if isinstance(assessment, dict) else {}
+    metrics = metrics if isinstance(metrics, dict) else {}
+    generation = generation if isinstance(generation, dict) else {}
+    return {
+        "id": 1,
+        "request_id": packet_json.get("request_id"),
+        "dry_run_plan_id": packet_json.get("dry_run_plan_id"),
+        "backup_verification_run_id": packet_json.get(
+            "backup_verification_run_id"
+        ),
+        "quarantine_planning_run_id": packet_json.get(
+            "quarantine_planning_run_id"
+        ),
+        "combined_rehearsal_run_id": packet_json.get(
+            "combined_rehearsal_run_id"
+        ),
+        "fault_matrix_run_id": packet_json.get("fault_matrix_run_id"),
+        "contract_version": packet_json.get("contract_version"),
+        "plan_fingerprint_sha256": input_contract.get(
+            "plan_fingerprint_sha256"
+        ),
+        "backup_verification_result_fingerprint_sha256": input_contract.get(
+            "backup_verification_result_fingerprint_sha256"
+        ),
+        "quarantine_planning_result_fingerprint_sha256": input_contract.get(
+            "quarantine_planning_result_fingerprint_sha256"
+        ),
+        "destination_contract_fingerprint_sha256": input_contract.get(
+            "destination_contract_fingerprint_sha256"
+        ),
+        "combined_rehearsal_result_fingerprint_sha256": input_contract.get(
+            "combined_rehearsal_result_fingerprint_sha256"
+        ),
+        "fault_matrix_result_fingerprint_sha256": input_contract.get(
+            "fault_matrix_result_fingerprint_sha256"
+        ),
+        "fault_scenario_contract_fingerprint_sha256": input_contract.get(
+            "fault_scenario_contract_fingerprint_sha256"
+        ),
+        "input_contract_fingerprint_sha256": packet_json.get(
+            "input_contract_fingerprint_sha256"
+        ),
+        "confirmation_text_sha256": generation.get(
+            "confirmation_text_sha256"
+        ),
+        "packet_fingerprint_sha256": packet_json.get(
+            "packet_fingerprint_sha256"
+        ),
+        "review_status": assessment.get("review_status"),
+        "packet_json": packet_json,
+        "input_count": metrics.get("input_count"),
+        "passed_input_count": metrics.get("passed_input_count"),
+        "blocked_input_count": metrics.get("blocked_input_count"),
+        "check_count": metrics.get("check_count"),
+        "passed_check_count": metrics.get("passed_check_count"),
+        "blocked_check_count": metrics.get("blocked_check_count"),
+        "fault_scenario_count": metrics.get("fault_scenario_count"),
+        "passed_fault_scenario_count": metrics.get(
+            "passed_fault_scenario_count"
+        ),
+        "contained_fault_count": metrics.get("contained_fault_count"),
+        "scratch_resources_removed": metrics.get(
+            "scratch_resources_removed"
+        ),
+        "generated_by": generation.get("generated_by"),
+        "generation_note": generation.get("generation_note"),
+        "generated_at_kst": generation.get("generated_at_kst"),
+    }
 
 
 def _packet_as_row(packet: DataDeletionReviewPacket) -> dict[str, Any]:

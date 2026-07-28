@@ -32,6 +32,14 @@ from pubg_ai.data_deletion_quarantine_planner import (
     QUARANTINE_PLANNER_CONTRACT_VERSION,
     DataDeletionQuarantinePlanningRun,
 )
+from pubg_ai.data_deletion_review_packet_verifier import (
+    MAX_EXPORTED_REVIEW_PACKET_BYTES,
+    VERIFICATION_STATUS_CURRENT,
+    VERIFICATION_STATUS_DATABASE_MISMATCH,
+    VERIFICATION_STATUS_OFFLINE,
+    ExportedReviewPacketVerifier,
+    ExportedReviewPacketVerifierError,
+)
 from pubg_ai.data_deletion_requests import DataDeletionRequest
 from pubg_ai.data_deletion_review_packet import (
     REVIEW_PACKET_CONFIRMATION_PREFIX,
@@ -183,7 +191,17 @@ class DataDeletionReviewPacketTests(unittest.TestCase):
             self.connection.dml,
             ["INSERT INTO data_deletion_readiness_review_packets"],
         )
-        self.assertTrue(canonical_review_packet_bytes(packet))
+        exported = canonical_review_packet_bytes(packet)
+        self.assertTrue(exported)
+        verification = ExportedReviewPacketVerifier().verify_text(
+            exported.decode("utf-8"),
+            cross_check_database=False,
+        )
+        self.assertEqual(
+            verification.verification_status,
+            VERIFICATION_STATUS_OFFLINE,
+        )
+        self.assertEqual(verification.review_status, REVIEW_STATUS_BLOCKED)
 
     def test_wrong_confirmation_blocks_before_transaction_or_audit(self) -> None:
         with self.assertRaisesRegex(DataDeletionReviewPacketError, "confirmation"):
@@ -257,15 +275,160 @@ class DataDeletionReviewPacketTests(unittest.TestCase):
         ):
             _review_packet_from_row(row)
 
+    def test_export_verifier_accepts_canonical_packet_offline_without_writes(self) -> None:
+        packet = self._passed_packet()
+        before_dml = list(self.connection.dml)
+
+        result = ExportedReviewPacketVerifier().verify_text(
+            canonical_review_packet_bytes(packet).decode("utf-8"),
+            cross_check_database=False,
+            reference_kst=datetime(2026, 7, 30, 11, 0, 0),
+        )
+
+        self.assertEqual(result.verification_status, VERIFICATION_STATUS_OFFLINE)
+        self.assertIsNone(result.database_cross_check_passed)
+        self.assertEqual(result.packet_fingerprint_sha256, packet.packet_fingerprint_sha256)
+        self.assertEqual(len(result.checks), 5)
+        self.assertTrue(all(item["status"] == "passed" for item in result.checks))
+        self.assertEqual(result.to_record()["records_created"], False)
+        self.assertEqual(self.connection.dml, before_dml)
+
+    def test_export_verifier_rejects_duplicate_json_key(self) -> None:
+        packet = self._passed_packet()
+        body = canonical_review_packet_bytes(packet).decode("utf-8").strip()
+        duplicate = body[:-1] + ',"request_id":17}'
+
+        with self.assertRaisesRegex(
+            ExportedReviewPacketVerifierError,
+            "strict JSON",
+        ):
+            ExportedReviewPacketVerifier().verify_text(
+                duplicate,
+                cross_check_database=False,
+            )
+
+    def test_export_verifier_rejects_nonstandard_json_constant(self) -> None:
+        with self.assertRaisesRegex(
+            ExportedReviewPacketVerifierError,
+            "strict JSON",
+        ):
+            ExportedReviewPacketVerifier().verify_text(
+                '{"value":NaN}',
+                cross_check_database=False,
+            )
+
+    def test_export_verifier_rejects_nonfinite_json_number(self) -> None:
+        with self.assertRaisesRegex(
+            ExportedReviewPacketVerifierError,
+            "strict JSON",
+        ):
+            ExportedReviewPacketVerifier().verify_text(
+                '{"value":1e400}',
+                cross_check_database=False,
+            )
+
+    def test_export_verifier_rejects_excessive_json_nesting(self) -> None:
+        nested = '{"value":' + ("[" * 1200) + "0" + ("]" * 1200) + "}"
+
+        with self.assertRaisesRegex(
+            ExportedReviewPacketVerifierError,
+            "strict JSON|canonicalized safely",
+        ):
+            ExportedReviewPacketVerifier().verify_text(
+                nested,
+                cross_check_database=False,
+            )
+
+    def test_export_verifier_rejects_rehashed_scenario_contract_change(self) -> None:
+        packet = self._passed_packet()
+        row = _packet_row(packet)
+        changed = deepcopy(packet.packet_json)
+        changed["fault_scenarios"][0]["key"] = "changed_scenario"
+        _rehash_packet(row, changed)
+
+        with self.assertRaisesRegex(
+            ExportedReviewPacketVerifierError,
+            "fault scenario contract",
+        ):
+            ExportedReviewPacketVerifier().verify_text(
+                _json_text(changed),
+                cross_check_database=False,
+            )
+
+    def test_export_verifier_cross_checks_current_database_without_writes(self) -> None:
+        packet = self._passed_packet()
+        before_dml = list(self.connection.dml)
+
+        result = ExportedReviewPacketVerifier(self.connection).verify_text(
+            canonical_review_packet_bytes(packet).decode("utf-8"),
+            cross_check_database=True,
+            reference_kst=datetime(2026, 7, 30, 11, 0, 0),
+        )
+
+        self.assertEqual(result.verification_status, VERIFICATION_STATUS_CURRENT)
+        self.assertTrue(result.database_cross_check_passed)
+        self.assertEqual(result.matched_packet_id, packet.id)
+        self.assertEqual(len(result.checks), 12)
+        self.assertTrue(all(item["status"] == "passed" for item in result.checks))
+        self.assertEqual(self.connection.dml, before_dml)
+        self.assertTrue(self.connection.selects)
+        self.assertTrue(
+            all(statement.startswith("SELECT ") for statement in self.connection.selects)
+        )
+
+    def test_export_verifier_reports_latest_plan_mismatch_without_writes(self) -> None:
+        packet = self._passed_packet()
+        self.connection.plan = replace(self.plan, id=902)
+        before_dml = list(self.connection.dml)
+
+        result = ExportedReviewPacketVerifier(self.connection).verify_text(
+            canonical_review_packet_bytes(packet).decode("utf-8"),
+            cross_check_database=True,
+        )
+
+        self.assertEqual(
+            result.verification_status,
+            VERIFICATION_STATUS_DATABASE_MISMATCH,
+        )
+        self.assertFalse(result.database_cross_check_passed)
+        blocked = {
+            item["key"] for item in result.checks if item["status"] == "blocked"
+        }
+        self.assertIn("dry_run_plan_latest", blocked)
+        self.assertEqual(self.connection.dml, before_dml)
+
+    def test_export_verifier_requires_connection_for_database_check(self) -> None:
+        packet = self._passed_packet()
+        with self.assertRaisesRegex(
+            ExportedReviewPacketVerifierError,
+            "database connection",
+        ):
+            ExportedReviewPacketVerifier().verify_text(
+                canonical_review_packet_bytes(packet).decode("utf-8"),
+                cross_check_database=True,
+            )
+
+    def test_export_verifier_rejects_packet_over_size_limit(self) -> None:
+        with self.assertRaisesRegex(
+            ExportedReviewPacketVerifierError,
+            "2 MiB",
+        ):
+            ExportedReviewPacketVerifier().verify_text(
+                "x" * (MAX_EXPORTED_REVIEW_PACKET_BYTES + 1),
+                cross_check_database=False,
+            )
+
     def _passed_packet(self):
         state = self._service().packet_state(self.request)
-        return self._service().generate(
+        packet = self._service().generate(
             self.request,
             fault_matrix_run_id=self.matrix.id,
             confirmation_text=state["packet_candidate"]["confirmation_text"],
             actor_id="local-owner",
             reference_kst=datetime(2026, 7, 30, 10, 0, 0),
         )
+        self.connection.persisted_packet = packet
+        return packet
 
     def _service(self) -> DataDeletionReviewPacketService:
         return DataDeletionReviewPacketService(
@@ -291,6 +454,8 @@ class _AuditConnection:
         self.committed = False
         self.rolled_back = False
         self.dml: list[str] = []
+        self.selects: list[str] = []
+        self.persisted_packet = None
 
     def cursor(self):
         return self.cursor_obj
@@ -321,10 +486,16 @@ class _AuditCursor:
         normalized = " ".join(str(query).split())
         value = self.connection
         self._rows = []
+        if normalized.startswith("SELECT "):
+            self.connection.selects.append(normalized)
         if normalized.startswith("INSERT INTO"):
             self.connection.dml.append(normalized.split(" (")[0])
         elif "FROM data_deletion_readiness_review_packets" in normalized:
-            self._rows = []
+            self._rows = (
+                [_packet_row(value.persisted_packet)]
+                if value.persisted_packet is not None
+                else []
+            )
         elif "FROM data_deletion_requests" in normalized:
             self._rows = [
                 {
@@ -735,6 +906,15 @@ def _rehash_packet(row: dict, packet_json: dict) -> None:
     packet_json["packet_fingerprint_sha256"] = fingerprint
     row["packet_json"] = packet_json
     row["packet_fingerprint_sha256"] = fingerprint
+
+
+def _json_text(value) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _canonical_fingerprint(value) -> str:

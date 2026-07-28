@@ -420,6 +420,15 @@ signal. The localhost API emits deterministic UTF-8 JSON through:
 - `GET /data-deletions/{request_id}/review-packets/{packet_id}`
 - `GET /data-deletions/{request_id}/review-packets/{packet_id}/export.json`
 
+Application version 21 adds `POST /data-deletion-review-packets/verify` and an `Exported review packet verifier` in
+the localhost manager. The browser reads one selected `.json` file into memory, enforces a 2 MiB UTF-8 limit, and
+sends raw JSON text so duplicate keys and non-standard constants can be rejected before canonical hashes, fixed v1
+shape, safety flags, metrics, review checks, and fault scenarios are recomputed. Offline mode opens no database and
+establishes internal consistency only, not provenance. The default MySQL mode executes parameterized `SELECT` queries
+to require an exact immutable packet row and the current unexecuted request plus latest bound input chain. Neither mode
+persists the uploaded text, creates a record, changes a row or file, grants authorization, promotes readiness, or
+enables execution. Version 21 adds no environment variable or table; the schema remains version 20 with 44 tables.
+
 Each packet is guarded by six `ON DELETE RESTRICT` foreign keys. Generation appends only one version 20 audit row; it
 grants no authorization,
 promotes no readiness, creates no evidence, and performs no restore, quarantine, production mutation, or deletion. The

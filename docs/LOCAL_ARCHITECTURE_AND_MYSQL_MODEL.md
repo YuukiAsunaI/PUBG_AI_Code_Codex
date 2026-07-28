@@ -550,10 +550,17 @@ Completed slices:
      metrics, checks, scenarios, safety flags, and fingerprints on load. Six upstream foreign keys use `ON DELETE
      RESTRICT`. One version 20 audit row is the only durable output; evidence, authorization, readiness promotion,
      production mutation, restore, quarantine movement, deletion, and execution stay absent.
+114. Application version 21 adds a read-only exported review-packet verifier to the localhost manager. One selected
+     JSON file is held in memory under a 2 MiB UTF-8 limit, parsed as strict JSON, canonicalized, and checked against
+     the fixed v1 shape, hashes, metrics, checks, scenarios, and non-authorization safety contract. Offline mode opens
+     no database and establishes internal consistency only. Default MySQL mode uses parameterized `SELECT` queries to
+     compare the exact immutable packet row and latest current chain. No text or result is persisted; no record, DML,
+     file mutation, evidence, authorization, readiness, restore, quarantine, deletion, or execution is created. The
+     database schema remains version 20 with 44 tables.
 
 Next slice:
 
-1. Build a read-only exported review-packet verifier that opens a selected JSON file, canonicalizes it, recomputes all
-   hashes and safety invariants, and optionally cross-checks its immutable input IDs and fingerprints against current
-   database rows. It must record nothing and expose no authorization, readiness, mutation, restore, quarantine,
+1. Build a read-only in-memory comparison tool for two valid exported review packets. It should report canonical field,
+   input-ID, fingerprint, assessment, and check-outcome differences and may optionally cross-check both packets against
+   current MySQL rows. It must persist nothing and expose no authorization, readiness, mutation, restore, quarantine,
    deletion, or execution capability.

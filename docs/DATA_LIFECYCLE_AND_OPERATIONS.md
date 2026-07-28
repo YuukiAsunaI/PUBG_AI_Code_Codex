@@ -271,6 +271,14 @@ Implemented behavior:
 - Generation appends one immutable `data_deletion_readiness_review_packets` row and deterministic UTF-8 JSON. The
   detail and attachment export routes are read-only. No evidence, readiness state, production database row, source
   file, quarantine target, restore target, or deletion execution is created or changed.
+- Application version 21 verifies one selected export entirely in memory. The browser and API enforce a 2 MiB UTF-8
+  limit; strict parsing rejects duplicate keys, non-standard numeric constants, invalid encoding, and unsafe nesting.
+  Canonical packet and input-contract hashes, fixed v1 shape, safety invariants, metrics, review checks, and fault
+  scenarios are recomputed. Uploaded text and verification results are not written to a file or database row.
+- Offline verification opens no database and proves internal consistency only. The default current-MySQL mode uses
+  parameterized `SELECT` queries to compare the exact immutable packet row, approved unexecuted request, and latest
+  dry-run, backup-verification, quarantine-planning, combined-rehearsal, and fault-matrix bindings. A mismatch is a
+  read-only result, not an authorization or readiness transition. Schema version 20 and its 44 tables are unchanged.
 - The earlier non-executing rehearsal still rechecks live deletion impact, evidence times, artifact metadata, bound
   planner-generated capacity evidence, and current quarantine free space without changing targets.
   `executor_not_implemented` remains even after every available rehearsal passes; production restore, actual

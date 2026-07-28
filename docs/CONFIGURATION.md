@@ -145,6 +145,11 @@ foreign keys use `ON DELETE RESTRICT`, and no evidence or production data is cha
 `python -m pubg_ai.cli init-db` after updating so the fourteen deletion workflow tables are created. No deletion
 executor or execution endpoint is enabled.
 
+Application version 21 adds the localhost `POST /data-deletion-review-packets/verify` route and file-selection UI.
+It needs no new environment variable. Selected JSON is limited to 2 MiB and is never persisted. Offline verification
+opens no MySQL connection; optional current-chain verification uses read-only parameterized `SELECT` queries. The
+schema remains version 20 with 44 total tables and fourteen deletion-workflow tables.
+
 The opt-in builder uses `PUBG_BACKUP_DATA_DIR` (default `./data/backups`). The backup root must be writable and must not
 equal, contain, or be contained by `PUBG_RAW_DATA_DIR` or `PUBG_REPLAY_DATA_DIR`. A build requires the exact latest-plan
 confirmation text. For each prerequisite required by the latest plan, MySQL candidate rows are exported as typed JSONL
