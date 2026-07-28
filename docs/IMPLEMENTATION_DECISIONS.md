@@ -220,6 +220,15 @@ Suggested command groups:
   no-mutation block, and treats cleanup as mandatory. Platform-specific durable journal replacement is recorded.
   Production source bytes are not opened, no readiness evidence is appended, and production restore, actual
   quarantine moves, and deletion remain absent.
+- Schema version 18 stores immutable isolated combined-rehearsal runs. Exact confirmation binds all four current
+  contracts: dry-run plan, passed backup verification, latest passed quarantine planning, and destination. Candidate
+  backup rows are restored only into generated connection-scoped temporary tables before the DELETE transaction begins.
+  Planned selector kinds can mutate only those generated names; the runner checks zero-row postconditions, a separate
+  shared/audit preservation ledger, ROLLBACK restoration counts, and canonical row-set hashes. It then runs the
+  synthetic quarantine state machine and requires complete cleanup. This ordering follows MySQL's documented
+  [temporary-table and implicit-commit behavior](https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html) while
+  relying on InnoDB transaction rollback for DELETE DML. One audit row is the only durable output, and no readiness
+  evidence, production mutation, restore path, quarantine mover, or executor is introduced.
 - Deletion should be split into options:
   - delete registration only
   - delete normalized DB data

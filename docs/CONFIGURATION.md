@@ -125,8 +125,13 @@ quarantine root with a capacity reserve. A passed run creates planner-bound capa
 integrity evidence is rejected. Schema version 17 adds `data_deletion_quarantine_rehearsal_runs`. The exact-confirmation
 endpoint creates deterministic synthetic fixtures only in a random owned quarantine-root scratch directory, rehearses
 normal postconditions, reverse no-overwrite rollback, known interruption recovery, and ambiguous-state blocking, then
-requires cleanup. It never opens production replay bytes and creates no readiness evidence. Run
-`python -m pubg_ai.cli init-db` after updating so the eleven deletion workflow tables are created. No deletion executor
+requires cleanup. It never opens production replay bytes and creates no readiness evidence. Schema version 18 adds
+`data_deletion_combined_rehearsal_runs`. Its exact confirmation binds the latest dry-run plan, passed backup
+verification, latest passed quarantine planning, and destination contract. It revalidates backup bytes, runs planned
+DELETE selectors only against generated connection-scoped temporary tables, rolls the transaction back, verifies
+row-set restoration and preservation ledgers, and combines that result with the synthetic quarantine state machine.
+Only one immutable audit row is appended; no readiness evidence is created and production rows/files are unchanged. Run
+`python -m pubg_ai.cli init-db` after updating so the twelve deletion workflow tables are created. No deletion executor
 or execution endpoint is enabled.
 
 The opt-in builder uses `PUBG_BACKUP_DATA_DIR` (default `./data/backups`). The backup root must be writable and must not

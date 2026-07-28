@@ -35,7 +35,10 @@ from pubg_ai.data_deletion_backup_verifier import (
     DataDeletionBackupVerifierService,
     RevalidatedBackupBuild,
 )
-from pubg_ai.data_deletion_dry_run import DataDeletionDryRunPlan
+from pubg_ai.data_deletion_dry_run import (
+    AUDIT_TABLE_EXCLUSIONS,
+    DataDeletionDryRunPlan,
+)
 from pubg_ai.data_deletion_requests import DataDeletionRequest
 from pubg_ai.time_utils import now_kst, to_kst
 
@@ -114,6 +117,17 @@ class _RestoreBlocked(RuntimeError):
 
 class _DuplicateJsonKey(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class _TemporaryTableBinding:
+    source_table: str
+    temporary_table: str
+    sequence: int
+    columns: tuple[str, ...]
+    column_types: dict[str, str]
+    row_count: int
+    row_set_fingerprint_sha256: str
 
 
 @dataclass(frozen=True)
@@ -781,16 +795,22 @@ class _IsolatedRestoreRunner:
         backup_root: Path,
         expected_database_name: str,
         revalidated: RevalidatedBackupBuild,
+        restore_replay_artifact: bool = True,
+        exercise_database_deletion: bool = False,
     ) -> None:
         self.audit_connection = audit_connection
         self.scratch_connection_factory = scratch_connection_factory
         self.backup_root = backup_root
         self.expected_database_name = expected_database_name
         self.revalidated = revalidated
+        self.restore_replay_artifact = bool(restore_replay_artifact)
+        self.exercise_database_deletion = bool(exercise_database_deletion)
         self.checks: list[dict[str, Any]] = []
         self.metrics = _empty_metrics()
+        self.deletion_exercise: dict[str, Any] | None = None
         self._scratch_connection: Any | None = None
         self._temp_tables: list[str] = []
+        self._temp_table_bindings: dict[str, _TemporaryTableBinding] = {}
         self._scratch_directory: Path | None = None
         self._token = uuid.uuid4().hex[:10]
 
@@ -822,6 +842,10 @@ class _IsolatedRestoreRunner:
             artifacts = _artifact_records(self.revalidated)
             if _MYSQL_ARTIFACT_KEY in artifacts:
                 self._restore_mysql(artifacts[_MYSQL_ARTIFACT_KEY])
+            elif self.exercise_database_deletion:
+                raise _RestoreBlocked(
+                    "combined deletion rehearsal requires a MySQL backup artifact"
+                )
             else:
                 self.checks.append(
                     _not_required(
@@ -829,13 +853,20 @@ class _IsolatedRestoreRunner:
                         "latest plan has no MySQL backup prerequisite",
                     )
                 )
-            if _REPLAY_ARTIFACT_KEY in artifacts:
+            if self.restore_replay_artifact and _REPLAY_ARTIFACT_KEY in artifacts:
                 self._restore_replay(artifacts[_REPLAY_ARTIFACT_KEY])
-            else:
+            elif self.restore_replay_artifact:
                 self.checks.append(
                     _not_required(
                         "replay_restore_round_trip",
                         "latest plan has no replay backup prerequisite",
+                    )
+                )
+            else:
+                self.checks.append(
+                    _not_required(
+                        "replay_restore_round_trip",
+                        "combined rehearsal uses the synthetic quarantine state machine",
                     )
                 )
             self.checks.append(
@@ -873,7 +904,11 @@ class _IsolatedRestoreRunner:
             )
         finally:
             self._cleanup()
-        return {"checks": self.checks, "metrics": self.metrics}
+        return {
+            "checks": self.checks,
+            "metrics": self.metrics,
+            "deletion_exercise": self.deletion_exercise,
+        }
 
     def _restore_mysql(self, artifact: dict[str, Any]) -> None:
         path = self.revalidated.artifact_paths[_MYSQL_ARTIFACT_KEY]
@@ -950,6 +985,8 @@ class _IsolatedRestoreRunner:
                 "all MySQL rows matched after temporary-table restore and readback",
             )
         )
+        if self.exercise_database_deletion:
+            self.deletion_exercise = self._exercise_database_deletion()
 
     def _restore_mysql_table(
         self,
@@ -1084,6 +1121,17 @@ class _IsolatedRestoreRunner:
             )
         ):
             raise _RestoreBlocked(f"temporary MySQL row readback differs: {table}")
+        if table in self._temp_table_bindings:
+            raise _RestoreBlocked(f"duplicate temporary MySQL table binding: {table}")
+        self._temp_table_bindings[table] = _TemporaryTableBinding(
+            source_table=table,
+            temporary_table=temp_name,
+            sequence=sequence,
+            columns=tuple(columns),
+            column_types=dict(column_types),
+            row_count=row_count,
+            row_set_fingerprint_sha256=source_set_fingerprint,
+        )
         return {
             "sequence": sequence,
             "table": table,
@@ -1095,6 +1143,435 @@ class _IsolatedRestoreRunner:
             "restored_row_set_sha256": restored_set_fingerprint,
             "foreign_keys_copied": False,
         }
+
+    def _exercise_database_deletion(self) -> dict[str, Any]:
+        if self._scratch_connection is None:
+            raise _RestoreBlocked("scratch MySQL connection is unavailable")
+        operations = _combined_database_operations(self.revalidated.plan)
+        operation_tables = [str(item["table"]) for item in operations]
+        if operation_tables != list(self._temp_table_bindings):
+            raise _RestoreBlocked(
+                "temporary MySQL tables differ from the ordered deletion plan"
+            )
+        target = self.revalidated.plan.plan_json.get("target")
+        if not isinstance(target, dict):
+            raise _RestoreBlocked("dry-run target identity is missing")
+        account_id = _required_text(target.get("account_id"), "account_id", 128)
+        shard = _required_text(target.get("shard"), "shard", 32)
+        descriptors = _preservation_descriptors(self.revalidated.plan)
+
+        ledger_name = self._auxiliary_temp_table_name(900)
+        with self._scratch_connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                CREATE TEMPORARY TABLE `{ledger_name}` (
+                    descriptor_sha256 CHAR(64) NOT NULL PRIMARY KEY,
+                    category VARCHAR(32) NOT NULL,
+                    descriptor_json JSON NOT NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
+        self._temp_tables.append(ledger_name)
+        with self._scratch_connection.cursor() as cursor:
+            for descriptor in descriptors:
+                body = _json_dump(descriptor)
+                cursor.execute(
+                    f"""
+                    INSERT INTO `{ledger_name}` (
+                        descriptor_sha256,
+                        category,
+                        descriptor_json
+                    ) VALUES (%s, %s, %s)
+                    """,
+                    (
+                        _canonical_sha256(descriptor),
+                        str(descriptor["preservation_kind"]),
+                        body,
+                    ),
+                )
+
+        match_scope_name: str | None = None
+        if any(
+            isinstance(item.get("selector"), dict)
+            and item["selector"].get("kind") == "player_match_scope"
+            for item in operations
+        ):
+            match_scope_name = self._auxiliary_temp_table_name(901)
+            with self._scratch_connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    CREATE TEMPORARY TABLE `{match_scope_name}` (
+                        match_id VARCHAR(191) NOT NULL,
+                        shard VARCHAR(32) NOT NULL,
+                        PRIMARY KEY (match_id, shard)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                    """
+                )
+            self._temp_tables.append(match_scope_name)
+            for operation in operations:
+                selector = operation.get("selector")
+                if not isinstance(selector, dict) or selector.get("kind") != "player_match_scope":
+                    continue
+                binding = self._temp_table_bindings[str(operation["table"])]
+                if "match_id" not in binding.columns:
+                    raise _RestoreBlocked(
+                        f"player-match temporary table lacks match_id: {binding.source_table}"
+                    )
+                with self._scratch_connection.cursor() as cursor:
+                    cursor.execute(
+                        f"""
+                        INSERT IGNORE INTO `{match_scope_name}` (match_id, shard)
+                        SELECT DISTINCT CAST(`match_id` AS CHAR(191)), %s
+                        FROM `{binding.temporary_table}`
+                        WHERE `match_id` IS NOT NULL
+                        """,
+                        (shard,),
+                    )
+
+        _commit(self._scratch_connection)
+        baseline = {
+            table: self._temporary_table_state(binding)
+            for table, binding in self._temp_table_bindings.items()
+        }
+        ledger_before = self._preservation_ledger_state(ledger_name)
+        if ledger_before["row_count"] != len(descriptors):
+            raise _RestoreBlocked("temporary preservation ledger row count differs")
+        transaction_started = False
+        transaction_error: Exception | None = None
+        operation_results: list[dict[str, Any]] = []
+        post_delete: dict[str, dict[str, Any]] = {}
+        ledger_after_delete: dict[str, Any] | None = None
+        mutation_targets: list[str] = []
+        try:
+            _begin(self._scratch_connection)
+            transaction_started = True
+            for operation in operations:
+                table = str(operation["table"])
+                binding = self._temp_table_bindings[table]
+                expected_rows = _nonnegative_int(
+                    operation.get("estimated_rows"),
+                    f"estimated_rows for {table}",
+                )
+                before = baseline[table]
+                if before["row_count"] != expected_rows:
+                    raise _RestoreBlocked(
+                        f"temporary row count differs from plan estimate: {table}"
+                    )
+                statement, parameters = self._temporary_delete_statement(
+                    operation,
+                    binding,
+                    account_id=account_id,
+                    shard=shard,
+                    match_scope_name=match_scope_name,
+                )
+                with self._scratch_connection.cursor() as cursor:
+                    cursor.execute(statement, parameters)
+                    affected_rows = int(cursor.rowcount)
+                mutation_targets.append(binding.temporary_table)
+                if affected_rows != expected_rows:
+                    raise _RestoreBlocked(
+                        f"temporary delete affected an unexpected row count: {table}"
+                    )
+                operation_results.append(
+                    {
+                        "sequence": int(operation["sequence"]),
+                        "table": table,
+                        "selector_kind": str(operation["selector"]["kind"]),
+                        "expected_rows": expected_rows,
+                        "deleted_rows": affected_rows,
+                        "temporary_target": binding.temporary_table,
+                    }
+                )
+            post_delete = {
+                table: self._temporary_table_state(binding)
+                for table, binding in self._temp_table_bindings.items()
+            }
+            ledger_after_delete = self._preservation_ledger_state(ledger_name)
+            if any(state["row_count"] != 0 for state in post_delete.values()):
+                raise _RestoreBlocked(
+                    "candidate temporary rows remain after ordered deletion"
+                )
+            if ledger_after_delete != ledger_before:
+                raise _RestoreBlocked(
+                    "shared-data or audit preservation ledger changed during deletion"
+                )
+        except Exception as exc:
+            transaction_error = exc
+        finally:
+            if transaction_started:
+                try:
+                    _rollback(self._scratch_connection)
+                except Exception as exc:
+                    raise _RestoreBlocked(
+                        f"temporary deletion transaction rollback failed: {_safe_error_message(exc)}"
+                    ) from exc
+
+        rolled_back = {
+            table: self._temporary_table_state(binding)
+            for table, binding in self._temp_table_bindings.items()
+        }
+        ledger_after_rollback = self._preservation_ledger_state(ledger_name)
+        rollback_matches = rolled_back == baseline
+        preservation_matches = (
+            ledger_after_delete == ledger_before
+            and ledger_after_rollback == ledger_before
+        )
+        expected_mutation_targets = {
+            binding.temporary_table
+            for binding in self._temp_table_bindings.values()
+        }
+        mutation_guard = (
+            set(mutation_targets).issubset(expected_mutation_targets)
+            and all(_TEMP_TABLE_PATTERN.fullmatch(item) for item in mutation_targets)
+        )
+        self.checks.append(
+            _check(
+                "temporary_deletion_postconditions",
+                transaction_error is None
+                and bool(post_delete)
+                and all(state["row_count"] == 0 for state in post_delete.values()),
+                "every planned candidate temporary table reaches zero rows",
+                {"operations": operation_results, "post_delete": post_delete},
+                (
+                    "ordered selectors removed every candidate temporary row"
+                    if transaction_error is None
+                    else _safe_error_message(transaction_error)
+                ),
+            )
+        )
+        self.checks.append(
+            _check(
+                "shared_and_audit_preservation",
+                preservation_matches,
+                "all shared-row, file, and immutable audit descriptors remain unchanged",
+                {
+                    "descriptor_count": len(descriptors),
+                    "before": ledger_before,
+                    "after_delete": ledger_after_delete,
+                    "after_rollback": ledger_after_rollback,
+                },
+                (
+                    "shared-data and audit preservation descriptors remained unchanged"
+                    if preservation_matches
+                    else "temporary preservation ledger changed"
+                ),
+            )
+        )
+        self.checks.append(
+            _check(
+                "temporary_deletion_rollback",
+                rollback_matches,
+                "rollback restores every temporary row count and canonical row-set fingerprint",
+                {"before": baseline, "after_rollback": rolled_back},
+                (
+                    "temporary candidate rows were completely restored by rollback"
+                    if rollback_matches
+                    else "temporary candidate rows differ after rollback"
+                ),
+            )
+        )
+        self.checks.append(
+            _check(
+                "temporary_mutation_target_guard",
+                mutation_guard,
+                "every mutation target is a generated connection-scoped temporary table",
+                {"mutation_targets": mutation_targets},
+                (
+                    "all deletion mutations targeted generated temporary tables"
+                    if mutation_guard
+                    else "a deletion mutation target escaped the temporary-table allowlist"
+                ),
+            )
+        )
+        if transaction_error is not None:
+            if isinstance(transaction_error, _RestoreBlocked):
+                raise transaction_error
+            raise _RestoreBlocked(
+                f"temporary deletion exercise failed: {_safe_error_message(transaction_error)}"
+            ) from transaction_error
+        if not rollback_matches or not preservation_matches or not mutation_guard:
+            raise _RestoreBlocked("temporary deletion safety invariants failed")
+        deleted_rows = sum(item["deleted_rows"] for item in operation_results)
+        return {
+            "contract_version": "temporary-mysql-deletion-rehearsal-v1",
+            "operation_count": len(operation_results),
+            "candidate_table_count": len(self._temp_table_bindings),
+            "candidate_row_count": deleted_rows,
+            "deleted_row_count": deleted_rows,
+            "rolled_back_row_count": sum(
+                int(state["row_count"]) for state in rolled_back.values()
+            ),
+            "preserved_descriptor_count": len(descriptors),
+            "operation_results": operation_results,
+            "baseline": baseline,
+            "post_delete": post_delete,
+            "after_rollback": rolled_back,
+            "preservation_fingerprint_sha256": ledger_before[
+                "fingerprint_sha256"
+            ],
+            "safety": {
+                "temporary_tables_only": True,
+                "ordered_selectors_exercised": True,
+                "transaction_rolled_back": True,
+                "shared_data_preserved": True,
+                "audit_data_preserved": True,
+                "production_database_rows_modified": False,
+                "production_files_modified": False,
+                "deletion_performed": False,
+                "execution_enabled": False,
+                "execution_ready": False,
+            },
+        }
+
+    def _auxiliary_temp_table_name(self, sequence: int) -> str:
+        value = (
+            f"{_TEMP_TABLE_PREFIX}{self.revalidated.verification_run.id}_"
+            f"{sequence:03d}_{self._token}"
+        )
+        if not _TEMP_TABLE_PATTERN.fullmatch(value) or value in self._temp_tables:
+            raise _RestoreBlocked("generated auxiliary temporary table name is invalid")
+        return value
+
+    def _temporary_table_state(
+        self,
+        binding: _TemporaryTableBinding,
+    ) -> dict[str, Any]:
+        if self._scratch_connection is None:
+            raise _RestoreBlocked("scratch MySQL connection is unavailable")
+        if not _TEMP_TABLE_PATTERN.fullmatch(binding.temporary_table):
+            raise _RestoreBlocked("temporary table binding name is invalid")
+        column_sql = ", ".join(f"`{item}`" for item in binding.columns)
+        hashes: list[str] = []
+        with self._scratch_connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT {column_sql} FROM `{binding.temporary_table}`"
+            )
+            while rows := cursor.fetchmany(500):
+                for row in rows:
+                    if not isinstance(row, Mapping):
+                        raise _RestoreBlocked(
+                            f"temporary table returned a non-object row: {binding.source_table}"
+                        )
+                    hashes.append(
+                        _row_fingerprint(dict(row), binding.column_types)
+                    )
+        return {
+            "row_count": len(hashes),
+            "row_set_fingerprint_sha256": _row_set_fingerprint(hashes),
+        }
+
+    def _preservation_ledger_state(self, table: str) -> dict[str, Any]:
+        if self._scratch_connection is None:
+            raise _RestoreBlocked("scratch MySQL connection is unavailable")
+        if not _TEMP_TABLE_PATTERN.fullmatch(table):
+            raise _RestoreBlocked("temporary preservation table name is invalid")
+        records: list[dict[str, str]] = []
+        with self._scratch_connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT descriptor_sha256, category, descriptor_json
+                FROM `{table}`
+                ORDER BY descriptor_sha256 ASC
+                """
+            )
+            rows = cursor.fetchall()
+        for row in rows:
+            if not isinstance(row, Mapping):
+                raise _RestoreBlocked("preservation ledger returned a non-object row")
+            descriptor_json = row.get("descriptor_json")
+            if not isinstance(descriptor_json, str):
+                descriptor_json = _json_dump(descriptor_json)
+            records.append(
+                {
+                    "descriptor_sha256": str(row.get("descriptor_sha256") or ""),
+                    "category": str(row.get("category") or ""),
+                    "descriptor_json": descriptor_json,
+                }
+            )
+        return {
+            "row_count": len(records),
+            "fingerprint_sha256": _canonical_sha256(records),
+        }
+
+    def _temporary_delete_statement(
+        self,
+        operation: dict[str, Any],
+        binding: _TemporaryTableBinding,
+        *,
+        account_id: str,
+        shard: str,
+        match_scope_name: str | None,
+    ) -> tuple[str, tuple[Any, ...]]:
+        selector = operation.get("selector")
+        if not isinstance(selector, dict):
+            raise _RestoreBlocked(
+                f"database selector is missing for {binding.source_table}"
+            )
+        if (
+            selector.get("account_id") != account_id
+            or selector.get("shard") != shard
+        ):
+            raise _RestoreBlocked(
+                f"database selector identity differs for {binding.source_table}"
+            )
+        name = binding.temporary_table
+        kind = str(selector.get("kind") or "")
+        if kind == "target_identity":
+            if "account_id" not in binding.columns or "shard" not in binding.columns:
+                raise _RestoreBlocked(
+                    f"identity temporary table lacks target columns: {binding.source_table}"
+                )
+            return (
+                f"DELETE FROM `{name}` WHERE `account_id` = %s AND `shard` = %s",
+                (account_id, shard),
+            )
+        if kind == "player_match_scope":
+            if (
+                selector.get("account_column") != "account_id"
+                or selector.get("match_join") != "matches.match_id"
+                or "account_id" not in binding.columns
+                or "match_id" not in binding.columns
+                or match_scope_name is None
+                or not _TEMP_TABLE_PATTERN.fullmatch(match_scope_name)
+            ):
+                raise _RestoreBlocked(
+                    f"player-match selector contract is invalid: {binding.source_table}"
+                )
+            return (
+                f"""
+                DELETE target_rows
+                FROM `{name}` AS target_rows
+                INNER JOIN `{match_scope_name}` AS target_matches
+                    ON target_matches.match_id = target_rows.match_id
+                WHERE target_rows.account_id = %s AND target_matches.shard = %s
+                """,
+                (account_id, shard),
+            )
+        if kind == "registered_player_join":
+            players = self._temp_table_bindings.get("registered_players")
+            if (
+                selector.get("via_table") != "registered_players"
+                or selector.get("via_column") != "registered_player_id"
+                or "registered_player_id" not in binding.columns
+                or players is None
+                or "id" not in players.columns
+                or "account_id" not in players.columns
+                or "shard" not in players.columns
+            ):
+                raise _RestoreBlocked("registered-player selector contract is invalid")
+            return (
+                f"""
+                DELETE target_rows
+                FROM `{name}` AS target_rows
+                INNER JOIN `{players.temporary_table}` AS target_players
+                    ON target_players.id = target_rows.registered_player_id
+                WHERE target_players.account_id = %s AND target_players.shard = %s
+                """,
+                (account_id, shard),
+            )
+        raise _RestoreBlocked(
+            f"unsupported temporary deletion selector: {binding.source_table}"
+        )
 
     def _restore_replay(self, artifact: dict[str, Any]) -> None:
         path = self.revalidated.artifact_paths[_REPLAY_ARTIFACT_KEY]
@@ -1295,6 +1772,95 @@ class _IsolatedRestoreRunner:
             )
         )
 
+
+
+def run_isolated_mysql_deletion_rehearsal(
+    *,
+    audit_connection: Any,
+    scratch_connection_factory: Callable[[], Any],
+    backup_root: Path,
+    expected_database_name: str,
+    revalidated: RevalidatedBackupBuild,
+) -> dict[str, Any]:
+    runner = _IsolatedRestoreRunner(
+        audit_connection=audit_connection,
+        scratch_connection_factory=scratch_connection_factory,
+        backup_root=backup_root.expanduser().resolve(strict=False),
+        expected_database_name=_identifier(
+            expected_database_name,
+            "expected_database_name",
+        ),
+        revalidated=revalidated,
+        restore_replay_artifact=False,
+        exercise_database_deletion=True,
+    )
+    return runner.run()
+
+
+def _combined_database_operations(
+    plan: DataDeletionDryRunPlan,
+) -> list[dict[str, Any]]:
+    records = plan.plan_json.get("database_operations")
+    if not isinstance(records, list):
+        raise _RestoreBlocked("dry-run database operations are missing")
+    operations = [dict(item) for item in records if isinstance(item, dict)]
+    if len(operations) != len(records):
+        raise _RestoreBlocked("dry-run database operation is invalid")
+    seen: set[str] = set()
+    for expected_sequence, operation in enumerate(operations, start=1):
+        sequence = _positive_int(operation.get("sequence"), "operation sequence")
+        table = _identifier(operation.get("table"), "operation table")
+        if sequence != expected_sequence:
+            raise _RestoreBlocked("database operation sequence is not contiguous")
+        if table in seen:
+            raise _RestoreBlocked(f"duplicate database operation table: {table}")
+        seen.add(table)
+        if operation.get("action") != "delete_rows_planned":
+            raise _RestoreBlocked(f"database operation action is invalid: {table}")
+        if operation.get("mutation_enabled") is not False:
+            raise _RestoreBlocked(f"database operation enables mutation: {table}")
+        if not isinstance(operation.get("selector"), dict):
+            raise _RestoreBlocked(f"database operation selector is invalid: {table}")
+    return operations
+
+
+def _preservation_descriptors(
+    plan: DataDeletionDryRunPlan,
+) -> list[dict[str, Any]]:
+    audit_records = plan.plan_json.get("audit_table_exclusions")
+    if not isinstance(audit_records, list):
+        raise _RestoreBlocked("dry-run audit-table exclusions are missing")
+    audit_tables = [
+        str(item.get("table") or "")
+        for item in audit_records
+        if isinstance(item, dict)
+    ]
+    if (
+        len(audit_tables) != len(audit_records)
+        or audit_tables != list(AUDIT_TABLE_EXCLUSIONS)
+    ):
+        raise _RestoreBlocked(
+            "dry-run audit-table exclusions do not match the current safety contract"
+        )
+    descriptors: list[dict[str, Any]] = []
+    for source_key, kind in (
+        ("row_exclusions", "shared_row"),
+        ("file_exclusions", "protected_file"),
+        ("audit_table_exclusions", "audit_table"),
+    ):
+        records = plan.plan_json.get(source_key)
+        if not isinstance(records, list):
+            raise _RestoreBlocked(f"dry-run {source_key} are missing")
+        for record in records:
+            if not isinstance(record, dict):
+                raise _RestoreBlocked(f"dry-run {source_key} contain an invalid record")
+            descriptors.append(
+                {"preservation_kind": kind, "record": dict(record)}
+            )
+    fingerprints = [_canonical_sha256(item) for item in descriptors]
+    if len(fingerprints) != len(set(fingerprints)):
+        raise _RestoreBlocked("dry-run preservation descriptors contain duplicates")
+    return descriptors
 
 def expected_restore_rehearsal_confirmation(
     request_id: int,

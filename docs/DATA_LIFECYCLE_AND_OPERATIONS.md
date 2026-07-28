@@ -234,6 +234,20 @@ Implemented behavior:
   atomic replace plus parent-directory `fsync` on POSIX. Recursive cleanup is allowed only after the random name,
   exact parent, resolved path, and non-symlink ownership contract are rechecked. Cleanup failure makes the audit result
   blocked. The rehearsal adds no evidence and never enables execution.
+- Schema version 18 requires exact confirmation bound to the current dry-run plan, a passed backup-verification result,
+  the latest passed quarantine-planning result, and the full destination-contract fingerprint. It revalidates the
+  backup artifacts before exercising either side of the combined rehearsal.
+- Candidate rows are restored into random connection-scoped MySQL temporary tables. All temporary tables are created
+  and populated before a DELETE-only transaction starts; every mutation target must match the generated temporary-table
+  allowlist. The runner verifies candidate tables reach zero, shared/audit preservation descriptors remain unchanged,
+  rolls back, and then compares the original row counts and canonical row-set SHA-256 values. MySQL documents that
+  temporary-table DDL does not implicitly commit but is not itself rolled back in its
+  [implicit-commit rules](https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html), while InnoDB provides the
+  [transaction model](https://dev.mysql.com/doc/refman/8.4/en/innodb-introduction.html) and transactional DML can be
+  reversed with [ROLLBACK](https://dev.mysql.com/doc/refman/8.4/en/commit.html).
+- The same run invokes the version 17 synthetic quarantine state machine without opening production replay files. A
+  passed or blocked outcome appends only one immutable combined-rehearsal audit row, requires scratch cleanup, creates
+  no readiness evidence, and leaves production rows/files unchanged.
 - The earlier non-executing rehearsal still rechecks live deletion impact, evidence times, artifact metadata, bound
   planner-generated capacity evidence, and current quarantine free space without changing targets.
   `executor_not_implemented` remains even after every available rehearsal passes; production restore, actual

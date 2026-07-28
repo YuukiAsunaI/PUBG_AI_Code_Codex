@@ -329,6 +329,61 @@ class DataDeletionQuarantineRehearsalService:
             run_at_kst=run_at,
         )
 
+    def run_bound_synthetic_state(
+        self,
+        request: DataDeletionRequest,
+        *,
+        quarantine_planning_run_id: int,
+        reference_kst: datetime | None = None,
+    ) -> tuple[
+        DataDeletionDryRunPlan,
+        DataDeletionQuarantinePlanningRun,
+        dict[str, Any],
+    ]:
+        planning_id = _positive_int(
+            quarantine_planning_run_id,
+            "quarantine_planning_run_id",
+        )
+        if request.status != "approved":
+            raise DataDeletionQuarantineRehearsalError(
+                "request must remain approved."
+            )
+        planning = self.planner_service.get_run(planning_id)
+        if planning.request_id != request.id:
+            raise DataDeletionQuarantineRehearsalError(
+                "quarantine planning run belongs to another deletion request."
+            )
+        plan = self.backup_service.require_latest_plan(
+            request,
+            planning.dry_run_plan_id,
+        )
+        latest = self.planner_service.list_runs(plan.id, limit=1)
+        if not latest or latest[0].id != planning.id:
+            raise DataDeletionQuarantineRehearsalError(
+                "selected quarantine planning run is not the latest run."
+            )
+        planning_blockers = self._planning_blockers(plan, planning)
+        if planning_blockers:
+            raise DataDeletionQuarantineRehearsalError(
+                "quarantine rehearsal planning input is blocked: "
+                + "; ".join(planning_blockers)
+            )
+        root_status = inspect_directory_read_only(self.quarantine_root_input)
+        root_blockers = self._root_blockers(request, plan, root_status)
+        if root_blockers:
+            raise DataDeletionQuarantineRehearsalError(
+                "quarantine rehearsal root is blocked: "
+                + "; ".join(root_blockers)
+            )
+        result = _IsolatedQuarantineRunner(
+            request=request,
+            plan=plan,
+            planning=planning,
+            quarantine_root=self.quarantine_root,
+            run_at_kst=to_kst(reference_kst or now_kst()),
+        ).run()
+        return plan, planning, result
+
     def get_run(self, rehearsal_run_id: int) -> DataDeletionQuarantineRehearsalRun:
         rehearsal_run_id = _positive_int(rehearsal_run_id, "rehearsal_run_id")
         with self.connection.cursor() as cursor:

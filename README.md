@@ -394,9 +394,17 @@ rehearsal creates only deterministic synthetic fixtures inside a random owned di
 quarantine root, exercises copy/verify/source-removal postconditions, no-overwrite rollback, known interrupted states,
 and ambiguous-state blocking, then requires complete scratch cleanup. Production replay files are not opened or
 modified. Windows journal replacement uses write-through `MoveFileExW`; POSIX uses atomic replace plus parent `fsync`.
-Cleanup failure records a blocked immutable audit. No outcome creates readiness evidence or enables execution. The
-database archive still contains no schema DDL, and there is no production restore, quarantine mover, deletion endpoint, executable
-deletion SQL, file remover, or execution button. `executor_not_implemented` remains unconditional. Rerun
+Cleanup failure records a blocked immutable audit. No outcome creates readiness evidence or enables execution. Schema
+version 18 adds immutable isolated combined-deletion rehearsal runs. Exact confirmation starts with
+`RUN ISOLATED COMBINED DELETION REHEARSAL` and binds the latest dry-run plan, passed backup-verification result, latest
+passed quarantine-planning result, and destination contract fingerprints. The runner revalidates backup artifacts,
+restores candidate rows into generated connection-scoped MySQL temporary tables, applies only the planned selectors
+there in a DELETE-only transaction, verifies preservation, rolls back, and compares the original row counts and
+canonical row-set hashes. The same run exercises the version 17 synthetic quarantine state machine and requires all
+scratch resources to be removed. It appends one audit row and creates no evidence or readiness state. Production rows
+and files remain unchanged. The database archive still contains no schema DDL, and there is no production restore,
+quarantine mover, deletion endpoint, executable deletion SQL, file remover, or execution button.
+`executor_not_implemented` remains unconditional. Rerun
 `python -m pubg_ai.cli init-db` after updating from an earlier schema.
 The `admin` group includes `pubg-alerts`, which returns current storage and worker alerts. When
 `PUBG_LOCAL_WEB_BASE_URL` is set, that response includes a local current-alert list link. When Discord alert channel

@@ -528,10 +528,16 @@ Completed slices:
      no-overwrite rollback, durable journal transitions, four known interruption states, and an ambiguous no-mutation
      block. A random owned quarantine-root scratch directory is mandatory and cleanup failure blocks the audit.
      Production source bytes, target paths, database rows, and execution routes remain untouched.
+111. Schema version 18 adds immutable isolated combined-deletion rehearsal runs. Exact confirmation binds the current
+     dry-run plan, passed backup verification, latest passed quarantine planning, and destination fingerprints. The
+     runner restores backed-up candidate rows into generated connection-scoped MySQL temporary tables, applies only
+     ordered plan selectors in a DELETE transaction, verifies shared/audit preservation, rolls back, and compares
+     original counts and row-set hashes. It combines that result with the synthetic quarantine state machine, requires
+     cleanup, and appends one audit row without evidence or readiness. Production rows, files, and execution routes stay
+     untouched.
 
 Next slice:
 
-1. Build an isolated combined deletion rehearsal that restores backed-up candidate rows into connection-scoped MySQL
-   temporary tables, applies the ordered deletion selectors only there, and combines those results with the synthetic
-   quarantine state machine. Verify shared-data and audit-table preservation plus complete rollback while keeping
-   production database rows, source files, actual quarantine moves, restore, and every execution route disabled.
+1. Add an isolated combined fault-injection matrix for MySQL statement failures, rollback verification, synthetic
+   quarantine failures, and cleanup/audit behavior. Use only connection-scoped temporary tables and synthetic scratch
+   files; keep production rows/files, actual quarantine movement, restore, and every execution route disabled.

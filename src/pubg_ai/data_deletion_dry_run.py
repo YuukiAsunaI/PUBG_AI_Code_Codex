@@ -48,7 +48,7 @@ _PLAYER_TABLE_ORDER = {
     "match_participants": 9,
     "raw_player_snapshots": 10,
 }
-_AUDIT_TABLE_EXCLUSIONS = (
+AUDIT_TABLE_EXCLUSIONS = (
     "data_deletion_requests",
     "data_deletion_request_events",
     "data_deletion_preview_snapshots",
@@ -60,6 +60,7 @@ _AUDIT_TABLE_EXCLUSIONS = (
     "data_deletion_backup_restore_rehearsal_runs",
     "data_deletion_quarantine_planning_runs",
     "data_deletion_quarantine_rehearsal_runs",
+    "data_deletion_combined_rehearsal_runs",
 )
 
 
@@ -551,7 +552,7 @@ def build_dry_run_plan_manifest(
                 "table": table,
                 "reason": "immutable deletion workflow audit data is never a target",
             }
-            for table in _AUDIT_TABLE_EXCLUSIONS
+            for table in AUDIT_TABLE_EXCLUSIONS
         ],
         "postcondition_checks": [
             "candidate player-owned row counts must become zero",

@@ -41,6 +41,10 @@ from pubg_ai.data_deletion_backup_verifier import (
     DataDeletionBackupVerifierError,
     DataDeletionBackupVerifierService,
 )
+from pubg_ai.data_deletion_combined_rehearsal import (
+    DataDeletionCombinedRehearsalError,
+    DataDeletionCombinedRehearsalService,
+)
 from pubg_ai.data_deletion_quarantine_planner import (
     DataDeletionQuarantinePlannerError,
     DataDeletionQuarantinePlannerService,
@@ -262,6 +266,14 @@ class DataDeletionQuarantinePlanningCreateRequest(BaseModel):
 class DataDeletionQuarantineRehearsalCreateRequest(BaseModel):
     quarantine_planning_run_id: int = Field(gt=0)
     confirmation_text: str = Field(min_length=1, max_length=500)
+    actor_id: str = Field(default="local-manager", min_length=1, max_length=191)
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class DataDeletionCombinedRehearsalCreateRequest(BaseModel):
+    backup_verification_run_id: int = Field(gt=0)
+    quarantine_planning_run_id: int = Field(gt=0)
+    confirmation_text: str = Field(min_length=1, max_length=700)
     actor_id: str = Field(default="local-manager", min_length=1, max_length=191)
     note: str | None = Field(default=None, max_length=1000)
 
@@ -493,6 +505,48 @@ def create_app() -> Any:
             raw_data_dir=runtime_config.app.raw_data_dir,
             replay_data_dir=runtime_config.app.replay_data_dir,
             backup_root=runtime_config.app.backup_data_dir,
+        )
+
+    def build_data_deletion_combined_rehearsal_service(
+        connection: Any,
+        runtime_config: RuntimeConfig,
+        *,
+        backup_service: DataDeletionBackupService | None = None,
+        verifier_service: DataDeletionBackupVerifierService | None = None,
+        planner_service: DataDeletionQuarantinePlannerService | None = None,
+        quarantine_rehearsal_service: DataDeletionQuarantineRehearsalService | None = None,
+    ) -> DataDeletionCombinedRehearsalService:
+        backup = backup_service or build_data_deletion_backup_service(
+            connection,
+            runtime_config,
+        )
+        verifier = verifier_service or build_data_deletion_backup_verifier_service(
+            connection,
+            runtime_config,
+            backup_service=backup,
+        )
+        planner = planner_service or build_data_deletion_quarantine_planner_service(
+            connection,
+            runtime_config,
+            backup_service=backup,
+        )
+        quarantine = (
+            quarantine_rehearsal_service
+            or build_data_deletion_quarantine_rehearsal_service(
+                connection,
+                runtime_config,
+                backup_service=backup,
+                planner_service=planner,
+            )
+        )
+        return DataDeletionCombinedRehearsalService(
+            connection,
+            backup_service=backup,
+            verifier_service=verifier,
+            quarantine_rehearsal_service=quarantine,
+            scratch_connection_factory=lambda: connect_mysql(runtime_config.database),
+            backup_root=runtime_config.app.backup_data_dir,
+            expected_database_name=runtime_config.database.database,
         )
 
     collector_worker = CollectorWorkerController(config_loader=current_config)
@@ -953,6 +1007,7 @@ def create_app() -> Any:
             "backup_restore_rehearsal_url": f"/data-deletions/{request_id}/backup-restore-rehearsals",
             "quarantine_planning_url": f"/data-deletions/{request_id}/quarantine-plans",
             "quarantine_rehearsal_url": f"/data-deletions/{request_id}/quarantine-rehearsals",
+            "combined_rehearsal_url": f"/data-deletions/{request_id}/combined-rehearsals",
             "backup_evidence_url": f"/data-deletions/{request_id}/backup-evidence",
             "rehearsal_url": f"/data-deletions/{request_id}/rehearsals",
             "execution_enabled": False,
@@ -1159,12 +1214,27 @@ def create_app() -> Any:
                 quarantine_planner_state = quarantine_planner_service.planning_state(
                     request
                 )
-                quarantine_rehearsal_state = (
+                quarantine_rehearsal_service = (
                     build_data_deletion_quarantine_rehearsal_service(
                         connection,
                         runtime_config,
                         backup_service=backup_service,
                         planner_service=quarantine_planner_service,
+                    )
+                )
+                quarantine_rehearsal_state = (
+                    quarantine_rehearsal_service.rehearsal_state(request)
+                )
+                combined_rehearsal_state = (
+                    build_data_deletion_combined_rehearsal_service(
+                        connection,
+                        runtime_config,
+                        backup_service=backup_service,
+                        verifier_service=verifier_service,
+                        planner_service=quarantine_planner_service,
+                        quarantine_rehearsal_service=(
+                            quarantine_rehearsal_service
+                        ),
                     ).rehearsal_state(request)
                 )
             except DataDeletionRequestError as exc:
@@ -1175,6 +1245,7 @@ def create_app() -> Any:
                 DataDeletionRestoreRehearsalError,
                 DataDeletionQuarantinePlannerError,
                 DataDeletionQuarantineRehearsalError,
+                DataDeletionCombinedRehearsalError,
                 DataDeletionBackupError,
                 DataDeletionDryRunError,
             ) as exc:
@@ -1188,6 +1259,7 @@ def create_app() -> Any:
             "backup_restore_rehearsal_state": restore_rehearsal_state,
             "quarantine_planner_state": quarantine_planner_state,
             "quarantine_rehearsal_state": quarantine_rehearsal_state,
+            "combined_rehearsal_state": combined_rehearsal_state,
             "execution_enabled": False,
             "execution_ready": False,
         }
@@ -1375,6 +1447,50 @@ def create_app() -> Any:
             connection.close()
         return {
             "quarantine_rehearsal": rehearsal.to_record(),
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+
+    @app.post("/data-deletions/{request_id}/combined-rehearsals")
+    def run_data_deletion_combined_rehearsal(
+        request_id: int,
+        rehearsal_request: DataDeletionCombinedRehearsalCreateRequest,
+    ) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(runtime_config.database)
+        try:
+            try:
+                request = DataDeletionRequestService(connection).get_request(request_id)
+                rehearsal = build_data_deletion_combined_rehearsal_service(
+                    connection,
+                    runtime_config,
+                ).run(
+                    request,
+                    backup_verification_run_id=(
+                        rehearsal_request.backup_verification_run_id
+                    ),
+                    quarantine_planning_run_id=(
+                        rehearsal_request.quarantine_planning_run_id
+                    ),
+                    confirmation_text=rehearsal_request.confirmation_text,
+                    actor_id=rehearsal_request.actor_id,
+                    note=rehearsal_request.note,
+                )
+            except DataDeletionRequestError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except (
+                DataDeletionCombinedRehearsalError,
+                DataDeletionQuarantineRehearsalError,
+                DataDeletionQuarantinePlannerError,
+                DataDeletionBackupVerifierError,
+                DataDeletionBackupError,
+                DataDeletionDryRunError,
+            ) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {
+            "combined_rehearsal": rehearsal.to_record(),
             "execution_enabled": False,
             "execution_ready": False,
         }
@@ -4393,7 +4509,7 @@ _INDEX_HTML = """<!doctype html>
       dataDeletionStatus.textContent = "Read-only dry-run plan recorded. Deletion execution remains disabled.";
     }
 
-    function renderDataDeletionBackupReadiness(state, builderState, verifierState, restoreState, plannerState, quarantineRehearsalState) {
+    function renderDataDeletionBackupReadiness(state, builderState, verifierState, restoreState, plannerState, quarantineRehearsalState, combinedRehearsalState) {
       const plan = state.latest_plan;
       const builderBlockers = (builderState?.build_blockers || [])
         .map((blocker) => `<li>${escapeHtml(blocker)}</li>`)
@@ -4650,6 +4766,56 @@ _INDEX_HTML = """<!doctype html>
             </table>
           </div>
         </div>`;
+      const combinedBlockers = (combinedRehearsalState?.combined_rehearsal_blockers || [])
+        .map((blocker) => `<li>${escapeHtml(blocker)}</li>`)
+        .join("");
+      const combinedCandidate = combinedRehearsalState?.combined_candidate || null;
+      const combinedForm = combinedCandidate?.confirmation_text ? `
+        <code>${escapeHtml(combinedCandidate.confirmation_text)}</code>
+        <form class="confirmation-input-row combined-rehearsal-form" data-combined-rehearsal-form data-request-id="${attr(state.request_id)}" data-verification-run-id="${attr(combinedCandidate.backup_verification?.id || "")}" data-planning-run-id="${attr(combinedCandidate.quarantine_planning?.id || "")}">
+          <label>Exact combined rehearsal confirmation
+            <input name="confirmation_text" autocomplete="off" required>
+          </label>
+          <button class="secondary" type="submit" ${combinedRehearsalState?.combined_rehearsal_allowed ? "" : "disabled"}>Run combined rehearsal</button>
+        </form>` : "";
+      const latestCombined = combinedRehearsalState?.latest_combined_rehearsal || null;
+      const combinedCheckRows = (latestCombined?.result_json?.checks || []).map((check) => `
+        <tr>
+          <td>${escapeHtml(check.key)}</td>
+          <td>${escapeHtml(check.status)}</td>
+          <td>${escapeHtml(check.message)}</td>
+        </tr>`).join("") || `<tr><td colspan="3">No combined rehearsal checks recorded.</td></tr>`;
+      const combinedHistoryRows = (combinedRehearsalState?.combined_rehearsal_history || []).map((item) => `
+        <tr>
+          <td>${escapeHtml(item.id)}</td>
+          <td>${escapeHtml(item.result_status)}</td>
+          <td>${escapeHtml(item.mysql_deleted_row_count)} / ${escapeHtml(item.mysql_rolled_back_row_count)}</td>
+          <td>${escapeHtml(item.quarantine_recovered_case_count)} / ${escapeHtml(item.quarantine_recovery_case_count)}</td>
+          <td>${item.scratch_resources_removed ? "removed" : "cleanup blocked"}</td>
+          <td>${escapeHtml(item.run_by)} / ${escapeHtml(item.run_at_kst)}</td>
+        </tr>`).join("") || `<tr><td colspan="6">No combined rehearsal records.</td></tr>`;
+      const combinedRehearsalPanel = `
+        <div class="backup-builder-contract">
+          <h3>Isolated combined deletion rehearsal</h3>
+          <div class="status">MySQL: connection-scoped temporary tables + DELETE + ROLLBACK / files: synthetic quarantine state machine / production rows and files: unchanged / execution: disabled</div>
+          <ul>${combinedBlockers}</ul>
+          ${combinedForm}
+          <div class="status">Latest: ${escapeHtml(latestCombined?.result_status || "none")} / MySQL deleted and rolled back: ${escapeHtml(latestCombined?.mysql_deleted_row_count || 0)} / ${escapeHtml(latestCombined?.mysql_rolled_back_row_count || 0)} / scratch cleanup: ${latestCombined ? (latestCombined.scratch_resources_removed ? "removed" : "blocked") : "not run"}</div>
+          <h3>Latest combined checks</h3>
+          <div class="table-scroll">
+            <table class="detail-table">
+              <thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>
+              <tbody>${combinedCheckRows}</tbody>
+            </table>
+          </div>
+          <h3>Combined rehearsal history</h3>
+          <div class="table-scroll">
+            <table class="detail-table">
+              <thead><tr><th>ID</th><th>Status</th><th>DB delete / rollback</th><th>File recovery</th><th>Scratch</th><th>Run</th></tr></thead>
+              <tbody>${combinedHistoryRows}</tbody>
+            </table>
+          </div>
+        </div>`;
       const prerequisiteRows = (state.prerequisites || []).map((item) => `
         <tr>
           <td>${escapeHtml(item.key)}</td>
@@ -4724,6 +4890,7 @@ _INDEX_HTML = """<!doctype html>
           ${restorePanel}
           ${plannerPanel}
           ${quarantineRehearsalPanel}
+          ${combinedRehearsalPanel}
           <h3>Prerequisite evidence</h3>
           <div class="table-scroll">
             <table class="detail-table">
@@ -4785,6 +4952,7 @@ _INDEX_HTML = """<!doctype html>
         payload.backup_restore_rehearsal_state,
         payload.quarantine_planner_state,
         payload.quarantine_rehearsal_state,
+        payload.combined_rehearsal_state,
       );
       updateBackupEvidenceFields(host.querySelector("form[data-backup-evidence-form]"));
     }
@@ -4924,6 +5092,34 @@ _INDEX_HTML = """<!doctype html>
         const run = payload.quarantine_rehearsal || {};
         await loadDataDeletionRequestDetail(requestId);
         dataDeletionStatus.textContent = `Isolated quarantine rehearsal ${run.result_status || "unknown"}. Scratch cleanup: ${run.scratch_directory_removed ? "removed" : "blocked"}. Production source access, quarantine, and deletion remained disabled.`;
+      } finally {
+        if (button) button.disabled = false;
+      }
+    }
+
+    async function runDataDeletionCombinedRehearsal(formElement) {
+      const values = new FormData(formElement);
+      const reviewer = new FormData(dataDeletionFilterForm);
+      const requestId = formElement.dataset.requestId || "";
+      const actorId = String(reviewer.get("actor_id") || "").trim();
+      const note = String(reviewer.get("note") || "").trim();
+      const confirmationText = String(values.get("confirmation_text") || "").trim();
+      if (!actorId) throw new Error("Local reviewer is required.");
+      if (!confirmationText) throw new Error("Exact isolated combined rehearsal confirmation is required.");
+      if (!window.confirm("Run an isolated combined deletion rehearsal? Verified backup rows are loaded only into connection-scoped MySQL temporary tables, deleted there, and rolled back. File behavior uses deterministic synthetic fixtures only. Production rows and files are not changed, and execution remains disabled.")) return;
+      const button = formElement.querySelector("button[type='submit']");
+      if (button) button.disabled = true;
+      try {
+        const payload = await postJson(`/data-deletions/${encodeURIComponent(requestId)}/combined-rehearsals`, {
+          backup_verification_run_id: Number(formElement.dataset.verificationRunId),
+          quarantine_planning_run_id: Number(formElement.dataset.planningRunId),
+          confirmation_text: confirmationText,
+          actor_id: actorId,
+          note: note || null,
+        });
+        const run = payload.combined_rehearsal || {};
+        await loadDataDeletionRequestDetail(requestId);
+        dataDeletionStatus.textContent = `Combined rehearsal ${run.result_status || "unknown"}. MySQL delete / rollback: ${run.mysql_deleted_row_count || 0} / ${run.mysql_rolled_back_row_count || 0}. Scratch cleanup: ${run.scratch_resources_removed ? "removed" : "blocked"}. Production rows, files, quarantine, and deletion remained disabled.`;
       } finally {
         if (button) button.disabled = false;
       }
@@ -7755,6 +7951,19 @@ _INDEX_HTML = """<!doctype html>
       event.preventDefault();
       try {
         await runDataDeletionQuarantineRehearsal(form);
+      } catch (error) {
+        dataDeletionStatus.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    dataDeletionDetail.addEventListener("submit", async (event) => {
+      const form = event.target instanceof Element
+        ? event.target.closest("form[data-combined-rehearsal-form]")
+        : null;
+      if (!form) return;
+      event.preventDefault();
+      try {
+        await runDataDeletionCombinedRehearsal(form);
       } catch (error) {
         dataDeletionStatus.textContent = `Error: ${error.message}`;
       }

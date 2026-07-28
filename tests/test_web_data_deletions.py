@@ -322,6 +322,56 @@ class WebDataDeletionTests(unittest.TestCase):
             "execution_ready": False,
         }
         quarantine_rehearsal_service.run.return_value = quarantine_rehearsal
+        combined_confirmation = (
+            "RUN ISOLATED COMBINED DELETION REHEARSAL REQUEST 17 PLAN 901 "
+            "VERIFICATION 1201 "
+            + "h" * 64
+            + " QUARANTINE PLAN 1501 "
+            + "g" * 64
+            + " DESTINATION "
+            + "f" * 64
+        )
+        combined_rehearsal = MagicMock()
+        combined_rehearsal.to_record.return_value = {
+            "id": 1801,
+            "request_id": 17,
+            "dry_run_plan_id": 901,
+            "backup_verification_run_id": 1201,
+            "quarantine_planning_run_id": 1501,
+            "result_status": "passed",
+            "mysql_deleted_row_count": 10,
+            "mysql_rolled_back_row_count": 10,
+            "quarantine_recovery_case_count": 5,
+            "quarantine_recovered_case_count": 4,
+            "scratch_resources_removed": True,
+            "production_database_rows_modified": False,
+            "production_source_files_opened": False,
+            "production_quarantine_performed": False,
+            "deletion_performed": False,
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+        combined_service = MagicMock()
+        combined_service.rehearsal_state.return_value = {
+            "request_id": 17,
+            "request_status": "pending",
+            "latest_plan_id": 901,
+            "combined_candidate": None,
+            "latest_combined_rehearsal": None,
+            "combined_rehearsal_history": [],
+            "combined_rehearsal_allowed": False,
+            "combined_rehearsal_blockers": [
+                "request status must be approved, not pending"
+            ],
+            "appends_readiness_evidence": False,
+            "production_database_rows_modified": False,
+            "production_source_files_opened": False,
+            "production_quarantine_performed": False,
+            "deletion_performed": False,
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+        combined_service.run.return_value = combined_rehearsal
         connections: list[FakeConnection] = []
 
         def connection_factory(*_: object, **__: object) -> FakeConnection:
@@ -355,6 +405,10 @@ class WebDataDeletionTests(unittest.TestCase):
             patch(
                 "pubg_ai.web.app.DataDeletionQuarantineRehearsalService",
                 return_value=quarantine_rehearsal_service,
+            ),
+            patch(
+                "pubg_ai.web.app.DataDeletionCombinedRehearsalService",
+                return_value=combined_service,
             ),
         ):
             client = TestClient(create_app())
@@ -479,6 +533,25 @@ class WebDataDeletionTests(unittest.TestCase):
                     "actor_id": "local-owner",
                 },
             )
+            combined_rehearsal_response = client.post(
+                "/data-deletions/17/combined-rehearsals",
+                json={
+                    "backup_verification_run_id": 1201,
+                    "quarantine_planning_run_id": 1501,
+                    "confirmation_text": combined_confirmation,
+                    "actor_id": "local-owner",
+                    "note": "temporary delete rollback plus synthetic files",
+                },
+            )
+            invalid_combined_rehearsal_response = client.post(
+                "/data-deletions/17/combined-rehearsals",
+                json={
+                    "backup_verification_run_id": 0,
+                    "quarantine_planning_run_id": 1501,
+                    "confirmation_text": "invalid",
+                    "actor_id": "local-owner",
+                },
+            )
             backup_evidence_response = client.post(
                 "/data-deletions/17/backup-evidence",
                 json={
@@ -553,6 +626,10 @@ class WebDataDeletionTests(unittest.TestCase):
             "/data-deletions/17/quarantine-rehearsals",
         )
         self.assertEqual(
+            detail_response.json()["combined_rehearsal_url"],
+            "/data-deletions/17/combined-rehearsals",
+        )
+        self.assertEqual(
             detail_response.json()["backup_evidence_url"],
             "/data-deletions/17/backup-evidence",
         )
@@ -616,6 +693,18 @@ class WebDataDeletionTests(unittest.TestCase):
             backup_state_response.json()["quarantine_rehearsal_state"]
             ["synthetic_fixtures_only"]
         )
+        self.assertFalse(
+            backup_state_response.json()["combined_rehearsal_state"]
+            ["combined_rehearsal_allowed"]
+        )
+        self.assertFalse(
+            backup_state_response.json()["combined_rehearsal_state"]
+            ["production_database_rows_modified"]
+        )
+        self.assertFalse(
+            backup_state_response.json()["combined_rehearsal_state"]
+            ["appends_readiness_evidence"]
+        )
         self.assertEqual(backup_build_response.status_code, 200)
         self.assertEqual(backup_build_response.json()["backup_build"]["build_id"], "build-1")
         self.assertFalse(backup_build_response.json()["execution_enabled"])
@@ -661,6 +750,23 @@ class WebDataDeletionTests(unittest.TestCase):
         self.assertFalse(quarantine_rehearsal_response.json()["execution_enabled"])
         self.assertFalse(quarantine_rehearsal_response.json()["execution_ready"])
         self.assertEqual(invalid_quarantine_rehearsal_response.status_code, 422)
+        self.assertEqual(combined_rehearsal_response.status_code, 200)
+        self.assertEqual(
+            combined_rehearsal_response.json()["combined_rehearsal"]["id"],
+            1801,
+        )
+        self.assertEqual(
+            combined_rehearsal_response.json()["combined_rehearsal"]
+            ["mysql_deleted_row_count"],
+            10,
+        )
+        self.assertTrue(
+            combined_rehearsal_response.json()["combined_rehearsal"]
+            ["scratch_resources_removed"]
+        )
+        self.assertFalse(combined_rehearsal_response.json()["execution_enabled"])
+        self.assertFalse(combined_rehearsal_response.json()["execution_ready"])
+        self.assertEqual(invalid_combined_rehearsal_response.status_code, 422)
         self.assertEqual(backup_evidence_response.status_code, 200)
         self.assertEqual(backup_evidence_response.json()["backup_evidence"]["id"], 801)
         self.assertFalse(backup_evidence_response.json()["execution_enabled"])
@@ -740,6 +846,15 @@ class WebDataDeletionTests(unittest.TestCase):
             confirmation_text=quarantine_rehearsal_confirmation,
             actor_id="local-owner",
             note="synthetic rollback and recovery",
+        )
+        combined_service.rehearsal_state.assert_called_once_with(pending)
+        combined_service.run.assert_called_once_with(
+            pending,
+            backup_verification_run_id=1201,
+            quarantine_planning_run_id=1501,
+            confirmation_text=combined_confirmation,
+            actor_id="local-owner",
+            note="temporary delete rollback plus synthetic files",
         )
         backup_service.record_evidence.assert_called_once_with(
             pending,

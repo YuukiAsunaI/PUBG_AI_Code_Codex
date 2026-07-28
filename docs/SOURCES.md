@@ -22,6 +22,14 @@ Research date: 2026-06-27
 - Damage causer dictionary: https://raw.githubusercontent.com/pubg/api-assets/master/dictionaries/telemetry/damageCauserName.json
 - Vehicle ID dictionary: https://raw.githubusercontent.com/pubg/api-assets/master/dictionaries/telemetry/vehicle/vehicleId.json
 
+## Official MySQL Transaction Sources
+
+Reviewed for the schema version 18 temporary-table deletion/rollback rehearsal on 2026-07-28:
+
+- Statements that cause implicit commits: https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html
+- COMMIT and ROLLBACK statements: https://dev.mysql.com/doc/refman/8.4/en/commit.html
+- InnoDB introduction and transaction model: https://dev.mysql.com/doc/refman/8.4/en/innodb-introduction.html
+
 ## Reference Projects
 
 - https://github.com/ramonsaraiva/pubg-python
