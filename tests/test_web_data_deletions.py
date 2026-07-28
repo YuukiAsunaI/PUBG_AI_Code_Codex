@@ -372,6 +372,63 @@ class WebDataDeletionTests(unittest.TestCase):
             "execution_ready": False,
         }
         combined_service.run.return_value = combined_rehearsal
+        fault_matrix_confirmation = (
+            "RUN ISOLATED COMBINED FAULT MATRIX REQUEST 17 PLAN 901 "
+            "COMBINED 1801 "
+            + "i" * 64
+            + " VERIFICATION 1201 "
+            + "h" * 64
+            + " QUARANTINE PLAN 1501 "
+            + "g" * 64
+            + " DESTINATION "
+            + "f" * 64
+            + " SCENARIOS "
+            + "e" * 64
+        )
+        fault_matrix_run = MagicMock()
+        fault_matrix_run.to_record.return_value = {
+            "id": 1901,
+            "request_id": 17,
+            "dry_run_plan_id": 901,
+            "combined_rehearsal_run_id": 1801,
+            "result_status": "passed",
+            "scenario_count": 4,
+            "passed_scenario_count": 4,
+            "contained_fault_count": 4,
+            "mysql_scenario_count": 1,
+            "quarantine_scenario_count": 3,
+            "scratch_resources_removed": True,
+            "production_database_rows_modified": False,
+            "production_source_files_opened": False,
+            "production_quarantine_performed": False,
+            "deletion_performed": False,
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+        fault_matrix_service = MagicMock()
+        fault_matrix_service.matrix_state.return_value = {
+            "request_id": 17,
+            "request_status": "pending",
+            "latest_plan_id": 901,
+            "fault_matrix_candidate": None,
+            "latest_fault_matrix_run": None,
+            "fault_matrix_history": [],
+            "fault_matrix_allowed": False,
+            "fault_matrix_blockers": [
+                "request status must be approved, not pending"
+            ],
+            "scenario_count": 4,
+            "appends_fault_matrix_audit_row": True,
+            "appends_combined_rehearsal_audit_row": False,
+            "appends_readiness_evidence": False,
+            "production_database_rows_modified": False,
+            "production_source_files_opened": False,
+            "production_quarantine_performed": False,
+            "deletion_performed": False,
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+        fault_matrix_service.run.return_value = fault_matrix_run
         connections: list[FakeConnection] = []
 
         def connection_factory(*_: object, **__: object) -> FakeConnection:
@@ -409,6 +466,10 @@ class WebDataDeletionTests(unittest.TestCase):
             patch(
                 "pubg_ai.web.app.DataDeletionCombinedRehearsalService",
                 return_value=combined_service,
+            ),
+            patch(
+                "pubg_ai.web.app.DataDeletionFaultMatrixService",
+                return_value=fault_matrix_service,
             ),
         ):
             client = TestClient(create_app())
@@ -552,6 +613,23 @@ class WebDataDeletionTests(unittest.TestCase):
                     "actor_id": "local-owner",
                 },
             )
+            fault_matrix_response = client.post(
+                "/data-deletions/17/fault-matrix-runs",
+                json={
+                    "combined_rehearsal_run_id": 1801,
+                    "confirmation_text": fault_matrix_confirmation,
+                    "actor_id": "local-owner",
+                    "note": "deterministic isolated fault matrix",
+                },
+            )
+            invalid_fault_matrix_response = client.post(
+                "/data-deletions/17/fault-matrix-runs",
+                json={
+                    "combined_rehearsal_run_id": 0,
+                    "confirmation_text": "invalid",
+                    "actor_id": "local-owner",
+                },
+            )
             backup_evidence_response = client.post(
                 "/data-deletions/17/backup-evidence",
                 json={
@@ -630,6 +708,10 @@ class WebDataDeletionTests(unittest.TestCase):
             "/data-deletions/17/combined-rehearsals",
         )
         self.assertEqual(
+            detail_response.json()["fault_matrix_url"],
+            "/data-deletions/17/fault-matrix-runs",
+        )
+        self.assertEqual(
             detail_response.json()["backup_evidence_url"],
             "/data-deletions/17/backup-evidence",
         )
@@ -705,6 +787,26 @@ class WebDataDeletionTests(unittest.TestCase):
             backup_state_response.json()["combined_rehearsal_state"]
             ["appends_readiness_evidence"]
         )
+        self.assertFalse(
+            backup_state_response.json()["fault_matrix_state"]
+            ["fault_matrix_allowed"]
+        )
+        self.assertEqual(
+            backup_state_response.json()["fault_matrix_state"]["scenario_count"],
+            4,
+        )
+        self.assertTrue(
+            backup_state_response.json()["fault_matrix_state"]
+            ["appends_fault_matrix_audit_row"]
+        )
+        self.assertFalse(
+            backup_state_response.json()["fault_matrix_state"]
+            ["production_database_rows_modified"]
+        )
+        self.assertFalse(
+            backup_state_response.json()["fault_matrix_state"]
+            ["execution_enabled"]
+        )
         self.assertEqual(backup_build_response.status_code, 200)
         self.assertEqual(backup_build_response.json()["backup_build"]["build_id"], "build-1")
         self.assertFalse(backup_build_response.json()["execution_enabled"])
@@ -767,6 +869,23 @@ class WebDataDeletionTests(unittest.TestCase):
         self.assertFalse(combined_rehearsal_response.json()["execution_enabled"])
         self.assertFalse(combined_rehearsal_response.json()["execution_ready"])
         self.assertEqual(invalid_combined_rehearsal_response.status_code, 422)
+        self.assertEqual(fault_matrix_response.status_code, 200)
+        self.assertEqual(
+            fault_matrix_response.json()["fault_matrix_run"]["id"],
+            1901,
+        )
+        self.assertEqual(
+            fault_matrix_response.json()["fault_matrix_run"]
+            ["contained_fault_count"],
+            4,
+        )
+        self.assertTrue(
+            fault_matrix_response.json()["fault_matrix_run"]
+            ["scratch_resources_removed"]
+        )
+        self.assertFalse(fault_matrix_response.json()["execution_enabled"])
+        self.assertFalse(fault_matrix_response.json()["execution_ready"])
+        self.assertEqual(invalid_fault_matrix_response.status_code, 422)
         self.assertEqual(backup_evidence_response.status_code, 200)
         self.assertEqual(backup_evidence_response.json()["backup_evidence"]["id"], 801)
         self.assertFalse(backup_evidence_response.json()["execution_enabled"])
@@ -855,6 +974,14 @@ class WebDataDeletionTests(unittest.TestCase):
             confirmation_text=combined_confirmation,
             actor_id="local-owner",
             note="temporary delete rollback plus synthetic files",
+        )
+        fault_matrix_service.matrix_state.assert_called_once_with(pending)
+        fault_matrix_service.run.assert_called_once_with(
+            pending,
+            combined_rehearsal_run_id=1801,
+            confirmation_text=fault_matrix_confirmation,
+            actor_id="local-owner",
+            note="deterministic isolated fault matrix",
         )
         backup_service.record_evidence.assert_called_once_with(
             pending,

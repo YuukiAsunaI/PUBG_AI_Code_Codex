@@ -535,9 +535,17 @@ Completed slices:
      original counts and row-set hashes. It combines that result with the synthetic quarantine state machine, requires
      cleanup, and appends one audit row without evidence or readiness. Production rows, files, and execution routes stay
      untouched.
+112. Schema version 19 adds immutable isolated combined fault-matrix runs. Exact confirmation binds the current plan,
+     latest passed combined rehearsal, selected verification and planning results, destination, and fixed ordered
+     scenario fingerprints. One generated-temporary-table scenario injects a failure after the first positive DELETE
+     and requires complete ROLLBACK count/hash restoration. Three synthetic quarantine scenarios interrupt after
+     verified copy, after source removal, and on the first cleanup attempt; each must recover and remove exact owned
+     scratch. Later scenarios continue after a block. One version 19 audit row is the only durable output, while
+     evidence, readiness, authorization, production mutation, actual quarantine, restore, and execution stay absent.
 
 Next slice:
 
-1. Add an isolated combined fault-injection matrix for MySQL statement failures, rollback verification, synthetic
-   quarantine failures, and cleanup/audit behavior. Use only connection-scoped temporary tables and synthetic scratch
-   files; keep production rows/files, actual quarantine movement, restore, and every execution route disabled.
+1. Build an immutable deletion-readiness review packet that aggregates the current request, dry-run plan, backup
+   verification, quarantine planning, version 18 combined rehearsal, and version 19 fault-matrix fingerprints and
+   outcomes into one canonical operator-facing export. Keep it advisory and non-authorizing: no evidence creation,
+   readiness promotion, production mutation, restore, quarantine movement, deletion, or execution route.

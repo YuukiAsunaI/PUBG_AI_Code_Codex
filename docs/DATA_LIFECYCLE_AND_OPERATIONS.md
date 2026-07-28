@@ -248,6 +248,19 @@ Implemented behavior:
 - The same run invokes the version 17 synthetic quarantine state machine without opening production replay files. A
   passed or blocked outcome appends only one immutable combined-rehearsal audit row, requires scratch cleanup, creates
   no readiness evidence, and leaves production rows/files unchanged.
+- Schema version 19 requires exact confirmation bound to the current plan, latest passed combined rehearsal and result,
+  selected backup verification and result, latest quarantine planning and result, destination contract, and the
+  canonical fixed-scenario fingerprint. Any stale or rehashed unsafe input blocks before fault execution.
+- The first scenario restores verified backup rows only into generated connection-scoped temporary tables, performs the
+  first positive-row DELETE, injects a deterministic statement failure, inspects the changed transactional state, rolls
+  back, and compares every original row count and canonical row-set SHA-256. Production tables are never mutation
+  targets. Three additional scenarios use synthetic quarantine fixtures to interrupt after verified copy, after source
+  removal, and during the first cleanup attempt; the last case must detect the failure and complete guarded emergency
+  cleanup of the exact owned scratch directory.
+- A blocked scenario does not suppress later scenarios. The final matrix must report all four outcomes and appends only
+  one immutable `data_deletion_combined_fault_matrix_runs` row. It appends no version 17 or 18 rehearsal row, no
+  readiness evidence, and no authorization. Production restore, actual quarantine, deletion, and execution routes
+  remain absent.
 - The earlier non-executing rehearsal still rechecks live deletion impact, evidence times, artifact metadata, bound
   planner-generated capacity evidence, and current quarantine free space without changing targets.
   `executor_not_implemented` remains even after every available rehearsal passes; production restore, actual

@@ -61,6 +61,7 @@ AUDIT_TABLE_EXCLUSIONS = (
     "data_deletion_quarantine_planning_runs",
     "data_deletion_quarantine_rehearsal_runs",
     "data_deletion_combined_rehearsal_runs",
+    "data_deletion_combined_fault_matrix_runs",
 )
 
 

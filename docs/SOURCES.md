@@ -24,7 +24,7 @@ Research date: 2026-06-27
 
 ## Official MySQL Transaction Sources
 
-Reviewed for the schema version 18 temporary-table deletion/rollback rehearsal on 2026-07-28:
+Reviewed for the schema versions 18-19 temporary-table deletion/rollback and fault-matrix rehearsals on 2026-07-28:
 
 - Statements that cause implicit commits: https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html
 - COMMIT and ROLLBACK statements: https://dev.mysql.com/doc/refman/8.4/en/commit.html

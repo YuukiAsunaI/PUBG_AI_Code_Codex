@@ -33,6 +33,11 @@ from pubg_ai.time_utils import now_kst, to_kst
 QUARANTINE_REHEARSAL_CONTRACT_VERSION = "deletion-quarantine-rehearsal-v1"
 QUARANTINE_REHEARSAL_CONFIRMATION_PREFIX = "RUN ISOLATED QUARANTINE REHEARSAL"
 QUARANTINE_FIXTURE_FORMAT_VERSION = "deletion-quarantine-fixture-v1"
+QUARANTINE_FAULT_POINTS = (
+    "after_verified_copy",
+    "after_source_removal",
+    "cleanup_first_attempt",
+)
 
 _SCRATCH_PREFIX = ".pubg-ai-quarantine-rehearsal-"
 _MARKER_NAME = ".pubg-ai-owned-scratch.json"
@@ -335,6 +340,7 @@ class DataDeletionQuarantineRehearsalService:
         *,
         quarantine_planning_run_id: int,
         reference_kst: datetime | None = None,
+        fault_point: str | None = None,
     ) -> tuple[
         DataDeletionDryRunPlan,
         DataDeletionQuarantinePlanningRun,
@@ -381,8 +387,33 @@ class DataDeletionQuarantineRehearsalService:
             planning=planning,
             quarantine_root=self.quarantine_root,
             run_at_kst=to_kst(reference_kst or now_kst()),
+            fault_point=fault_point,
         ).run()
         return plan, planning, result
+
+    def run_bound_synthetic_fault_state(
+        self,
+        request: DataDeletionRequest,
+        *,
+        quarantine_planning_run_id: int,
+        fault_point: str,
+        reference_kst: datetime | None = None,
+    ) -> tuple[
+        DataDeletionDryRunPlan,
+        DataDeletionQuarantinePlanningRun,
+        dict[str, Any],
+    ]:
+        point = str(fault_point or "")
+        if point not in QUARANTINE_FAULT_POINTS:
+            raise DataDeletionQuarantineRehearsalError(
+                "unsupported synthetic quarantine fault point"
+            )
+        return self.run_bound_synthetic_state(
+            request,
+            quarantine_planning_run_id=quarantine_planning_run_id,
+            reference_kst=reference_kst,
+            fault_point=point,
+        )
 
     def get_run(self, rehearsal_run_id: int) -> DataDeletionQuarantineRehearsalRun:
         rehearsal_run_id = _positive_int(rehearsal_run_id, "rehearsal_run_id")
@@ -654,12 +685,19 @@ class _IsolatedQuarantineRunner:
         planning: DataDeletionQuarantinePlanningRun,
         quarantine_root: Path,
         run_at_kst: datetime,
+        fault_point: str | None = None,
     ) -> None:
         self.request = request
         self.plan = plan
         self.planning = planning
         self.quarantine_root = quarantine_root
         self.run_at_kst = run_at_kst
+        if fault_point is not None and fault_point not in QUARANTINE_FAULT_POINTS:
+            raise DataDeletionQuarantineRehearsalError(
+                "unsupported synthetic quarantine fault point"
+            )
+        self.fault_point = fault_point
+        self.fault_injection: dict[str, Any] | None = None
         self.token = uuid.uuid4().hex
         self.scratch = quarantine_root / f"{_SCRATCH_PREFIX}{self.token}"
         self.checks: list[dict[str, Any]] = []
@@ -679,8 +717,11 @@ class _IsolatedQuarantineRunner:
             specs = _fixture_specs(self.planning)
             self._record_contract_check(specs)
             self._create_scratch()
-            self._run_normal_and_rollback(specs)
-            self._run_recovery_cases(specs[0])
+            if self.fault_point is None:
+                self._run_normal_and_rollback(specs)
+                self._run_recovery_cases(specs[0])
+            else:
+                self._run_fault_scenario(specs)
             self.checks.append(
                 _check(
                     "production_source_isolation",
@@ -731,6 +772,7 @@ class _IsolatedQuarantineRunner:
             "quarantine_root": str(self.quarantine_root),
             "scratch_directory": str(self.scratch),
             "journal_strategy": self.journal_strategy,
+            "fault_injection": self.fault_injection,
             "checks": self.checks,
             "metrics": dict(self.metrics),
             "blockers": blockers,
@@ -881,6 +923,92 @@ class _IsolatedQuarantineRunner:
                 {"scratch_directory": str(self.scratch)},
             )
         )
+
+    def _run_fault_scenario(self, specs: list[dict[str, Any]]) -> None:
+        if self.fault_point == "cleanup_first_attempt":
+            self.fault_injection = {
+                "fault_point": self.fault_point,
+                "observed": False,
+                "recovered": False,
+                "emergency_cleanup_passed": False,
+            }
+            self._run_normal_and_rollback(specs)
+            return
+
+        spec = specs[0]
+        scenario = self.scratch / f"fault-{self.fault_point}"
+        source = scenario / "source.fixture"
+        target = scenario / "target.fixture"
+        scenario.mkdir(parents=True)
+        payload = _fixture_payload(self.planning, spec)
+        _write_new_file(source, payload)
+        self.metrics["fixture_file_count"] += 1
+        self.metrics["fixture_bytes"] += len(payload)
+        journal = scenario / _JOURNAL_NAME
+        self._write_journal(journal, "planned", None)
+        self._write_journal(journal, "copying", spec)
+        _copy_new_verified(source, target, payload)
+        self._write_journal(journal, "copied_and_verified", spec)
+        state = "copied_and_verified"
+        if self.fault_point == "after_source_removal":
+            self._write_journal(journal, "source_removal_committing", spec)
+            source.unlink()
+            state = "source_removal_committing"
+        observed = bool(
+            (state == "copied_and_verified" and source.exists() and target.exists())
+            or (
+                state == "source_removal_committing"
+                and not source.exists()
+                and target.exists()
+            )
+        )
+        outcome = _recover_fixture_case(
+            state=state,
+            source=source,
+            target=target,
+            expected_payload=payload,
+        )
+        recovered = bool(
+            outcome == "rolled_back"
+            and _file_matches(source, payload)
+            and not target.exists()
+        )
+        if recovered:
+            self._write_journal(journal, "rolled_back", spec)
+        self.metrics["recovery_case_count"] = 1
+        self.metrics["recovered_case_count"] = int(recovered)
+        self.fault_injection = {
+            "fault_point": self.fault_point,
+            "observed": observed,
+            "journal_state": state,
+            "recovery_outcome": outcome,
+            "recovered": recovered,
+            "emergency_cleanup_passed": False,
+        }
+        self.checks.append(
+            _check(
+                "fault_injection_observed",
+                observed,
+                "the synthetic interruption is observed at the declared journal state",
+                dict(self.fault_injection),
+            )
+        )
+        self.checks.append(
+            _check(
+                "fault_recovery",
+                recovered,
+                "recovery restores the synthetic source and removes the synthetic target",
+                {
+                    "recovery_outcome": outcome,
+                    "source_restored": _file_matches(source, payload),
+                    "target_removed": not target.exists(),
+                },
+            )
+        )
+        if not observed or not recovered:
+            raise _RehearsalBlocked(
+                "synthetic quarantine fault was not safely recovered"
+            )
 
     def _run_normal_and_rollback(self, specs: list[dict[str, Any]]) -> None:
         scenario = self.scratch / "normal-flow"
@@ -1084,6 +1212,26 @@ class _IsolatedQuarantineRunner:
     def _cleanup(self) -> None:
         errors: list[str] = []
         if self.scratch_created:
+            if self.fault_point == "cleanup_first_attempt":
+                injected_error = "injected first cleanup attempt failure"
+                if self.fault_injection is None:
+                    self.fault_injection = {"fault_point": self.fault_point}
+                self.fault_injection.update(
+                    {
+                        "observed": True,
+                        "initial_cleanup_error": injected_error,
+                        "recovered": False,
+                        "emergency_cleanup_passed": False,
+                    }
+                )
+                self.checks.append(
+                    _check(
+                        "cleanup_fault_detected",
+                        True,
+                        "the injected first cleanup failure is detected before retry",
+                        {"error": injected_error},
+                    )
+                )
             try:
                 _assert_owned_scratch(
                     self.quarantine_root,
@@ -1094,6 +1242,21 @@ class _IsolatedQuarantineRunner:
                 if os.path.lexists(str(self.scratch)):
                     raise OSError("scratch directory still exists after cleanup")
                 self.scratch_removed = True
+                if self.fault_point == "cleanup_first_attempt":
+                    self.fault_injection.update(
+                        {
+                            "recovered": True,
+                            "emergency_cleanup_passed": True,
+                        }
+                    )
+                    self.checks.append(
+                        _check(
+                            "emergency_cleanup",
+                            True,
+                            "the owned scratch directory is removed by the guarded retry",
+                            {"scratch_directory_removed": True},
+                        )
+                    )
             except Exception as exc:
                 errors.append(_safe_error_message(exc))
         else:

@@ -51,6 +51,7 @@ _REPLAY_ARTIFACT_KEY = "replay_artifact_backup"
 _INTEGRITY_EVIDENCE_KEY = "backup_integrity_verification"
 _TEMP_TABLE_PREFIX = "_pubg_ai_rr_"
 _TEMP_DIRECTORY_PREFIX = ".pubg-ai-restore-rehearsal-"
+MYSQL_DELETION_FAULT_POINTS = ("after_first_delete",)
 _COPY_CHUNK_BYTES = 1024 * 1024
 _MAX_INTERNAL_MANIFEST_BYTES = 8 * 1024 * 1024
 _MAX_JSONL_LINE_BYTES = 64 * 1024 * 1024
@@ -113,6 +114,12 @@ class DataDeletionRestoreRehearsalError(RuntimeError):
 
 class _RestoreBlocked(RuntimeError):
     pass
+
+
+class _InjectedDatabaseFault(_RestoreBlocked):
+    def __init__(self, fault_point: str) -> None:
+        self.fault_point = fault_point
+        super().__init__(f"injected temporary MySQL fault: {fault_point}")
 
 
 class _DuplicateJsonKey(ValueError):
@@ -797,6 +804,7 @@ class _IsolatedRestoreRunner:
         revalidated: RevalidatedBackupBuild,
         restore_replay_artifact: bool = True,
         exercise_database_deletion: bool = False,
+        database_fault_point: str | None = None,
     ) -> None:
         self.audit_connection = audit_connection
         self.scratch_connection_factory = scratch_connection_factory
@@ -805,6 +813,14 @@ class _IsolatedRestoreRunner:
         self.revalidated = revalidated
         self.restore_replay_artifact = bool(restore_replay_artifact)
         self.exercise_database_deletion = bool(exercise_database_deletion)
+        if (
+            database_fault_point is not None
+            and database_fault_point not in MYSQL_DELETION_FAULT_POINTS
+        ):
+            raise DataDeletionRestoreRehearsalError(
+                "unsupported temporary MySQL fault point"
+            )
+        self.database_fault_point = database_fault_point
         self.checks: list[dict[str, Any]] = []
         self.metrics = _empty_metrics()
         self.deletion_exercise: dict[str, Any] | None = None
@@ -1239,8 +1255,8 @@ class _IsolatedRestoreRunner:
         transaction_started = False
         transaction_error: Exception | None = None
         operation_results: list[dict[str, Any]] = []
-        post_delete: dict[str, dict[str, Any]] = {}
-        ledger_after_delete: dict[str, Any] | None = None
+        transaction_state: dict[str, dict[str, Any]] = {}
+        ledger_during_transaction: dict[str, Any] | None = None
         mutation_targets: list[str] = []
         try:
             _begin(self._scratch_connection)
@@ -1282,21 +1298,39 @@ class _IsolatedRestoreRunner:
                         "temporary_target": binding.temporary_table,
                     }
                 )
-            post_delete = {
+                if (
+                    self.database_fault_point == "after_first_delete"
+                    and affected_rows > 0
+                ):
+                    raise _InjectedDatabaseFault(self.database_fault_point)
+            transaction_state = {
                 table: self._temporary_table_state(binding)
                 for table, binding in self._temp_table_bindings.items()
             }
-            ledger_after_delete = self._preservation_ledger_state(ledger_name)
-            if any(state["row_count"] != 0 for state in post_delete.values()):
+            ledger_during_transaction = self._preservation_ledger_state(ledger_name)
+            if any(state["row_count"] != 0 for state in transaction_state.values()):
                 raise _RestoreBlocked(
                     "candidate temporary rows remain after ordered deletion"
                 )
-            if ledger_after_delete != ledger_before:
+            if ledger_during_transaction != ledger_before:
                 raise _RestoreBlocked(
                     "shared-data or audit preservation ledger changed during deletion"
                 )
         except Exception as exc:
             transaction_error = exc
+            try:
+                transaction_state = {
+                    table: self._temporary_table_state(binding)
+                    for table, binding in self._temp_table_bindings.items()
+                }
+                ledger_during_transaction = self._preservation_ledger_state(
+                    ledger_name
+                )
+            except Exception as observation_error:
+                transaction_error = _RestoreBlocked(
+                    "failed to inspect the injected transaction state: "
+                    + _safe_error_message(observation_error)
+                )
         finally:
             if transaction_started:
                 try:
@@ -1313,7 +1347,7 @@ class _IsolatedRestoreRunner:
         ledger_after_rollback = self._preservation_ledger_state(ledger_name)
         rollback_matches = rolled_back == baseline
         preservation_matches = (
-            ledger_after_delete == ledger_before
+            ledger_during_transaction == ledger_before
             and ledger_after_rollback == ledger_before
         )
         expected_mutation_targets = {
@@ -1324,21 +1358,52 @@ class _IsolatedRestoreRunner:
             set(mutation_targets).issubset(expected_mutation_targets)
             and all(_TEMP_TABLE_PATTERN.fullmatch(item) for item in mutation_targets)
         )
-        self.checks.append(
-            _check(
-                "temporary_deletion_postconditions",
-                transaction_error is None
-                and bool(post_delete)
-                and all(state["row_count"] == 0 for state in post_delete.values()),
-                "every planned candidate temporary table reaches zero rows",
-                {"operations": operation_results, "post_delete": post_delete},
-                (
-                    "ordered selectors removed every candidate temporary row"
-                    if transaction_error is None
-                    else _safe_error_message(transaction_error)
-                ),
-            )
+        fault_expected = self.database_fault_point is not None
+        fault_observed = bool(
+            isinstance(transaction_error, _InjectedDatabaseFault)
+            and transaction_error.fault_point == self.database_fault_point
         )
+        changed_during_transaction = transaction_state != baseline
+        if fault_expected:
+            self.checks.append(
+                _check(
+                    "temporary_deletion_fault_injection",
+                    fault_observed and changed_during_transaction,
+                    "the declared fault fires after at least one temporary DELETE changes rows",
+                    {
+                        "fault_point": self.database_fault_point,
+                        "fault_observed": fault_observed,
+                        "temporary_state_changed": changed_during_transaction,
+                    },
+                    (
+                        "the temporary DELETE fault was observed at the declared point"
+                        if fault_observed and changed_during_transaction
+                        else "the declared temporary DELETE fault was not observed"
+                    ),
+                )
+            )
+        else:
+            self.checks.append(
+                _check(
+                    "temporary_deletion_postconditions",
+                    transaction_error is None
+                    and bool(transaction_state)
+                    and all(
+                        state["row_count"] == 0
+                        for state in transaction_state.values()
+                    ),
+                    "every planned candidate temporary table reaches zero rows",
+                    {
+                        "operations": operation_results,
+                        "post_delete": transaction_state,
+                    },
+                    (
+                        "ordered selectors removed every candidate temporary row"
+                        if transaction_error is None
+                        else _safe_error_message(transaction_error)
+                    ),
+                )
+            )
         self.checks.append(
             _check(
                 "shared_and_audit_preservation",
@@ -1347,7 +1412,7 @@ class _IsolatedRestoreRunner:
                 {
                     "descriptor_count": len(descriptors),
                     "before": ledger_before,
-                    "after_delete": ledger_after_delete,
+                    "during_transaction": ledger_during_transaction,
                     "after_rollback": ledger_after_rollback,
                 },
                 (
@@ -1383,35 +1448,54 @@ class _IsolatedRestoreRunner:
                 ),
             )
         )
-        if transaction_error is not None:
+        if transaction_error is not None and not fault_observed:
             if isinstance(transaction_error, _RestoreBlocked):
                 raise transaction_error
             raise _RestoreBlocked(
                 f"temporary deletion exercise failed: {_safe_error_message(transaction_error)}"
             ) from transaction_error
+        if fault_expected and not fault_observed:
+            raise _RestoreBlocked("declared temporary MySQL fault was not observed")
         if not rollback_matches or not preservation_matches or not mutation_guard:
             raise _RestoreBlocked("temporary deletion safety invariants failed")
         deleted_rows = sum(item["deleted_rows"] for item in operation_results)
+        candidate_rows = sum(
+            int(state["row_count"]) for state in baseline.values()
+        )
         return {
-            "contract_version": "temporary-mysql-deletion-rehearsal-v1",
+            "contract_version": (
+                "temporary-mysql-deletion-fault-rehearsal-v1"
+                if fault_expected
+                else "temporary-mysql-deletion-rehearsal-v1"
+            ),
             "operation_count": len(operation_results),
             "candidate_table_count": len(self._temp_table_bindings),
-            "candidate_row_count": deleted_rows,
+            "candidate_row_count": candidate_rows,
             "deleted_row_count": deleted_rows,
-            "rolled_back_row_count": sum(
+            "rolled_back_row_count": deleted_rows,
+            "restored_candidate_row_count": sum(
                 int(state["row_count"]) for state in rolled_back.values()
             ),
             "preserved_descriptor_count": len(descriptors),
             "operation_results": operation_results,
             "baseline": baseline,
-            "post_delete": post_delete,
+            "during_transaction": transaction_state,
             "after_rollback": rolled_back,
             "preservation_fingerprint_sha256": ledger_before[
                 "fingerprint_sha256"
             ],
+            "fault_injection": {
+                "requested": fault_expected,
+                "fault_point": self.database_fault_point,
+                "observed": fault_observed,
+                "temporary_state_changed": changed_during_transaction,
+            },
             "safety": {
                 "temporary_tables_only": True,
-                "ordered_selectors_exercised": True,
+                "ordered_selectors_exercised": not fault_expected,
+                "injected_statement_failure_exercised": (
+                    fault_expected and fault_observed
+                ),
                 "transaction_rolled_back": True,
                 "shared_data_preserved": True,
                 "audit_data_preserved": True,
@@ -1793,6 +1877,36 @@ def run_isolated_mysql_deletion_rehearsal(
         revalidated=revalidated,
         restore_replay_artifact=False,
         exercise_database_deletion=True,
+    )
+    return runner.run()
+
+
+def run_isolated_mysql_deletion_fault_rehearsal(
+    *,
+    audit_connection: Any,
+    scratch_connection_factory: Callable[[], Any],
+    backup_root: Path,
+    expected_database_name: str,
+    revalidated: RevalidatedBackupBuild,
+    fault_point: str,
+) -> dict[str, Any]:
+    point = str(fault_point or "")
+    if point not in MYSQL_DELETION_FAULT_POINTS:
+        raise DataDeletionRestoreRehearsalError(
+            "unsupported temporary MySQL fault point"
+        )
+    runner = _IsolatedRestoreRunner(
+        audit_connection=audit_connection,
+        scratch_connection_factory=scratch_connection_factory,
+        backup_root=backup_root.expanduser().resolve(strict=False),
+        expected_database_name=_identifier(
+            expected_database_name,
+            "expected_database_name",
+        ),
+        revalidated=revalidated,
+        restore_replay_artifact=False,
+        exercise_database_deletion=True,
+        database_fault_point=point,
     )
     return runner.run()
 

@@ -25,6 +25,7 @@ from pubg_ai.data_deletion_quarantine_planner import (
     fingerprint_quarantine_destination_contract,
 )
 from pubg_ai.data_deletion_quarantine_rehearsal import (
+    QUARANTINE_FAULT_POINTS,
     DataDeletionQuarantineRehearsalError,
     DataDeletionQuarantineRehearsalService,
     _rehearsal_run_from_row,
@@ -136,6 +137,45 @@ class QuarantineRehearsalServiceTests(unittest.TestCase):
         )
         self.assertTrue(self.connection.committed)
         self.assertFalse(self.connection.rolled_back)
+
+    def test_bound_fault_scenarios_recover_and_clean_without_v17_audit(self) -> None:
+        service = self._service()
+        source_bytes = {
+            relative: (self.replay_root / relative).read_bytes()
+            for relative in self.bodies
+        }
+
+        for fault_point in QUARANTINE_FAULT_POINTS:
+            with self.subTest(fault_point=fault_point):
+                plan, planning, result = service.run_bound_synthetic_fault_state(
+                    _request(),
+                    quarantine_planning_run_id=self.planning.id,
+                    fault_point=fault_point,
+                    reference_kst=datetime(2026, 7, 29, 11, 0, 0),
+                )
+
+                self.assertEqual(plan.id, self.plan.id)
+                self.assertEqual(planning.id, self.planning.id)
+                self.assertEqual(result["result_status"], "passed")
+                self.assertEqual(
+                    result["fault_injection"]["fault_point"],
+                    fault_point,
+                )
+                self.assertTrue(result["fault_injection"]["observed"])
+                self.assertTrue(result["fault_injection"]["recovered"])
+                self.assertTrue(
+                    result["safety"]["scratch_directory_removed"]
+                )
+                self.assertFalse(
+                    result["safety"]["production_source_files_opened"]
+                )
+                self.assertEqual(list(self.quarantine_root.iterdir()), [])
+                self.assertEqual(self.connection.dml, [])
+                for relative, body in source_bytes.items():
+                    self.assertEqual(
+                        (self.replay_root / relative).read_bytes(),
+                        body,
+                    )
 
     def test_tampered_planning_item_binding_is_audited_blocked(self) -> None:
         tampered_result = deepcopy(self.planning.result_json)

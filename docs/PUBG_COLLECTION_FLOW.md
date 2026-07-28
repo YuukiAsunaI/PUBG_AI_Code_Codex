@@ -409,6 +409,11 @@ The current Discord bot slice is intentionally small and reuses the same local M
   shared/audit preservation, rolls back, and rechecks counts plus canonical row-set hashes. It then runs the synthetic
   quarantine state machine. Scratch cleanup is mandatory, one immutable audit row is the only durable output, and no
   production row/file mutation, readiness evidence, or execution capability is created.
+- The isolated combined fault matrix binds that passed combined run and every upstream fingerprint to a fixed ordered
+  set of four deterministic failures. It injects one post-DELETE failure only in generated MySQL temporary tables and
+  verifies ROLLBACK count/hash restoration, then exercises three synthetic quarantine interruptions and guarded cleanup
+  recovery. It continues after an individual block, removes all owned scratch resources, and appends only one immutable
+  matrix audit row. It creates no readiness evidence, authorization, production mutation, or execution capability.
 - The non-executing rehearsal rechecks the live source fingerprint plus evidence/file metadata, planner-bound capacity
   evidence, and current free space, then appends a passed/blocked result. The rehearsal itself does not open backups,
   calculate checksums, run a restore, move replay artifacts, execute SQL mutations, or expose a Discord counterpart.

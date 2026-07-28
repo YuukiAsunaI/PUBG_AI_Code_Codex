@@ -130,9 +130,14 @@ requires cleanup. It never opens production replay bytes and creates no readines
 verification, latest passed quarantine planning, and destination contract. It revalidates backup bytes, runs planned
 DELETE selectors only against generated connection-scoped temporary tables, rolls the transaction back, verifies
 row-set restoration and preservation ledgers, and combines that result with the synthetic quarantine state machine.
-Only one immutable audit row is appended; no readiness evidence is created and production rows/files are unchanged. Run
-`python -m pubg_ai.cli init-db` after updating so the twelve deletion workflow tables are created. No deletion executor
-or execution endpoint is enabled.
+Only one immutable audit row is appended; no readiness evidence is created and production rows/files are unchanged.
+Schema version 19 adds `data_deletion_combined_fault_matrix_runs`. Its exact confirmation binds the current plan and
+passed version 18 run plus verification, planning, destination, and fixed scenario fingerprints. The matrix injects one
+post-DELETE MySQL fault in generated connection-scoped temporary tables and three deterministic synthetic quarantine
+faults (`after_verified_copy`, `after_source_removal`, and `cleanup_first_attempt`). Every fault must be observed,
+contained, recovered or rolled back, and cleaned; the matrix continues after an individual block and appends only one
+immutable version 19 audit row. Run `python -m pubg_ai.cli init-db` after updating so the thirteen deletion workflow
+tables are created. No deletion executor or execution endpoint is enabled.
 
 The opt-in builder uses `PUBG_BACKUP_DATA_DIR` (default `./data/backups`). The backup root must be writable and must not
 equal, contain, or be contained by `PUBG_RAW_DATA_DIR` or `PUBG_REPLAY_DATA_DIR`. A build requires the exact latest-plan

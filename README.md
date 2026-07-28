@@ -402,7 +402,15 @@ restores candidate rows into generated connection-scoped MySQL temporary tables,
 there in a DELETE-only transaction, verifies preservation, rolls back, and compares the original row counts and
 canonical row-set hashes. The same run exercises the version 17 synthetic quarantine state machine and requires all
 scratch resources to be removed. It appends one audit row and creates no evidence or readiness state. Production rows
-and files remain unchanged. The database archive still contains no schema DDL, and there is no production restore,
+and files remain unchanged. Schema version 19 adds immutable isolated combined fault-matrix runs. Exact confirmation
+starts with `RUN ISOLATED COMBINED FAULT MATRIX` and binds the current plan, latest passed combined rehearsal, backup
+verification, quarantine planning, destination contract, and fixed four-scenario contract fingerprints. One scenario
+injects a failure after the first positive-row DELETE against a generated temporary table and verifies that ROLLBACK
+restores both row counts and canonical row-set hashes. Three synthetic quarantine scenarios interrupt after verified
+copy, after source removal, and on the first cleanup attempt; each must recover and remove its owned scratch resources.
+Remaining scenarios still run after an individual block so the immutable result reports the complete matrix. The run
+appends only its version 19 audit row and creates no combined-rehearsal row, evidence, readiness state, production
+mutation, or execution capability. The database archive still contains no schema DDL, and there is no production restore,
 quarantine mover, deletion endpoint, executable deletion SQL, file remover, or execution button.
 `executor_not_implemented` remains unconditional. Rerun
 `python -m pubg_ai.cli init-db` after updating from an earlier schema.

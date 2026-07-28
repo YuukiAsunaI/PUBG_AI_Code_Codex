@@ -229,6 +229,14 @@ Suggested command groups:
   [temporary-table and implicit-commit behavior](https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html) while
   relying on InnoDB transaction rollback for DELETE DML. One audit row is the only durable output, and no readiness
   evidence, production mutation, restore path, quarantine mover, or executor is introduced.
+- Schema version 19 stores immutable isolated combined fault-matrix runs. The fixed ordered contract contains one MySQL
+  `after_first_delete` fault and three synthetic quarantine faults: `after_verified_copy`, `after_source_removal`, and
+  `cleanup_first_attempt`. Exact confirmation binds the current plan, latest passed combined rehearsal, verification,
+  planning, destination, and scenario-contract fingerprints. The MySQL fault must observe a positive-row temporary
+  DELETE before ROLLBACK restores counts and canonical row-set hashes. File faults must recover synthetic state, and a
+  simulated first cleanup failure must trigger guarded emergency cleanup. Later scenarios continue after a block so
+  the audit is complete. Only the version 19 row is durable; no evidence, readiness, authorization, production
+  mutation, actual quarantine, restore, deletion, or executor is introduced.
 - Deletion should be split into options:
   - delete registration only
   - delete normalized DB data
