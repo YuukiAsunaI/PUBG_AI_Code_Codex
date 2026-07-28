@@ -261,6 +261,16 @@ Implemented behavior:
   one immutable `data_deletion_combined_fault_matrix_runs` row. It appends no version 17 or 18 rehearsal row, no
   readiness evidence, and no authorization. Production restore, actual quarantine, deletion, and execution routes
   remain absent.
+- Schema version 20 compiles the current request plus the five immutable downstream results into one canonical
+  deletion-readiness review packet. The selected plan, backup verification, quarantine planning, combined rehearsal,
+  and fault matrix must all be the latest current chain and retain their original contract and result fingerprints.
+  Exact confirmation binds the request, plan, fault-matrix run, and complete input-contract SHA-256.
+- A passed matrix produces `advisory_checks_passed`; a blocked matrix produces `advisory_checks_blocked` and remains
+  exportable for complete operator review. This distinction is an assessment only. It cannot authorize deletion or
+  promote readiness, and rehashing any unsafe flag or input identifier makes packet loading fail closed.
+- Generation appends one immutable `data_deletion_readiness_review_packets` row and deterministic UTF-8 JSON. The
+  detail and attachment export routes are read-only. No evidence, readiness state, production database row, source
+  file, quarantine target, restore target, or deletion execution is created or changed.
 - The earlier non-executing rehearsal still rechecks live deletion impact, evidence times, artifact metadata, bound
   planner-generated capacity evidence, and current quarantine free space without changing targets.
   `executor_not_implemented` remains even after every available rehearsal passes; production restore, actual

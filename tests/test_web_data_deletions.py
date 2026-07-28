@@ -429,6 +429,76 @@ class WebDataDeletionTests(unittest.TestCase):
             "execution_ready": False,
         }
         fault_matrix_service.run.return_value = fault_matrix_run
+        review_packet_confirmation = (
+            "GENERATE ADVISORY DELETION REVIEW PACKET REQUEST 17 PLAN 901 "
+            "FAULT MATRIX 1901 INPUTS " + "j" * 64
+        )
+        review_packet = MagicMock()
+        review_packet.id = 2001
+        review_packet.request_id = 17
+        review_packet.to_record.return_value = {
+            "id": 2001,
+            "request_id": 17,
+            "dry_run_plan_id": 901,
+            "backup_verification_run_id": 1201,
+            "quarantine_planning_run_id": 1501,
+            "combined_rehearsal_run_id": 1801,
+            "fault_matrix_run_id": 1901,
+            "review_status": "advisory_checks_passed",
+            "input_count": 6,
+            "passed_input_count": 6,
+            "blocked_input_count": 0,
+            "check_count": 12,
+            "passed_check_count": 12,
+            "blocked_check_count": 0,
+            "fault_scenario_count": 4,
+            "passed_fault_scenario_count": 4,
+            "contained_fault_count": 4,
+            "scratch_resources_removed": True,
+            "authorization_granted": False,
+            "readiness_promoted": False,
+            "execution_enabled": False,
+            "execution_ready": False,
+            "packet_json": {
+                "checks": [
+                    {
+                        "key": "input_contract_current",
+                        "status": "passed",
+                        "message": "All immutable inputs are current.",
+                    }
+                ]
+            },
+        }
+        review_packet_state = {
+            "request_id": 17,
+            "request_status": "pending",
+            "contract_version": "deletion-readiness-review-packet-v1",
+            "packet_kind": "advisory_deletion_readiness_review",
+            "packet_candidate": None,
+            "latest_review_packet": None,
+            "review_packet_history": [],
+            "review_packet_allowed": False,
+            "review_packet_blockers": [
+                "request status must be approved, not pending"
+            ],
+            "captures_blocked_fault_matrix_outcome": True,
+            "appends_review_packet_audit_row": True,
+            "appends_readiness_evidence": False,
+            "authorization_granted": False,
+            "readiness_promoted": False,
+            "deletion_performed": False,
+            "execution_enabled": False,
+            "execution_ready": False,
+            "execution_blockers": [
+                "review_packet_is_advisory_only",
+                "executor_not_implemented",
+            ],
+        }
+        review_packet_service = MagicMock()
+        review_packet_service.packet_state.return_value = review_packet_state
+        review_packet_service.generate.return_value = review_packet
+        review_packet_service.get_packet.return_value = review_packet
+        review_packet_bytes = b'{"contract_version":"deletion-readiness-review-packet-v1"}\n'
         connections: list[FakeConnection] = []
 
         def connection_factory(*_: object, **__: object) -> FakeConnection:
@@ -471,6 +541,14 @@ class WebDataDeletionTests(unittest.TestCase):
                 "pubg_ai.web.app.DataDeletionFaultMatrixService",
                 return_value=fault_matrix_service,
             ),
+            patch(
+                "pubg_ai.web.app.DataDeletionReviewPacketService",
+                return_value=review_packet_service,
+            ),
+            patch(
+                "pubg_ai.web.app.canonical_review_packet_bytes",
+                return_value=review_packet_bytes,
+            ) as canonical_packet_bytes,
         ):
             client = TestClient(create_app())
             list_response = client.get("/data-deletions?status=pending&limit=50")
@@ -630,6 +708,29 @@ class WebDataDeletionTests(unittest.TestCase):
                     "actor_id": "local-owner",
                 },
             )
+            review_packet_response = client.post(
+                "/data-deletions/17/review-packets",
+                json={
+                    "fault_matrix_run_id": 1901,
+                    "confirmation_text": review_packet_confirmation,
+                    "actor_id": "local-owner",
+                    "note": "canonical operator review export",
+                },
+            )
+            invalid_review_packet_response = client.post(
+                "/data-deletions/17/review-packets",
+                json={
+                    "fault_matrix_run_id": 0,
+                    "confirmation_text": "invalid",
+                    "actor_id": "local-owner",
+                },
+            )
+            review_packet_detail_response = client.get(
+                "/data-deletions/17/review-packets/2001"
+            )
+            review_packet_export_response = client.get(
+                "/data-deletions/17/review-packets/2001/export.json"
+            )
             backup_evidence_response = client.post(
                 "/data-deletions/17/backup-evidence",
                 json={
@@ -710,6 +811,10 @@ class WebDataDeletionTests(unittest.TestCase):
         self.assertEqual(
             detail_response.json()["fault_matrix_url"],
             "/data-deletions/17/fault-matrix-runs",
+        )
+        self.assertEqual(
+            detail_response.json()["review_packet_url"],
+            "/data-deletions/17/review-packets",
         )
         self.assertEqual(
             detail_response.json()["backup_evidence_url"],
@@ -807,6 +912,26 @@ class WebDataDeletionTests(unittest.TestCase):
             backup_state_response.json()["fault_matrix_state"]
             ["execution_enabled"]
         )
+        self.assertFalse(
+            backup_state_response.json()["review_packet_state"]
+            ["review_packet_allowed"]
+        )
+        self.assertTrue(
+            backup_state_response.json()["review_packet_state"]
+            ["appends_review_packet_audit_row"]
+        )
+        self.assertFalse(
+            backup_state_response.json()["review_packet_state"]
+            ["authorization_granted"]
+        )
+        self.assertFalse(
+            backup_state_response.json()["review_packet_state"]
+            ["readiness_promoted"]
+        )
+        self.assertFalse(
+            backup_state_response.json()["review_packet_state"]
+            ["execution_enabled"]
+        )
         self.assertEqual(backup_build_response.status_code, 200)
         self.assertEqual(backup_build_response.json()["backup_build"]["build_id"], "build-1")
         self.assertFalse(backup_build_response.json()["execution_enabled"])
@@ -886,6 +1011,42 @@ class WebDataDeletionTests(unittest.TestCase):
         self.assertFalse(fault_matrix_response.json()["execution_enabled"])
         self.assertFalse(fault_matrix_response.json()["execution_ready"])
         self.assertEqual(invalid_fault_matrix_response.status_code, 422)
+        self.assertEqual(review_packet_response.status_code, 200)
+        self.assertEqual(
+            review_packet_response.json()["review_packet"]["id"],
+            2001,
+        )
+        self.assertEqual(
+            review_packet_response.json()["export_url"],
+            "/data-deletions/17/review-packets/2001/export.json",
+        )
+        self.assertFalse(review_packet_response.json()["authorization_granted"])
+        self.assertFalse(review_packet_response.json()["readiness_promoted"])
+        self.assertFalse(review_packet_response.json()["execution_enabled"])
+        self.assertFalse(review_packet_response.json()["execution_ready"])
+        self.assertEqual(invalid_review_packet_response.status_code, 422)
+        self.assertEqual(review_packet_detail_response.status_code, 200)
+        self.assertEqual(
+            review_packet_detail_response.json()["review_packet"]["id"],
+            2001,
+        )
+        self.assertFalse(
+            review_packet_detail_response.json()["authorization_granted"]
+        )
+        self.assertEqual(review_packet_export_response.status_code, 200)
+        self.assertEqual(review_packet_export_response.content, review_packet_bytes)
+        self.assertEqual(
+            review_packet_export_response.headers["content-type"],
+            "application/json",
+        )
+        self.assertEqual(
+            review_packet_export_response.headers["content-disposition"],
+            'attachment; filename="pubg-ai-deletion-review-request-17-packet-2001.json"',
+        )
+        self.assertEqual(
+            review_packet_export_response.headers["x-content-type-options"],
+            "nosniff",
+        )
         self.assertEqual(backup_evidence_response.status_code, 200)
         self.assertEqual(backup_evidence_response.json()["backup_evidence"]["id"], 801)
         self.assertFalse(backup_evidence_response.json()["execution_enabled"])
@@ -983,6 +1144,17 @@ class WebDataDeletionTests(unittest.TestCase):
             actor_id="local-owner",
             note="deterministic isolated fault matrix",
         )
+        review_packet_service.packet_state.assert_called_once_with(pending)
+        review_packet_service.generate.assert_called_once_with(
+            pending,
+            fault_matrix_run_id=1901,
+            confirmation_text=review_packet_confirmation,
+            actor_id="local-owner",
+            note="canonical operator review export",
+        )
+        self.assertEqual(review_packet_service.get_packet.call_count, 2)
+        review_packet_service.get_packet.assert_called_with(2001)
+        canonical_packet_bytes.assert_called_once_with(review_packet)
         backup_service.record_evidence.assert_called_once_with(
             pending,
             dry_run_plan_id=901,

@@ -543,9 +543,17 @@ Completed slices:
      scratch. Later scenarios continue after a block. One version 19 audit row is the only durable output, while
      evidence, readiness, authorization, production mutation, actual quarantine, restore, and execution stay absent.
 
+113. Schema version 20 adds immutable advisory deletion-readiness review packets. Exact confirmation binds the
+     request, current dry-run plan, passed backup verification, passed quarantine planning, passed combined rehearsal,
+     and latest passed-or-blocked fault matrix through one canonical input-contract fingerprint. The service compiles a
+     deterministic UTF-8 JSON export, records passed or blocked advisory assessment, and strictly revalidates IDs,
+     metrics, checks, scenarios, safety flags, and fingerprints on load. Six upstream foreign keys use `ON DELETE
+     RESTRICT`. One version 20 audit row is the only durable output; evidence, authorization, readiness promotion,
+     production mutation, restore, quarantine movement, deletion, and execution stay absent.
+
 Next slice:
 
-1. Build an immutable deletion-readiness review packet that aggregates the current request, dry-run plan, backup
-   verification, quarantine planning, version 18 combined rehearsal, and version 19 fault-matrix fingerprints and
-   outcomes into one canonical operator-facing export. Keep it advisory and non-authorizing: no evidence creation,
-   readiness promotion, production mutation, restore, quarantine movement, deletion, or execution route.
+1. Build a read-only exported review-packet verifier that opens a selected JSON file, canonicalizes it, recomputes all
+   hashes and safety invariants, and optionally cross-checks its immutable input IDs and fingerprints against current
+   database rows. It must record nothing and expose no authorization, readiness, mutation, restore, quarantine,
+   deletion, or execution capability.

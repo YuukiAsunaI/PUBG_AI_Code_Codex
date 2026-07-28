@@ -8,7 +8,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 
 class DatabaseError(RuntimeError):
@@ -76,7 +76,7 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 VALUES (%s, %s, NOW(6))
                 ON DUPLICATE KEY UPDATE description = VALUES(description)
                 """,
-                (SCHEMA_VERSION, "isolated combined deletion fault matrix audit schema"),
+                (SCHEMA_VERSION, "advisory deletion review packet audit schema"),
             )
             applied += 1
     finally:
@@ -793,6 +793,87 @@ def schema_statements() -> list[str]:
             CONSTRAINT fk_data_deletion_fault_matrix_combined
                 FOREIGN KEY (combined_rehearsal_run_id)
                 REFERENCES data_deletion_combined_rehearsal_runs(id)
+                ON DELETE RESTRICT
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS data_deletion_readiness_review_packets (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            request_id BIGINT UNSIGNED NOT NULL,
+            dry_run_plan_id BIGINT UNSIGNED NOT NULL,
+            backup_verification_run_id BIGINT UNSIGNED NOT NULL,
+            quarantine_planning_run_id BIGINT UNSIGNED NOT NULL,
+            combined_rehearsal_run_id BIGINT UNSIGNED NOT NULL,
+            fault_matrix_run_id BIGINT UNSIGNED NOT NULL,
+            contract_version VARCHAR(64) NOT NULL,
+            plan_fingerprint_sha256 CHAR(64) NOT NULL,
+            backup_verification_result_fingerprint_sha256 CHAR(64) NOT NULL,
+            quarantine_planning_result_fingerprint_sha256 CHAR(64) NOT NULL,
+            destination_contract_fingerprint_sha256 CHAR(64) NOT NULL,
+            combined_rehearsal_result_fingerprint_sha256 CHAR(64) NOT NULL,
+            fault_matrix_result_fingerprint_sha256 CHAR(64) NOT NULL,
+            fault_scenario_contract_fingerprint_sha256 CHAR(64) NOT NULL,
+            input_contract_fingerprint_sha256 CHAR(64) NOT NULL,
+            confirmation_text_sha256 CHAR(64) NOT NULL,
+            packet_fingerprint_sha256 CHAR(64) NOT NULL,
+            review_status ENUM(
+                'advisory_checks_passed',
+                'advisory_checks_blocked'
+            ) NOT NULL,
+            packet_json JSON NOT NULL,
+            input_count INT UNSIGNED NOT NULL,
+            passed_input_count INT UNSIGNED NOT NULL,
+            blocked_input_count INT UNSIGNED NOT NULL,
+            check_count INT UNSIGNED NOT NULL,
+            passed_check_count INT UNSIGNED NOT NULL,
+            blocked_check_count INT UNSIGNED NOT NULL,
+            fault_scenario_count INT UNSIGNED NOT NULL,
+            passed_fault_scenario_count INT UNSIGNED NOT NULL,
+            contained_fault_count INT UNSIGNED NOT NULL,
+            scratch_resources_removed TINYINT(1) NOT NULL,
+            generated_by VARCHAR(191) NOT NULL,
+            generation_note VARCHAR(1000) NULL,
+            generated_at_kst DATETIME(6) NOT NULL,
+            KEY idx_data_deletion_review_packet_request_time (
+                request_id,
+                generated_at_kst
+            ),
+            KEY idx_data_deletion_review_packet_plan_time (
+                dry_run_plan_id,
+                generated_at_kst
+            ),
+            KEY idx_data_deletion_review_packet_status (
+                review_status,
+                generated_at_kst
+            ),
+            KEY idx_data_deletion_review_packet_matrix (
+                fault_matrix_run_id
+            ),
+            KEY idx_data_deletion_review_packet_fingerprint (
+                packet_fingerprint_sha256
+            ),
+            CONSTRAINT fk_data_deletion_review_packet_request
+                FOREIGN KEY (request_id) REFERENCES data_deletion_requests(id)
+                ON DELETE RESTRICT,
+            CONSTRAINT fk_data_deletion_review_packet_plan
+                FOREIGN KEY (dry_run_plan_id)
+                REFERENCES data_deletion_dry_run_plans(id)
+                ON DELETE RESTRICT,
+            CONSTRAINT fk_data_deletion_review_packet_verification
+                FOREIGN KEY (backup_verification_run_id)
+                REFERENCES data_deletion_backup_verification_runs(id)
+                ON DELETE RESTRICT,
+            CONSTRAINT fk_data_deletion_review_packet_planning
+                FOREIGN KEY (quarantine_planning_run_id)
+                REFERENCES data_deletion_quarantine_planning_runs(id)
+                ON DELETE RESTRICT,
+            CONSTRAINT fk_data_deletion_review_packet_combined
+                FOREIGN KEY (combined_rehearsal_run_id)
+                REFERENCES data_deletion_combined_rehearsal_runs(id)
+                ON DELETE RESTRICT,
+            CONSTRAINT fk_data_deletion_review_packet_fault_matrix
+                FOREIGN KEY (fault_matrix_run_id)
+                REFERENCES data_deletion_combined_fault_matrix_runs(id)
                 ON DELETE RESTRICT
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """,

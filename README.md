@@ -410,8 +410,21 @@ restores both row counts and canonical row-set hashes. Three synthetic quarantin
 copy, after source removal, and on the first cleanup attempt; each must recover and remove its owned scratch resources.
 Remaining scenarios still run after an individual block so the immutable result reports the complete matrix. The run
 appends only its version 19 audit row and creates no combined-rehearsal row, evidence, readiness state, production
-mutation, or execution capability. The database archive still contains no schema DDL, and there is no production restore,
-quarantine mover, deletion endpoint, executable deletion SQL, file remover, or execution button.
+mutation, or execution capability. Schema version 20 adds immutable advisory deletion-readiness review packets. Exact
+confirmation starts with `GENERATE ADVISORY DELETION REVIEW PACKET` and binds the current request, dry-run plan, backup
+verification, quarantine planning, combined rehearsal, fault matrix, and their canonical fingerprints. A latest passed
+or blocked fault matrix can be captured so an operator receives the complete assessment instead of a false readiness
+signal. The localhost API emits deterministic UTF-8 JSON through:
+
+- `POST /data-deletions/{request_id}/review-packets`
+- `GET /data-deletions/{request_id}/review-packets/{packet_id}`
+- `GET /data-deletions/{request_id}/review-packets/{packet_id}/export.json`
+
+Each packet is guarded by six `ON DELETE RESTRICT` foreign keys. Generation appends only one version 20 audit row; it
+grants no authorization,
+promotes no readiness, creates no evidence, and performs no restore, quarantine, production mutation, or deletion. The
+database archive still contains no schema DDL, and there is no production restore, quarantine mover, deletion endpoint,
+executable deletion SQL, file remover, or execution button.
 `executor_not_implemented` remains unconditional. Rerun
 `python -m pubg_ai.cli init-db` after updating from an earlier schema.
 The `admin` group includes `pubg-alerts`, which returns current storage and worker alerts. When

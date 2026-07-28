@@ -90,6 +90,7 @@ class DatabaseSchemaTests(unittest.TestCase):
             "data_deletion_quarantine_rehearsal_runs",
             "data_deletion_combined_rehearsal_runs",
             "data_deletion_combined_fault_matrix_runs",
+            "data_deletion_readiness_review_packets",
             "matches",
             "raw_match_payloads",
             "raw_telemetry_payloads",
@@ -109,7 +110,7 @@ class DatabaseSchemaTests(unittest.TestCase):
         ]:
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table_name}", schema)
 
-        self.assertEqual(SCHEMA_VERSION, 19)
+        self.assertEqual(SCHEMA_VERSION, 20)
         self.assertIn("fk_data_deletion_events_request", schema)
         self.assertIn("fk_data_deletion_confirmation_snapshot", schema)
         self.assertIn("uq_data_deletion_confirmation_snapshot", schema)
@@ -125,6 +126,12 @@ class DatabaseSchemaTests(unittest.TestCase):
         self.assertIn("fk_data_deletion_fault_matrix_verification", schema)
         self.assertIn("fk_data_deletion_fault_matrix_planning", schema)
         self.assertIn("fk_data_deletion_fault_matrix_combined", schema)
+        self.assertIn("fk_data_deletion_review_packet_request", schema)
+        self.assertIn("fk_data_deletion_review_packet_plan", schema)
+        self.assertIn("fk_data_deletion_review_packet_verification", schema)
+        self.assertIn("fk_data_deletion_review_packet_planning", schema)
+        self.assertIn("fk_data_deletion_review_packet_combined", schema)
+        self.assertIn("fk_data_deletion_review_packet_fault_matrix", schema)
         self.assertIn("fk_data_deletion_rehearsal_plan", schema)
         self.assertIn("fk_data_deletion_backup_verification_plan", schema)
         self.assertIn("fk_data_deletion_restore_verification", schema)

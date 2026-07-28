@@ -49,6 +49,11 @@ from pubg_ai.data_deletion_fault_matrix import (
     DataDeletionFaultMatrixError,
     DataDeletionFaultMatrixService,
 )
+from pubg_ai.data_deletion_review_packet import (
+    DataDeletionReviewPacketError,
+    DataDeletionReviewPacketService,
+    canonical_review_packet_bytes,
+)
 from pubg_ai.data_deletion_quarantine_planner import (
     DataDeletionQuarantinePlannerError,
     DataDeletionQuarantinePlannerService,
@@ -285,6 +290,13 @@ class DataDeletionCombinedRehearsalCreateRequest(BaseModel):
 class DataDeletionFaultMatrixCreateRequest(BaseModel):
     combined_rehearsal_run_id: int = Field(gt=0)
     confirmation_text: str = Field(min_length=1, max_length=900)
+    actor_id: str = Field(default="local-manager", min_length=1, max_length=191)
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class DataDeletionReviewPacketCreateRequest(BaseModel):
+    fault_matrix_run_id: int = Field(gt=0)
+    confirmation_text: str = Field(min_length=1, max_length=500)
     actor_id: str = Field(default="local-manager", min_length=1, max_length=191)
     note: str | None = Field(default=None, max_length=1000)
 
@@ -613,6 +625,72 @@ def create_app() -> Any:
             scratch_connection_factory=lambda: connect_mysql(runtime_config.database),
             backup_root=runtime_config.app.backup_data_dir,
             expected_database_name=runtime_config.database.database,
+        )
+
+    def build_data_deletion_review_packet_service(
+        connection: Any,
+        runtime_config: RuntimeConfig,
+        *,
+        backup_service: DataDeletionBackupService | None = None,
+        verifier_service: DataDeletionBackupVerifierService | None = None,
+        planner_service: DataDeletionQuarantinePlannerService | None = None,
+        quarantine_rehearsal_service: DataDeletionQuarantineRehearsalService | None = None,
+        combined_rehearsal_service: DataDeletionCombinedRehearsalService | None = None,
+        fault_matrix_service: DataDeletionFaultMatrixService | None = None,
+    ) -> DataDeletionReviewPacketService:
+        backup = backup_service or build_data_deletion_backup_service(
+            connection,
+            runtime_config,
+        )
+        verifier = verifier_service or build_data_deletion_backup_verifier_service(
+            connection,
+            runtime_config,
+            backup_service=backup,
+        )
+        planner = planner_service or build_data_deletion_quarantine_planner_service(
+            connection,
+            runtime_config,
+            backup_service=backup,
+        )
+        quarantine = (
+            quarantine_rehearsal_service
+            or build_data_deletion_quarantine_rehearsal_service(
+                connection,
+                runtime_config,
+                backup_service=backup,
+                planner_service=planner,
+            )
+        )
+        combined = (
+            combined_rehearsal_service
+            or build_data_deletion_combined_rehearsal_service(
+                connection,
+                runtime_config,
+                backup_service=backup,
+                verifier_service=verifier,
+                planner_service=planner,
+                quarantine_rehearsal_service=quarantine,
+            )
+        )
+        fault_matrix = (
+            fault_matrix_service
+            or build_data_deletion_fault_matrix_service(
+                connection,
+                runtime_config,
+                backup_service=backup,
+                verifier_service=verifier,
+                planner_service=planner,
+                quarantine_rehearsal_service=quarantine,
+                combined_rehearsal_service=combined,
+            )
+        )
+        return DataDeletionReviewPacketService(
+            connection,
+            backup_service=backup,
+            verifier_service=verifier,
+            planner_service=planner,
+            combined_rehearsal_service=combined,
+            fault_matrix_service=fault_matrix,
         )
 
     collector_worker = CollectorWorkerController(config_loader=current_config)
@@ -1075,6 +1153,7 @@ def create_app() -> Any:
             "quarantine_rehearsal_url": f"/data-deletions/{request_id}/quarantine-rehearsals",
             "combined_rehearsal_url": f"/data-deletions/{request_id}/combined-rehearsals",
             "fault_matrix_url": f"/data-deletions/{request_id}/fault-matrix-runs",
+            "review_packet_url": f"/data-deletions/{request_id}/review-packets",
             "backup_evidence_url": f"/data-deletions/{request_id}/backup-evidence",
             "rehearsal_url": f"/data-deletions/{request_id}/rehearsals",
             "execution_enabled": False,
@@ -1307,7 +1386,7 @@ def create_app() -> Any:
                 combined_rehearsal_state = (
                     combined_rehearsal_service.rehearsal_state(request)
                 )
-                fault_matrix_state = build_data_deletion_fault_matrix_service(
+                fault_matrix_service = build_data_deletion_fault_matrix_service(
                     connection,
                     runtime_config,
                     backup_service=backup_service,
@@ -1315,7 +1394,18 @@ def create_app() -> Any:
                     planner_service=quarantine_planner_service,
                     quarantine_rehearsal_service=quarantine_rehearsal_service,
                     combined_rehearsal_service=combined_rehearsal_service,
-                ).matrix_state(request)
+                )
+                fault_matrix_state = fault_matrix_service.matrix_state(request)
+                review_packet_state = build_data_deletion_review_packet_service(
+                    connection,
+                    runtime_config,
+                    backup_service=backup_service,
+                    verifier_service=verifier_service,
+                    planner_service=quarantine_planner_service,
+                    quarantine_rehearsal_service=quarantine_rehearsal_service,
+                    combined_rehearsal_service=combined_rehearsal_service,
+                    fault_matrix_service=fault_matrix_service,
+                ).packet_state(request)
             except DataDeletionRequestError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
             except (
@@ -1326,6 +1416,7 @@ def create_app() -> Any:
                 DataDeletionQuarantineRehearsalError,
                 DataDeletionCombinedRehearsalError,
                 DataDeletionFaultMatrixError,
+                DataDeletionReviewPacketError,
                 DataDeletionBackupError,
                 DataDeletionDryRunError,
             ) as exc:
@@ -1341,6 +1432,7 @@ def create_app() -> Any:
             "quarantine_rehearsal_state": quarantine_rehearsal_state,
             "combined_rehearsal_state": combined_rehearsal_state,
             "fault_matrix_state": fault_matrix_state,
+            "review_packet_state": review_packet_state,
             "execution_enabled": False,
             "execution_ready": False,
         }
@@ -1617,6 +1709,124 @@ def create_app() -> Any:
             "execution_enabled": False,
             "execution_ready": False,
         }
+
+    @app.post("/data-deletions/{request_id}/review-packets")
+    def generate_data_deletion_review_packet(
+        request_id: int,
+        packet_request: DataDeletionReviewPacketCreateRequest,
+    ) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(runtime_config.database)
+        try:
+            try:
+                request = DataDeletionRequestService(connection).get_request(request_id)
+                packet = build_data_deletion_review_packet_service(
+                    connection,
+                    runtime_config,
+                ).generate(
+                    request,
+                    fault_matrix_run_id=packet_request.fault_matrix_run_id,
+                    confirmation_text=packet_request.confirmation_text,
+                    actor_id=packet_request.actor_id,
+                    note=packet_request.note,
+                )
+            except DataDeletionRequestError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except (
+                DataDeletionReviewPacketError,
+                DataDeletionFaultMatrixError,
+                DataDeletionCombinedRehearsalError,
+                DataDeletionQuarantineRehearsalError,
+                DataDeletionQuarantinePlannerError,
+                DataDeletionBackupVerifierError,
+                DataDeletionBackupError,
+                DataDeletionDryRunError,
+            ) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {
+            "review_packet": packet.to_record(),
+            "export_url": (
+                f"/data-deletions/{request_id}/review-packets/{packet.id}/export.json"
+            ),
+            "authorization_granted": False,
+            "readiness_promoted": False,
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+
+    @app.get("/data-deletions/{request_id}/review-packets/{packet_id}")
+    def data_deletion_review_packet_detail(
+        request_id: int,
+        packet_id: int,
+    ) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(runtime_config.database)
+        try:
+            try:
+                DataDeletionRequestService(connection).get_request(request_id)
+                packet = build_data_deletion_review_packet_service(
+                    connection,
+                    runtime_config,
+                ).get_packet(packet_id)
+                if packet.request_id != request_id:
+                    raise DataDeletionReviewPacketError(
+                        "review packet does not belong to the requested deletion request."
+                    )
+            except DataDeletionRequestError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except DataDeletionReviewPacketError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return {
+            "review_packet": packet.to_record(),
+            "export_url": (
+                f"/data-deletions/{request_id}/review-packets/{packet.id}/export.json"
+            ),
+            "authorization_granted": False,
+            "readiness_promoted": False,
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+
+    @app.get("/data-deletions/{request_id}/review-packets/{packet_id}/export.json")
+    def export_data_deletion_review_packet(
+        request_id: int,
+        packet_id: int,
+    ) -> Response:
+        runtime_config = current_config()
+        connection = connect_mysql(runtime_config.database)
+        try:
+            try:
+                DataDeletionRequestService(connection).get_request(request_id)
+                packet = build_data_deletion_review_packet_service(
+                    connection,
+                    runtime_config,
+                ).get_packet(packet_id)
+                if packet.request_id != request_id:
+                    raise DataDeletionReviewPacketError(
+                        "review packet does not belong to the requested deletion request."
+                    )
+                content = canonical_review_packet_bytes(packet)
+            except DataDeletionRequestError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except DataDeletionReviewPacketError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+        finally:
+            connection.close()
+        return Response(
+            content=content,
+            media_type="application/json",
+            headers={
+                "Content-Disposition": (
+                    'attachment; filename="pubg-ai-deletion-review-request-'
+                    f'{request_id}-packet-{packet_id}.json"'
+                ),
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @app.post("/data-deletions/{request_id}/backup-evidence")
     def record_data_deletion_backup_evidence(
@@ -4632,7 +4842,7 @@ _INDEX_HTML = """<!doctype html>
       dataDeletionStatus.textContent = "Read-only dry-run plan recorded. Deletion execution remains disabled.";
     }
 
-    function renderDataDeletionBackupReadiness(state, builderState, verifierState, restoreState, plannerState, quarantineRehearsalState, combinedRehearsalState, faultMatrixState) {
+    function renderDataDeletionBackupReadiness(state, builderState, verifierState, restoreState, plannerState, quarantineRehearsalState, combinedRehearsalState, faultMatrixState, reviewPacketState) {
       const plan = state.latest_plan;
       const builderBlockers = (builderState?.build_blockers || [])
         .map((blocker) => `<li>${escapeHtml(blocker)}</li>`)
@@ -5010,6 +5220,79 @@ _INDEX_HTML = """<!doctype html>
             </table>
           </div>
         </div>`;
+      const reviewPacketBlockers = (reviewPacketState?.review_packet_blockers || [])
+        .map((blocker) => `<li>${escapeHtml(blocker)}</li>`)
+        .join("");
+      const reviewPacketCandidate = reviewPacketState?.packet_candidate || null;
+      const reviewPacketForm = reviewPacketCandidate?.confirmation_text ? `
+        <code>${escapeHtml(reviewPacketCandidate.confirmation_text)}</code>
+        <form class="confirmation-input-row review-packet-form" data-review-packet-form data-request-id="${attr(state.request_id)}" data-fault-matrix-run-id="${attr(reviewPacketCandidate.fault_matrix?.id || "")}">
+          <label>Exact advisory packet confirmation
+            <input name="confirmation_text" autocomplete="off" required>
+          </label>
+          <button class="secondary" type="submit" ${reviewPacketState?.review_packet_allowed ? "" : "disabled"}>Generate advisory packet</button>
+        </form>` : "";
+      const reviewInputRows = reviewPacketCandidate ? [
+        ["Deletion request", { id: state.request_id, result_status: reviewPacketState?.request_status || "bound" }, null],
+        ["Dry-run plan", reviewPacketCandidate.dry_run_plan, "plan_fingerprint_sha256"],
+        ["Backup verification", reviewPacketCandidate.backup_verification, "result_fingerprint_sha256"],
+        ["Quarantine planning", reviewPacketCandidate.quarantine_planning, "result_fingerprint_sha256"],
+        ["Combined rehearsal", reviewPacketCandidate.combined_rehearsal, "result_fingerprint_sha256"],
+        ["Fault matrix", reviewPacketCandidate.fault_matrix, "result_fingerprint_sha256"],
+      ].map(([label, input, fingerprintKey]) => `
+        <tr>
+          <td>${escapeHtml(label)}</td>
+          <td>#${escapeHtml(input?.id || "-")}</td>
+          <td>${escapeHtml(input?.result_status || "immutable")}</td>
+          <td><code>${escapeHtml(fingerprintKey ? (input?.[fingerprintKey] || "-") : reviewPacketCandidate.input_contract_fingerprint_sha256)}</code></td>
+        </tr>`).join("") : `<tr><td colspan="4">No current six-input review contract is available.</td></tr>`;
+      const latestReviewPacket = reviewPacketState?.latest_review_packet || null;
+      const reviewPacketCheckRows = (latestReviewPacket?.packet_json?.checks || []).map((check) => `
+        <tr>
+          <td>${escapeHtml(check.key)}</td>
+          <td>${escapeHtml(check.status)}</td>
+          <td>${escapeHtml(check.message)}</td>
+        </tr>`).join("") || `<tr><td colspan="3">No immutable review packet checks recorded.</td></tr>`;
+      const reviewPacketHistoryRows = (reviewPacketState?.review_packet_history || []).map((item) => `
+        <tr>
+          <td>#${escapeHtml(item.id)}</td>
+          <td>${escapeHtml(item.review_status)}</td>
+          <td>${escapeHtml(item.passed_input_count)} / ${escapeHtml(item.input_count)}</td>
+          <td>${escapeHtml(item.passed_check_count)} / ${escapeHtml(item.check_count)}</td>
+          <td>${escapeHtml(item.passed_fault_scenario_count)} / ${escapeHtml(item.fault_scenario_count)}</td>
+          <td>${item.scratch_resources_removed ? "removed" : "blocked"}</td>
+          <td>${escapeHtml(item.generated_by)} / ${escapeHtml(item.generated_at_kst)}</td>
+          <td><a href="/data-deletions/${attr(state.request_id)}/review-packets/${attr(item.id)}/export.json" download>JSON</a></td>
+        </tr>`).join("") || `<tr><td colspan="8">No immutable advisory review packets.</td></tr>`;
+      const reviewPacketPanel = `
+        <div class="backup-builder-contract">
+          <h3>Advisory deletion review packet</h3>
+          <div class="status">Immutable JSON audit packet: yes / authorization granted: no / readiness promoted: no / execution: disabled</div>
+          <ul>${reviewPacketBlockers}</ul>
+          ${reviewPacketForm}
+          <div class="status">Candidate assessment: ${escapeHtml(reviewPacketCandidate?.predicted_review_status || "unavailable")} / latest packet: ${escapeHtml(latestReviewPacket?.review_status || "none")} / input fingerprint: <code>${escapeHtml(reviewPacketCandidate?.input_contract_fingerprint_sha256 || "-")}</code></div>
+          <h3>Canonical input chain</h3>
+          <div class="table-scroll">
+            <table class="detail-table">
+              <thead><tr><th>Input</th><th>ID</th><th>Status</th><th>Fingerprint</th></tr></thead>
+              <tbody>${reviewInputRows}</tbody>
+            </table>
+          </div>
+          <h3>Latest packet assessment checks</h3>
+          <div class="table-scroll">
+            <table class="detail-table">
+              <thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>
+              <tbody>${reviewPacketCheckRows}</tbody>
+            </table>
+          </div>
+          <h3>Advisory packet history</h3>
+          <div class="table-scroll">
+            <table class="detail-table">
+              <thead><tr><th>ID</th><th>Assessment</th><th>Inputs</th><th>Checks</th><th>Faults</th><th>Scratch</th><th>Generated</th><th>Export</th></tr></thead>
+              <tbody>${reviewPacketHistoryRows}</tbody>
+            </table>
+          </div>
+        </div>`;
       const prerequisiteRows = (state.prerequisites || []).map((item) => `
         <tr>
           <td>${escapeHtml(item.key)}</td>
@@ -5086,6 +5369,7 @@ _INDEX_HTML = """<!doctype html>
           ${quarantineRehearsalPanel}
           ${combinedRehearsalPanel}
           ${faultMatrixPanel}
+          ${reviewPacketPanel}
           <h3>Prerequisite evidence</h3>
           <div class="table-scroll">
             <table class="detail-table">
@@ -5149,6 +5433,7 @@ _INDEX_HTML = """<!doctype html>
         payload.quarantine_rehearsal_state,
         payload.combined_rehearsal_state,
         payload.fault_matrix_state,
+        payload.review_packet_state,
       );
       updateBackupEvidenceFields(host.querySelector("form[data-backup-evidence-form]"));
     }
@@ -5343,6 +5628,33 @@ _INDEX_HTML = """<!doctype html>
         const run = payload.fault_matrix_run || {};
         await loadDataDeletionRequestDetail(requestId);
         dataDeletionStatus.textContent = `Fault matrix ${run.result_status || "unknown"}. Passed and contained: ${run.passed_scenario_count || 0} / ${run.scenario_count || 0}. Scratch cleanup: ${run.scratch_resources_removed ? "removed" : "blocked"}. Production rows, files, quarantine, restore, and deletion remained disabled.`;
+      } finally {
+        if (button) button.disabled = false;
+      }
+    }
+
+    async function generateDataDeletionReviewPacket(formElement) {
+      const values = new FormData(formElement);
+      const reviewer = new FormData(dataDeletionFilterForm);
+      const requestId = formElement.dataset.requestId || "";
+      const actorId = String(reviewer.get("actor_id") || "").trim();
+      const note = String(reviewer.get("note") || "").trim();
+      const confirmationText = String(values.get("confirmation_text") || "").trim();
+      if (!actorId) throw new Error("Local reviewer is required.");
+      if (!confirmationText) throw new Error("Exact advisory review packet confirmation is required.");
+      if (!window.confirm("Generate one immutable advisory review packet? This records one audit row and JSON export only. It grants no authorization, promotes no readiness, and cannot execute deletion.")) return;
+      const button = formElement.querySelector("button[type='submit']");
+      if (button) button.disabled = true;
+      try {
+        const payload = await postJson(`/data-deletions/${encodeURIComponent(requestId)}/review-packets`, {
+          fault_matrix_run_id: Number(formElement.dataset.faultMatrixRunId),
+          confirmation_text: confirmationText,
+          actor_id: actorId,
+          note: note || null,
+        });
+        const packet = payload.review_packet || {};
+        await loadDataDeletionRequestDetail(requestId);
+        dataDeletionStatus.textContent = `Advisory review packet #${packet.id || "?"} recorded as ${packet.review_status || "unknown"}. JSON: ${payload.export_url || "unavailable"}. Authorization, readiness promotion, and deletion execution remain disabled.`;
       } finally {
         if (button) button.disabled = false;
       }
@@ -8200,6 +8512,19 @@ _INDEX_HTML = """<!doctype html>
       event.preventDefault();
       try {
         await runDataDeletionFaultMatrix(form);
+      } catch (error) {
+        dataDeletionStatus.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    dataDeletionDetail.addEventListener("submit", async (event) => {
+      const form = event.target instanceof Element
+        ? event.target.closest("form[data-review-packet-form]")
+        : null;
+      if (!form) return;
+      event.preventDefault();
+      try {
+        await generateDataDeletionReviewPacket(form);
       } catch (error) {
         dataDeletionStatus.textContent = `Error: ${error.message}`;
       }

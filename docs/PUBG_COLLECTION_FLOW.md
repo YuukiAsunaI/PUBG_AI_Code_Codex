@@ -414,6 +414,11 @@ The current Discord bot slice is intentionally small and reuses the same local M
   verifies ROLLBACK count/hash restoration, then exercises three synthetic quarantine interruptions and guarded cleanup
   recovery. It continues after an individual block, removes all owned scratch resources, and appends only one immutable
   matrix audit row. It creates no readiness evidence, authorization, production mutation, or execution capability.
+- The advisory review-packet stage binds the request and latest current dry-run, verification, planning, combined,
+  and fault-matrix records into deterministic JSON. It preserves either a passed or blocked fault-matrix assessment,
+  validates the full chain and safety contract on every load/export, and appends one immutable audit row only when the
+  exact input-bound confirmation is supplied. It creates no evidence or authorization, promotes no readiness, opens or
+  changes no production source, and exposes no deletion execution route.
 - The non-executing rehearsal rechecks the live source fingerprint plus evidence/file metadata, planner-bound capacity
   evidence, and current free space, then appends a passed/blocked result. The rehearsal itself does not open backups,
   calculate checksums, run a restore, move replay artifacts, execute SQL mutations, or expose a Discord counterpart.

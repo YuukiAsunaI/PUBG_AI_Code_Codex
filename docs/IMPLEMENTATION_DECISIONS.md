@@ -237,6 +237,16 @@ Suggested command groups:
   simulated first cleanup failure must trigger guarded emergency cleanup. Later scenarios continue after a block so
   the audit is complete. Only the version 19 row is durable; no evidence, readiness, authorization, production
   mutation, actual quarantine, restore, deletion, or executor is introduced.
+- Schema version 20 stores immutable advisory deletion-readiness review packets. The input contract contains the
+  request, current dry-run plan, passed backup verification, passed quarantine planning, passed combined rehearsal,
+  and latest passed-or-blocked fault matrix. Exact confirmation binds the request ID, plan ID, matrix ID, and canonical
+  input-contract SHA-256. Packet JSON is canonicalized and self-fingerprinted; load/export recomputes canonical hashes,
+  cross-checks row-bound identifiers, fingerprints, generation metadata, metrics, and scenario/check totals, and
+  enforces fixed non-authorization flags. Rehashed attempts to alter input or generation bindings or grant authority
+  fail closed. A blocked matrix remains representable as `advisory_checks_blocked`, but neither status grants
+  authorization or readiness.
+  Only one version 20 audit row is durable, protected by six `ON DELETE RESTRICT` foreign keys. No evidence, production
+  mutation, source access, restore, quarantine movement, deletion, or executor is introduced.
 - Deletion should be split into options:
   - delete registration only
   - delete normalized DB data
