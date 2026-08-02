@@ -14,17 +14,18 @@ Status meanings:
 - `PARTIAL`: useful behavior exists, but part of the requested contract or evidence is missing.
 - `PENDING`: no production implementation yet.
 
-The weighted completion estimate for the requested core product is **92 to 94 percent**. Collection, storage,
-telemetry parsing, durable fight-outcome and KST trend analytics, post-match replay, recommendations, and local
-administration are operational. The largest remaining product gap is named map-region mapping. The largest remaining
-validation gaps are a real Discord command exchange and controlled rate-limit, storage, and worker recovery drills.
+The weighted completion estimate for the requested core product is **95 to 96 percent**. Collection, storage,
+telemetry parsing, durable fight-outcome and KST trend analytics, named drop-region resolution, post-match replay,
+recommendations, and local administration are operational. The largest remaining validation gaps are a real Discord
+command exchange and controlled rate-limit, storage, and worker recovery drills; weapon-family accuracy calibration
+remains a smaller analysis gap.
 
 ## Live Evidence Snapshot
 
 The following checks were run on 2026-08-02 KST without printing either secret:
 
-- Repository baseline before this implementation slice: `ee076f6` (`Add durable fight outcome analytics`).
-- Automated suite: `384 passed`, with one existing Starlette deprecation warning.
+- Repository baseline before this implementation slice: `02b2fe5` (`Add KST player trend reports`).
+- Automated suite: `395 passed`, with one existing Starlette deprecation warning.
 - Python compile and `git diff --check`: passed.
 - Secret scan and mutation-route scan: passed.
 - MySQL: local `pubg_ai`, schema version 21, 46 tables.
@@ -57,6 +58,12 @@ The following checks were run on 2026-08-02 KST without printing either secret:
   matches. CLI and localhost API totals matched the existing profile totals.
 - KST trend UI: real monthly and squad/TPP/hour views rendered 3 and 17 rows on desktop and 390 px mobile with no
   document overflow, console errors, or page errors. Discord formatter and option parser tests passed.
+- Named drop regions: a catalog pinned to official `pubg/api-assets` commit `32b13b5` contains more than 150 static
+  region definitions across ten canonical maps, explicit Paramo dynamic-map handling, and source-image SHA-256 values.
+  Fifteen of 20 live drop clusters matched named regions, representing 30 of 35 landing matches (85.7 percent);
+  unmatched points retained raw coordinates, stable cluster IDs, and grid labels.
+- Named-region UI: the real resolver returned Stalber with source/version metadata, while live recommendations rendered
+  Korean labels on desktop and 390 px mobile with no overflow, console errors, or page errors.
 - Browser replay check: a real `Savage_Main` timeline rendered a 960 by 960 nonblank canvas with 31 event buttons,
   an advancing playback clock, no document overflow, no console errors, and no page errors. Visual inspection confirmed
   the map, plane route, tracked player, three teammates, combat events, deaths, and care packages were legible.
@@ -124,7 +131,7 @@ Configured local roots:
 | ANA-05 | Use fine close-range AR buckets and 100 m DMR/SR buckets through 1 km | PROVEN | `distance_buckets.py` and tests enforce the requested family-specific ranges. |
 | ANA-06 | Recommend weapons, attachments, maps, and teammates | PROVEN | Recommendation service, web/Discord output, tests, and live queries passed. |
 | ANA-07 | Analyze common drop locations from coordinates | PROVEN | Coordinate clustering and live drop-zone recommendations work. |
-| ANA-08 | Map coordinate clusters to named regions | PENDING | Phase 2 needs a versioned per-map region dictionary and point-in-region mapper. |
+| ANA-08 | Map coordinate clusters to named regions | PROVEN | Versioned official-asset-backed region circles, stable IDs, raw-coordinate fallback, CLI/API/UI/Discord integration, tests, and live coverage validation passed. |
 | ANA-09 | Group reports by hour, day, week, and month in KST | PROVEN | `player_trends.py` uses stored KST match times and Python ISO-week rules. CLI/API/UI and live all-unit invariants passed. |
 | ANA-10 | Group trends by solo, duo, squad, perspective, match type, map, and shard | PROVEN | One filter contract covers game mode, team mode, perspective, match type, map, shard, custom status, and inclusive KST dates. Real team/perspective partitions summed exactly to all 207 matches. |
 | ANA-11 | Compute durable fight win/loss rates by weapon and attachments | PROVEN | MySQL service, CLI, localhost API/UI, and Discord formatter expose total, reason, firearm, and exact loadout win/loss rates. Real API and desktop/mobile UI checks passed. |
@@ -158,22 +165,18 @@ Configured local roots:
 1. **P0: real Discord command acceptance test**
    Run one read-only query and one disposable registration lifecycle in a user-selected test channel without exposing the
    token.
-2. **P1: named region mapping**
-   Introduce versioned map-region geometry and map coordinate clusters to Korean place labels while retaining the raw
-   coordinates and cluster ID.
-3. **P1: operational fault drills**
+2. **P1: operational fault drills**
    Exercise controlled 429/backoff behavior, a low-space alert, worker stop/restart recovery, and a bounded soak run.
-4. **P2: hit and accuracy calibration**
+3. **P2: hit and accuracy calibration**
    Define shell, projectile, and pellet semantics per weapon family and report both raw hit events and a clearly named
    accuracy metric.
-5. **P3: destructive deletion execution, only when explicitly approved**
+4. **P3: destructive deletion execution, only when explicitly approved**
    Keep the existing review and backup gates. Do not add or invoke irreversible deletion as an incidental step.
 
 ## Completion Gates
 
 The original core scope can be called complete when:
 
-- Named coordinate clusters can be mapped to versioned Korean region labels while preserving raw coordinates.
 - One real Discord channel acceptance run succeeds with no secret disclosure.
 - The collector survives the bounded rate-limit and restart drills without duplicate or missing match jobs.
 - Raw and replay storage audits remain at zero missing, mismatched, or escaped files after the changes.

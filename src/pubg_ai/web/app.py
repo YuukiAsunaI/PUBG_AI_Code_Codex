@@ -96,6 +96,7 @@ from pubg_ai.fight_outcome_stats import FightOutcomeStatsService
 from pubg_ai.discord_permission_manager import DiscordPermissionManager
 from pubg_ai.local_settings import LocalSettingsError, LocalSettingsStore, check_storage_path
 from pubg_ai.loadout_snapshot_processor import LoadoutSnapshotProcessor
+from pubg_ai.map_regions import map_region_catalog_record, resolve_map_region
 from pubg_ai.map_snapshot_renderer import MAP_ASSET_FILENAMES, MapAssetProvider, MapSnapshotProcessor
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.match_job_processor import MatchJobProcessor
@@ -2240,6 +2241,14 @@ def create_app() -> Any:
             raise HTTPException(status_code=404, detail="registered player trends not found.")
         return {"trends": report.to_record()}
 
+    @app.get("/map-regions")
+    def map_regions(map_name: str | None = None) -> dict[str, Any]:
+        return {"map_region_catalog": map_region_catalog_record(map_name)}
+
+    @app.get("/map-regions/resolve")
+    def map_region_resolution(map_name: str, x_cm: float, y_cm: float) -> dict[str, Any]:
+        return {"map_region": resolve_map_region(map_name, x_cm, y_cm).to_record()}
+
     @app.get("/players/recommendations")
     def player_recommendations(
         shard: str = "steam",
@@ -3613,6 +3622,31 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="recommendationBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
+    <section id="map-region-lookup">
+      <h2>맵 좌표 지역 확인</h2>
+      <form id="mapRegionForm">
+        <label>맵
+          <select name="map_name">
+            <option value="Baltic_Main">에란겔 리마스터</option>
+            <option value="Erangel_Main">에란겔</option>
+            <option value="Desert_Main">미라마</option>
+            <option value="DihorOtok_Main">비켄디</option>
+            <option value="Savage_Main">사녹</option>
+            <option value="Summerland_Main">카라킨</option>
+            <option value="Tiger_Main">태이고</option>
+            <option value="Chimera_Main">파라모</option>
+            <option value="Neon_Main">론도</option>
+            <option value="Range_Main">캠프 자칼</option>
+            <option value="Kiki_Main">데스턴</option>
+            <option value="Heaven_Main">헤이븐</option>
+          </select>
+        </label>
+        <label>X (cm)<input name="x_cm" type="number" min="0" step="0.01" required></label>
+        <label>Y (cm)<input name="y_cm" type="number" min="0" step="0.01" required></label>
+        <button type="submit">확인</button>
+      </form>
+      <div class="status" id="mapRegionBody" style="margin-top: 12px;">조회 대기 중</div>
+    </section>
     <section id="match-lookup">
       <h2>매치 조회</h2>
       <form id="matchForm">
@@ -3947,6 +3981,7 @@ _INDEX_HTML = """<!doctype html>
     const trendBody = document.querySelector("#trendBody");
     const weaponBody = document.querySelector("#weaponBody");
     const recommendationBody = document.querySelector("#recommendationBody");
+    const mapRegionBody = document.querySelector("#mapRegionBody");
     const matchBody = document.querySelector("#matchBody");
     const rankingBody = document.querySelector("#rankingBody");
     const jobsBody = document.querySelector("#jobsBody");
@@ -6686,6 +6721,45 @@ _INDEX_HTML = """<!doctype html>
       ].join("<br>");
     }
 
+    function dropZoneLocation(item) {
+      if (item.region_display_name_ko) return item.region_display_name_ko;
+      if (item.region_status === "dynamic_map") return `동적 맵 grid ${item.grid_x},${item.grid_y}`;
+      return `grid ${item.grid_x},${item.grid_y}`;
+    }
+
+    async function loadMapRegion(formElement) {
+      const form = new FormData(formElement);
+      const params = new URLSearchParams({
+        map_name: String(form.get("map_name") || "Baltic_Main"),
+        x_cm: String(form.get("x_cm") || "0"),
+        y_cm: String(form.get("y_cm") || "0"),
+      });
+      const response = await fetch(`/map-regions/resolve?${params.toString()}`);
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const region = (await response.json()).map_region;
+      const fallbackLabels = {
+        unmatched: "등록 지명 밖",
+        dynamic_map: "동적 지형",
+        unsupported_map: "미지원 맵",
+        invalid_coordinate: "좌표 범위 밖",
+      };
+      const location = region.region_display_name_ko || fallbackLabels[region.status] || region.status;
+      const normalized = region.x_pct === null || region.y_pct === null
+        ? "-"
+        : `${percent(region.x_pct)} / ${percent(region.y_pct)}`;
+      const distance = region.distance_to_center_m === null
+        ? "-"
+        : `${Number(region.distance_to_center_m).toFixed(1)} m`;
+      mapRegionBody.innerHTML = [
+        `<strong>${escapeHtml(region.map_name_ko)} · ${escapeHtml(location)}</strong>`,
+        `원본 좌표: ${Number(region.x_cm).toFixed(1)}, ${Number(region.y_cm).toFixed(1)} cm · 정규화: ${normalized}`,
+        `상태: ${escapeHtml(region.status)} · 지역 ID: ${escapeHtml(region.region_id || "-")} · 중심 거리: ${distance}`,
+        `사전: ${escapeHtml(region.catalog_version)} · 출처: ${escapeHtml(String(region.source_commit || "-").slice(0, 7))}`,
+      ].join("<br>");
+    }
     async function loadPlayerRecommendations(target, shard, minMatches) {
       activeRecommendationTarget = target;
       activeRecommendationShard = shard;
@@ -6726,7 +6800,7 @@ _INDEX_HTML = """<!doctype html>
         `${escapeHtml(item.name)}${item.registered ? " (registered)" : ""} score ${Number(item.score).toFixed(1)} / ${item.match_count} matches / ${percent(item.win_rate)} win`
       ));
       const drops = recommendationLines(report.drop_zones, (item) => (
-        `${escapeHtml(item.map_name_ko)} grid ${item.grid_x},${item.grid_y} / ${percent(item.x_pct)} x ${percent(item.y_pct)} / ${item.match_count} matches / ${percent(item.win_rate)} win`
+        `${escapeHtml(item.map_name_ko)} ${escapeHtml(dropZoneLocation(item))} / cluster ${escapeHtml(item.cluster_id || "-")} / 중심 ${Number(item.centroid_x_cm || 0).toFixed(0)},${Number(item.centroid_y_cm || 0).toFixed(0)} cm / ${item.match_count} matches / ${percent(item.win_rate)} win`
       ));
       recommendationBody.innerHTML = [
         `<strong>${escapeHtml(report.player.current_name)} recommendations</strong>`,
@@ -8524,6 +8598,16 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
+    document.querySelector("#mapRegionForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        await loadMapRegion(event.currentTarget);
+        banner.textContent = "맵 지역 확인 완료";
+      } catch (error) {
+        mapRegionBody.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
     document.querySelector("#recommendationForm").addEventListener("submit", async (event) => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);

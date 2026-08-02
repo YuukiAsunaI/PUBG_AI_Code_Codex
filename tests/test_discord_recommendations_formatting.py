@@ -158,6 +158,15 @@ class DiscordRecommendationFormattingTests(unittest.TestCase):
                     win_rate=0.5,
                     avg_damage_dealt=250.0,
                     avg_survival_seconds=1690.0,
+                    cluster_id="Tiger_Main:grid10:5:2",
+                    centroid_x_cm=428400.0,
+                    centroid_y_cm=244800.0,
+                    region_status="matched",
+                    region_id="taego.yong_cheon",
+                    region_name="Yong Cheon",
+                    region_name_ko="용천",
+                    region_display_name_ko="용천",
+                    region_catalog_version="test-v1",
                     reason="test",
                 )
             ],
@@ -172,7 +181,7 @@ class DiscordRecommendationFormattingTests(unittest.TestCase):
         self.assertIn("M416 10-15m", body)
         self.assertIn("Erangel", body)
         self.assertIn("Friend registered", body)
-        self.assertIn("Taego grid 5,2", body)
+        self.assertIn("Taego 용천", body)
         self.assertNotIn("/players/recommendations/weapon-attachment-evidence", body)
 
         body_with_links = format_player_recommendations(

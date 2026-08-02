@@ -17,6 +17,7 @@ from pubg_ai.fight_outcome_processor import FightOutcomeProcessor
 from pubg_ai.fight_outcome_stats import FightOutcomeStatsService
 from pubg_ai.local_settings import LocalSettingsError, LocalSettingsStore
 from pubg_ai.loadout_snapshot_processor import LoadoutSnapshotProcessor
+from pubg_ai.map_regions import map_region_catalog_record, resolve_map_region
 from pubg_ai.map_snapshot_renderer import MapSnapshotProcessor
 from pubg_ai.post_processing_worker import PostProcessingWorkerOptions, run_post_processing_cycle
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
@@ -101,6 +102,19 @@ def main(argv: list[str] | None = None) -> int:
     trend_parser.add_argument("--to-date", default=None, help="Inclusive KST date, YYYY-MM-DD.")
     trend_parser.add_argument("--bucket-limit", default=120, type=int)
 
+    map_region_parser = subparsers.add_parser(
+        "map-region",
+        help="Resolve raw PUBG map coordinates to a versioned named region.",
+    )
+    map_region_parser.add_argument("map_name", help="PUBG map code, for example Baltic_Main.")
+    map_region_parser.add_argument("x_cm", type=float, help="Telemetry X coordinate in centimeters.")
+    map_region_parser.add_argument("y_cm", type=float, help="Telemetry Y coordinate in centimeters.")
+
+    map_region_catalog_parser = subparsers.add_parser(
+        "map-region-catalog",
+        help="Print versioned map-region catalog metadata and geometry.",
+    )
+    map_region_catalog_parser.add_argument("--map-name", default=None)
     recommendations_parser = subparsers.add_parser(
         "player-recommendations",
         help="Print registered player weapon, attachment, map, teammate, and drop recommendations.",
@@ -293,6 +307,13 @@ def main(argv: list[str] | None = None) -> int:
             connection.close()
         return 0
 
+    if args.command == "map-region":
+        _print_json({"map_region": resolve_map_region(args.map_name, args.x_cm, args.y_cm).to_record()})
+        return 0
+
+    if args.command == "map-region-catalog":
+        _print_json({"map_region_catalog": map_region_catalog_record(args.map_name)})
+        return 0
     if args.command == "lookup-player":
         client = _pubg_client_from_config(config)
         player = client.lookup_player_by_name(args.shard, args.nickname)

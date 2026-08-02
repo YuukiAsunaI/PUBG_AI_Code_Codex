@@ -73,6 +73,8 @@ The first executable slice is now available:
 - raw telemetry combat parser for registered-player match summaries and weapon-level stats
 - raw telemetry item parser for pickups, drops, uses, equips, attachment changes, and item summary stats
 - combat loadout snapshot generator for weapon + attachment state at kill/DBNO/finish moments
+- versioned official-asset-backed map-region catalog for Korean named drop-zone recommendations with
+  raw-coordinate fallback
 - localhost-only FastAPI management app
 - browser UI for status, user registration, user lookup, collection stop/delete action, match job processing, and
   telemetry job/combat/item processing
@@ -158,6 +160,19 @@ python -m pubg_ai.cli player-recommendations Yuuki_Asuna--- --shard steam --min-
 Recommendations include distance-weighted weapon ranges and weapon+attachment pairs. When generated, combat loadout
 snapshots are used first so parts reflect the actual kill/DBNO/finish moment; attach-event co-occurrence remains the
 fallback for older parsed data.
+
+Drop-zone recommendations keep their stable cluster ID and raw centroid coordinates in centimeters. A versioned
+official-asset-backed catalog adds a Korean place name only when the centroid is inside a maintained region; unmatched
+points retain the map/grid label, and Paramo is explicitly treated as a dynamic map.
+
+Resolve one coordinate or inspect the catalog:
+
+```powershell
+python -m pubg_ai.cli map-region Baltic_Main 575857 134391
+python -m pubg_ai.cli map-region-catalog --map-name Baltic_Main
+```
+
+See `docs/MAP_REGION_CATALOG.md` for aliases, source commit and hashes, geometry policy, and update procedure.
 
 Show the supporting combat snapshots behind one weapon+attachment recommendation:
 
@@ -354,6 +369,7 @@ Discord's message content intent to be enabled for the bot application. Initial 
 
 Command access is checked through local Discord permission settings in `config/local_settings.json`.
 Recommendation lookup is available through `!추천 닉네임 [shard]` and `!pubg-recommend nickname [shard]`.
+Named drop-zone rows show the Korean region when matched and preserve a map/grid fallback otherwise.
 Fight win/loss lookup uses `!교전 닉네임 [shard]` or `!pubg-fights nickname [shard]`. KST trends use
 `!추세 닉네임 [month|week|date|hour] [shard] [key=value filters]` or `!pubg-trends`; both share the
 `profile_read` permission group. When `PUBG_LOCAL_WEB_BASE_URL` is set, trend replies include a prefilled local

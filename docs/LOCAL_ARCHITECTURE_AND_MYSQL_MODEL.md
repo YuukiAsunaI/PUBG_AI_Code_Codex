@@ -163,8 +163,11 @@ Use a two-layer storage model:
 | `agg_player_drop_zone` | Common landing/drop coordinate clusters and outcomes |
 | `agg_player_phase` | Performance by phase at landing, kill, DBNO, death, and survival endpoint |
 | `agg_player_movement` | Movement style rollups such as first vehicle timing, distance from plane route, and zone-distance tendency |
-| `map_region_labels` | Phase-2 mapping from coordinate clusters to named regions |
 | `recommendation_scores` | Rebuildable player/global recommendation outputs |
+
+Named map regions are intentionally schema-neutral. `map_regions.py` contains a versioned code catalog derived from a
+pinned official `pubg/api-assets` commit. Recommendation queries resolve retained cluster centroids without rewriting
+raw telemetry, normalized coordinates, or MySQL rows. Unmatched and dynamic-map points retain their stable grid label.
 
 ### Code Translation
 
@@ -577,9 +580,15 @@ Completed slices:
      Discord use one report contract. No raw/replay file, normalized row, schema version, or worker is changed; schema
      version 21 and 46 tables remain current.
 
+118. Versioned named-region resolution maps drop-cluster centroids to Korean place labels from pinned official PUBG map
+     assets. It keeps stable cluster IDs and raw centimeter coordinates, exposes source commit/asset/SHA-256 metadata,
+     treats Paramo as dynamic, and never forces unmatched points. CLI, localhost API/UI, recommendation reports, and
+     Discord formatting share the same query-time contract; schema version 21 and 46 tables remain current.
+
 Next slice:
 
 1. Run a real read-only Discord command acceptance check in an explicitly selected guild/channel.
-2. Add versioned Korean named-region mapping for coordinate clusters while preserving raw coordinates.
-3. Keep deletion execution out of scope until it is explicitly approved; the review and rehearsal tooling remains
+2. Run controlled rate-limit, low-space alert, worker restart/recovery, and bounded soak drills.
+3. Calibrate projectile, shell, and pellet hit/accuracy semantics with additional telemetry samples.
+4. Keep deletion execution out of scope until it is explicitly approved; the review and rehearsal tooling remains
    read-only/non-destructive.

@@ -7,6 +7,7 @@ import json
 
 from pubg_ai.code_translator import translate_code
 from pubg_ai.distance_buckets import WeaponFamily, distance_bucket
+from pubg_ai.map_regions import resolve_map_region
 from pubg_ai.map_snapshot_renderer import DEFAULT_WORLD_SIZE_CM, MAP_WORLD_SIZE_CM
 from pubg_ai.player_registry import RegisteredPlayer
 from pubg_ai.weapon_stats import normalize_weapon_code
@@ -222,6 +223,20 @@ class DropZoneRecommendation:
     avg_damage_dealt: float
     avg_survival_seconds: float
     reason: str
+    cluster_id: str | None = None
+    grid_size: int = 10
+    centroid_x_cm: float | None = None
+    centroid_y_cm: float | None = None
+    region_status: str = "unmatched"
+    region_id: str | None = None
+    region_name: str | None = None
+    region_name_ko: str | None = None
+    region_display_name_ko: str | None = None
+    region_geometry_type: str | None = None
+    region_distance_to_center_m: float | None = None
+    region_radius_m: float | None = None
+    region_catalog_version: str | None = None
+    region_source_commit: str | None = None
 
     def to_record(self) -> dict[str, Any]:
         return asdict(self)
@@ -1256,6 +1271,8 @@ class PlayerRecommendationService:
                     "deaths": 0,
                     "damage_dealt": 0.0,
                     "survival_seconds": 0.0,
+                    "x_cm_sum": 0.0,
+                    "y_cm_sum": 0.0,
                     "x_pct_sum": 0.0,
                     "y_pct_sum": 0.0,
                 },
@@ -1266,6 +1283,8 @@ class PlayerRecommendationService:
             bucket["deaths"] += _int(row.get("deaths"))
             bucket["damage_dealt"] += _float(row.get("damage_dealt"))
             bucket["survival_seconds"] += _survival_seconds_from_row(row)
+            bucket["x_cm_sum"] += _float(row.get("landing_x"))
+            bucket["y_cm_sum"] += _float(row.get("landing_y"))
             bucket["x_pct_sum"] += x_pct
             bucket["y_pct_sum"] += y_pct
 
@@ -1286,6 +1305,11 @@ class PlayerRecommendationService:
                 damage_dealt=damage_dealt,
             ) + _safe_divide(bucket["survival_seconds"], match_count) / 20
             map_name = str(bucket["map_name"])
+            centroid_x_cm = _safe_divide(bucket["x_cm_sum"], match_count)
+            centroid_y_cm = _safe_divide(bucket["y_cm_sum"], match_count)
+            region = resolve_map_region(map_name, centroid_x_cm, centroid_y_cm)
+            cluster_id = f"{map_name}:grid10:{bucket['grid_x']}:{bucket['grid_y']}"
+            region_label = region.region_display_name_ko or f"grid {bucket['grid_x']},{bucket['grid_y']}"
             recommendations.append(
                 DropZoneRecommendation(
                     map_name=map_name,
@@ -1303,7 +1327,20 @@ class PlayerRecommendationService:
                     win_rate=_safe_divide(wins, match_count),
                     avg_damage_dealt=_safe_divide(damage_dealt, match_count),
                     avg_survival_seconds=_safe_divide(bucket["survival_seconds"], match_count),
-                    reason=f"grid {bucket['grid_x']},{bucket['grid_y']} with {_safe_divide(wins, match_count) * 100:.1f}% win rate",
+                    reason=f"{region_label} with {_safe_divide(wins, match_count) * 100:.1f}% win rate",
+                    cluster_id=cluster_id,
+                    centroid_x_cm=centroid_x_cm,
+                    centroid_y_cm=centroid_y_cm,
+                    region_status=region.status,
+                    region_id=region.region_id,
+                    region_name=region.region_name,
+                    region_name_ko=region.region_name_ko,
+                    region_display_name_ko=region.region_display_name_ko,
+                    region_geometry_type=region.geometry_type,
+                    region_distance_to_center_m=region.distance_to_center_m,
+                    region_radius_m=region.radius_m,
+                    region_catalog_version=region.catalog_version,
+                    region_source_commit=region.source_commit,
                 )
             )
         return _top(recommendations, limit)

@@ -289,6 +289,13 @@ E:\PUBG_AI_Data\raw\matches\steam\2026\06\27\abc123.json.gz
 E:\PUBG_AI_Data\raw\telemetry\steam\2026\06\27\abc123.telemetry.json.gz
 ```
 
+## Map Region Catalog
+
+Named-region geometry is not an environment or local-manager setting. It is a reviewable, versioned code catalog in
+`src/pubg_ai/map_regions.py`, pinned to one official `pubg/api-assets` commit and per-image SHA-256 values. Updating it
+requires a source review, catalog version bump, and tests; it requires no MySQL migration and never rewrites retained
+raw coordinates. See `docs/MAP_REGION_CATALOG.md`.
+
 ## MySQL Responsibility
 
 MySQL should store metadata and analysis rows, not the full raw text files by default.

@@ -160,9 +160,13 @@ Suggested command groups:
 
 ## Location Analysis
 
-- Phase 1: use coordinate clustering for drop/landing/hotspot analysis.
-- Phase 2: map clusters to named regions such as city or landmark names.
-- Map coordinate-to-region dictionaries should be versioned separately from raw telemetry.
+- Keep coordinate clustering and raw landing centroids as the durable source facts.
+- Resolve cluster centroids at query time through the separately versioned catalog in `map_regions.py`.
+- Region circles are project-maintained interpretations around labels in pinned official PUBG map assets, not official
+  boundary polygons.
+- Never force an unmatched point to the nearest label; retain the map/grid fallback and raw centimeter coordinates.
+- Treat Paramo as a dynamic map because fixed coordinate labels can move between sessions.
+- Preserve a stable cluster ID and catalog/source metadata in every recommendation result so labels remain auditable.
 - Record phase-aware location facts such as phase at landing, phase at DBNO, phase at kill, and phase at death when
   telemetry phase data is available.
 - Record movement facts such as reconstructed plane route, distance from plane route to landing point, first vehicle

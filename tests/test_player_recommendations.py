@@ -191,6 +191,13 @@ class PlayerRecommendationServiceTests(unittest.TestCase):
         self.assertEqual(report.drop_zones[0].grid_x, 5)
         self.assertEqual(report.drop_zones[0].grid_y, 2)
         self.assertAlmostEqual(report.drop_zones[0].win_rate, 0.5)
+        self.assertEqual(report.drop_zones[0].cluster_id, "Tiger_Main:grid10:5:2")
+        self.assertAlmostEqual(report.drop_zones[0].centroid_x_cm or 0.0, 429000.0)
+        self.assertAlmostEqual(report.drop_zones[0].centroid_y_cm or 0.0, 212000.0)
+        self.assertEqual(report.drop_zones[0].region_status, "matched")
+        self.assertEqual(report.drop_zones[0].region_id, "taego.yong_cheon")
+        self.assertEqual(report.drop_zones[0].region_name_ko, "용천")
+        self.assertIsNotNone(report.drop_zones[0].region_catalog_version)
         self.assertEqual(len(connection.executed), 8)
 
     def test_non_global_scope_without_guild_returns_none_without_querying(self) -> None:

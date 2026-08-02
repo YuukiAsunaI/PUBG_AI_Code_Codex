@@ -1067,6 +1067,14 @@ def format_player_ranking(
     return "\n".join(lines)
 
 
+def _drop_zone_location_label(item: Any) -> str:
+    if item.region_display_name_ko:
+        return str(item.region_display_name_ko)
+    if item.region_status == "dynamic_map":
+        return f"동적 맵 grid {item.grid_x},{item.grid_y}"
+    return f"grid {item.grid_x},{item.grid_y}"
+
+
 def format_player_recommendations(
     report: PlayerRecommendationReport,
     *,
@@ -1131,7 +1139,7 @@ def format_player_recommendations(
 
     if report.drop_zones:
         lines.append("- drop zones: " + ", ".join(
-            f"{item.map_name_ko} grid {item.grid_x},{item.grid_y} {_percent(item.win_rate)} win"
+            f"{item.map_name_ko} {_drop_zone_location_label(item)} {_percent(item.win_rate)} win"
             for item in report.drop_zones[:3]
         ))
     else:
