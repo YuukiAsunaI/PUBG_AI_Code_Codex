@@ -122,12 +122,13 @@ Use a two-layer storage model:
 | --- | --- |
 | `telemetry_events` | Generic event index: event type, timestamp, elapsed time, actor, raw payload JSON |
 | `item_events` | Pick/drop/use/equip/unequip/attach/detach/trunk/carepackage/lootbox events |
-| `player_combat_loadout_snapshots` | Reconstructed weapon + attachment state at kill, DBNO-caused, and finish moments |
+| `player_combat_loadout_snapshots` | Reconstructed weapon + attachment state at kill, DBNO-caused, finish, DBNO-taken, and death moments |
 | `weapon_fire_events` | Attack, throwable, flare, fire-count events |
 | `damage_events` | Damage dealt/taken with causer, reason, distance, armor notes |
 | `body_part_hit_events` | One row per gun hit with attacker, victim, weapon, damage reason/body part, damage, and headshot flag |
 | `dbno_events` | Knockdown episodes keyed by `dBNOId`, including attacker, victim, weapon, distance, and revive/final state |
-| `fight_outcomes` | Per-player fight outcomes such as `dbno_win`, `dbno_loss`, `final_kill`, and `final_death` |
+| `player_fight_outcomes` | Event-indexed tracked-player wins/losses for kill, death, DBNO caused, and DBNO taken, with own/opponent weapon, attachments, bot/friendly-fire flags, headshot, distance, and KST time |
+| `player_fight_outcome_processing_states` | Per-match/per-account parser version and outcome count, including zero-outcome completion states |
 | `kill_events` | Final kill/death/finish/assist/teamkill/suicide records |
 | `revive_events` | Revive and redeploy events |
 | `position_samples` | Player position samples for movement, drop, route, and replay |
@@ -555,19 +556,25 @@ Completed slices:
      the fixed v1 shape, hashes, metrics, checks, scenarios, and non-authorization safety contract. Offline mode opens
      no database and establishes internal consistency only. Default MySQL mode uses parameterized `SELECT` queries to
      compare the exact immutable packet row and latest current chain. No text or result is persisted; no record, DML,
-     file mutation, evidence, authorization, readiness, restore, quarantine, deletion, or execution is created. The
-     database schema remains version 20 with 44 tables.
+     file mutation, evidence, authorization, readiness, restore, quarantine, deletion, or execution is created. At
+     that feature slice, the database schema remained version 20 with 44 tables.
 115. Application version 22 adds a read-only two-packet comparer to the localhost manager. Baseline and candidate must
      independently pass the version 21 verifier. The response reports directional canonical-field, input-ID,
      fingerprint, assessment, and review-check changes, preserves the complete field-difference count, and returns at
      most 1,000 canonical rows. Each input keeps the 2 MiB UTF-8 limit. Offline mode opens no database; optional
      current-chain mode reuses one connection for both parameterized `SELECT`-only checks. No packet text or result is
      persisted, and no record, DML, source access, evidence, authorization, readiness, restore, quarantine, deletion,
-     or execution capability is created. Schema version 20 remains current with 44 tables.
+     or execution capability is created. At that feature slice, schema version 20 remained current with 44 tables.
+116. Database schema version 21 adds durable `player_fight_outcomes` and version-aware
+     `player_fight_outcome_processing_states`. The v2 parser records kill/death and duo/squad DBNO win/loss events,
+     prioritizes actual attack attachments for own loadout context, retains bot/friendly-fire/environment facts, and
+     backfills without mutating immutable raw or replay files. CLI, localhost API/UI, Discord formatting, automatic
+     post-processing, deletion preview, and backup scope all understand the new tables. The current schema is version
+     21 with 46 tables.
 
 Next slice:
 
-1. Perform a requirement-to-evidence completion audit across the original collection, telemetry analytics, replay,
-   Discord authorization, local storage, and operations requirements. Record which items are proven by automated or
-   live evidence, which require real PUBG/MySQL/Discord validation, and which are not yet implemented; then use that
-   audit to prioritize the remaining roadmap before adding more deletion-workflow tooling.
+1. Implement KST hour/day/week/month trend reports with mode, perspective, match-type, map, and shard filters.
+2. Run a real read-only Discord command acceptance check in an explicitly selected guild/channel.
+3. Keep deletion execution out of scope until it is explicitly approved; the review and rehearsal tooling remains
+   read-only/non-destructive.

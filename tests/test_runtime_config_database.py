@@ -103,6 +103,8 @@ class DatabaseSchemaTests(unittest.TestCase):
             "player_movement_summaries",
             "player_combat_location_events",
             "player_combat_loadout_snapshots",
+            "player_fight_outcomes",
+            "player_fight_outcome_processing_states",
             "match_care_package_events",
             "match_plane_routes",
             "match_phase_events",
@@ -110,7 +112,7 @@ class DatabaseSchemaTests(unittest.TestCase):
         ]:
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table_name}", schema)
 
-        self.assertEqual(SCHEMA_VERSION, 20)
+        self.assertEqual(SCHEMA_VERSION, 21)
         self.assertIn("fk_data_deletion_events_request", schema)
         self.assertIn("fk_data_deletion_confirmation_snapshot", schema)
         self.assertIn("uq_data_deletion_confirmation_snapshot", schema)
@@ -157,9 +159,11 @@ class DiscordCommandDefaultsTests(unittest.TestCase):
         self.assertIn("유저등록", DEFAULT_COMMAND_GROUPS["register"])
         self.assertIn("유저조회", DEFAULT_COMMAND_GROUPS["profile_read"])
         self.assertIn("전적", DEFAULT_COMMAND_GROUPS["profile_read"])
+        self.assertIn("교전", DEFAULT_COMMAND_GROUPS["profile_read"])
         self.assertIn("무기", DEFAULT_COMMAND_GROUPS["profile_read"])
         self.assertIn("매치", DEFAULT_COMMAND_GROUPS["profile_read"])
         self.assertIn("pubg-stats", DEFAULT_COMMAND_GROUPS["profile_read"])
+        self.assertIn("pubg-fights", DEFAULT_COMMAND_GROUPS["profile_read"])
         self.assertIn("pubg-weapon", DEFAULT_COMMAND_GROUPS["profile_read"])
         self.assertIn("랭킹", DEFAULT_COMMAND_GROUPS["ranking_read"])
         self.assertIn("유저삭제", DEFAULT_COMMAND_GROUPS["admin"])

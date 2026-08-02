@@ -8,7 +8,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 
 class DatabaseError(RuntimeError):
@@ -76,7 +76,7 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 VALUES (%s, %s, NOW(6))
                 ON DUPLICATE KEY UPDATE description = VALUES(description)
                 """,
-                (SCHEMA_VERSION, "advisory deletion review packet audit schema"),
+                (SCHEMA_VERSION, "durable player fight outcome schema"),
             )
             applied += 1
     finally:
@@ -1241,6 +1241,73 @@ def schema_statements() -> list[str]:
             KEY idx_player_combat_loadout_account_weapon (account_id, weapon_code, match_id),
             KEY idx_player_combat_loadout_weapon_count (weapon_code, attachment_count),
             CONSTRAINT fk_player_combat_loadout_snapshots_match
+                FOREIGN KEY (match_id) REFERENCES matches(match_id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS player_fight_outcomes (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            match_id VARCHAR(191) NOT NULL,
+            account_id VARCHAR(128) NOT NULL,
+            opponent_account_id VARCHAR(128) NULL,
+            event_index INT NOT NULL,
+            event_type VARCHAR(64) NOT NULL,
+            event_at_kst DATETIME(6) NULL,
+            common_is_game FLOAT NULL,
+            outcome_type ENUM('win', 'loss') NOT NULL,
+            outcome_reason ENUM('kill', 'dbno_caused', 'death', 'dbno_taken') NOT NULL,
+            game_mode VARCHAR(64) NOT NULL,
+            dbno_id VARCHAR(191) NULL,
+            weapon_code VARCHAR(128) NULL,
+            weapon_name_ko VARCHAR(191) NULL,
+            attachment_codes JSON NULL,
+            attachment_names_ko JSON NULL,
+            weapon_context_source VARCHAR(32) NOT NULL,
+            weapon_context_event_index INT NULL,
+            opponent_weapon_code VARCHAR(128) NULL,
+            opponent_weapon_name_ko VARCHAR(191) NULL,
+            opponent_is_bot TINYINT(1) NULL,
+            is_friendly_fire TINYINT(1) NOT NULL DEFAULT 0,
+            damage_type_category VARCHAR(64) NULL,
+            damage_reason VARCHAR(64) NULL,
+            is_headshot TINYINT(1) NOT NULL DEFAULT 0,
+            distance_m FLOAT NULL,
+            updated_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_player_fight_outcomes (
+                match_id,
+                account_id,
+                event_index,
+                outcome_reason
+            ),
+            KEY idx_player_fight_outcomes_account_result (
+                account_id,
+                outcome_type,
+                event_at_kst
+            ),
+            KEY idx_player_fight_outcomes_account_weapon (
+                account_id,
+                weapon_code,
+                outcome_type
+            ),
+            KEY idx_player_fight_outcomes_opponent (opponent_account_id, match_id),
+            CONSTRAINT fk_player_fight_outcomes_match
+                FOREIGN KEY (match_id) REFERENCES matches(match_id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS player_fight_outcome_processing_states (
+            match_id VARCHAR(191) NOT NULL,
+            account_id VARCHAR(128) NOT NULL,
+            parser_version VARCHAR(64) NOT NULL,
+            outcome_count INT UNSIGNED NOT NULL DEFAULT 0,
+            processed_at_kst DATETIME(6) NOT NULL,
+            updated_at_kst DATETIME(6) NOT NULL,
+            PRIMARY KEY (match_id, account_id),
+            KEY idx_player_fight_outcome_states_account (account_id, processed_at_kst),
+            KEY idx_player_fight_outcome_states_parser (parser_version, processed_at_kst),
+            CONSTRAINT fk_player_fight_outcome_states_match
                 FOREIGN KEY (match_id) REFERENCES matches(match_id)
                 ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci

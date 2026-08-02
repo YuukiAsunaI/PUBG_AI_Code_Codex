@@ -91,6 +91,8 @@ from pubg_ai.data_deletion_preview import (
 )
 from pubg_ai.data_deletion_requests import DataDeletionRequestError, DataDeletionRequestService
 from pubg_ai.database import connect_mysql, count_tables
+from pubg_ai.fight_outcome_processor import FightOutcomeProcessor
+from pubg_ai.fight_outcome_stats import FightOutcomeStatsService
 from pubg_ai.discord_permission_manager import DiscordPermissionManager
 from pubg_ai.local_settings import LocalSettingsError, LocalSettingsStore, check_storage_path
 from pubg_ai.loadout_snapshot_processor import LoadoutSnapshotProcessor
@@ -166,6 +168,11 @@ class ParseTelemetryItemsRequest(BaseModel):
 
 
 class ParseTelemetryMovementRequest(BaseModel):
+    limit: int = Field(default=10, ge=1, le=200)
+    force: bool = False
+
+
+class ParseFightOutcomesRequest(BaseModel):
     limit: int = Field(default=10, ge=1, le=200)
     force: bool = False
 
@@ -382,6 +389,7 @@ class PostProcessingWorkerStartRequest(BaseModel):
     item_limit: int = Field(default=10, ge=1, le=200)
     movement_limit: int = Field(default=10, ge=1, le=200)
     loadout_limit: int = Field(default=50, ge=1, le=500)
+    fight_outcome_limit: int = Field(default=10, ge=1, le=200)
     map_snapshot_limit: int = Field(default=10, ge=1, le=200)
     timeline_limit: int = Field(default=10, ge=1, le=200)
     force: bool = False
@@ -999,6 +1007,7 @@ def create_app() -> Any:
                     item_limit=request.item_limit,
                     movement_limit=request.movement_limit,
                     loadout_limit=request.loadout_limit,
+                    fight_outcome_limit=request.fight_outcome_limit,
                     map_snapshot_limit=request.map_snapshot_limit,
                     timeline_limit=request.timeline_limit,
                     force=request.force,
@@ -2144,6 +2153,39 @@ def create_app() -> Any:
         finally:
             connection.close()
 
+    @app.get("/players/fight-outcomes")
+    def player_fight_outcomes(
+        shard: str = "steam",
+        name: str | None = None,
+        account_id: str | None = None,
+        weapon_limit: int = 10,
+        loadout_limit: int = 10,
+        recent_limit: int = 20,
+        include_friendly_fire: bool = False,
+        include_bots: bool = True,
+    ) -> dict[str, Any]:
+        if not name and not account_id:
+            raise HTTPException(status_code=400, detail="name or account_id is required.")
+
+        connection = connect_mysql(config.database)
+        try:
+            report = FightOutcomeStatsService(connection).get_report(
+                shard=shard,
+                account_id=account_id,
+                name=name,
+                global_scope=True,
+                weapon_limit=weapon_limit,
+                loadout_limit=loadout_limit,
+                recent_limit=recent_limit,
+                include_friendly_fire=include_friendly_fire,
+                include_bots=include_bots,
+            )
+            if report is None:
+                raise HTTPException(status_code=404, detail="registered player fight outcomes not found.")
+            return {"fight_outcomes": report.to_record()}
+        finally:
+            connection.close()
+
     @app.get("/players/recommendations")
     def player_recommendations(
         shard: str = "steam",
@@ -2443,6 +2485,22 @@ def create_app() -> Any:
         connection = connect_mysql(config.database)
         try:
             result = LoadoutSnapshotProcessor(connection).process_matches(limit=request.limit, force=request.force)
+            return {"result": result.to_record()}
+        finally:
+            connection.close()
+
+    @app.post("/telemetry/fight-outcomes/process")
+    def process_fight_outcomes(request: ParseFightOutcomesRequest) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(config.database)
+        try:
+            result = FightOutcomeProcessor(
+                connection,
+                RawPayloadStore(
+                    runtime_config.app.raw_data_dir,
+                    compression=runtime_config.app.raw_compression,  # type: ignore[arg-type]
+                ),
+            ).process_raw_telemetry(limit=request.limit, force=request.force)
             return {"result": result.to_record()}
         finally:
             connection.close()
@@ -3561,6 +3619,9 @@ _INDEX_HTML = """<!doctype html>
         <label>Loadout
           <input name="loadout_limit" type="number" min="1" max="500" value="50" required>
         </label>
+        <label>Fight outcomes
+          <input name="fight_outcome_limit" type="number" min="1" max="200" value="10" required>
+        </label>
         <label>Map JPEG
           <input name="map_snapshot_limit" type="number" min="1" max="200" value="10" required>
         </label>
@@ -3672,6 +3733,14 @@ _INDEX_HTML = """<!doctype html>
         <button class="secondary" type="button" onclick="generateLoadoutSnapshots(true)">재생성</button>
       </div>
       <div class="status" id="loadoutSnapshotStatus">대기 중</div>
+    </section>
+    <section>
+      <h2>Fight Outcome 생성</h2>
+      <div class="actions" style="margin-bottom: 10px;">
+        <button type="button" onclick="generateFightOutcomes(false)">승패 생성</button>
+        <button class="secondary" type="button" onclick="generateFightOutcomes(true)">재생성</button>
+      </div>
+      <div class="status" id="fightOutcomeStatus">대기 중</div>
     </section>
     <section>
       <h2>Map Snapshot 생성</h2>
@@ -3794,6 +3863,7 @@ _INDEX_HTML = """<!doctype html>
     const itemStatus = document.querySelector("#itemStatus");
     const movementStatus = document.querySelector("#movementStatus");
     const loadoutSnapshotStatus = document.querySelector("#loadoutSnapshotStatus");
+    const fightOutcomeStatus = document.querySelector("#fightOutcomeStatus");
     const mapSnapshotStatus = document.querySelector("#mapSnapshotStatus");
     const timelineStatus = document.querySelector("#timelineStatus");
     const replayArtifactsBody = document.querySelector("#replayArtifactsBody");
@@ -6346,17 +6416,32 @@ _INDEX_HTML = """<!doctype html>
       } else {
         params.set("name", target);
       }
-      const response = await fetch(`/players/profile?${params.toString()}`);
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ detail: response.statusText }));
-        throw new Error(error.detail || response.statusText);
+      const [profileResponse, fightResponse] = await Promise.all([
+        fetch(`/players/profile?${params.toString()}`),
+        fetch(`/players/fight-outcomes?${params.toString()}&weapon_limit=3&loadout_limit=3&recent_limit=5`),
+      ]);
+      if (!profileResponse.ok) {
+        const error = await profileResponse.json().catch(() => ({ detail: profileResponse.statusText }));
+        throw new Error(error.detail || profileResponse.statusText);
       }
-      const payload = await response.json();
-      const profile = payload.profile;
+      if (!fightResponse.ok) {
+        const error = await fightResponse.json().catch(() => ({ detail: fightResponse.statusText }));
+        throw new Error(error.detail || fightResponse.statusText);
+      }
+      const profile = (await profileResponse.json()).profile;
+      const fights = (await fightResponse.json()).fight_outcomes;
       const totals = profile.totals;
+      const fightTotals = fights.totals;
       const weapons = (profile.top_weapons || []).slice(0, 3).map((weapon) => (
         `${escapeHtml(weapon.weapon_name)} ${weapon.kills}킬 ${Number(weapon.damage_dealt).toFixed(0)}딜`
       )).join(", ") || "-";
+      const fightWeapons = (fights.weapons || []).map((weapon) => (
+        `${escapeHtml(weapon.weapon_name)} ${weapon.wins}승/${weapon.losses}패 ${percent(weapon.fight_win_rate)}`
+      )).join(", ") || "-";
+      const fightLoadouts = (fights.loadouts || []).map((loadout) => {
+        const parts = (loadout.attachment_names || []).map(escapeHtml).join(" + ") || "파츠 없음";
+        return `${escapeHtml(loadout.weapon_name)} + ${parts} ${loadout.wins}승/${loadout.losses}패 ${percent(loadout.fight_win_rate)}`;
+      }).join("<br>") || "-";
       profileBody.innerHTML = [
         `<strong>${escapeHtml(profile.player.current_name)} (${escapeHtml(profile.player.shard)})</strong>`,
         `경기/치킨: ${totals.match_count}전 ${totals.wins}치킨 (${percent(totals.win_rate)})`,
@@ -6364,7 +6449,14 @@ _INDEX_HTML = """<!doctype html>
         `평균 딜/받은 딜: ${Number(totals.avg_damage_dealt).toFixed(1)} / ${Number(totals.avg_damage_taken).toFixed(1)}`,
         `명중률: ${percent(totals.accuracy)}`,
         `주무기: ${weapons}`,
-      ].join("<br>");
+        `교전 승/패: ${fightTotals.wins}승 ${fightTotals.losses}패 (${percent(fightTotals.fight_win_rate)})`,
+        `교전 상세: 킬승 ${fightTotals.kill_wins} · 기절승 ${fightTotals.dbno_wins} · 사망패 ${fightTotals.death_losses} · 기절패 ${fightTotals.dbno_losses}`,
+        fightTotals.excluded_non_firearm_contexts
+          ? `총기 순위 제외: 비총기 장비 ${fightTotals.excluded_non_firearm_contexts}건`
+          : null,
+        `교전 무기: ${fightWeapons}`,
+        `교전 파츠:<br>${fightLoadouts}`,
+      ].filter(Boolean).join("<br>");
     }
 
     async function loadPlayerWeapon(target, weapon, shard) {
@@ -7933,6 +8025,23 @@ _INDEX_HTML = """<!doctype html>
       banner.textContent = "Loadout snapshot 생성 완료";
     }
 
+    async function generateFightOutcomes(force) {
+      banner.textContent = force ? "Fight outcome 재생성 중" : "Fight outcome 생성 중";
+      const response = await fetch("/telemetry/fight-outcomes/process", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 50, force }),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const payload = await response.json();
+      const result = payload.result;
+      fightOutcomeStatus.textContent = `처리 ${result.parsed_payloads}개, 대상 ${result.tracked_players}명, 승리 ${result.generated_wins}개, 패배 ${result.generated_losses}개, 장비 ${result.generated_loadout_snapshots}개, 실패 ${result.failed_payloads}개`;
+      banner.textContent = "Fight outcome 생성 완료";
+    }
+
     async function generateMapSnapshots(force) {
       banner.textContent = force ? "JPEG 재생성 중" : "JPEG 생성 중";
       const response = await fetch("/replay/map-snapshots/generate", {
@@ -8116,6 +8225,7 @@ _INDEX_HTML = """<!doctype html>
         item_limit: Number(form.get("item_limit") || 10),
         movement_limit: Number(form.get("movement_limit") || 10),
         loadout_limit: Number(form.get("loadout_limit") || 50),
+        fight_outcome_limit: Number(form.get("fight_outcome_limit") || 10),
         map_snapshot_limit: Number(form.get("map_snapshot_limit") || 10),
         timeline_limit: Number(form.get("timeline_limit") || 10),
         force: form.get("force") === "true",

@@ -37,6 +37,7 @@ from pubg_ai.data_deletion_requests import (
 from pubg_ai.database import connect_mysql
 from pubg_ai.discord_permission_manager import DiscordPermissionManager
 from pubg_ai.discord_permissions import DiscordCommandIdentity, DiscordPermissionChecker
+from pubg_ai.fight_outcome_stats import FightOutcomeStatsService, PlayerFightOutcomeReport
 from pubg_ai.local_settings import CollectorSettings, LocalSettingsError, LocalSettingsStore
 from pubg_ai.player_rankings import PlayerRanking, PlayerRankingService
 from pubg_ai.player_recommendations import PlayerRecommendationReport, PlayerRecommendationService
@@ -756,6 +757,56 @@ def format_player_profile_stats(profile: PlayerProfileStats, *, detail_base_url:
     return "\n".join(lines)
 
 
+
+def format_player_fight_outcomes(
+    report: PlayerFightOutcomeReport,
+    *,
+    detail_base_url: str | None = None,
+) -> str:
+    totals = report.totals
+    lines = [
+        f"{report.player.current_name} 교전 승패 ({report.player.shard})",
+        f"- 전체: {totals.wins}승/{totals.losses}패 ({_percent(totals.fight_win_rate)})",
+        f"- 승리: 킬 {totals.kill_wins} / 기절 {totals.dbno_wins}",
+        f"- 패배: 사망 {totals.death_losses} / 기절 {totals.dbno_losses}",
+        f"- 상대: 사람 {totals.human_opponent_fights} / 봇 {totals.bot_opponent_fights}",
+    ]
+    if totals.excluded_friendly_fire:
+        lines.append(f"- 아군 피해 제외: {totals.excluded_friendly_fire}건")
+    if totals.excluded_non_firearm_contexts:
+        lines.append(
+            f"- 총기 순위 제외: 비총기 장비 {totals.excluded_non_firearm_contexts}건"
+        )
+
+    if report.weapons:
+        weapons = [
+            f"{item.weapon_name} {item.wins}승/{item.losses}패 {_percent(item.fight_win_rate)}"
+            for item in report.weapons[:3]
+        ]
+        lines.append(f"- 무기: {', '.join(weapons)}")
+
+    if report.loadouts:
+        lines.append("상위 무기 + 파츠")
+        for item in report.loadouts[:3]:
+            parts = " + ".join(item.attachment_names) if item.attachment_names else "파츠 없음"
+            lines.append(
+                f"- {item.weapon_name} + {parts}: "
+                f"{item.wins}승/{item.losses}패 {_percent(item.fight_win_rate)}"
+            )
+
+    if totals.fight_count == 0:
+        lines.append("아직 파싱된 교전 승패 데이터가 없습니다.")
+
+    local_link = _local_section_url(
+        detail_base_url,
+        "profile-lookup",
+        {"shard": report.player.shard, "account_id": report.player.account_id},
+    )
+    if local_link:
+        lines.append(f"- local_profile: [open]({local_link})")
+    return "\n".join(lines)
+
+
 def format_player_weapon_detail(detail: PlayerWeaponDetail, *, detail_base_url: str | None = None) -> str:
     totals = detail.totals
     lines = [
@@ -1130,6 +1181,7 @@ def create_discord_bot(
                     f"- `{command_prefix}유저등록 steam 닉네임`",
                     f"- `{command_prefix}유저조회 [닉네임] [shard]`",
                     f"- `{command_prefix}전적 닉네임 [shard]`",
+                    f"- `{command_prefix}교전 닉네임 [shard]`",
                     f"- `{command_prefix}무기 닉네임 무기명 [shard]`",
                     f"- `{command_prefix}추천 닉네임 [shard]`",
                     f"- `{command_prefix}매치 match_id [닉네임|accountId] [shard]`",
@@ -1226,6 +1278,56 @@ def create_discord_bot(
 
         await ctx.reply(
             format_player_profile_stats(profile, detail_base_url=config.app.local_web_base_url),
+            mention_author=False,
+        )
+
+    @bot.command(name="교전", aliases=["pubg-fights", "pubg-fight"])
+    async def player_fight_outcomes_command(
+        ctx: Any,
+        name: str | None = None,
+        shard: str = "steam",
+    ) -> None:
+        if not await require_permission(ctx, "profile_read"):
+            return
+        if not name:
+            await ctx.reply(f"사용법: `{command_prefix}교전 닉네임 [shard]`", mention_author=False)
+            return
+
+        guild_id = await require_scoped_guild(ctx)
+        if guild_id is None and not has_global_scope(ctx):
+            return
+        global_scope = has_global_scope(ctx)
+
+        connection = connect_mysql(config.database)
+        try:
+            report = FightOutcomeStatsService(connection).get_report(
+                shard=shard,
+                account_id=name if name.startswith("account.") else None,
+                name=None if name.startswith("account.") else name,
+                guild_id=None if global_scope else guild_id,
+                global_scope=global_scope,
+                weapon_limit=5,
+                loadout_limit=3,
+                recent_limit=5,
+            )
+        finally:
+            connection.close()
+
+        if report is None:
+            await ctx.reply(
+                format_local_section_command_reply(
+                    "조회 가능한 등록 유저를 찾지 못했습니다.",
+                    "profile_lookup",
+                    "profile-lookup",
+                    detail_base_url=config.app.local_web_base_url,
+                    query_params={"shard": shard, "target": name},
+                ),
+                mention_author=False,
+            )
+            return
+
+        await ctx.reply(
+            format_player_fight_outcomes(report, detail_base_url=config.app.local_web_base_url),
             mention_author=False,
         )
 

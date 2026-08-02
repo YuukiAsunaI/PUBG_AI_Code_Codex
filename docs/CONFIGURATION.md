@@ -147,13 +147,18 @@ executor or execution endpoint is enabled.
 
 Application version 21 adds the localhost `POST /data-deletion-review-packets/verify` route and file-selection UI.
 It needs no new environment variable. Selected JSON is limited to 2 MiB and is never persisted. Offline verification
-opens no MySQL connection; optional current-chain verification uses read-only parameterized `SELECT` queries. The
-schema remains version 20 with 44 total tables and fourteen deletion-workflow tables.
+opens no MySQL connection; optional current-chain verification uses read-only parameterized `SELECT` queries. At
+that release, the schema remained version 20 with 44 total tables and fourteen deletion-workflow tables.
 
 Application version 22 adds `POST /data-deletion-review-packets/compare` and requires no new setting. Baseline and
 candidate JSON each keep the 2 MiB UTF-8 limit and are never persisted. Offline comparison opens no connection; the
 default database option reuses one connection for two read-only current-chain checks. Canonical difference responses
-include the complete count and at most 1,000 field rows. Schema version 20 and all 44 tables remain unchanged.
+include the complete count and at most 1,000 field rows. At that release, schema version 20 and all 44 tables were
+unchanged.
+
+The current runtime schema is version 21 with 46 tables. Durable fight outcomes add no secret or environment
+variable. The localhost manager stores the automatic worker's `fight_outcome_limit` beside the existing processing
+limits, and the manual parser reads immutable telemetry from the configured raw-data root.
 
 The opt-in builder uses `PUBG_BACKUP_DATA_DIR` (default `./data/backups`). The backup root must be writable and must not
 equal, contain, or be contained by `PUBG_RAW_DATA_DIR` or `PUBG_REPLAY_DATA_DIR`. A build requires the exact latest-plan

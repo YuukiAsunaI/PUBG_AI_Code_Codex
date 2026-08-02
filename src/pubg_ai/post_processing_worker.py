@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from pubg_ai.config import RuntimeConfig
 from pubg_ai.database import connect_mysql
+from pubg_ai.fight_outcome_processor import FightOutcomeProcessor
 from pubg_ai.loadout_snapshot_processor import LoadoutSnapshotProcessor
 from pubg_ai.map_snapshot_renderer import MapSnapshotProcessor
 from pubg_ai.raw_storage import RawPayloadStore
@@ -30,6 +31,7 @@ class PostProcessingWorkerOptions:
     item_limit: int = 10
     movement_limit: int = 10
     loadout_limit: int = 50
+    fight_outcome_limit: int = 10
     map_snapshot_limit: int = 10
     timeline_limit: int = 10
     force: bool = False
@@ -48,6 +50,7 @@ class PostProcessingCycleResult:
     items: dict[str, Any] | None
     movement: dict[str, Any] | None
     loadout_snapshots: dict[str, Any] | None
+    fight_outcomes: dict[str, Any] | None
     map_snapshots: dict[str, Any] | None
     replay_timelines: dict[str, Any] | None
     errors: list[str]
@@ -96,6 +99,7 @@ def run_post_processing_cycle(
     item_processor_factory: ProcessorFactory = TelemetryItemProcessor,
     movement_processor_factory: ProcessorFactory = TelemetryMovementProcessor,
     loadout_processor_factory: ProcessorFactory = LoadoutSnapshotProcessor,
+    fight_outcome_processor_factory: ProcessorFactory = FightOutcomeProcessor,
     map_snapshot_processor_factory: ProcessorFactory = MapSnapshotProcessor,
     timeline_processor_factory: ProcessorFactory = ReplayTimelineProcessor,
     history_recorder: HistoryRecorder = _record_worker_history,
@@ -108,6 +112,7 @@ def run_post_processing_cycle(
     items: dict[str, Any] | None = None
     movement: dict[str, Any] | None = None
     loadout_snapshots: dict[str, Any] | None = None
+    fight_outcomes: dict[str, Any] | None = None
     map_snapshots: dict[str, Any] | None = None
     replay_timelines: dict[str, Any] | None = None
 
@@ -121,6 +126,7 @@ def run_post_processing_cycle(
             items=items,
             movement=movement,
             loadout_snapshots=loadout_snapshots,
+            fight_outcomes=fight_outcomes,
             map_snapshots=map_snapshots,
             replay_timelines=replay_timelines,
             errors=list(errors),
@@ -186,6 +192,14 @@ def run_post_processing_cycle(
             errors.append(_safe_error("loadout_snapshots", exc))
 
         try:
+            fight_outcomes = fight_outcome_processor_factory(connection, raw_store).process_raw_telemetry(
+                limit=worker_options.fight_outcome_limit,
+                force=worker_options.force,
+            ).to_record()
+        except Exception as exc:
+            errors.append(_safe_error("fight_outcomes", exc))
+
+        try:
             map_snapshots = map_snapshot_processor_factory(connection, replay_store).generate_player_snapshots(
                 limit=worker_options.map_snapshot_limit,
                 force=worker_options.force,
@@ -218,6 +232,7 @@ class PostProcessingWorkerController:
         item_processor_factory: ProcessorFactory = TelemetryItemProcessor,
         movement_processor_factory: ProcessorFactory = TelemetryMovementProcessor,
         loadout_processor_factory: ProcessorFactory = LoadoutSnapshotProcessor,
+        fight_outcome_processor_factory: ProcessorFactory = FightOutcomeProcessor,
         map_snapshot_processor_factory: ProcessorFactory = MapSnapshotProcessor,
         timeline_processor_factory: ProcessorFactory = ReplayTimelineProcessor,
         history_recorder: HistoryRecorder = _record_worker_history,
@@ -230,6 +245,7 @@ class PostProcessingWorkerController:
         self._item_processor_factory = item_processor_factory
         self._movement_processor_factory = movement_processor_factory
         self._loadout_processor_factory = loadout_processor_factory
+        self._fight_outcome_processor_factory = fight_outcome_processor_factory
         self._map_snapshot_processor_factory = map_snapshot_processor_factory
         self._timeline_processor_factory = timeline_processor_factory
         self._history_recorder = history_recorder
@@ -312,6 +328,7 @@ class PostProcessingWorkerController:
                         item_processor_factory=self._item_processor_factory,
                         movement_processor_factory=self._movement_processor_factory,
                         loadout_processor_factory=self._loadout_processor_factory,
+                        fight_outcome_processor_factory=self._fight_outcome_processor_factory,
                         map_snapshot_processor_factory=self._map_snapshot_processor_factory,
                         timeline_processor_factory=self._timeline_processor_factory,
                         history_recorder=self._history_recorder,
@@ -393,6 +410,7 @@ def _validate_options(options: PostProcessingWorkerOptions) -> None:
         ("item_limit", options.item_limit, 200),
         ("movement_limit", options.movement_limit, 200),
         ("loadout_limit", options.loadout_limit, 500),
+        ("fight_outcome_limit", options.fight_outcome_limit, 200),
         ("map_snapshot_limit", options.map_snapshot_limit, 200),
         ("timeline_limit", options.timeline_limit, 200),
     ):

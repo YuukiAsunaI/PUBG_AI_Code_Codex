@@ -56,6 +56,14 @@ changes them.
 - Revive or redeploy does not erase the DBNO fight outcome.
 - Teamkill, suicide, fall damage, bluezone, vehicle accidents, and environment deaths must be classified separately
   from ordinary weapon fight outcomes.
+- Persist each tracked-player outcome by match, account, event index, and reason; also persist a parser-version state
+  for every processed match/account pair so zero-outcome matches and future parser upgrades remain idempotent.
+- Own loadout context priority is actual `LogPlayerAttack.weapon.attachedItems`, reconstructed item state, explicit
+  equip state, then the offensive damage event. Unknown context remains null rather than being guessed.
+- Friendly fire remains queryable but is excluded from default win-rate totals. Bot outcomes remain included and are
+  also counted separately.
+- The event ledger retains throwable, melee, utility, and unknown contexts. Firearm/loadout ranking lists exclude
+  known non-firearm codes and report the excluded count; recent outcomes still show the factual raw context.
 
 ## Weapon Accuracy And Hit Parts
 
@@ -256,7 +264,7 @@ Suggested command groups:
   internal consistency, not provenance. Offline mode opens no connection. Database mode uses only parameterized
   `SELECT` queries and requires exact equality with an immutable packet row plus the latest current input chain. It
   performs no commit, rollback, DML, file access, audit append, authorization, readiness promotion, or execution. No
-  schema or configuration change is needed; schema version 20 remains current.
+  schema or configuration change was needed; at that feature slice, schema version 20 remained current.
 - Application version 22 accepts two raw JSON strings so each side receives the same strict v1 verification before
   comparison. Results are directional (`baseline_to_candidate`) and bind both canonical export hashes into a
   direction-sensitive comparison fingerprint. Large changed values are summarized by size and SHA-256; the total

@@ -6,6 +6,7 @@ MySQL data model direction, 2D replay/live-view feasibility, and reference proje
 
 ## Current Documents
 
+- [Requirement-to-Evidence Audit](docs/REQUIREMENT_EVIDENCE_AUDIT.md)
 - [PUBG Open API Research](docs/PUBG_OPEN_API_RESEARCH.md)
 - [PUBG Collection Flow](docs/PUBG_COLLECTION_FLOW.md)
 - [Local Architecture and MySQL Model](docs/LOCAL_ARCHITECTURE_AND_MYSQL_MODEL.md)
@@ -80,7 +81,7 @@ The first executable slice is now available:
 - automatic collector loop from CLI or the local manager for player refresh, match-detail storage, and telemetry
   download cycles
 - automatic post-processing loop from CLI or the local manager for combat/item/movement parsing, loadout snapshots,
-  map JPEG snapshots, and replay timelines
+  durable fight outcomes, map JPEG snapshots, and replay timelines
 - persistent worker run history in MySQL with a local manager table/detail panel for recent collector/post-processing
   cycles, summary metrics, and full stored errors
 - local and Discord alert settings for storage pressure and worker failures, including configurable Discord alert
@@ -128,6 +129,15 @@ Show one weapon's parsed combat stats:
 ```powershell
 python -m pubg_ai.cli player-weapon-stats Yuuki_Asuna--- M416 --shard steam
 ```
+
+Show durable kill/DBNO fight wins and death/DBNO losses by firearm and exact attachment loadout:
+
+```powershell
+python -m pubg_ai.cli player-fight-outcomes Yuuki_Asuna--- --shard steam
+```
+
+Friendly fire is excluded by default. Bot fights remain separately counted, and non-firearm contexts stay in the
+event ledger and recent-event output while firearm/loadout rankings exclude them.
 
 Show first-pass recommendations from parsed summary tables:
 
@@ -198,7 +208,7 @@ Run the post-processing loop. This repeatedly parses stored telemetry and genera
 the individual processing buttons:
 
 ```powershell
-python -m pubg_ai.cli run-post-processing --combat-limit 10 --item-limit 10 --movement-limit 10 --loadout-limit 50 --map-snapshot-limit 10 --timeline-limit 10
+python -m pubg_ai.cli run-post-processing --combat-limit 10 --item-limit 10 --movement-limit 10 --loadout-limit 50 --fight-outcome-limit 10 --map-snapshot-limit 10 --timeline-limit 10
 ```
 
 Parse raw telemetry into registered-player combat summaries and weapon stats:
@@ -249,6 +259,15 @@ Regenerate existing combat loadout snapshots after parser changes:
 python -m pubg_ai.cli generate-loadout-snapshots --limit 200 --force
 ```
 
+Parse versioned durable fight outcomes and tracked-player weapon/attachment context:
+
+```powershell
+python -m pubg_ai.cli parse-fight-outcomes --limit 10
+```
+
+The processor automatically reparses rows from an older parser version. Use `--force` only for an explicit full
+rebuild. Raw match and telemetry files remain immutable.
+
 Generate registered-player 2D route JPEG snapshots under `PUBG_REPLAY_DATA_DIR`:
 
 ```powershell
@@ -297,6 +316,7 @@ Discord's message content intent to be enabled for the bot application. Initial 
 !유저등록 steam 닉네임
 !유저조회 [닉네임] [shard]
 !전적 닉네임 [shard]
+!교전 닉네임 [shard]
 !무기 닉네임 무기명 [shard]
 !매치 match_id [닉네임|accountId] [shard]
 !랭킹 [지표] [shard] [limit] [전체]
@@ -323,6 +343,8 @@ Discord's message content intent to be enabled for the bot application. Initial 
 
 Command access is checked through local Discord permission settings in `config/local_settings.json`.
 Recommendation lookup is available through `!추천 닉네임 [shard]` and `!pubg-recommend nickname [shard]`.
+Fight win/loss lookup uses `!교전 닉네임 [shard]` or `!pubg-fights nickname [shard]` and shares the
+`profile_read` permission group.
 If `PUBG_LOCAL_WEB_BASE_URL` is set, weapon+attachment recommendation rows include local web evidence links for
 supporting combat snapshots, and `pubg-alert-history` rows include local alert-detail links, a filtered local manager
 page link, and a filtered CSV export link. This can be set from the local manager's `Local Web Link` section or through
@@ -427,7 +449,8 @@ shape, safety flags, metrics, review checks, and fault scenarios are recomputed.
 establishes internal consistency only, not provenance. The default MySQL mode executes parameterized `SELECT` queries
 to require an exact immutable packet row and the current unexecuted request plus latest bound input chain. Neither mode
 persists the uploaded text, creates a record, changes a row or file, grants authorization, promotes readiness, or
-enables execution. Version 21 adds no environment variable or table; the schema remains version 20 with 44 tables.
+enables execution. Version 21 adds no environment variable or table; at that feature slice, the schema remained
+version 20 with 44 tables.
 
 Application version 22 adds `POST /data-deletion-review-packets/compare` and a two-file comparison panel. Both inputs
 must first pass the version 21 verifier. The comparison is directional from baseline to candidate and reports input-ID,
@@ -436,7 +459,11 @@ while at most 1,000 field rows are returned. Each file keeps the 2 MiB UTF-8 lim
 the default MySQL mode cross-checks both packets through one connection using only parameterized `SELECT` queries.
 Packet text and comparison results remain in memory and are never persisted. No record, authorization, readiness,
 evidence, production mutation, restore, quarantine, deletion, or execution capability is created. Version 22 adds no
-environment variable or table; the schema remains version 20 with 44 tables.
+environment variable or table; at that feature slice, the schema remained version 20 with 44 tables.
+
+The current runtime schema is version 21 with 46 tables. It adds `player_fight_outcomes` and
+`player_fight_outcome_processing_states`; rerun `python -m pubg_ai.cli init-db` after updating. Existing raw and
+replay artifacts are not rewritten by this migration or backfill.
 
 Each packet is guarded by six `ON DELETE RESTRICT` foreign keys. Generation appends only one version 20 audit row; it
 grants no authorization,

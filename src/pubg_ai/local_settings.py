@@ -136,10 +136,12 @@ DEFAULT_COMMAND_GROUPS: dict[str, list[str]] = {
     "profile_read": [
         "유저조회",
         "전적",
+        "교전",
         "무기",
         "매치",
         "pubg-profile",
         "pubg-stats",
+        "pubg-fights",
         "pubg-recent",
         "pubg-match",
         "pubg-weapon",

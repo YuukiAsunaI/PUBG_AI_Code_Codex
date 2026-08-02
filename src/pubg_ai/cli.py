@@ -13,6 +13,8 @@ from pubg_ai.database import connect_mysql, count_tables, initialize_database
 from pubg_ai.discord_bot import DEFAULT_DISCORD_PREFIX, run_discord_bot
 from pubg_ai.discord_permission_manager import DiscordPermissionManager
 from pubg_ai.discord_permissions import DiscordPermissionChecker
+from pubg_ai.fight_outcome_processor import FightOutcomeProcessor
+from pubg_ai.fight_outcome_stats import FightOutcomeStatsService
 from pubg_ai.local_settings import LocalSettingsError, LocalSettingsStore
 from pubg_ai.loadout_snapshot_processor import LoadoutSnapshotProcessor
 from pubg_ai.map_snapshot_renderer import MapSnapshotProcessor
@@ -63,6 +65,18 @@ def main(argv: list[str] | None = None) -> int:
     weapon_stats_parser.add_argument("target", help="Registered nickname or accountId.")
     weapon_stats_parser.add_argument("weapon", help="Weapon code or common weapon name, for example M416.")
     weapon_stats_parser.add_argument("--shard", default="steam")
+
+    fight_stats_parser = subparsers.add_parser(
+        "player-fight-outcomes",
+        help="Print registered player fight win/loss rates by weapon and loadout.",
+    )
+    fight_stats_parser.add_argument("target", help="Registered nickname or accountId.")
+    fight_stats_parser.add_argument("--shard", default="steam")
+    fight_stats_parser.add_argument("--weapon-limit", default=10, type=int)
+    fight_stats_parser.add_argument("--loadout-limit", default=10, type=int)
+    fight_stats_parser.add_argument("--recent-limit", default=20, type=int)
+    fight_stats_parser.add_argument("--exclude-bots", action="store_true")
+    fight_stats_parser.add_argument("--include-friendly-fire", action="store_true")
 
     recommendations_parser = subparsers.add_parser(
         "player-recommendations",
@@ -146,6 +160,13 @@ def main(argv: list[str] | None = None) -> int:
     parse_movement_parser.add_argument("--limit", default=10, type=int)
     parse_movement_parser.add_argument("--force", action="store_true", help="Reparse already summarized movement rows.")
 
+    parse_fight_outcomes_parser = subparsers.add_parser(
+        "parse-fight-outcomes",
+        help="Parse durable kill/DBNO fight outcomes and own loadout context.",
+    )
+    parse_fight_outcomes_parser.add_argument("--limit", default=10, type=int)
+    parse_fight_outcomes_parser.add_argument("--force", action="store_true")
+
     map_snapshots_parser = subparsers.add_parser(
         "generate-map-snapshots",
         help="Generate registered-player 2D route JPEG snapshots under PUBG_REPLAY_DATA_DIR.",
@@ -188,6 +209,7 @@ def main(argv: list[str] | None = None) -> int:
     post_process_parser.add_argument("--item-limit", default=10, type=int)
     post_process_parser.add_argument("--movement-limit", default=10, type=int)
     post_process_parser.add_argument("--loadout-limit", default=50, type=int)
+    post_process_parser.add_argument("--fight-outcome-limit", default=10, type=int)
     post_process_parser.add_argument("--map-snapshot-limit", default=10, type=int)
     post_process_parser.add_argument("--timeline-limit", default=10, type=int)
     post_process_parser.add_argument("--force", action="store_true")
@@ -298,6 +320,27 @@ def main(argv: list[str] | None = None) -> int:
             if detail is None:
                 raise SystemExit("registered player weapon stats not found.")
             _print_json({"weapon": detail.to_record()})
+        finally:
+            connection.close()
+        return 0
+
+    if args.command == "player-fight-outcomes":
+        connection = connect_mysql(config.database)
+        try:
+            report = FightOutcomeStatsService(connection).get_report(
+                shard=args.shard,
+                account_id=args.target if args.target.startswith("account.") else None,
+                name=None if args.target.startswith("account.") else args.target,
+                global_scope=True,
+                weapon_limit=args.weapon_limit,
+                loadout_limit=args.loadout_limit,
+                recent_limit=args.recent_limit,
+                include_friendly_fire=args.include_friendly_fire,
+                include_bots=not args.exclude_bots,
+            )
+            if report is None:
+                raise SystemExit("registered player fight outcomes not found.")
+            _print_json({"fight_outcomes": report.to_record()})
         finally:
             connection.close()
         return 0
@@ -491,6 +534,21 @@ def main(argv: list[str] | None = None) -> int:
             connection.close()
         return 0
 
+    if args.command == "parse-fight-outcomes":
+        connection = connect_mysql(config.database)
+        try:
+            result = FightOutcomeProcessor(
+                connection,
+                RawPayloadStore(
+                    config.app.raw_data_dir,
+                    compression=config.app.raw_compression,  # type: ignore[arg-type]
+                ),
+            ).process_raw_telemetry(limit=args.limit, force=args.force)
+            _print_json(result.to_record())
+        finally:
+            connection.close()
+        return 0
+
     if args.command == "generate-map-snapshots":
         connection = connect_mysql(config.database)
         try:
@@ -551,6 +609,7 @@ def main(argv: list[str] | None = None) -> int:
             item_limit=args.item_limit,
             movement_limit=args.movement_limit,
             loadout_limit=args.loadout_limit,
+            fight_outcome_limit=args.fight_outcome_limit,
             map_snapshot_limit=args.map_snapshot_limit,
             timeline_limit=args.timeline_limit,
             force=args.force,

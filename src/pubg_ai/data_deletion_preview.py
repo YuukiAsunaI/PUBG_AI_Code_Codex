@@ -24,6 +24,8 @@ NORMALIZED_PLAYER_TABLES = (
     "player_movement_summaries",
     "player_combat_location_events",
     "player_combat_loadout_snapshots",
+    "player_fight_outcomes",
+    "player_fight_outcome_processing_states",
 )
 
 SHARED_MATCH_TABLES = (
@@ -404,6 +406,24 @@ class DataDeletionImpactPreviewService:
                     INNER JOIN matches AS target_matches
                         ON target_matches.match_id = player_rows.match_id
                     WHERE player_rows.related_account_id = %s
+                      AND player_rows.account_id <> %s
+                      AND target_matches.shard = %s
+                    """,
+                    (request.account_id, request.account_id, request.shard),
+                ),
+                deletion_candidate=False,
+            ),
+            DeletionRowImpact(
+                table="player_fight_outcomes.opponent_account_id",
+                category="normalized_reference",
+                relationship="referenced_by_other_player_rows",
+                row_count=self._count(
+                    """
+                    SELECT COUNT(*) AS row_count
+                    FROM player_fight_outcomes AS player_rows
+                    INNER JOIN matches AS target_matches
+                        ON target_matches.match_id = player_rows.match_id
+                    WHERE player_rows.opponent_account_id = %s
                       AND player_rows.account_id <> %s
                       AND target_matches.shard = %s
                     """,

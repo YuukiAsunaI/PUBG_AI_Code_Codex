@@ -26,6 +26,7 @@ class PostProcessingWorkerTests(unittest.TestCase):
             item_limit=4,
             movement_limit=5,
             loadout_limit=6,
+            fight_outcome_limit=9,
             map_snapshot_limit=7,
             timeline_limit=8,
             force=True,
@@ -40,6 +41,7 @@ class PostProcessingWorkerTests(unittest.TestCase):
             item_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("items", *args, calls=calls),
             movement_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("movement", *args, calls=calls),
             loadout_processor_factory=lambda *args, **kwargs: FakeLoadoutProcessor(*args, calls=calls),
+            fight_outcome_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("fight_outcomes", *args, calls=calls),
             map_snapshot_processor_factory=lambda *args, **kwargs: FakeReplayProcessor("map_snapshots", *args, calls=calls),
             timeline_processor_factory=lambda *args, **kwargs: FakeReplayProcessor("replay_timelines", *args, calls=calls),
             history_recorder=lambda conn, worker_name, cycle: history.append((conn, worker_name, cycle)),
@@ -51,6 +53,7 @@ class PostProcessingWorkerTests(unittest.TestCase):
         self.assertEqual(result.items, {"parsed_payloads": 4, "failed_payloads": 0})
         self.assertEqual(result.movement, {"parsed_payloads": 5, "failed_payloads": 0})
         self.assertEqual(result.loadout_snapshots, {"generated_snapshots": 6, "failed_matches": 0})
+        self.assertEqual(result.fight_outcomes, {"parsed_payloads": 9, "failed_payloads": 0})
         self.assertEqual(result.map_snapshots, {"generated_snapshots": 7, "failed_snapshots": 0, "artifacts": []})
         self.assertEqual(result.replay_timelines, {"generated_timelines": 8, "failed_timelines": 0, "artifacts": []})
         self.assertEqual(result.errors, [])
@@ -61,6 +64,7 @@ class PostProcessingWorkerTests(unittest.TestCase):
         self.assertIn(("items", (4, True)), calls)
         self.assertIn(("movement", (5, True)), calls)
         self.assertIn(("loadout", (6, True)), calls)
+        self.assertIn(("fight_outcomes", (9, True)), calls)
         self.assertIn(("map_snapshots", (7, True)), calls)
         self.assertIn(("replay_timelines", (8, True)), calls)
         self.assertEqual(len(history), 1)
@@ -79,6 +83,7 @@ class PostProcessingWorkerTests(unittest.TestCase):
             item_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("items", *args, calls=[]),
             movement_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("movement", *args, calls=[]),
             loadout_processor_factory=lambda *args, **kwargs: FakeLoadoutProcessor(*args, calls=[]),
+            fight_outcome_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("fight_outcomes", *args, calls=[]),
             map_snapshot_processor_factory=lambda *args, **kwargs: FakeReplayProcessor("map_snapshots", *args, calls=[]),
             timeline_processor_factory=lambda *args, **kwargs: FakeReplayProcessor("replay_timelines", *args, calls=[]),
             history_recorder=lambda conn, worker_name, cycle: None,

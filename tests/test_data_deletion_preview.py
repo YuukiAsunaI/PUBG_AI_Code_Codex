@@ -235,6 +235,9 @@ class PreviewCursor:
         if "related_account_id" in normalized:
             self.row = {"row_count": self.connection.counts.get("_related_combat_locations", 0)}
             return
+        if "opponent_account_id" in normalized:
+            self.row = {"row_count": self.connection.counts.get("_related_fight_outcomes", 0)}
+            return
 
         known_tables = (
             "match_care_package_events",
