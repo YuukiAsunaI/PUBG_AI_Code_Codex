@@ -139,6 +139,16 @@ python -m pubg_ai.cli player-fight-outcomes Yuuki_Asuna--- --shard steam
 Friendly fire is excluded by default. Bot fights remain separately counted, and non-firearm contexts stay in the
 event ledger and recent-event output while firearm/loadout rankings exclude them.
 
+Show KST hour-of-day, date, ISO-week, or month trends. Every match dimension can be filtered independently:
+
+```powershell
+python -m pubg_ai.cli player-trends Yuuki_Asuna--- --shard steam --granularity month
+python -m pubg_ai.cli player-trends Yuuki_Asuna--- --shard steam --granularity hour --team-mode squad --perspective tpp --match-type official --map-name Baltic_Main --custom false --from-date 2026-06-01 --to-date 2026-08-31
+```
+
+Trend reports calculate from immutable per-match facts at query time, use `Asia/Seoul` calendar boundaries and
+Python ISO weeks, and require no schema or raw-file rewrite.
+
 Show first-pass recommendations from parsed summary tables:
 
 ```powershell
@@ -317,6 +327,7 @@ Discord's message content intent to be enabled for the bot application. Initial 
 !유저조회 [닉네임] [shard]
 !전적 닉네임 [shard]
 !교전 닉네임 [shard]
+!추세 닉네임 [hour|date|week|month] [shard] [team=squad view=tpp mode=squad type=official map=Baltic_Main from=YYYY-MM-DD to=YYYY-MM-DD custom=false limit=12]
 !무기 닉네임 무기명 [shard]
 !매치 match_id [닉네임|accountId] [shard]
 !랭킹 [지표] [shard] [limit] [전체]
@@ -343,8 +354,10 @@ Discord's message content intent to be enabled for the bot application. Initial 
 
 Command access is checked through local Discord permission settings in `config/local_settings.json`.
 Recommendation lookup is available through `!추천 닉네임 [shard]` and `!pubg-recommend nickname [shard]`.
-Fight win/loss lookup uses `!교전 닉네임 [shard]` or `!pubg-fights nickname [shard]` and shares the
-`profile_read` permission group.
+Fight win/loss lookup uses `!교전 닉네임 [shard]` or `!pubg-fights nickname [shard]`. KST trends use
+`!추세 닉네임 [month|week|date|hour] [shard] [key=value filters]` or `!pubg-trends`; both share the
+`profile_read` permission group. When `PUBG_LOCAL_WEB_BASE_URL` is set, trend replies include a prefilled local
+manager link.
 If `PUBG_LOCAL_WEB_BASE_URL` is set, weapon+attachment recommendation rows include local web evidence links for
 supporting combat snapshots, and `pubg-alert-history` rows include local alert-detail links, a filtered local manager
 page link, and a filtered CSV export link. This can be set from the local manager's `Local Web Link` section or through

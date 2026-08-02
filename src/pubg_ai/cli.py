@@ -25,6 +25,12 @@ from pubg_ai.player_rankings import PlayerRankingService
 from pubg_ai.player_recommendations import PlayerRecommendationService
 from pubg_ai.player_registry import PlayerRegistry
 from pubg_ai.player_stats import PlayerStatsService
+from pubg_ai.player_trends import (
+    PlayerTrendFilters,
+    PlayerTrendService,
+    parse_optional_bool,
+    parse_trend_date,
+)
 from pubg_ai.pubg_client import PubgApiClient
 from pubg_ai.raw_storage import RawPayloadStore
 from pubg_ai.replay_storage import ReplayArtifactStore
@@ -77,6 +83,23 @@ def main(argv: list[str] | None = None) -> int:
     fight_stats_parser.add_argument("--recent-limit", default=20, type=int)
     fight_stats_parser.add_argument("--exclude-bots", action="store_true")
     fight_stats_parser.add_argument("--include-friendly-fire", action="store_true")
+
+    trend_parser = subparsers.add_parser(
+        "player-trends",
+        help="Print KST hour/date/ISO-week/month trends with match filters.",
+    )
+    trend_parser.add_argument("target", help="Registered nickname or accountId.")
+    trend_parser.add_argument("--shard", default="steam")
+    trend_parser.add_argument("--granularity", default="month", help="hour, date, week, or month.")
+    trend_parser.add_argument("--game-mode", default=None)
+    trend_parser.add_argument("--team-mode", default=None)
+    trend_parser.add_argument("--perspective", default=None)
+    trend_parser.add_argument("--match-type", default=None)
+    trend_parser.add_argument("--map-name", default=None)
+    trend_parser.add_argument("--custom", default="any", help="any, true, or false.")
+    trend_parser.add_argument("--from-date", default=None, help="Inclusive KST date, YYYY-MM-DD.")
+    trend_parser.add_argument("--to-date", default=None, help="Inclusive KST date, YYYY-MM-DD.")
+    trend_parser.add_argument("--bucket-limit", default=120, type=int)
 
     recommendations_parser = subparsers.add_parser(
         "player-recommendations",
@@ -341,6 +364,34 @@ def main(argv: list[str] | None = None) -> int:
             if report is None:
                 raise SystemExit("registered player fight outcomes not found.")
             _print_json({"fight_outcomes": report.to_record()})
+        finally:
+            connection.close()
+        return 0
+
+    if args.command == "player-trends":
+        connection = connect_mysql(config.database)
+        try:
+            report = PlayerTrendService(connection).get_report(
+                shard=args.shard,
+                account_id=args.target if args.target.startswith("account.") else None,
+                name=None if args.target.startswith("account.") else args.target,
+                global_scope=True,
+                granularity=args.granularity,
+                filters=PlayerTrendFilters(
+                    game_mode=args.game_mode,
+                    team_mode=args.team_mode,
+                    perspective=args.perspective,
+                    match_type=args.match_type,
+                    map_name=args.map_name,
+                    is_custom_match=parse_optional_bool(args.custom, "custom"),
+                    from_date_kst=parse_trend_date(args.from_date, "from_date"),
+                    to_date_kst=parse_trend_date(args.to_date, "to_date"),
+                ),
+                bucket_limit=args.bucket_limit,
+            )
+            if report is None:
+                raise SystemExit("registered player trends not found.")
+            _print_json({"trends": report.to_record()})
         finally:
             connection.close()
         return 0

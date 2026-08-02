@@ -46,6 +46,17 @@ changes them.
 - Daily, weekly, and monthly aggregates use KST calendar boundaries.
 - External PUBG timestamps can be preserved as source values, but normalized tables should include KST columns.
 
+## KST Trend Reports
+
+- Compute hour-of-day, calendar date, ISO week, and calendar month from `matches.created_at_kst`; never regroup from
+  UTC source text at query time.
+- Use Python's ISO calendar for week keys so results do not depend on MySQL server week-mode configuration.
+- Reuse per-match combat summaries and participant/movement facts at query time. This keeps future matches immediately
+  visible and avoids a second aggregate backfill or raw-file rewrite.
+- Apply shard, game mode, team mode, perspective, match type, map, custom status, and inclusive KST date filters before
+  grouping. A requested end date includes that entire KST calendar day.
+- Totals always cover the complete filtered set even when the returned bucket list is limited to the newest periods.
+
 ## Combat Outcomes
 
 - Solo fight results are primarily final kill/death outcomes.

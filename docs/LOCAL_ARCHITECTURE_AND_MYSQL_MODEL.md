@@ -571,10 +571,15 @@ Completed slices:
      backfills without mutating immutable raw or replay files. CLI, localhost API/UI, Discord formatting, automatic
      post-processing, deletion preview, and backup scope all understand the new tables. The current schema is version
      21 with 46 tables.
+117. KST trend reporting is query-time and schema-neutral. `player_trends.py` joins existing match, participant, combat,
+     and movement facts, groups by hour-of-day/date/Python ISO-week/month, and applies game-mode, team-mode,
+     perspective, match-type, map, custom-status, shard, and inclusive KST-date filters. CLI, localhost API/UI, and
+     Discord use one report contract. No raw/replay file, normalized row, schema version, or worker is changed; schema
+     version 21 and 46 tables remain current.
 
 Next slice:
 
-1. Implement KST hour/day/week/month trend reports with mode, perspective, match-type, map, and shard filters.
-2. Run a real read-only Discord command acceptance check in an explicitly selected guild/channel.
+1. Run a real read-only Discord command acceptance check in an explicitly selected guild/channel.
+2. Add versioned Korean named-region mapping for coordinate clusters while preserving raw coordinates.
 3. Keep deletion execution out of scope until it is explicitly approved; the review and rehearsal tooling remains
    read-only/non-destructive.

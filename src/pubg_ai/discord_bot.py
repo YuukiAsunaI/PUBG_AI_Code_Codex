@@ -43,6 +43,14 @@ from pubg_ai.player_rankings import PlayerRanking, PlayerRankingService
 from pubg_ai.player_recommendations import PlayerRecommendationReport, PlayerRecommendationService
 from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry, RegisteredPlayer
 from pubg_ai.player_stats import PlayerMatchDetail, PlayerProfileStats, PlayerStatsService, PlayerWeaponDetail
+from pubg_ai.player_trends import (
+    PlayerTrendFilters,
+    PlayerTrendReport,
+    PlayerTrendService,
+    normalize_trend_granularity,
+    parse_optional_bool,
+    parse_trend_date,
+)
 from pubg_ai.pubg_client import PubgApiClient, PubgApiError
 from pubg_ai.replay_artifact_catalog import ReplayArtifactRecord, list_replay_artifacts
 from pubg_ai.replay_storage import ReplayArtifactStore, ReplayStorageError
@@ -758,6 +766,141 @@ def format_player_profile_stats(profile: PlayerProfileStats, *, detail_base_url:
 
 
 
+def format_player_trends(
+    report: PlayerTrendReport,
+    *,
+    detail_base_url: str | None = None,
+) -> str:
+    granularity_names = {"hour": "시간대별", "date": "일자별", "week": "주별", "month": "월별"}
+    totals = report.totals
+    lines = [
+        f"{report.player.current_name} KST {granularity_names[report.granularity]} 추세 ({report.player.shard})",
+        f"- 합계: {totals.match_count}전 {totals.wins}치킨/{totals.non_wins}비치킨 ({_percent(totals.win_rate)})",
+        f"- K/D/A: {totals.kills}/{totals.deaths}/{totals.assists} · KDA {totals.kda:.2f}",
+        f"- 평균 딜/받은 딜: {totals.avg_damage_dealt:.1f}/{totals.avg_damage_taken:.1f}",
+        f"- 필터: {_trend_filter_label(report.filters)}",
+    ]
+    if report.buckets:
+        lines.append("최근 구간")
+        for bucket in report.buckets[-6:]:
+            metrics = bucket.metrics
+            lines.append(
+                f"- {bucket.period_label}: {metrics.match_count}전 {metrics.wins}치킨 "
+                f"{_percent(metrics.win_rate)} · KDA {metrics.kda:.2f} · 평딜 {metrics.avg_damage_dealt:.1f}"
+            )
+    else:
+        lines.append("조건에 맞는 완료 경기 데이터가 없습니다.")
+    if report.truncated:
+        lines.append(f"- 표시 구간: 최근 {len(report.buckets)}/{report.available_bucket_count}개")
+
+    query_params: dict[str, Any] = {
+        "shard": report.player.shard,
+        "target": report.player.account_id,
+        "granularity": report.granularity,
+    }
+    for key, value in report.filters.to_record().items():
+        if value is not None:
+            query_params[key] = str(value).lower() if isinstance(value, bool) else value
+    local_link = _local_section_url(
+        detail_base_url,
+        "trend-lookup",
+        query_params,
+    )
+    if local_link:
+        lines.append(f"- local_trends: [open]({local_link})")
+    return "\n".join(lines)
+
+
+def _trend_filter_label(filters: PlayerTrendFilters) -> str:
+    values = filters.to_record()
+    labels = {
+        "game_mode": "mode",
+        "team_mode": "team",
+        "perspective": "view",
+        "match_type": "type",
+        "map_name": "map",
+        "is_custom_match": "custom",
+        "from_date_kst": "from",
+        "to_date_kst": "to",
+    }
+    selected = [
+        f"{labels[key]}={str(value).lower() if isinstance(value, bool) else value}"
+        for key, value in values.items()
+        if value is not None
+    ]
+    return ", ".join(selected) if selected else "전체"
+
+
+def parse_player_trend_command_options(
+    raw_options: str,
+) -> tuple[str, str, PlayerTrendFilters, int]:
+    granularity = "month"
+    shard = "steam"
+    values: dict[str, str] = {}
+    key_aliases = {
+        "period": "granularity",
+        "granularity": "granularity",
+        "shard": "shard",
+        "platform": "shard",
+        "mode": "game_mode",
+        "game_mode": "game_mode",
+        "team": "team_mode",
+        "team_mode": "team_mode",
+        "view": "perspective",
+        "perspective": "perspective",
+        "type": "match_type",
+        "match_type": "match_type",
+        "map": "map_name",
+        "map_name": "map_name",
+        "custom": "custom",
+        "from": "from_date",
+        "from_date": "from_date",
+        "to": "to_date",
+        "to_date": "to_date",
+        "limit": "limit",
+    }
+    for token in shlex.split(raw_options):
+        if "=" in token:
+            raw_key, value = token.split("=", 1)
+            key = key_aliases.get(raw_key.strip().lower())
+            if key is None:
+                raise ValueError(f"unknown trend filter: {raw_key}")
+            values[key] = value.strip()
+            continue
+        lowered = token.lower()
+        if lowered in {"steam", "kakao"}:
+            shard = lowered
+            continue
+        try:
+            granularity = normalize_trend_granularity(token)
+        except ValueError as exc:
+            raise ValueError(f"unknown trend option: {token}") from exc
+
+    if "granularity" in values:
+        granularity = normalize_trend_granularity(values["granularity"])
+    if "shard" in values:
+        shard = values["shard"].lower()
+    if shard not in {"steam", "kakao"}:
+        raise ValueError("shard must be steam or kakao.")
+    try:
+        limit = int(values.get("limit", "12"))
+    except ValueError as exc:
+        raise ValueError("limit must be an integer.") from exc
+    if not 1 <= limit <= 24:
+        raise ValueError("limit must be between 1 and 24.")
+    filters = PlayerTrendFilters(
+        game_mode=values.get("game_mode"),
+        team_mode=values.get("team_mode"),
+        perspective=values.get("perspective"),
+        match_type=values.get("match_type"),
+        map_name=values.get("map_name"),
+        is_custom_match=parse_optional_bool(values.get("custom"), "custom"),
+        from_date_kst=parse_trend_date(values.get("from_date"), "from_date"),
+        to_date_kst=parse_trend_date(values.get("to_date"), "to_date"),
+    ).normalized()
+    return granularity, shard, filters, limit
+
+
 def format_player_fight_outcomes(
     report: PlayerFightOutcomeReport,
     *,
@@ -1182,6 +1325,7 @@ def create_discord_bot(
                     f"- `{command_prefix}유저조회 [닉네임] [shard]`",
                     f"- `{command_prefix}전적 닉네임 [shard]`",
                     f"- `{command_prefix}교전 닉네임 [shard]`",
+                    f"- `{command_prefix}추세 닉네임 [hour|date|week|month] [shard] [filters]`",
                     f"- `{command_prefix}무기 닉네임 무기명 [shard]`",
                     f"- `{command_prefix}추천 닉네임 [shard]`",
                     f"- `{command_prefix}매치 match_id [닉네임|accountId] [shard]`",
@@ -1328,6 +1472,56 @@ def create_discord_bot(
 
         await ctx.reply(
             format_player_fight_outcomes(report, detail_base_url=config.app.local_web_base_url),
+            mention_author=False,
+        )
+
+    @bot.command(name="추세", aliases=["pubg-trends", "pubg-trend"])
+    async def player_trends_command(
+        ctx: Any,
+        name: str | None = None,
+        *,
+        options: str = "",
+    ) -> None:
+        if not await require_permission(ctx, "profile_read"):
+            return
+        if not name:
+            await ctx.reply(
+                f"사용법: `{command_prefix}추세 닉네임 [month|week|date|hour] [steam|kakao] "
+                "[team=squad view=fpp mode=squad-fpp type=official map=Baltic_Main "
+                "from=YYYY-MM-DD to=YYYY-MM-DD custom=false limit=12]`",
+                mention_author=False,
+            )
+            return
+        try:
+            granularity, shard, filters, limit = parse_player_trend_command_options(options)
+        except ValueError as exc:
+            await ctx.reply(f"추세 옵션 오류: {exc}", mention_author=False)
+            return
+
+        guild_id = await require_scoped_guild(ctx)
+        if guild_id is None and not has_global_scope(ctx):
+            return
+        global_scope = has_global_scope(ctx)
+        connection = connect_mysql(config.database)
+        try:
+            report = PlayerTrendService(connection).get_report(
+                shard=shard,
+                account_id=name if name.startswith("account.") else None,
+                name=None if name.startswith("account.") else name,
+                guild_id=None if global_scope else guild_id,
+                global_scope=global_scope,
+                granularity=granularity,
+                filters=filters,
+                bucket_limit=limit,
+            )
+        finally:
+            connection.close()
+
+        if report is None:
+            await ctx.reply("조회 가능한 추세 데이터를 찾지 못했습니다.", mention_author=False)
+            return
+        await ctx.reply(
+            format_player_trends(report, detail_base_url=config.app.local_web_base_url),
             mention_author=False,
         )
 

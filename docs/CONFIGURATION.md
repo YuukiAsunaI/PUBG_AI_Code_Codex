@@ -160,6 +160,10 @@ The current runtime schema is version 21 with 46 tables. Durable fight outcomes 
 variable. The localhost manager stores the automatic worker's `fight_outcome_limit` beside the existing processing
 limits, and the manual parser reads immutable telemetry from the configured raw-data root.
 
+KST trend reports add no environment variable, local setting, schema table, or background worker. The CLI, Discord
+command, and localhost `GET /players/trends` endpoint calculate from existing per-match MySQL facts. Date inputs use
+`YYYY-MM-DD` and are interpreted as inclusive `Asia/Seoul` calendar dates.
+
 The opt-in builder uses `PUBG_BACKUP_DATA_DIR` (default `./data/backups`). The backup root must be writable and must not
 equal, contain, or be contained by `PUBG_RAW_DATA_DIR` or `PUBG_REPLAY_DATA_DIR`. A build requires the exact latest-plan
 confirmation text. For each prerequisite required by the latest plan, MySQL candidate rows are exported as typed JSONL

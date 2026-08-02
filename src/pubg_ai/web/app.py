@@ -108,6 +108,12 @@ from pubg_ai.post_processing_worker import (
 )
 from pubg_ai.player_recommendations import PlayerRecommendationService
 from pubg_ai.player_stats import PlayerStatsService
+from pubg_ai.player_trends import (
+    PlayerTrendFilters,
+    PlayerTrendService,
+    parse_optional_bool,
+    parse_trend_date,
+)
 from pubg_ai.pubg_client import PubgApiClient, PubgApiError
 from pubg_ai.raw_storage import RawPayloadStore
 from pubg_ai.replay_artifact_catalog import get_replay_artifact, list_replay_artifacts
@@ -2186,6 +2192,54 @@ def create_app() -> Any:
         finally:
             connection.close()
 
+    @app.get("/players/trends")
+    def player_trends(
+        shard: str = "steam",
+        name: str | None = None,
+        account_id: str | None = None,
+        granularity: str = "month",
+        game_mode: str | None = None,
+        team_mode: str | None = None,
+        perspective: str | None = None,
+        match_type: str | None = None,
+        map_name: str | None = None,
+        is_custom_match: str | None = None,
+        from_date_kst: str | None = None,
+        to_date_kst: str | None = None,
+        bucket_limit: int = Query(default=120, ge=1, le=500),
+    ) -> dict[str, Any]:
+        if not name and not account_id:
+            raise HTTPException(status_code=400, detail="name or account_id is required.")
+        try:
+            filters = PlayerTrendFilters(
+                game_mode=game_mode,
+                team_mode=team_mode,
+                perspective=perspective,
+                match_type=match_type,
+                map_name=map_name,
+                is_custom_match=parse_optional_bool(is_custom_match, "is_custom_match"),
+                from_date_kst=parse_trend_date(from_date_kst, "from_date_kst"),
+                to_date_kst=parse_trend_date(to_date_kst, "to_date_kst"),
+            ).normalized()
+            connection = connect_mysql(config.database)
+            try:
+                report = PlayerTrendService(connection).get_report(
+                    shard=shard,
+                    account_id=account_id,
+                    name=name,
+                    global_scope=True,
+                    granularity=granularity,
+                    filters=filters,
+                    bucket_limit=bucket_limit,
+                )
+            finally:
+                connection.close()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if report is None:
+            raise HTTPException(status_code=404, detail="registered player trends not found.")
+        return {"trends": report.to_record()}
+
     @app.get("/players/recommendations")
     def player_recommendations(
         shard: str = "steam",
@@ -2873,6 +2927,8 @@ _INDEX_HTML = """<!doctype html>
       grid-template-columns: 130px 120px 130px minmax(170px, 1fr) minmax(170px, 1fr) 90px auto;
       margin-bottom: 10px;
     }
+    .trend-filter { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    .trend-table { min-width: 980px; table-layout: auto; }
     label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
     input, select, textarea {
       width: 100%;
@@ -3068,6 +3124,7 @@ _INDEX_HTML = """<!doctype html>
       form { grid-template-columns: 1fr; }
       .alert-history-filter { grid-template-columns: 1fr; }
       .worker-run-filter { grid-template-columns: 1fr; }
+      .trend-filter { grid-template-columns: 1fr; }
       .player-controls { grid-template-columns: 1fr; }
       .confirmation-input-row { grid-template-columns: 1fr; }
       .backup-evidence-form { grid-template-columns: 1fr; }
@@ -3477,6 +3534,47 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="profileBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
+    <section id="trend-lookup">
+      <h2>KST 추세 조회</h2>
+      <form id="trendForm" class="trend-filter">
+        <label>플랫폼
+          <select name="shard"><option value="steam">steam</option><option value="kakao">kakao</option></select>
+        </label>
+        <label>닉네임 또는 Account ID<input name="target" autocomplete="off" required></label>
+        <label>집계 단위
+          <select name="granularity">
+            <option value="hour">시간대</option><option value="date">일자</option>
+            <option value="week">ISO 주차</option><option value="month" selected>월</option>
+          </select>
+        </label>
+        <label>팀 모드
+          <select name="team_mode">
+            <option value="">전체</option><option value="solo">solo</option>
+            <option value="duo">duo</option><option value="squad">squad</option><option value="unknown">unknown</option>
+          </select>
+        </label>
+        <label>시점
+          <select name="perspective"><option value="">전체</option><option value="fpp">fpp</option><option value="tpp">tpp</option><option value="unknown">unknown</option></select>
+        </label>
+        <label>Game mode<input name="game_mode" autocomplete="off" placeholder="squad-fpp"></label>
+        <label>Match type<input name="match_type" autocomplete="off" placeholder="official"></label>
+        <label>Map<input name="map_name" autocomplete="off" placeholder="Baltic_Main"></label>
+        <label>커스텀
+          <select name="is_custom_match"><option value="">전체</option><option value="false">일반</option><option value="true">커스텀</option></select>
+        </label>
+        <label>시작일 (KST)<input name="from_date_kst" type="date"></label>
+        <label>종료일 (KST)<input name="to_date_kst" type="date"></label>
+        <label>최대 구간<input name="bucket_limit" type="number" min="1" max="500" value="120" required></label>
+        <button type="submit">조회</button>
+      </form>
+      <div class="status" id="trendSummary" style="margin-top: 12px;">조회 대기 중</div>
+      <div class="table-scroll" style="margin-top: 10px;">
+        <table class="trend-table">
+          <thead><tr><th>구간</th><th>경기</th><th>치킨</th><th>승률</th><th>K/D/A</th><th>KDA</th><th>평균 딜/받은 딜</th><th>기절 +/-</th><th>평균 생존</th></tr></thead>
+          <tbody id="trendBody"><tr><td colspan="9">조회 대기 중</td></tr></tbody>
+        </table>
+      </div>
+    </section>
     <section id="weapon-lookup">
       <h2>무기 조회</h2>
       <form id="weaponForm">
@@ -3845,6 +3943,8 @@ _INDEX_HTML = """<!doctype html>
     const exportedReviewPacketComparerStatus = document.querySelector("#exportedReviewPacketComparerStatus");
     const exportedReviewPacketComparerResult = document.querySelector("#exportedReviewPacketComparerResult");
     const profileBody = document.querySelector("#profileBody");
+    const trendSummary = document.querySelector("#trendSummary");
+    const trendBody = document.querySelector("#trendBody");
     const weaponBody = document.querySelector("#weaponBody");
     const recommendationBody = document.querySelector("#recommendationBody");
     const matchBody = document.querySelector("#matchBody");
@@ -6247,7 +6347,9 @@ _INDEX_HTML = """<!doctype html>
     }
 
     function lookupUrlBoundedNumber(value, fallback, min, max) {
-      const parsed = Number(value);
+      const text = String(value ?? "").trim();
+      if (!text) return fallback;
+      const parsed = Number(text);
       if (!Number.isFinite(parsed)) return fallback;
       return Math.max(min, Math.min(Math.floor(parsed), max));
     }
@@ -6298,6 +6400,16 @@ _INDEX_HTML = """<!doctype html>
         "collector_player_lookup_chunk_size",
         "discord_public_profile_default",
         "deletion_request_id",
+        "granularity",
+        "game_mode",
+        "team_mode",
+        "perspective",
+        "match_type",
+        "map_name",
+        "is_custom_match",
+        "from_date_kst",
+        "to_date_kst",
+        "bucket_limit",
       ];
       if (!lookupKeys.some((key) => params.has(key))) return false;
 
@@ -6335,6 +6447,16 @@ _INDEX_HTML = """<!doctype html>
         "",
       );
       const deletionRequestId = firstUrlParam(params, ["deletion_request_id"]);
+      const trendGranularity = lookupUrlChoice(firstUrlParam(params, ["granularity"]), ["hour", "date", "week", "month"], "month");
+      const trendGameMode = firstUrlParam(params, ["game_mode"]);
+      const trendTeamMode = lookupUrlChoice(firstUrlParam(params, ["team_mode"]), ["", "solo", "duo", "squad", "unknown"], "");
+      const trendPerspective = lookupUrlChoice(firstUrlParam(params, ["perspective"]), ["", "fpp", "tpp", "unknown"], "");
+      const trendMatchType = firstUrlParam(params, ["match_type"]);
+      const trendMapName = firstUrlParam(params, ["map_name"]);
+      const trendCustom = lookupUrlChoice(firstUrlParam(params, ["is_custom_match"]), ["", "true", "false"], "");
+      const trendFromDate = firstUrlParam(params, ["from_date_kst"]);
+      const trendToDate = firstUrlParam(params, ["to_date_kst"]);
+      const trendBucketLimit = lookupUrlBoundedNumber(firstUrlParam(params, ["bucket_limit"]), 120, 1, 500);
 
       if (shouldPrefillSection(hash, "data-deletions") && /^\\d+$/.test(deletionRequestId)) {
         deletionRequestHighlightId = deletionRequestId;
@@ -6383,6 +6505,21 @@ _INDEX_HTML = """<!doctype html>
       if (shouldPrefillSection(hash, "profile-lookup")) {
         setFormElementValue(document.querySelector("#profileForm"), "shard", shard);
         setFormElementValue(document.querySelector("#profileForm"), "target", target);
+      }
+      if (shouldPrefillSection(hash, "trend-lookup")) {
+        const trendForm = document.querySelector("#trendForm");
+        setFormElementValue(trendForm, "shard", shard);
+        setFormElementValue(trendForm, "target", target);
+        setFormElementValue(trendForm, "granularity", trendGranularity);
+        setFormElementValue(trendForm, "game_mode", trendGameMode);
+        setFormElementValue(trendForm, "team_mode", trendTeamMode);
+        setFormElementValue(trendForm, "perspective", trendPerspective);
+        setFormElementValue(trendForm, "match_type", trendMatchType);
+        setFormElementValue(trendForm, "map_name", trendMapName);
+        setFormElementValue(trendForm, "is_custom_match", trendCustom);
+        setFormElementValue(trendForm, "from_date_kst", trendFromDate);
+        setFormElementValue(trendForm, "to_date_kst", trendToDate);
+        setFormElementValue(trendForm, "bucket_limit", String(trendBucketLimit));
       }
       if (shouldPrefillSection(hash, "weapon-lookup")) {
         setFormElementValue(document.querySelector("#weaponForm"), "shard", shard);
@@ -6457,6 +6594,68 @@ _INDEX_HTML = """<!doctype html>
         `교전 무기: ${fightWeapons}`,
         `교전 파츠:<br>${fightLoadouts}`,
       ].filter(Boolean).join("<br>");
+    }
+
+    async function loadPlayerTrends(formElement) {
+      const form = new FormData(formElement);
+      const target = String(form.get("target") || "");
+      const params = new URLSearchParams({
+        shard: String(form.get("shard") || "steam"),
+        granularity: String(form.get("granularity") || "month"),
+        bucket_limit: String(form.get("bucket_limit") || 120),
+      });
+      if (target.startsWith("account.")) params.set("account_id", target);
+      else params.set("name", target);
+      for (const name of ["game_mode", "team_mode", "perspective", "match_type", "map_name", "is_custom_match", "from_date_kst", "to_date_kst"]) {
+        const value = String(form.get(name) || "");
+        if (value) params.set(name, value);
+      }
+      const response = await fetch(`/players/trends?${params.toString()}`);
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const report = (await response.json()).trends;
+      const totals = report.totals;
+      const granularityLabel = {
+        hour: "시간대별",
+        date: "일자별",
+        week: "주별",
+        month: "월별",
+      }[report.granularity] || report.granularity;
+      const filterLabels = {
+        game_mode: "게임 모드",
+        team_mode: "팀",
+        perspective: "시점",
+        match_type: "매치 유형",
+        map_name: "맵",
+        is_custom_match: "커스텀",
+        from_date_kst: "시작일",
+        to_date_kst: "종료일",
+      };
+      const filterText = Object.entries(report.filters || {})
+        .filter(([, value]) => value !== null && value !== "")
+        .map(([key, value]) => `${escapeHtml(filterLabels[key] || key)}=${escapeHtml(value)}`)
+        .join(", ") || "전체";
+      trendSummary.innerHTML = [
+        `<strong>${escapeHtml(report.player.current_name)} · KST ${escapeHtml(granularityLabel)}</strong>`,
+        `${totals.match_count}전 ${totals.wins}치킨/${totals.non_wins}비치킨 (${percent(totals.win_rate)}) · KDA ${Number(totals.kda).toFixed(2)} · 평딜 ${Number(totals.avg_damage_dealt).toFixed(1)}`,
+        `필터: ${filterText}`,
+        report.truncated ? `최근 ${report.returned_bucket_count}/${report.available_bucket_count}개 구간 표시` : `${report.returned_bucket_count}개 구간`,
+      ].join("<br>");
+      trendBody.innerHTML = (report.buckets || []).map((bucket) => `
+        <tr>
+          <td>${escapeHtml(bucket.period_label)}</td>
+          <td>${bucket.match_count}</td>
+          <td>${bucket.wins}</td>
+          <td>${percent(bucket.win_rate)}</td>
+          <td>${bucket.kills}/${bucket.deaths}/${bucket.assists}</td>
+          <td>${Number(bucket.kda).toFixed(2)}</td>
+          <td>${Number(bucket.avg_damage_dealt).toFixed(1)} / ${Number(bucket.avg_damage_taken).toFixed(1)}</td>
+          <td>${bucket.dbnos_caused} / ${bucket.dbnos_taken}</td>
+          <td>${minutes(bucket.avg_survival_seconds)}</td>
+        </tr>
+      `).join("") || `<tr><td colspan="9">조건에 맞는 완료 경기 데이터가 없습니다.</td></tr>`;
     }
 
     async function loadPlayerWeapon(target, weapon, shard) {
@@ -8293,6 +8492,18 @@ _INDEX_HTML = """<!doctype html>
         banner.textContent = "전적 조회 완료";
       } catch (error) {
         profileBody.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    document.querySelector("#trendForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        await loadPlayerTrends(event.currentTarget);
+        banner.textContent = "KST 추세 조회 완료";
+      } catch (error) {
+        trendSummary.textContent = `오류: ${error.message}`;
+        trendBody.innerHTML = `<tr><td colspan="9">오류: ${escapeHtml(error.message)}</td></tr>`;
         banner.textContent = `오류: ${error.message}`;
       }
     });
