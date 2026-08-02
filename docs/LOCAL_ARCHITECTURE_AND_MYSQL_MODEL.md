@@ -557,10 +557,17 @@ Completed slices:
      compare the exact immutable packet row and latest current chain. No text or result is persisted; no record, DML,
      file mutation, evidence, authorization, readiness, restore, quarantine, deletion, or execution is created. The
      database schema remains version 20 with 44 tables.
+115. Application version 22 adds a read-only two-packet comparer to the localhost manager. Baseline and candidate must
+     independently pass the version 21 verifier. The response reports directional canonical-field, input-ID,
+     fingerprint, assessment, and review-check changes, preserves the complete field-difference count, and returns at
+     most 1,000 canonical rows. Each input keeps the 2 MiB UTF-8 limit. Offline mode opens no database; optional
+     current-chain mode reuses one connection for both parameterized `SELECT`-only checks. No packet text or result is
+     persisted, and no record, DML, source access, evidence, authorization, readiness, restore, quarantine, deletion,
+     or execution capability is created. Schema version 20 remains current with 44 tables.
 
 Next slice:
 
-1. Build a read-only in-memory comparison tool for two valid exported review packets. It should report canonical field,
-   input-ID, fingerprint, assessment, and check-outcome differences and may optionally cross-check both packets against
-   current MySQL rows. It must persist nothing and expose no authorization, readiness, mutation, restore, quarantine,
-   deletion, or execution capability.
+1. Perform a requirement-to-evidence completion audit across the original collection, telemetry analytics, replay,
+   Discord authorization, local storage, and operations requirements. Record which items are proven by automated or
+   live evidence, which require real PUBG/MySQL/Discord validation, and which are not yet implemented; then use that
+   audit to prioritize the remaining roadmap before adding more deletion-workflow tooling.

@@ -257,6 +257,13 @@ Suggested command groups:
   `SELECT` queries and requires exact equality with an immutable packet row plus the latest current input chain. It
   performs no commit, rollback, DML, file access, audit append, authorization, readiness promotion, or execution. No
   schema or configuration change is needed; schema version 20 remains current.
+- Application version 22 accepts two raw JSON strings so each side receives the same strict v1 verification before
+  comparison. Results are directional (`baseline_to_candidate`) and bind both canonical export hashes into a
+  direction-sensitive comparison fingerprint. Large changed values are summarized by size and SHA-256; the total
+  canonical difference count is complete while response rows are capped at 1,000.
+- Comparison is intentionally ephemeral. Offline mode opens no connection, while database mode reuses one connection
+  for both parameterized `SELECT`-only current-chain checks. It performs no persistence, DML, file access, audit append,
+  authorization, readiness promotion, restore, quarantine, deletion, or execution. No schema or setting changes.
 - Deletion should be split into options:
   - delete registration only
   - delete normalized DB data

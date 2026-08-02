@@ -32,6 +32,14 @@ from pubg_ai.data_deletion_quarantine_planner import (
     QUARANTINE_PLANNER_CONTRACT_VERSION,
     DataDeletionQuarantinePlanningRun,
 )
+from pubg_ai.data_deletion_review_packet_comparer import (
+    COMPARISON_STATUS_DIFFERENT,
+    COMPARISON_STATUS_EQUIVALENT,
+    EXPORTED_PACKET_COMPARER_CONTRACT_VERSION,
+    ExportedReviewPacketComparer,
+    ExportedReviewPacketComparerError,
+    _canonical_field_differences,
+)
 from pubg_ai.data_deletion_review_packet_verifier import (
     MAX_EXPORTED_REVIEW_PACKET_BYTES,
     VERIFICATION_STATUS_CURRENT,
@@ -417,6 +425,207 @@ class DataDeletionReviewPacketTests(unittest.TestCase):
                 "x" * (MAX_EXPORTED_REVIEW_PACKET_BYTES + 1),
                 cross_check_database=False,
             )
+
+    def test_export_comparer_reports_identical_packet_offline(self) -> None:
+        packet = self._passed_packet()
+        text = canonical_review_packet_bytes(packet).decode("utf-8")
+        before_dml = list(self.connection.dml)
+
+        comparison = ExportedReviewPacketComparer().compare_texts(
+            text,
+            text,
+            cross_check_database=False,
+            reference_kst=datetime(2026, 7, 30, 12, 0, 0),
+        )
+        record = comparison.to_record()
+
+        self.assertEqual(
+            comparison.comparison_status,
+            COMPARISON_STATUS_EQUIVALENT,
+        )
+        self.assertEqual(record["direction"], "baseline_to_candidate")
+        self.assertTrue(record["packets_equivalent"])
+        self.assertEqual(record["metrics"]["canonical_field_difference_count"], 0)
+        self.assertEqual(
+            record["metrics"]["max_reported_canonical_field_differences"],
+            1000,
+        )
+        self.assertEqual(record["metrics"]["input_id_difference_count"], 0)
+        self.assertEqual(record["metrics"]["fingerprint_difference_count"], 0)
+        self.assertEqual(record["metrics"]["assessment_difference_count"], 0)
+        self.assertEqual(record["metrics"]["review_check_difference_count"], 0)
+        self.assertIsNone(record["database_cross_check_passed"])
+        self.assertFalse(record["uploaded_text_persisted"])
+        self.assertFalse(record["comparison_persisted"])
+        self.assertFalse(record["records_created"])
+        self.assertFalse(record["database_writes_performed"])
+        self.assertFalse(record["authorization_granted"])
+        self.assertFalse(record["readiness_promoted"])
+        self.assertFalse(record["execution_enabled"])
+        self.assertFalse(record["execution_ready"])
+        self.assertEqual(self.connection.dml, before_dml)
+
+    def test_export_comparer_reports_directional_generation_changes(self) -> None:
+        baseline = self._passed_packet()
+        state = self._service().packet_state(self.request)
+        candidate = self._service().generate(
+            self.request,
+            fault_matrix_run_id=self.matrix.id,
+            confirmation_text=state["packet_candidate"]["confirmation_text"],
+            actor_id="second-reviewer",
+            note="second export",
+            reference_kst=datetime(2026, 7, 30, 10, 5, 0),
+        )
+        baseline_text = canonical_review_packet_bytes(baseline).decode("utf-8")
+        candidate_text = canonical_review_packet_bytes(candidate).decode("utf-8")
+        before_dml = list(self.connection.dml)
+
+        comparison = ExportedReviewPacketComparer().compare_texts(
+            baseline_text,
+            candidate_text,
+            cross_check_database=False,
+        )
+        reverse = ExportedReviewPacketComparer().compare_texts(
+            candidate_text,
+            baseline_text,
+            cross_check_database=False,
+        )
+        record = comparison.to_record()
+
+        self.assertEqual(
+            comparison.comparison_status,
+            COMPARISON_STATUS_DIFFERENT,
+        )
+        self.assertFalse(record["packets_equivalent"])
+        self.assertGreater(
+            record["metrics"]["canonical_field_difference_count"],
+            0,
+        )
+        self.assertEqual(record["metrics"]["input_id_difference_count"], 0)
+        self.assertEqual(record["metrics"]["fingerprint_difference_count"], 1)
+        self.assertEqual(record["metrics"]["assessment_difference_count"], 0)
+        self.assertEqual(record["metrics"]["review_check_difference_count"], 0)
+        paths = {item["path"] for item in record["differences"]["canonical_fields"]}
+        self.assertIn("$.generation.generated_by", paths)
+        self.assertIn("$.generation.generated_at_kst", paths)
+        self.assertIn("$.packet_fingerprint_sha256", paths)
+        self.assertNotEqual(
+            comparison.comparison_fingerprint_sha256,
+            reverse.comparison_fingerprint_sha256,
+        )
+        self.assertEqual(self.connection.dml, before_dml)
+
+    def test_export_comparer_reports_passed_to_blocked_assessment(self) -> None:
+        baseline = self._passed_packet()
+        self.matrix = _blocked_matrix(self.matrix)
+        self.connection = _AuditConnection(
+            self.request,
+            self.plan,
+            self.verification,
+            self.planning,
+            self.combined,
+            self.matrix,
+        )
+        self.matrix_service.get_run.return_value = self.matrix
+        self.matrix_service.list_runs.return_value = [self.matrix]
+        state = self._service().packet_state(self.request)
+        candidate = self._service().generate(
+            self.request,
+            fault_matrix_run_id=self.matrix.id,
+            confirmation_text=state["packet_candidate"]["confirmation_text"],
+            actor_id="local-owner",
+            reference_kst=datetime(2026, 7, 30, 10, 10, 0),
+        )
+        before_dml = list(self.connection.dml)
+
+        comparison = ExportedReviewPacketComparer().compare_texts(
+            canonical_review_packet_bytes(baseline).decode("utf-8"),
+            canonical_review_packet_bytes(candidate).decode("utf-8"),
+            cross_check_database=False,
+        )
+        record = comparison.to_record()
+
+        self.assertEqual(record["comparison_status"], COMPARISON_STATUS_DIFFERENT)
+        assessment_fields = {
+            item["field"] for item in record["differences"]["assessment"]
+        }
+        self.assertIn("review_status", assessment_fields)
+        self.assertIn("blocked_input_count", assessment_fields)
+        self.assertIn("fault_matrix_result_status", assessment_fields)
+        check_keys = {
+            item["key"] for item in record["differences"]["review_checks"]
+        }
+        self.assertIn("fault_matrix_outcome", check_keys)
+        self.assertIn("all_declared_faults_contained", check_keys)
+        self.assertGreater(record["metrics"]["fingerprint_difference_count"], 1)
+        self.assertEqual(self.connection.dml, before_dml)
+
+    def test_export_comparer_cross_checks_both_packets_without_writes(self) -> None:
+        packet = self._passed_packet()
+        text = canonical_review_packet_bytes(packet).decode("utf-8")
+        before_dml = list(self.connection.dml)
+        before_select_count = len(self.connection.selects)
+
+        comparison = ExportedReviewPacketComparer(self.connection).compare_texts(
+            text,
+            text,
+            cross_check_database=True,
+            reference_kst=datetime(2026, 7, 30, 12, 0, 0),
+        )
+        record = comparison.to_record()
+
+        self.assertTrue(record["database_cross_check_requested"])
+        self.assertTrue(record["database_cross_check_passed"])
+        self.assertEqual(
+            record["baseline_verification"]["verification_status"],
+            VERIFICATION_STATUS_CURRENT,
+        )
+        self.assertEqual(
+            record["candidate_verification"]["verification_status"],
+            VERIFICATION_STATUS_CURRENT,
+        )
+        self.assertEqual(len(self.connection.selects) - before_select_count, 14)
+        self.assertTrue(
+            all(statement.startswith("SELECT ") for statement in self.connection.selects)
+        )
+        self.assertEqual(self.connection.dml, before_dml)
+
+    def test_export_comparer_rejects_candidate_without_echoing_text(self) -> None:
+        packet = self._passed_packet()
+        supplied = '{"secret_like_local_note":"do-not-echo-comparison"}'
+
+        with self.assertRaises(ExportedReviewPacketComparerError) as raised:
+            ExportedReviewPacketComparer().compare_texts(
+                canonical_review_packet_bytes(packet).decode("utf-8"),
+                supplied,
+                cross_check_database=False,
+            )
+
+        self.assertIn("candidate review packet", str(raised.exception))
+        self.assertNotIn("do-not-echo-comparison", str(raised.exception))
+
+    def test_export_comparer_contract_version_is_stable(self) -> None:
+        self.assertEqual(
+            EXPORTED_PACKET_COMPARER_CONTRACT_VERSION,
+            "deletion-review-packet-export-comparer-v1",
+        )
+
+    def test_export_comparer_caps_reported_canonical_differences(self) -> None:
+        baseline = {f"field_{index:04d}": index for index in range(1205)}
+        candidate = {
+            f"field_{index:04d}": index + 1 for index in range(1205)
+        }
+
+        differences, total = _canonical_field_differences(
+            baseline,
+            candidate,
+            limit=1000,
+        )
+
+        self.assertEqual(total, 1205)
+        self.assertEqual(len(differences), 1000)
+        self.assertEqual(differences[0]["path"], "$.field_0000")
+        self.assertEqual(differences[-1]["path"], "$.field_0999")
 
     def _passed_packet(self):
         state = self._service().packet_state(self.request)

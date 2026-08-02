@@ -150,6 +150,11 @@ It needs no new environment variable. Selected JSON is limited to 2 MiB and is n
 opens no MySQL connection; optional current-chain verification uses read-only parameterized `SELECT` queries. The
 schema remains version 20 with 44 total tables and fourteen deletion-workflow tables.
 
+Application version 22 adds `POST /data-deletion-review-packets/compare` and requires no new setting. Baseline and
+candidate JSON each keep the 2 MiB UTF-8 limit and are never persisted. Offline comparison opens no connection; the
+default database option reuses one connection for two read-only current-chain checks. Canonical difference responses
+include the complete count and at most 1,000 field rows. Schema version 20 and all 44 tables remain unchanged.
+
 The opt-in builder uses `PUBG_BACKUP_DATA_DIR` (default `./data/backups`). The backup root must be writable and must not
 equal, contain, or be contained by `PUBG_RAW_DATA_DIR` or `PUBG_REPLAY_DATA_DIR`. A build requires the exact latest-plan
 confirmation text. For each prerequisite required by the latest plan, MySQL candidate rows are exported as typed JSONL

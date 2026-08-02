@@ -54,6 +54,10 @@ from pubg_ai.data_deletion_review_packet import (
     DataDeletionReviewPacketService,
     canonical_review_packet_bytes,
 )
+from pubg_ai.data_deletion_review_packet_comparer import (
+    ExportedReviewPacketComparer,
+    ExportedReviewPacketComparerError,
+)
 from pubg_ai.data_deletion_review_packet_verifier import (
     MAX_EXPORTED_REVIEW_PACKET_BYTES,
     ExportedReviewPacketVerifier,
@@ -308,6 +312,18 @@ class DataDeletionReviewPacketCreateRequest(BaseModel):
 
 class ExportedReviewPacketVerifyRequest(BaseModel):
     packet_text: str = Field(
+        min_length=2,
+        max_length=MAX_EXPORTED_REVIEW_PACKET_BYTES,
+    )
+    cross_check_database: bool = True
+
+
+class ExportedReviewPacketCompareRequest(BaseModel):
+    baseline_packet_text: str = Field(
+        min_length=2,
+        max_length=MAX_EXPORTED_REVIEW_PACKET_BYTES,
+    )
+    candidate_packet_text: str = Field(
         min_length=2,
         max_length=MAX_EXPORTED_REVIEW_PACKET_BYTES,
     )
@@ -1761,6 +1777,46 @@ def create_app() -> Any:
             "execution_ready": False,
         }
 
+    @app.post("/data-deletion-review-packets/compare")
+    def compare_exported_data_deletion_review_packets(
+        compare_request: ExportedReviewPacketCompareRequest,
+        response: Response,
+    ) -> dict[str, Any]:
+        comparison_headers = {
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        }
+        response.headers.update(comparison_headers)
+        connection = None
+        try:
+            if compare_request.cross_check_database:
+                connection = connect_mysql(current_config().database)
+            comparison = ExportedReviewPacketComparer(connection).compare_texts(
+                compare_request.baseline_packet_text,
+                compare_request.candidate_packet_text,
+                cross_check_database=compare_request.cross_check_database,
+            )
+        except ExportedReviewPacketComparerError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=str(exc),
+                headers=comparison_headers,
+            ) from exc
+        finally:
+            if connection is not None:
+                connection.close()
+        return {
+            "comparison": comparison.to_record(),
+            "uploaded_text_persisted": False,
+            "comparison_persisted": False,
+            "records_created": False,
+            "database_writes_performed": False,
+            "authorization_granted": False,
+            "readiness_promoted": False,
+            "execution_enabled": False,
+            "execution_ready": False,
+        }
+
     @app.post("/data-deletions/{request_id}/review-packets")
     def generate_data_deletion_review_packet(
         request_id: int,
@@ -2860,6 +2916,20 @@ _INDEX_HTML = """<!doctype html>
     .review-packet-verifier-form .checkbox-field input { width: auto; min-height: 0; }
     .review-packet-verifier-result { min-width: 0; max-width: 100%; margin-top: 12px; }
     .review-packet-verifier-result .status, .review-packet-verifier-result code { overflow-wrap: anywhere; word-break: break-word; }
+    .review-packet-comparer-form { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 12px; align-items: end; }
+    .review-packet-comparer-form .checkbox-field { display: inline-flex; align-items: center; gap: 8px; min-height: 38px; }
+    .review-packet-comparer-form .checkbox-field input { width: auto; min-height: 0; }
+    .review-packet-comparer-result { min-width: 0; max-width: 100%; margin-top: 12px; }
+    .review-packet-comparer-result .status, .review-packet-comparer-result code, .comparison-value { overflow-wrap: anywhere; word-break: break-word; }
+    .review-packet-comparer-result .comparison-table { min-width: 760px; table-layout: auto; }
+    .review-packet-comparer-result .comparison-check-table { min-width: 960px; }
+    .review-packet-comparer-result .comparison-contract-table th:nth-child(1), .review-packet-comparer-result .comparison-contract-table td:nth-child(1) { min-width: 110px; }
+    .review-packet-comparer-result .comparison-contract-table th:nth-child(2), .review-packet-comparer-result .comparison-contract-table td:nth-child(2) { min-width: 190px; }
+    .review-packet-comparer-result .comparison-check-table th:nth-child(1), .review-packet-comparer-result .comparison-check-table td:nth-child(1) { min-width: 170px; }
+    .review-packet-comparer-result .comparison-check-table th:nth-child(2), .review-packet-comparer-result .comparison-check-table td:nth-child(2) { min-width: 120px; }
+    .review-packet-comparer-result .comparison-canonical-table th:nth-child(1), .review-packet-comparer-result .comparison-canonical-table td:nth-child(1) { min-width: 240px; }
+    .review-packet-comparer-result .comparison-canonical-table th:nth-child(2), .review-packet-comparer-result .comparison-canonical-table td:nth-child(2) { min-width: 90px; }
+    .review-packet-comparer-result .comparison-value { min-width: 180px; max-width: 420px; white-space: normal; }
     .confirmation-input-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
     .player-controls { display: grid; grid-template-columns: minmax(220px, 1fr) 110px auto auto; gap: 10px; align-items: end; }
     .toggle-row { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; color: var(--muted); font-size: 13px; }
@@ -2944,6 +3014,7 @@ _INDEX_HTML = """<!doctype html>
       .confirmation-input-row { grid-template-columns: 1fr; }
       .backup-evidence-form { grid-template-columns: 1fr; }
       .review-packet-verifier-form { grid-template-columns: 1fr; }
+      .review-packet-comparer-form { grid-template-columns: 1fr; }
       .timeline-range { grid-template-columns: 1fr; }
       .replay-detail-layout { grid-template-columns: 1fr; }
       header { align-items: flex-start; flex-direction: column; }
@@ -3292,6 +3363,25 @@ _INDEX_HTML = """<!doctype html>
         </form>
         <div class="status" id="exportedReviewPacketVerifierStatus">No packet selected.</div>
         <div class="review-packet-verifier-result" id="exportedReviewPacketVerifierResult"></div>
+      </div>
+      <div class="backup-builder-contract" id="exportedReviewPacketComparer">
+        <h3>Review packet comparison</h3>
+        <div class="status">Direction: baseline to candidate / comparison persisted: no / authorization and execution: disabled</div>
+        <form class="review-packet-comparer-form" id="exportedReviewPacketComparerForm">
+          <label>Baseline JSON
+            <input name="baseline_packet_file" type="file" accept="application/json,.json" required>
+          </label>
+          <label>Candidate JSON
+            <input name="candidate_packet_file" type="file" accept="application/json,.json" required>
+          </label>
+          <label class="checkbox-field">
+            <input name="cross_check_database" type="checkbox" checked>
+            Current MySQL chain for both
+          </label>
+          <button class="secondary" type="submit">Compare packets</button>
+        </form>
+        <div class="status" id="exportedReviewPacketComparerStatus">No packet pair selected.</div>
+        <div class="review-packet-comparer-result" id="exportedReviewPacketComparerResult"></div>
       </div>
       <div class="table-scroll">
       <table class="deletion-request-table">
@@ -3682,6 +3772,9 @@ _INDEX_HTML = """<!doctype html>
     const exportedReviewPacketVerifierForm = document.querySelector("#exportedReviewPacketVerifierForm");
     const exportedReviewPacketVerifierStatus = document.querySelector("#exportedReviewPacketVerifierStatus");
     const exportedReviewPacketVerifierResult = document.querySelector("#exportedReviewPacketVerifierResult");
+    const exportedReviewPacketComparerForm = document.querySelector("#exportedReviewPacketComparerForm");
+    const exportedReviewPacketComparerStatus = document.querySelector("#exportedReviewPacketComparerStatus");
+    const exportedReviewPacketComparerResult = document.querySelector("#exportedReviewPacketComparerResult");
     const profileBody = document.querySelector("#profileBody");
     const weaponBody = document.querySelector("#weaponBody");
     const recommendationBody = document.querySelector("#recommendationBody");
@@ -4668,18 +4761,23 @@ _INDEX_HTML = """<!doctype html>
         </div>`;
     }
 
+    async function readExportedReviewPacketFile(file, label) {
+      if (!file) throw new Error(`${label} file is required.`);
+      if (file.size > 2097152) {
+        throw new Error(`${label} exceeds the 2 MiB verification limit.`);
+      }
+      const packetText = await file.text();
+      if (new TextEncoder().encode(packetText).byteLength > 2097152) {
+        throw new Error(`${label} exceeds the 2 MiB verification limit.`);
+      }
+      return packetText;
+    }
+
     async function verifyExportedReviewPacket(formElement) {
       const values = new FormData(formElement);
       const fileInput = formElement.elements.packet_file;
       const file = fileInput?.files?.[0] || null;
-      if (!file) throw new Error("Packet JSON file is required.");
-      if (file.size > 2097152) {
-        throw new Error("Packet JSON exceeds the 2 MiB verification limit.");
-      }
-      const packetText = await file.text();
-      if (new TextEncoder().encode(packetText).byteLength > 2097152) {
-        throw new Error("Packet JSON exceeds the 2 MiB verification limit.");
-      }
+      const packetText = await readExportedReviewPacketFile(file, "Packet JSON");
       const button = formElement.querySelector("button[type='submit']");
       if (button) button.disabled = true;
       exportedReviewPacketVerifierResult.innerHTML = "";
@@ -4692,6 +4790,114 @@ _INDEX_HTML = """<!doctype html>
         const verification = payload.verification || {};
         exportedReviewPacketVerifierResult.innerHTML = renderExportedReviewPacketVerification(verification);
         exportedReviewPacketVerifierStatus.textContent = `${verification.verification_status || "unknown"}. Uploaded text was not persisted; authorization, readiness, and execution remain disabled.`;
+      } finally {
+        if (button) button.disabled = false;
+      }
+    }
+
+    function comparisonValueText(value) {
+      if (value === null) return "null";
+      if (value === undefined) return "-";
+      if (typeof value === "string") return value;
+      try {
+        return JSON.stringify(value);
+      } catch (_) {
+        return String(value);
+      }
+    }
+
+    function renderExportedReviewPacketComparison(comparison) {
+      const differences = comparison?.differences || {};
+      const metrics = comparison?.metrics || {};
+      const baseline = comparison?.baseline_verification || {};
+      const candidate = comparison?.candidate_verification || {};
+      const databaseState = comparison?.database_cross_check_requested
+        ? (comparison?.database_cross_check_passed ? "both current" : "mismatch")
+        : "not requested";
+      const groupedDifferences = [
+        ["Input ID", differences.input_ids || []],
+        ["Fingerprint", differences.fingerprints || []],
+        ["Assessment", differences.assessment || []],
+      ];
+      const contractRows = groupedDifferences.flatMap(([category, items]) => items.map((item) => `
+        <tr>
+          <td>${escapeHtml(category)}</td>
+          <td>${escapeHtml(item.field || "-")}</td>
+          <td class="comparison-value">${escapeHtml(comparisonValueText(item.baseline_value))}</td>
+          <td class="comparison-value">${escapeHtml(comparisonValueText(item.candidate_value))}</td>
+        </tr>`)).join("") || `<tr><td colspan="4">No input, fingerprint, or assessment differences.</td></tr>`;
+      const checkRows = (differences.review_checks || []).map((item) => `
+        <tr>
+          <td>${escapeHtml(item.key || "-")}</td>
+          <td>${escapeHtml((item.changed_fields || []).join(", ") || "-")}</td>
+          <td>${escapeHtml(item.baseline_status || "-")}</td>
+          <td>${escapeHtml(item.candidate_status || "-")}</td>
+          <td class="comparison-value">${escapeHtml(item.baseline_message || "-")}</td>
+          <td class="comparison-value">${escapeHtml(item.candidate_message || "-")}</td>
+        </tr>`).join("") || `<tr><td colspan="6">No review-check outcome differences.</td></tr>`;
+      const canonicalRows = (differences.canonical_fields || []).map((item) => `
+        <tr>
+          <td><code>${escapeHtml(item.path || "-")}</code></td>
+          <td>${escapeHtml(item.change_type || "-")}</td>
+          <td class="comparison-value">${escapeHtml(comparisonValueText(item.baseline_value))}</td>
+          <td class="comparison-value">${escapeHtml(comparisonValueText(item.candidate_value))}</td>
+        </tr>`).join("") || `<tr><td colspan="4">Canonical packet content is equivalent.</td></tr>`;
+      const truncation = metrics.canonical_field_differences_truncated
+        ? ` / shown: ${escapeHtml(metrics.reported_canonical_field_difference_count || 0)} (truncated)`
+        : "";
+      return `
+        <div class="grid">
+          <div class="kv"><span>Comparison</span><strong>${escapeHtml(comparison?.comparison_status || "-")}</strong></div>
+          <div class="kv"><span>Baseline verification</span><strong>${escapeHtml(baseline.verification_status || "-")}</strong></div>
+          <div class="kv"><span>Candidate verification</span><strong>${escapeHtml(candidate.verification_status || "-")}</strong></div>
+          <div class="kv"><span>Current MySQL</span><strong>${escapeHtml(databaseState)}</strong></div>
+        </div>
+        <div class="status">Canonical changes: ${escapeHtml(metrics.canonical_field_difference_count || 0)}${truncation} / input IDs: ${escapeHtml(metrics.input_id_difference_count || 0)} / fingerprints: ${escapeHtml(metrics.fingerprint_difference_count || 0)} / assessment: ${escapeHtml(metrics.assessment_difference_count || 0)} / checks: ${escapeHtml(metrics.review_check_difference_count || 0)} / records created: no</div>
+        <div class="status">Comparison SHA-256: <code>${escapeHtml(comparison?.comparison_fingerprint_sha256 || "-")}</code></div>
+        <h4>Contract and assessment differences</h4>
+        <div class="table-scroll">
+          <table class="detail-table comparison-table comparison-contract-table">
+            <thead><tr><th>Category</th><th>Field</th><th>Baseline</th><th>Candidate</th></tr></thead>
+            <tbody>${contractRows}</tbody>
+          </table>
+        </div>
+        <h4>Review-check outcome differences</h4>
+        <div class="table-scroll">
+          <table class="detail-table comparison-table comparison-check-table">
+            <thead><tr><th>Check</th><th>Changed</th><th>Baseline</th><th>Candidate</th><th>Baseline message</th><th>Candidate message</th></tr></thead>
+            <tbody>${checkRows}</tbody>
+          </table>
+        </div>
+        <h4>Canonical field differences</h4>
+        <div class="table-scroll">
+          <table class="detail-table comparison-table comparison-canonical-table">
+            <thead><tr><th>JSON path</th><th>Change</th><th>Baseline</th><th>Candidate</th></tr></thead>
+            <tbody>${canonicalRows}</tbody>
+          </table>
+        </div>`;
+    }
+
+    async function compareExportedReviewPackets(formElement) {
+      const values = new FormData(formElement);
+      const baselineFile = formElement.elements.baseline_packet_file?.files?.[0] || null;
+      const candidateFile = formElement.elements.candidate_packet_file?.files?.[0] || null;
+      const [baselineText, candidateText] = await Promise.all([
+        readExportedReviewPacketFile(baselineFile, "Baseline JSON"),
+        readExportedReviewPacketFile(candidateFile, "Candidate JSON"),
+      ]);
+      const button = formElement.querySelector("button[type='submit']");
+      if (button) button.disabled = true;
+      exportedReviewPacketComparerResult.innerHTML = "";
+      exportedReviewPacketComparerStatus.textContent = "Comparing verified packets in memory...";
+      try {
+        const payload = await postJson("/data-deletion-review-packets/compare", {
+          baseline_packet_text: baselineText,
+          candidate_packet_text: candidateText,
+          cross_check_database: values.get("cross_check_database") === "on",
+        });
+        const comparison = payload.comparison || {};
+        exportedReviewPacketComparerResult.innerHTML = renderExportedReviewPacketComparison(comparison);
+        exportedReviewPacketComparerStatus.textContent = `${comparison.comparison_status || "unknown"}. Uploaded text and comparison were not persisted; authorization, readiness, and execution remain disabled.`;
       } finally {
         if (button) button.disabled = false;
       }
@@ -8689,6 +8895,16 @@ _INDEX_HTML = """<!doctype html>
       } catch (error) {
         exportedReviewPacketVerifierResult.innerHTML = "";
         exportedReviewPacketVerifierStatus.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    exportedReviewPacketComparerForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        await compareExportedReviewPackets(exportedReviewPacketComparerForm);
+      } catch (error) {
+        exportedReviewPacketComparerResult.innerHTML = "";
+        exportedReviewPacketComparerStatus.textContent = `Error: ${error.message}`;
       }
     });
 

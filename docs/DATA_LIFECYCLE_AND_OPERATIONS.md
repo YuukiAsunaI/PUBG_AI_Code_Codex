@@ -279,6 +279,13 @@ Implemented behavior:
   parameterized `SELECT` queries to compare the exact immutable packet row, approved unexecuted request, and latest
   dry-run, backup-verification, quarantine-planning, combined-rehearsal, and fault-matrix bindings. A mismatch is a
   read-only result, not an authorization or readiness transition. Schema version 20 and its 44 tables are unchanged.
+- Application version 22 compares two verifier-valid exports in memory from baseline to candidate. It reports
+  canonical field, input-ID, fingerprint, assessment, and review-check differences. The total canonical difference
+  count remains complete while only the first 1,000 rows are returned. Each input retains the 2 MiB UTF-8 limit.
+- Offline comparison opens no database. Optional current-chain comparison reuses one connection and applies the same
+  parameterized `SELECT`-only verification to both packets. Neither input nor the comparison is persisted, and no
+  record, evidence, authorization, readiness, production source access or mutation, restore, quarantine, deletion, or
+  execution capability is created. Schema version 20 and its 44 tables are unchanged.
 - The earlier non-executing rehearsal still rechecks live deletion impact, evidence times, artifact metadata, bound
   planner-generated capacity evidence, and current quarantine free space without changing targets.
   `executor_not_implemented` remains even after every available rehearsal passes; production restore, actual

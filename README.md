@@ -429,6 +429,15 @@ to require an exact immutable packet row and the current unexecuted request plus
 persists the uploaded text, creates a record, changes a row or file, grants authorization, promotes readiness, or
 enables execution. Version 21 adds no environment variable or table; the schema remains version 20 with 44 tables.
 
+Application version 22 adds `POST /data-deletion-review-packets/compare` and a two-file comparison panel. Both inputs
+must first pass the version 21 verifier. The comparison is directional from baseline to candidate and reports input-ID,
+fingerprint, assessment, review-check, and canonical-field changes. The full canonical difference count is retained
+while at most 1,000 field rows are returned. Each file keeps the 2 MiB UTF-8 limit. Offline mode opens no database;
+the default MySQL mode cross-checks both packets through one connection using only parameterized `SELECT` queries.
+Packet text and comparison results remain in memory and are never persisted. No record, authorization, readiness,
+evidence, production mutation, restore, quarantine, deletion, or execution capability is created. Version 22 adds no
+environment variable or table; the schema remains version 20 with 44 tables.
+
 Each packet is guarded by six `ON DELETE RESTRICT` foreign keys. Generation appends only one version 20 audit row; it
 grants no authorization,
 promotes no readiness, creates no evidence, and performs no restore, quarantine, production mutation, or deletion. The

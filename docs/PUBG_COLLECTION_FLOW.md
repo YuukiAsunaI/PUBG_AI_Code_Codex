@@ -424,6 +424,11 @@ The current Discord bot slice is intentionally small and reuses the same local M
   mode establishes internal consistency without MySQL. The default database mode executes only parameterized `SELECT`
   queries to require the exact immutable packet row and latest current chain. It records nothing and cannot authorize,
   promote readiness, restore, quarantine, delete, or execute.
+- The exported-packet comparison stage accepts two verifier-valid JSON exports and reports directional baseline-to-
+  candidate changes across canonical fields, input IDs, fingerprints, assessment fields, and review checks. Each input
+  retains the 2 MiB limit; at most 1,000 canonical rows are returned with the complete difference count. Offline mode
+  opens no database, and current-chain mode reuses one connection for two parameterized `SELECT`-only checks. Inputs
+  and results remain in memory and cannot persist, authorize, promote readiness, restore, quarantine, delete, or execute.
 - The non-executing rehearsal rechecks the live source fingerprint plus evidence/file metadata, planner-bound capacity
   evidence, and current free space, then appends a passed/blocked result. The rehearsal itself does not open backups,
   calculate checksums, run a restore, move replay artifacts, execute SQL mutations, or expose a Discord counterpart.
