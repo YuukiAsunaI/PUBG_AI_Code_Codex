@@ -351,7 +351,29 @@ python -m pubg_ai.cli run-discord-bot --prefix !
 ```
 
 The Discord bot token stays only in `.env` as `DISCORD_BOT_TOKEN`. The bot currently uses text commands and requires
-Discord's message content intent to be enabled for the bot application. Initial commands are:
+Discord's message content intent to be enabled for the bot application.
+
+Use the guarded live-acceptance workflow before enabling a production alert channel. The probe is read-only and its
+selected channel row includes `last_message_id` for a pre-send audit:
+
+```powershell
+python -m pubg_ai.cli discord-acceptance-probe --guild-id <guild_id> --channel-id <channel_id>
+python -m pubg_ai.cli discord-acceptance-send-alert --guild-id <guild_id> --channel-id <channel_id> --confirm SEND_DISCORD_ACCEPTANCE_TEST
+```
+
+Use the verified alert result's `message_id` as the baseline. After a human sends `!배그도움말` in that channel,
+verify that Discord retained the newer command and the bot's referenced reply without returning either message body:
+
+```powershell
+python -m pubg_ai.cli discord-acceptance-observe --guild-id <guild_id> --channel-id <channel_id> --after-message-id <baseline_message_id>
+```
+
+The alert command refuses to send unless both numeric IDs and the exact confirmation phrase are supplied. It sends a
+fixed message with mentions disabled, reads the created message back, and never prints the token. The observer
+requires a numeric baseline, exits with code `2` until a newer matching human-command/bot-reply pair exists, then exits
+with code `0`.
+
+Initial commands are:
 
 ```text
 !배그도움말

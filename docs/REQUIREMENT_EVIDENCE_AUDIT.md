@@ -25,7 +25,7 @@ deletion remains intentionally absent until the administrator explicitly approve
 The following checks were run through 2026-08-10 KST without printing either secret:
 
 - Repository baseline before the weapon hit-metric calibration slice: `a5f62fd`.
-- Automated suite: `434 passed`, with one existing Starlette deprecation warning.
+- Automated suite: `444 passed`, with one existing Starlette deprecation warning.
 - Python compile, `git diff --check`, and secret-pattern scan: passed. The actual `.env` is ignored and untracked;
   only `.env.example` is tracked, and no JWT-like or Discord-token-like value was found outside `.env`.
 - MySQL: local `pubg_ai`, MySQL 8.0.41, schema version 22, 47 tables.
@@ -55,8 +55,10 @@ The following checks were run through 2026-08-10 KST without printing either sec
   table uses a stable horizontal scroll layout.
 - Earlier 2026-08-02 acceptance evidence remains valid for KST trend partitions, recommendation output, official-asset
   named regions, and nonblank 2D replay playback; all associated regression tests remain green.
-- Earlier read-only Discord authentication returned 200 for the bot account and guild list with 16 memberships. No
-  message has been sent, so real command and alert delivery remain external acceptance work.
+- Discord readiness: the guarded production probe authenticated `SCA_Bot`, found 16 guild memberships, and verified
+  view/send/history permissions plus a baseline message ID for the recommended test channel. The production bot then
+  connected to the Discord Gateway. No message has been sent, so real command and alert delivery remain external
+  acceptance work behind explicit channel selection.
 
 Configured local roots:
 
@@ -144,8 +146,8 @@ Configured local roots:
 | DSC-02 | Assign command permissions through guild-scoped groups | IMPLEMENTED | Permission manager, Discord authorization, and web permission tests pass. |
 | DSC-03 | Allow a global administrator to inspect all guilds | IMPLEMENTED | Scope and authorization tests pass. |
 | DSC-04 | Provide guild rankings and optional public profiles | IMPLEMENTED | Ranking/public-profile tests pass. |
-| DSC-05 | Authenticate the actual configured bot | PROVEN | Read-only Discord REST authentication and 16 guild memberships were verified. |
-| DSC-06 | Exercise a real command in a selected guild and channel | PENDING | Requires an explicitly selected test guild/channel and a harmless command invocation. |
+| DSC-05 | Authenticate the actual configured bot | PROVEN | Guarded REST probing verified the bot account, 16 guild memberships, and selected-channel permissions; the production bot also connected to the Gateway. |
+| DSC-06 | Exercise a real command in a selected guild and channel | PENDING | Probe/send/observe tooling and a verified candidate are ready; explicit channel selection, controlled alert delivery, and a human command remain. |
 | OPS-01 | Run collector and post-processing workers | PROVEN | Both workers completed real one-cycle runs and left zero backlog. |
 | OPS-02 | Recover cleanly across long-running operation and restart | PROVEN | Controller stop/restart, bounded simulated and live soak, interruptible waits, and transactional MySQL match/telemetry stale recovery passed; live queue and duplicate counts ended at zero. |
 | OPS-03 | Let an administrator decide whether retained player data is deleted | PARTIAL | Request, preview, backup, verification, quarantine, restore rehearsal, and review tooling exist. There is intentionally no destructive executor yet. |
@@ -153,8 +155,9 @@ Configured local roots:
 ## Prioritized Remaining Roadmap
 
 1. **P0: real Discord command acceptance test**
-   Run one read-only query and one disposable registration lifecycle in a user-selected test channel without exposing the
-   token; confirm one controlled alert delivery there as well.
+   Use the guarded probe baseline, send one controlled alert with explicit confirmation, then observe a human
+   `!배그도움말` round trip. Grant the detected author only the temporary command groups needed for one read-only query
+   and disposable registration lifecycle, then revoke them and confirm no secret disclosure.
 2. **P1: destructive deletion execution, only when explicitly approved**
    Keep the existing review and backup gates. Do not add or invoke irreversible deletion as an incidental step.
 

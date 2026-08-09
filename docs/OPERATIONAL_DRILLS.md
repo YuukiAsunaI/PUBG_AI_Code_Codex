@@ -95,3 +95,11 @@ On 2026-08-09 KST:
 The remaining external operations acceptance gap is an actual Discord command and alert delivery in a user-selected
 guild/channel. The controlled storage drill proves alert classification and targets but deliberately does not fill a
 real disk or send a test Discord message.
+
+The guarded `discord-acceptance-probe`, `discord-acceptance-send-alert`, and `discord-acceptance-observe` CLI commands
+make that final run repeatable. Probe is read-only; send-alert requires exact explicit confirmation and verifies the
+created message by reading it back; observe pairs a human command with the bot's referenced reply without exposing
+message bodies. On 2026-08-10 KST, the production probe authenticated `SCA_Bot`, found 16 guild memberships, and
+verified view/send/history permissions plus a baseline message ID for the recommended test channel. The bot also
+connected to the Discord Gateway successfully. No test message was sent because the user-selected channel gate remains
+intentional.

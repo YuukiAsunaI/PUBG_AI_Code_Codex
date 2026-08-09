@@ -607,6 +607,13 @@ Completed slices:
      localhost API/UI, Discord formatting, recommendations, rankings, trends, 434 automated tests, and desktop/mobile
      browser checks all use the same semantic contract. Schema version 22 and 47 tables remain current.
 
+121. Guarded Discord live-acceptance tooling adds a read-only guild/channel permission probe, an explicitly
+     confirmed fixed test-alert sender with read-back verification and disabled mentions, and a command/reply observer
+     that returns metadata rather than message bodies. The real bot authenticated across 16 guilds, the recommended
+     test channel passed view/send/history checks, and the bot connected to the Gateway. Ten focused tests and the
+     full 444-test suite passed. No message was sent before explicit channel selection; schema version 22 and 47
+     tables remain current.
+
 Remaining external acceptance:
 
 1. Run a real read-only Discord command acceptance check in an explicitly selected guild/channel.

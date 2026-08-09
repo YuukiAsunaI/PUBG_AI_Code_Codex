@@ -10,6 +10,10 @@ from typing import Any, Callable
 from pubg_ai.collector_worker import CollectorWorkerOptions, run_collector_cycle
 from pubg_ai.config import RuntimeConfig, load_dotenv_values
 from pubg_ai.database import connect_mysql, count_tables, initialize_database
+from pubg_ai.discord_acceptance import (
+    DISCORD_ACCEPTANCE_CONFIRMATION,
+    DiscordAcceptanceClient,
+)
 from pubg_ai.discord_bot import DEFAULT_DISCORD_PREFIX, run_discord_bot
 from pubg_ai.discord_permission_manager import DiscordPermissionManager
 from pubg_ai.discord_permissions import DiscordPermissionChecker
@@ -277,6 +281,37 @@ def main(argv: list[str] | None = None) -> int:
 
     discord_parser = subparsers.add_parser("run-discord-bot", help="Run the Discord bot.")
     discord_parser.add_argument("--prefix", default=DEFAULT_DISCORD_PREFIX, help="Text command prefix.")
+
+    discord_probe_parser = subparsers.add_parser(
+        "discord-acceptance-probe",
+        help="Read Discord guild/channel candidates without sending messages.",
+    )
+    discord_probe_parser.add_argument("--guild-id", default=None)
+    discord_probe_parser.add_argument("--channel-id", default=None)
+    discord_probe_parser.add_argument("--channel-limit", default=8, type=int)
+
+    discord_alert_parser = subparsers.add_parser(
+        "discord-acceptance-send-alert",
+        help="Send and verify one controlled, secret-free Discord acceptance alert.",
+    )
+    discord_alert_parser.add_argument("--guild-id", required=True)
+    discord_alert_parser.add_argument("--channel-id", required=True)
+    discord_alert_parser.add_argument(
+        "--confirm",
+        required=True,
+        help=f"Must exactly equal {DISCORD_ACCEPTANCE_CONFIRMATION}.",
+    )
+
+    discord_observe_parser = subparsers.add_parser(
+        "discord-acceptance-observe",
+        help="Verify a human Discord command and the bot reply after a baseline message.",
+    )
+    discord_observe_parser.add_argument("--guild-id", required=True)
+    discord_observe_parser.add_argument("--channel-id", required=True)
+    discord_observe_parser.add_argument("--after-message-id", required=True)
+    discord_observe_parser.add_argument("--expected-command", default="배그도움말")
+    discord_observe_parser.add_argument("--prefix", default=DEFAULT_DISCORD_PREFIX)
+    discord_observe_parser.add_argument("--limit", default=50, type=int)
 
     subparsers.add_parser("discord-permissions", help="Print Discord permission settings.")
 
@@ -740,6 +775,41 @@ def main(argv: list[str] | None = None) -> int:
                 sleep(max(60, min(current.app.collector_poll_interval_seconds, 300)))
             except KeyboardInterrupt:
                 return 0
+
+    if args.command in {
+        "discord-acceptance-probe",
+        "discord-acceptance-send-alert",
+        "discord-acceptance-observe",
+    }:
+        if not config.secrets.discord_bot_token:
+            raise SystemExit("DISCORD_BOT_TOKEN is not configured in .env.")
+        acceptance = DiscordAcceptanceClient(config.secrets.discord_bot_token)
+        if args.command == "discord-acceptance-probe":
+            report = acceptance.probe(
+                guild_id=args.guild_id,
+                channel_id=args.channel_id,
+                channel_limit=args.channel_limit,
+            )
+            _print_json({"discord_acceptance_probe": report.to_record()})
+            return 0
+        if args.command == "discord-acceptance-send-alert":
+            delivery = acceptance.send_controlled_alert(
+                guild_id=args.guild_id,
+                channel_id=args.channel_id,
+                confirmation=args.confirm,
+            )
+            _print_json({"discord_acceptance_alert": delivery.to_record()})
+            return 0
+        report = acceptance.observe_round_trip(
+            guild_id=args.guild_id,
+            channel_id=args.channel_id,
+            after_message_id=args.after_message_id,
+            expected_command=args.expected_command,
+            command_prefix=args.prefix,
+            limit=args.limit,
+        )
+        _print_json({"discord_acceptance_round_trip": report.to_record()})
+        return 0 if report.verified else 2
 
     if args.command == "run-discord-bot":
         if not config.secrets.discord_bot_token:

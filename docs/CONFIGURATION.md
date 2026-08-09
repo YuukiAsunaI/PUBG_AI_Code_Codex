@@ -246,6 +246,12 @@ python -m pubg_ai.cli discord-permissions
 
 These commands update `config/local_settings.json` only. API keys and bot tokens still remain in `.env`.
 
+Discord live acceptance is deliberately separate from permission configuration. `discord-acceptance-probe` only
+reads the bot identity, memberships, and effective text-channel permissions. `discord-acceptance-send-alert` requires
+an explicit numeric guild ID, numeric channel ID, and the exact `SEND_DISCORD_ACCEPTANCE_TEST` confirmation phrase.
+`discord-acceptance-observe` returns message IDs, the command author ID, command name, timestamps, and reply length,
+but never returns command/reply bodies or the token.
+
 ## Local Web Link Sharing
 
 Discord recommendation responses can include local web evidence links for weapon+attachment recommendations, and
