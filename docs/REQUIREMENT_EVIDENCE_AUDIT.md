@@ -25,10 +25,10 @@ until the administrator explicitly approves that irreversible capability.
 The following checks were run through 2026-08-10 KST without printing either secret:
 
 - Repository baseline before the Discord live-acceptance slice: `14c82f2`.
-- Automated suite: `447 passed`, with one existing Starlette deprecation warning.
+- Automated suite: `485 passed`, with one external Starlette TestClient deprecation warning.
 - Python compile, `git diff --check`, and secret-pattern scan: passed. The actual `.env` is ignored and untracked;
   only `.env.example` is tracked, and no JWT-like or Discord-token-like value was found outside `.env`.
-- MySQL: local `pubg_ai`, MySQL 8.0.41, schema version 22, 47 tables.
+- MySQL: local `pubg_ai`, MySQL 8.0.41, schema version 23, 48 tables; every connection uses a `+09:00` session.
 - Registered target: Steam player `Yuuki_Asuna---`; collection continues by the stored PUBG `accountId`.
 - Operational drill evidence: simulated run 1 passed 4/4; live run 3 passed 5/5. The live transaction recovered one
   stale match and one stale telemetry job, rolled back, and left zero drill rows. Two bounded Steam cycles ended with
@@ -39,7 +39,8 @@ The following checks were run through 2026-08-10 KST without printing either sec
   payloads.
 - Current parsed corpus: 244 combat summaries, 826 weapon rows, 36,167 item events, 7,202 item-stat rows, 16,841
   position samples, 1,644 combat locations, 1,059 loadout snapshots, 935 durable fight outcomes, 244 fight-processing
-  states, 9,076 care-package events, 211 plane routes, and 36,045 phase events.
+  states, 732 per-account telemetry-processing states, 9,076 care-package events, 211 plane routes, and 36,045 phase
+  events. All 244 match-level kills and damage totals exactly reconcile to PUBG participant facts.
 - Weapon hit-metric calibration: 244/244 telemetry payloads parsed with zero failures; 12,650 supported
   single-projectile attacks and 1,763 hit events yielded a 13.9368% estimate, while 68 shotgun shells and 213
   pellet hit events yielded 3.13235 pellet hits per shell. Twenty-three unclassified attacks remain visible and
@@ -179,7 +180,7 @@ The original core scope can be called complete when:
 - The full automated suite, compile check, diff check, and secret scan continue to pass.
 
 All three core gates passed on 2026-08-10 KST. The selected-channel alert and command lifecycle passed, storage audit
-invariants remained clean, and the 447-test suite plus compile/diff/secret checks passed.
+invariants remained clean, and the 485-test suite plus compile/diff/secret checks passed.
 
 The bounded rate-limit, stop/restart, MySQL stale-recovery, and live idempotency gate is complete as of live drill run 3.
 The weapon-family shell/projectile/pellet calibration gate is complete as of the 2026-08-10 full-corpus reprocess.

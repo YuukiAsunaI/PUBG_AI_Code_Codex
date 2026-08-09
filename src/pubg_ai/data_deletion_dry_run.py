@@ -38,6 +38,7 @@ _REGISTRATION_TABLE_ORDER = {
 _PLAYER_TABLE_ORDER = {
     "player_fight_outcomes": 0,
     "player_fight_outcome_processing_states": 1,
+    "player_telemetry_processing_states": 2,
     "player_combat_loadout_snapshots": 2,
     "player_combat_location_events": 3,
     "player_position_samples": 4,

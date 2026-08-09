@@ -291,8 +291,10 @@ Implemented behavior:
   preview, dry-run, and backup scope. Opponent account IDs are preserved references, while target-owned rows and
   target-owned fight loadout snapshots follow the existing match/account lifecycle. No raw or replay file is rewritten
   by fight-outcome parsing.
-- Current schema version 22 adds `operational_drill_runs`. Reports contain bounded counts and safe metrics only; no
-  API key, Discord token, nickname, account ID, or temporary drill target ID is persisted.
+- Current schema version 23 adds `player_telemetry_processing_states` and a unique API-job target index. Parser
+  completion is tracked per match, account, processor, and parser version, including zero-output results. Schema
+  version 22 added `operational_drill_runs`; reports contain bounded counts and safe metrics only, with no API key,
+  Discord token, nickname, account ID, or temporary drill target ID persisted.
 - The earlier non-executing rehearsal still rechecks live deletion impact, evidence times, artifact metadata, bound
   planner-generated capacity evidence, and current quarantine free space without changing targets.
   `executor_not_implemented` remains even after every available rehearsal passes; production restore, actual

@@ -599,21 +599,32 @@ Completed slices:
      behavior without external collection. Live mode selects one active shard and one 10-player batch per cycle,
      transactionally verifies both MySQL stale-job recovery paths with complete rollback, and checks real collection
      for errors, duplicate groups, and stranded running jobs. CLI, localhost API/UI, 423 tests, desktop/mobile Chrome,
-     and live run 3 all passed. The current schema is version 22 with 47 tables.
+     and live run 3 all passed. At that validation point, the schema was version 22 with 47 tables.
 
 120. Weapon hit-metric calibration counts `LogPlayerAttack` weapon events, treats `LogWeaponFireCount` as a
      cumulative audit/fallback checkpoint, reports supported single-projectile estimated hit rate separately from
      shotgun pellet hits per shell, and excludes unclassified attacks from both. All 244 retained telemetry payloads
      (9,151,853 events) were reprocessed into 244 combat summaries and 826 weapon rows with zero failures. CLI,
      localhost API/UI, Discord formatting, recommendations, rankings, trends, 434 automated tests, and desktop/mobile
-     browser checks all use the same semantic contract. Schema version 22 and 47 tables remain current.
+     browser checks all use the same semantic contract. At that validation point, schema version 22 and 47
+     tables were current.
 
 121. Guarded Discord live-acceptance tooling adds a read-only guild/channel permission probe, an explicitly
      confirmed fixed test-alert sender with read-back verification and disabled mentions, and a command/reply observer
      that returns metadata rather than message bodies. The real bot authenticated across 16 guilds, the recommended
      test channel passed view/send/history checks, and the bot connected to the Gateway. Ten focused tests and the
-     full 444-test suite passed. No message was sent before explicit channel selection; schema version 22 and 47
-     tables remain current.
+     full 444-test suite passed. No message was sent before explicit channel selection; at that validation point,
+     schema version 22 and 47 tables were current.
+
+122. The 2026-08-10 full-project audit moves the runtime to schema version 23 with 48 tables. It adds per-account,
+     versioned telemetry completion state, transactionally replaces normalized parser output, prevents duplicate API
+     job targets, filters self/friendly attacks from dealt combat facts, and forces MySQL sessions to KST. Local web
+     Host/origin checks, streaming telemetry size and redirect validation, atomic settings/file writes, durable worker
+     failure propagation, and content-addressed replay outputs close the reproduced safety gaps. All 244 retained
+     matches reprocessed without failure; every per-match kill and damage total reconciled to PUBG participant facts.
+     All 488 cataloged raw files and 488 replay files passed path, size, and SHA-256 verification. The full 485-test
+     suite, compile check, diff check, live official-CDN download, localhost HTTP checks, and Discord Gateway restart
+     passed. Detailed evidence is in `docs/PROJECT_AUDIT_2026-08-10.md`.
 
 Remaining external acceptance:
 

@@ -47,7 +47,7 @@ class FakeTelemetryResponse:
         self.status_code = status_code
         self.content = content
         self.headers = headers or {}
-        self.url = "https://telemetry.example.test/match.json"
+        self.url = "https://telemetry-cdn.pubg.com/match.json"
 
 
 class ApiJobProcessorRetryTests(unittest.TestCase):
@@ -109,7 +109,7 @@ class ApiJobProcessorRetryTests(unittest.TestCase):
         )
 
         with self.assertRaises(TelemetryJobProcessingError) as raised:
-            processor._fetch_telemetry("https://telemetry.example.test/match.json")
+            processor._fetch_telemetry("https://telemetry-cdn.pubg.com/match.json")
 
         self.assertTrue(raised.exception.retryable)
         self.assertEqual(raised.exception.status_code, 503)
@@ -124,7 +124,7 @@ class ApiJobProcessorRetryTests(unittest.TestCase):
         )
 
         with self.assertRaises(TelemetryJobProcessingError) as raised:
-            processor._fetch_telemetry("https://telemetry.example.test/match.json")
+            processor._fetch_telemetry("https://telemetry-cdn.pubg.com/match.json")
 
         self.assertTrue(raised.exception.retryable)
         self.assertEqual(raised.exception.status_code, 404)
@@ -142,7 +142,7 @@ class ApiJobProcessorRetryTests(unittest.TestCase):
         )
 
         with self.assertRaises(TelemetryJobProcessingError) as raised:
-            processor._fetch_telemetry("https://telemetry.example.test/match.json")
+            processor._fetch_telemetry("https://telemetry-cdn.pubg.com/match.json")
 
         self.assertTrue(raised.exception.retryable)
         self.assertIn("not JSON-like", str(raised.exception))

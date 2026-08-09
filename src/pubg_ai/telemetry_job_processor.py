@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import datetime
+from io import BytesIO
 from typing import Any, Callable, Mapping
+from urllib.parse import urljoin, urlsplit
 import gzip
 
 from pubg_ai.api_job_retry import decide_api_job_retry, stale_running_cutoff
 from pubg_ai.parser_policy import CURRENT_TELEMETRY_PARSER_VERSION
 from pubg_ai.raw_storage import RawPayloadStore
 from pubg_ai.time_utils import now_kst, to_kst
+
+
+ALLOWED_TELEMETRY_HOSTS = {"telemetry-cdn.pubg.com"}
+MAX_TELEMETRY_DOWNLOAD_BYTES = 256 * 1024 * 1024
+MAX_TELEMETRY_REDIRECTS = 5
 
 
 class TelemetryJobProcessingError(RuntimeError):
@@ -33,6 +41,14 @@ class TelemetryDownload:
     content: bytes
     content_type: str | None
     source_url: str
+
+
+@dataclass(frozen=True)
+class _TelemetryHttpResponse:
+    status_code: int
+    headers: Mapping[str, str]
+    url: str
+    content: bytes
 
 
 @dataclass(frozen=True)
@@ -183,24 +199,62 @@ class TelemetryJobProcessor:
     def _fetch_telemetry(self, telemetry_url: str) -> TelemetryDownload:
         import httpx
 
-        request_get = self._request_get or httpx.get
-        try:
-            response = request_get(
-                telemetry_url,
-                headers={
-                    "Accept": "application/json",
-                    "Accept-Encoding": "gzip",
-                    "User-Agent": "pubg-ai-local-analytics/0.1",
-                },
-                timeout=self.timeout_seconds,
-                follow_redirects=True,
-            )
-        except httpx.HTTPError as exc:
-            raise TelemetryJobProcessingError(
-                f"telemetry download failed: {exc.__class__.__name__}",
-                retryable=True,
-            ) from exc
+        request_get = self._request_get
+        request_headers = {
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip",
+            "User-Agent": "pubg-ai-local-analytics/0.1",
+        }
+        current_url = telemetry_url
+        response = None
+        for redirect_count in range(MAX_TELEMETRY_REDIRECTS + 1):
+            _validate_telemetry_url(current_url)
+            try:
+                if request_get is None:
+                    response = _stream_httpx_get(
+                        httpx,
+                        current_url,
+                        headers=request_headers,
+                        timeout=self.timeout_seconds,
+                        max_bytes=MAX_TELEMETRY_DOWNLOAD_BYTES,
+                    )
+                else:
+                    response = request_get(
+                        current_url,
+                        headers=request_headers,
+                        timeout=self.timeout_seconds,
+                        follow_redirects=False,
+                    )
+            except httpx.HTTPError as exc:
+                raise TelemetryJobProcessingError(
+                    f"telemetry download failed: {exc.__class__.__name__}",
+                    retryable=True,
+                ) from exc
 
+            status_code = int(response.status_code)
+            if status_code not in {301, 302, 303, 307, 308}:
+                break
+            if redirect_count >= MAX_TELEMETRY_REDIRECTS:
+                raise TelemetryJobProcessingError(
+                    "telemetry CDN returned too many redirects",
+                    retryable=True,
+                )
+            location = response.headers.get("location")
+            if not location:
+                raise TelemetryJobProcessingError(
+                    "telemetry CDN redirect is missing a Location header",
+                    status_code=status_code,
+                    retryable=True,
+                )
+            next_url = urljoin(current_url, location)
+            _validate_telemetry_url(next_url)
+            current_url = next_url
+
+        if response is None:
+            raise TelemetryJobProcessingError(
+                "telemetry download did not return a response",
+                retryable=True,
+            )
         if response.status_code >= 400:
             status_code = int(response.status_code)
             raise TelemetryJobProcessingError(
@@ -210,7 +264,17 @@ class TelemetryJobProcessor:
                 retry_after_seconds=_retry_after_seconds(response.headers),
             )
 
-        content = _maybe_decompress_gzip(response.content)
+        source_url = str(response.url)
+        _validate_telemetry_url(source_url)
+        if len(response.content) > MAX_TELEMETRY_DOWNLOAD_BYTES:
+            raise TelemetryJobProcessingError("telemetry response exceeds the maximum download size")
+        try:
+            content = _maybe_decompress_gzip(
+                response.content,
+                max_output_bytes=MAX_TELEMETRY_DOWNLOAD_BYTES,
+            )
+        except ValueError as exc:
+            raise TelemetryJobProcessingError(str(exc)) from exc
         if not _looks_like_json_bytes(content):
             content_type = response.headers.get("content-type")
             raise TelemetryJobProcessingError(
@@ -221,7 +285,7 @@ class TelemetryJobProcessor:
         return TelemetryDownload(
             content=content,
             content_type=response.headers.get("content-type"),
-            source_url=str(response.url),
+            source_url=source_url,
         )
 
     def _list_queued_telemetry_jobs(self, *, limit: int) -> list[dict[str, Any]]:
@@ -396,13 +460,81 @@ class TelemetryJobProcessor:
             )
 
 
-def _maybe_decompress_gzip(content: bytes) -> bytes:
+
+def _stream_httpx_get(
+    httpx_module: Any,
+    url: str,
+    *,
+    headers: Mapping[str, str],
+    timeout: float,
+    max_bytes: int,
+) -> _TelemetryHttpResponse:
+    with httpx_module.stream(
+        "GET",
+        url,
+        headers=headers,
+        timeout=timeout,
+        follow_redirects=False,
+    ) as response:
+        status_code = int(response.status_code)
+        content = b""
+        if 200 <= status_code < 300:
+            content = _join_limited_chunks(response.iter_bytes(), max_bytes=max_bytes)
+        return _TelemetryHttpResponse(
+            status_code=status_code,
+            headers=response.headers,
+            url=str(response.url),
+            content=content,
+        )
+
+
+def _join_limited_chunks(chunks: Iterable[bytes], *, max_bytes: int) -> bytes:
+    if max_bytes <= 0:
+        raise ValueError("max_bytes must be positive")
+    body = bytearray()
+    for chunk in chunks:
+        body.extend(chunk)
+        if len(body) > max_bytes:
+            raise TelemetryJobProcessingError("telemetry response exceeds the maximum download size")
+    return bytes(body)
+
+
+def _maybe_decompress_gzip(
+    content: bytes,
+    *,
+    max_output_bytes: int = MAX_TELEMETRY_DOWNLOAD_BYTES,
+) -> bytes:
+    if max_output_bytes <= 0:
+        raise ValueError("max_output_bytes must be positive")
     if content.startswith(b"\x1f\x8b"):
         try:
-            return gzip.decompress(content)
+            with gzip.GzipFile(fileobj=BytesIO(content), mode="rb") as file:
+                decompressed = file.read(max_output_bytes + 1)
         except OSError:
             return content
+        if len(decompressed) > max_output_bytes:
+            raise ValueError("telemetry decompressed payload exceeds the maximum download size")
+        return decompressed
+    if len(content) > max_output_bytes:
+        raise ValueError("telemetry payload exceeds the maximum download size")
     return content
+
+
+def _validate_telemetry_url(value: str) -> None:
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as exc:
+        raise TelemetryJobProcessingError("telemetry URL is invalid") from exc
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if (
+        parsed.scheme.lower() != "https"
+        or hostname not in ALLOWED_TELEMETRY_HOSTS
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in {None, 443}
+    ):
+        raise TelemetryJobProcessingError("telemetry URL must use the official PUBG HTTPS CDN")
 
 
 def _looks_like_json_bytes(content: bytes) -> bool:

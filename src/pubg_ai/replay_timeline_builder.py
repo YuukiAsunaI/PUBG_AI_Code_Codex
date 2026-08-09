@@ -7,7 +7,11 @@ import json
 
 from pubg_ai.code_translator import translate_code
 from pubg_ai.map_snapshot_renderer import DEFAULT_WORLD_SIZE_CM, MAP_WORLD_SIZE_CM
-from pubg_ai.replay_storage import ReplayArtifactStore, StoredReplayArtifact
+from pubg_ai.replay_storage import (
+    ReplayArtifactStore,
+    StoredReplayArtifact,
+    content_addressed_filename,
+)
 from pubg_ai.time_utils import now_kst, to_kst
 
 
@@ -62,12 +66,18 @@ class ReplayTimelineProcessor:
                 if not payload["positions"]:
                     skipped_no_position += 1
                     continue
-                stored = self.replay_store.write_json(
+                body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                stored = self.replay_store.write_bytes(
                     artifact_type="timeline",
                     shard=str(job["shard"]),
                     match_id=match_id,
-                    payload=payload,
-                    filename=f"player-{_short_account_id(account_id)}-timeline.json",
+                    data=body,
+                    filename=content_addressed_filename(
+                        stem=f"player-{_short_account_id(account_id)}-timeline",
+                        data=body,
+                        suffix=".json",
+                    ),
+                    content_type="application/json",
                     match_created_at=_optional_datetime(job.get("created_at_kst")),
                 )
                 self._upsert_artifact(job=job, stored=stored)

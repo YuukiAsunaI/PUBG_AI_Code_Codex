@@ -233,6 +233,7 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
             self.assertEqual(result.failed_timelines, 0)
             artifact = result.artifacts[0]
             self.assertEqual(artifact.artifact_type, "timeline")
+            self.assertIn(artifact.sha256, Path(artifact.relative_path).name)
             path = Path(temp_dir) / artifact.relative_path
             payload = json.loads(path.read_text(encoding="utf-8"))
 

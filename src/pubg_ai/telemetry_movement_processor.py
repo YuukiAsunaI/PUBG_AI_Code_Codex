@@ -9,8 +9,19 @@ from typing import Any, Iterable, Mapping
 import gzip
 import json
 
+from pubg_ai.database import mysql_transaction
 from pubg_ai.raw_storage import RawPayloadStore
+from pubg_ai.telemetry_processing_state import (
+    count_outputs_by_account,
+    list_pending_telemetry_payloads,
+    pending_tracked_account_ids,
+    upsert_processing_states,
+)
 from pubg_ai.time_utils import now_kst, to_kst
+
+
+PROCESSOR_NAME = "movement"
+PARSER_VERSION = "movement-v1"
 
 
 class TelemetryMovementProcessingError(RuntimeError):
@@ -250,11 +261,11 @@ class TelemetryMovementProcessor:
             match_id = str(payload["match_id"])
             shard = str(payload["shard"])
 
-            if not force and self._movement_rows_exist(match_id):
-                skipped_existing += 1
-                continue
-
-            tracked_account_ids = self._tracked_account_ids_for_match(match_id=match_id, shard=shard)
+            tracked_account_ids = self._tracked_account_ids_for_match(
+                match_id=match_id,
+                shard=shard,
+                force=force,
+            )
             if not tracked_account_ids:
                 skipped_no_tracked_player += 1
                 continue
@@ -331,51 +342,29 @@ class TelemetryMovementProcessor:
         )
 
     def _list_raw_telemetry_payloads(self, *, limit: int, force: bool) -> list[dict[str, Any]]:
-        where = ""
-        if not force:
-            where = """
-                WHERE NOT EXISTS (
-                    SELECT 1
-                    FROM player_movement_summaries summaries
-                    WHERE summaries.match_id = raw_telemetry_payloads.match_id
-                )
-            """
+        return list_pending_telemetry_payloads(
+            self.connection,
+            processor_name=PROCESSOR_NAME,
+            parser_version=PARSER_VERSION,
+            limit=limit,
+            force=force,
+        )
 
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                f"""
-                SELECT id, match_id, shard, relative_path, compression
-                FROM raw_telemetry_payloads
-                {where}
-                ORDER BY id ASC
-                LIMIT %s
-                """,
-                (limit,),
-            )
-            return list(cursor.fetchall())
-
-    def _movement_rows_exist(self, match_id: str) -> bool:
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT 1 FROM player_movement_summaries WHERE match_id = %s LIMIT 1",
-                (match_id,),
-            )
-            return cursor.fetchone() is not None
-
-    def _tracked_account_ids_for_match(self, *, match_id: str, shard: str) -> set[str]:
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT DISTINCT registered_players.account_id
-                FROM registered_players
-                INNER JOIN match_participants
-                    ON match_participants.account_id = registered_players.account_id
-                   AND match_participants.match_id = %s
-                WHERE registered_players.shard = %s
-                """,
-                (match_id, shard),
-            )
-            return {str(row["account_id"]) for row in cursor.fetchall()}
+    def _tracked_account_ids_for_match(
+        self,
+        *,
+        match_id: str,
+        shard: str,
+        force: bool,
+    ) -> set[str]:
+        return pending_tracked_account_ids(
+            self.connection,
+            match_id=match_id,
+            shard=shard,
+            processor_name=PROCESSOR_NAME,
+            parser_version=PARSER_VERSION,
+            force=force,
+        )
 
     def _load_telemetry_events(self, payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
         relative_path = _required_text(payload.get("relative_path"), "relative_path")
@@ -410,14 +399,30 @@ class TelemetryMovementProcessor:
         plane_route: PlaneRoute | None,
         phase_events: list[PhaseEvent],
     ) -> None:
-        self._delete_existing_rows(match_id=match_id, account_ids=tracked_account_ids)
-        self._insert_position_samples(position_samples)
-        self._insert_landing_events(landing_events)
-        self._insert_movement_summaries(movement_summaries)
-        self._insert_combat_location_events(combat_location_events)
-        self._insert_care_package_events(care_package_events)
-        self._insert_plane_route(plane_route)
-        self._insert_phase_events(phase_events)
+        player_rows = [
+            *position_samples,
+            *landing_events,
+            *movement_summaries,
+            *combat_location_events,
+        ]
+        output_counts = count_outputs_by_account(player_rows)
+        with mysql_transaction(self.connection):
+            self._delete_existing_rows(match_id=match_id, account_ids=tracked_account_ids)
+            self._insert_position_samples(position_samples)
+            self._insert_landing_events(landing_events)
+            self._insert_movement_summaries(movement_summaries)
+            self._insert_combat_location_events(combat_location_events)
+            self._insert_care_package_events(care_package_events)
+            self._insert_plane_route(plane_route)
+            self._insert_phase_events(phase_events)
+            upsert_processing_states(
+                self.connection,
+                match_id=match_id,
+                account_ids=tracked_account_ids,
+                processor_name=PROCESSOR_NAME,
+                parser_version=PARSER_VERSION,
+                output_counts=output_counts,
+            )
 
     def _delete_existing_rows(self, *, match_id: str, account_ids: set[str]) -> None:
         with self.connection.cursor() as cursor:

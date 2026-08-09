@@ -234,10 +234,12 @@ class RegisteredPlayerMatchCollector:
                     updated_at_kst
                 )
                 VALUES ('match', %s, %s, 'queued', 0, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE id = id
                 """,
                 (shard, match_id, timestamp, timestamp, timestamp),
             )
-        return True
+            inserted = int(getattr(cursor, "rowcount", 1) or 0) == 1
+        return inserted
 
     def _match_exists(self, match_id: str) -> bool:
         with self.connection.cursor() as cursor:

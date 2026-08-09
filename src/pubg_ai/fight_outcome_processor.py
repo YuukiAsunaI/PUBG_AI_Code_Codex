@@ -10,6 +10,7 @@ import json
 
 from pubg_ai.code_translator import translate_code
 from pubg_ai.combat_outcomes import is_dbno_fight_mode
+from pubg_ai.database import mysql_transaction
 from pubg_ai.raw_storage import RawPayloadStore
 from pubg_ai.time_utils import now_kst, to_kst
 from pubg_ai.weapon_stats import normalize_weapon_code
@@ -298,27 +299,28 @@ class FightOutcomeProcessor:
     ) -> int:
         placeholders = ", ".join(["%s"] * len(account_ids))
         params = [match_id, *sorted(account_ids)]
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                f"""
-                DELETE FROM player_fight_outcomes
-                WHERE match_id = %s AND account_id IN ({placeholders})
-                """,
-                params,
-            )
-            cursor.execute(
-                f"""
-                DELETE FROM player_combat_loadout_snapshots
-                WHERE match_id = %s
-                  AND account_id IN ({placeholders})
-                  AND combat_action IN ('kill', 'dbno_caused', 'death', 'dbno_taken')
-                """,
-                params,
-            )
+        with mysql_transaction(self.connection):
+            with self.connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    DELETE FROM player_fight_outcomes
+                    WHERE match_id = %s AND account_id IN ({placeholders})
+                    """,
+                    params,
+                )
+                cursor.execute(
+                    f"""
+                    DELETE FROM player_combat_loadout_snapshots
+                    WHERE match_id = %s
+                      AND account_id IN ({placeholders})
+                      AND combat_action IN ('kill', 'dbno_caused', 'death', 'dbno_taken')
+                    """,
+                    params,
+                )
 
-        self._insert_outcomes(outcomes)
-        snapshot_count = self._upsert_loadout_snapshots(outcomes)
-        self._upsert_processing_states(match_id=match_id, account_ids=account_ids, outcomes=outcomes)
+            self._insert_outcomes(outcomes)
+            snapshot_count = self._upsert_loadout_snapshots(outcomes)
+            self._upsert_processing_states(match_id=match_id, account_ids=account_ids, outcomes=outcomes)
         return snapshot_count
 
     def _insert_outcomes(self, outcomes: list[PlayerFightOutcome]) -> None:

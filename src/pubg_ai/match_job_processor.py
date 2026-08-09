@@ -495,10 +495,12 @@ class MatchJobProcessor:
                     updated_at_kst
                 )
                 VALUES ('telemetry', %s, %s, 'queued', 0, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE id = id
                 """,
                 (match.shard, match.match_id, timestamp, timestamp, timestamp),
             )
-        return "queued"
+            inserted = int(getattr(cursor, "rowcount", 1) or 0) == 1
+        return "queued" if inserted else "existing"
 
     def _telemetry_payload_exists(self, match_id: str) -> bool:
         with self.connection.cursor() as cursor:

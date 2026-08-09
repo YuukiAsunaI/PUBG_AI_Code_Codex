@@ -61,6 +61,7 @@ _NORMALIZED_TABLES = {
     "player_combat_loadout_snapshots",
     "player_fight_outcomes",
     "player_fight_outcome_processing_states",
+    "player_telemetry_processing_states",
 }
 _DATABASE_TABLES = _IDENTITY_TABLES | _NORMALIZED_TABLES | {"player_collection_states"}
 _COPY_CHUNK_BYTES = 1024 * 1024

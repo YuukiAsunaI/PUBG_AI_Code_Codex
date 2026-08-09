@@ -159,6 +159,7 @@ def run_collector_cycle(
                 pubg_client,
                 raw_store,
             ).process_queued_matches(limit=worker_options.match_job_limit).to_record()
+            _append_reported_failures(errors, "match_jobs", match_jobs, "failed_jobs", "terminal_failed_jobs")
         except Exception as exc:
             errors.append(_safe_error("match_jobs", exc))
 
@@ -167,6 +168,7 @@ def run_collector_cycle(
                 connection,
                 raw_store,
             ).process_queued_telemetry(limit=worker_options.telemetry_job_limit).to_record()
+            _append_reported_failures(errors, "telemetry_jobs", telemetry_jobs, "failed_jobs", "terminal_failed_jobs")
         except Exception as exc:
             errors.append(_safe_error("telemetry_jobs", exc))
 
@@ -359,6 +361,21 @@ def _validate_options(options: CollectorWorkerOptions) -> None:
 
 def _interruptible_sleep(seconds: int, stop_event: Event) -> None:
     stop_event.wait(timeout=max(0, seconds))
+
+
+def _append_reported_failures(
+    errors: list[str],
+    stage: str,
+    result: dict[str, Any],
+    *fields: str,
+) -> None:
+    failures = [
+        f"{field}={int(result.get(field) or 0)}"
+        for field in fields
+        if int(result.get(field) or 0) > 0
+    ]
+    if failures:
+        errors.append(f"{stage}: reported " + ", ".join(failures))
 
 
 def _safe_error(stage: str, exc: Exception) -> str:

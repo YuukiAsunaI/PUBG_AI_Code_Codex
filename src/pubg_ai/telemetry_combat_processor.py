@@ -7,7 +7,14 @@ from typing import Any, Mapping
 import gzip
 import json
 
+from pubg_ai.database import mysql_transaction
 from pubg_ai.raw_storage import RawPayloadStore
+from pubg_ai.telemetry_processing_state import (
+    count_outputs_by_account,
+    list_pending_telemetry_payloads,
+    pending_tracked_account_ids,
+    upsert_processing_states,
+)
 from pubg_ai.time_utils import now_kst
 from pubg_ai.weapon_stats import (
     PlayerMatchCombatSummary,
@@ -15,6 +22,10 @@ from pubg_ai.weapon_stats import (
     summarize_player_match_combat,
     summarize_weapon_combat_stats,
 )
+
+
+PROCESSOR_NAME = "combat"
+PARSER_VERSION = "combat-v3"
 
 
 class TelemetryCombatProcessingError(RuntimeError):
@@ -62,11 +73,11 @@ class TelemetryCombatProcessor:
             match_id = str(payload["match_id"])
             shard = str(payload["shard"])
 
-            if not force and self._combat_summary_exists(match_id):
-                skipped_existing += 1
-                continue
-
-            tracked_account_ids = self._tracked_account_ids_for_match(match_id=match_id, shard=shard)
+            tracked_account_ids = self._tracked_account_ids_for_match(
+                match_id=match_id,
+                shard=shard,
+                force=force,
+            )
             if not tracked_account_ids:
                 skipped_no_tracked_player += 1
                 continue
@@ -115,51 +126,29 @@ class TelemetryCombatProcessor:
         )
 
     def _list_raw_telemetry_payloads(self, *, limit: int, force: bool) -> list[dict[str, Any]]:
-        where = ""
-        if not force:
-            where = """
-                WHERE NOT EXISTS (
-                    SELECT 1
-                    FROM player_match_combat_summaries summaries
-                    WHERE summaries.match_id = raw_telemetry_payloads.match_id
-                )
-            """
+        return list_pending_telemetry_payloads(
+            self.connection,
+            processor_name=PROCESSOR_NAME,
+            parser_version=PARSER_VERSION,
+            limit=limit,
+            force=force,
+        )
 
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                f"""
-                SELECT id, match_id, shard, relative_path, compression
-                FROM raw_telemetry_payloads
-                {where}
-                ORDER BY id ASC
-                LIMIT %s
-                """,
-                (limit,),
-            )
-            return list(cursor.fetchall())
-
-    def _combat_summary_exists(self, match_id: str) -> bool:
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT 1 FROM player_match_combat_summaries WHERE match_id = %s LIMIT 1",
-                (match_id,),
-            )
-            return cursor.fetchone() is not None
-
-    def _tracked_account_ids_for_match(self, *, match_id: str, shard: str) -> set[str]:
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT DISTINCT registered_players.account_id
-                FROM registered_players
-                INNER JOIN match_participants
-                    ON match_participants.account_id = registered_players.account_id
-                   AND match_participants.match_id = %s
-                WHERE registered_players.shard = %s
-                """,
-                (match_id, shard),
-            )
-            return {str(row["account_id"]) for row in cursor.fetchall()}
+    def _tracked_account_ids_for_match(
+        self,
+        *,
+        match_id: str,
+        shard: str,
+        force: bool,
+    ) -> set[str]:
+        return pending_tracked_account_ids(
+            self.connection,
+            match_id=match_id,
+            shard=shard,
+            processor_name=PROCESSOR_NAME,
+            parser_version=PARSER_VERSION,
+            force=force,
+        )
 
     def _load_telemetry_events(self, payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
         relative_path = _required_text(payload.get("relative_path"), "relative_path")
@@ -189,9 +178,19 @@ class TelemetryCombatProcessor:
         summaries: list[PlayerMatchCombatSummary],
         weapon_stats: list[WeaponCombatStats],
     ) -> None:
-        self._delete_existing_rows(match_id=match_id, account_ids=tracked_account_ids)
-        self._insert_combat_summaries(summaries)
-        self._insert_weapon_stats(weapon_stats)
+        output_counts = count_outputs_by_account(summaries)
+        with mysql_transaction(self.connection):
+            self._delete_existing_rows(match_id=match_id, account_ids=tracked_account_ids)
+            self._insert_combat_summaries(summaries)
+            self._insert_weapon_stats(weapon_stats)
+            upsert_processing_states(
+                self.connection,
+                match_id=match_id,
+                account_ids=tracked_account_ids,
+                processor_name=PROCESSOR_NAME,
+                parser_version=PARSER_VERSION,
+                output_counts=output_counts,
+            )
 
     def _delete_existing_rows(self, *, match_id: str, account_ids: set[str]) -> None:
         if not account_ids:

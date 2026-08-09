@@ -180,10 +180,11 @@ def summarize_weapon_combat_stats(
             attacker_account_id = _character_account_id(event.get("attacker"))
             victim_account_id = _character_account_id(event.get("victim"))
 
-            if attacker_account_id and victim_account_id and weapon_code:
+            is_opponent = _is_opponent_characters(event.get("attacker"), event.get("victim"))
+            if is_opponent and attacker_account_id and victim_account_id and weapon_code:
                 last_gun_damage_weapon_by_pair[(attacker_account_id, victim_account_id)] = weapon_code
 
-            attacker_stats = get_stats(attacker_account_id, weapon_code)
+            attacker_stats = get_stats(attacker_account_id, weapon_code) if is_opponent else None
             if attacker_stats is not None:
                 attacker_stats.shots_hit += 1
                 attacker_stats.damage_dealt += damage
@@ -206,7 +207,11 @@ def summarize_weapon_combat_stats(
             weapon_code = normalize_weapon_code(event.get("damageCauserName"))
             body_part = body_part_from_damage_reason(event.get("damageReason"))
 
-            attacker_stats = get_stats(_character_account_id(event.get("attacker")), weapon_code)
+            attacker_stats = (
+                get_stats(_character_account_id(event.get("attacker")), weapon_code)
+                if _is_opponent_characters(event.get("attacker"), event.get("victim"))
+                else None
+            )
             if attacker_stats is not None:
                 attacker_stats.dbnos += 1
                 if body_part == "head":
@@ -270,13 +275,16 @@ def summarize_player_match_combat(
     for event in event_list:
         if not include_lobby and not _is_in_game_event(event):
             continue
-        if event.get("_T") != "LogPlayerKillV2":
-            continue
 
-        for account_id in _assist_account_ids(event):
-            summary = get_summary(account_id)
-            if summary is not None:
-                summary.assists = max(summary.assists, _event_assist_count(event_list, account_id, include_lobby))
+        _apply_unattributed_overall_event(event, get_summary)
+        if event.get("_T") == "LogPlayerKillV2":
+            for account_id in _assist_account_ids(event):
+                summary = get_summary(account_id)
+                if summary is not None:
+                    summary.assists = max(
+                        summary.assists,
+                        _event_assist_count(event_list, account_id, include_lobby),
+                    )
 
     return sorted(summaries_by_account.values(), key=lambda summary: summary.account_id)
 
@@ -316,7 +324,11 @@ def _apply_kill_event(
         body_part = body_part_from_damage_reason(killer_info.get("damageReason"))
 
         killer_stats = get_stats(_character_account_id(event.get("killer")), weapon_code)
-        if killer_stats is not None and not event.get("isSuicide"):
+        if (
+            killer_stats is not None
+            and not event.get("isSuicide")
+            and _is_opponent_characters(event.get("killer"), event.get("victim"))
+        ):
             killer_stats.kills += 1
             if body_part == "head":
                 killer_stats.headshot_kills += 1
@@ -333,7 +345,11 @@ def _apply_kill_event(
         body_part = body_part_from_damage_reason(finish_info.get("damageReason"))
 
         finisher_stats = get_stats(_character_account_id(event.get("finisher")), weapon_code)
-        if finisher_stats is not None and not event.get("isSuicide"):
+        if (
+            finisher_stats is not None
+            and not event.get("isSuicide")
+            and _is_opponent_characters(event.get("finisher"), event.get("victim"))
+        ):
             finisher_stats.finishes += 1
             if body_part == "head":
                 finisher_stats.headshot_finishes += 1
@@ -391,6 +407,112 @@ def _add_weapon_stats_to_summary(
     _merge_counts(summary.taken_hit_parts, stats.taken_hit_parts)
 
 
+def _apply_unattributed_overall_event(event: Mapping[str, Any], get_summary: Any) -> None:
+    event_type = event.get("_T")
+    if event_type == "LogPlayerTakeDamage":
+        if _has_weapon_stat_attribution(event):
+            return
+        damage = _float_or_zero(event.get("damage"))
+        attacker = (
+            get_summary(_character_account_id(event.get("attacker")))
+            if _is_opponent_characters(event.get("attacker"), event.get("victim"))
+            else None
+        )
+        victim = get_summary(_character_account_id(event.get("victim")))
+        if attacker is not None:
+            attacker.damage_dealt += damage
+        if victim is not None:
+            victim.damage_taken += damage
+
+        if event.get("damageTypeCategory") == "Damage_Gun":
+            body_part = body_part_from_damage_reason(event.get("damageReason"))
+            if attacker is not None:
+                attacker.shots_hit += 1
+                _increment(attacker.hit_parts, body_part)
+                if body_part == "head":
+                    attacker.headshot_hits += 1
+            if victim is not None:
+                victim.hits_taken += 1
+                _increment(victim.taken_hit_parts, body_part)
+                if body_part == "head":
+                    victim.headshot_hits_taken += 1
+        return
+
+    if event_type == "LogPlayerMakeGroggy":
+        if _has_weapon_stat_attribution(event):
+            return
+        body_part = body_part_from_damage_reason(event.get("damageReason"))
+        attacker = (
+            get_summary(_character_account_id(event.get("attacker")))
+            if _is_opponent_characters(event.get("attacker"), event.get("victim"))
+            else None
+        )
+        victim = get_summary(_character_account_id(event.get("victim")))
+        if attacker is not None:
+            attacker.dbnos_caused += 1
+            if body_part == "head":
+                attacker.headshot_dbnos_caused += 1
+        if victim is not None:
+            victim.dbnos_taken += 1
+            if body_part == "head":
+                victim.headshot_dbnos_taken += 1
+        return
+
+    if event_type != "LogPlayerKillV2":
+        return
+
+    killer_info = event.get("killerDamageInfo")
+    attributed_kill = isinstance(killer_info, Mapping) and _has_weapon_stat_attribution(killer_info)
+    if not attributed_kill:
+        body_part = body_part_from_damage_reason(
+            killer_info.get("damageReason") if isinstance(killer_info, Mapping) else None
+        )
+        killer = get_summary(_character_account_id(event.get("killer")))
+        victim = get_summary(_character_account_id(event.get("victim")))
+        if (
+            killer is not None
+            and not event.get("isSuicide")
+            and _is_opponent_characters(event.get("killer"), event.get("victim"))
+        ):
+            killer.kills += 1
+            if body_part == "head":
+                killer.headshot_kills += 1
+        if victim is not None:
+            victim.deaths += 1
+            if body_part == "head":
+                victim.headshot_deaths += 1
+
+    finish_info = event.get("finishDamageInfo")
+    if not isinstance(finish_info, Mapping) or not _has_actual_damage(finish_info):
+        return
+    if _has_weapon_stat_attribution(finish_info):
+        return
+
+    body_part = body_part_from_damage_reason(finish_info.get("damageReason"))
+    finisher = get_summary(_character_account_id(event.get("finisher")))
+    victim = get_summary(_character_account_id(event.get("victim")))
+    if (
+        finisher is not None
+        and not event.get("isSuicide")
+        and _is_opponent_characters(event.get("finisher"), event.get("victim"))
+    ):
+        finisher.finishes += 1
+        if body_part == "head":
+            finisher.headshot_finishes += 1
+    if victim is not None:
+        victim.finishes_taken += 1
+        if body_part == "head":
+            victim.headshot_finishes_taken += 1
+
+
+def _has_weapon_stat_attribution(value: Mapping[str, Any]) -> bool:
+    return _is_gun_damage(value) and normalize_weapon_code(value.get("damageCauserName")) is not None
+
+
+def _has_actual_damage(value: Mapping[str, Any]) -> bool:
+    return value.get("damageTypeCategory") not in {None, "Damage_None"}
+
+
 def _assist_account_ids(event: Mapping[str, Any]) -> list[str]:
     assists = event.get("assists_AccountId")
     if not isinstance(assists, (list, tuple, set)):
@@ -427,6 +549,19 @@ def _character_account_id(value: Any) -> str | None:
     if isinstance(account_id, str) and account_id:
         return account_id
     return None
+
+
+def _is_opponent_characters(attacker: Any, victim: Any) -> bool:
+    attacker_account_id = _character_account_id(attacker)
+    victim_account_id = _character_account_id(victim)
+    if not attacker_account_id or not victim_account_id or attacker_account_id == victim_account_id:
+        return False
+
+    attacker_team_id = attacker.get("teamId") if isinstance(attacker, Mapping) else None
+    victim_team_id = victim.get("teamId") if isinstance(victim, Mapping) else None
+    if attacker_team_id is not None and victim_team_id is not None:
+        return attacker_team_id != victim_team_id
+    return True
 
 
 def _strip_weapon_instance_suffix(code: str) -> str:

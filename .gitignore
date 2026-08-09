@@ -29,3 +29,4 @@ data/tmp/
 secrets/
 config/local_settings.json
 config/*.local.json
+config/*.lock

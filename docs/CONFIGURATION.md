@@ -163,10 +163,12 @@ default database option reuses one connection for two read-only current-chain ch
 include the complete count and at most 1,000 field rows. At that release, schema version 20 and all 44 tables were
 unchanged.
 
-The current runtime schema is version 22 with 47 tables. `operational_drill_runs` adds no secret or environment
-variable and stores only bounded, secret-free drill reports. Durable fight outcomes remain in the two schema-version
-21 tables. The localhost manager stores the automatic worker's `fight_outcome_limit` beside the existing processing
-limits, and the manual parser reads immutable telemetry from the configured raw-data root.
+The current runtime schema is version 23 with 48 tables. `player_telemetry_processing_states` records completion
+per match, tracked account, processor, and parser version; the API job target tuple is unique. `operational_drill_runs`
+adds no secret or environment variable and stores only bounded, secret-free drill reports. Durable fight outcomes
+remain in the two schema-version 21 tables. Every MySQL connection sets its session time zone to `+09:00`. The
+localhost manager stores the automatic worker's `fight_outcome_limit` beside the existing processing limits, and the
+manual parser reads immutable telemetry from the configured raw-data root.
 
 KST trend reports add no environment variable, local setting, schema table, or background worker. The CLI, Discord
 command, and localhost `GET /players/trends` endpoint calculate from existing per-match MySQL facts. Date inputs use

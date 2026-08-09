@@ -106,6 +106,7 @@ class DatabaseSchemaTests(unittest.TestCase):
             "player_combat_loadout_snapshots",
             "player_fight_outcomes",
             "player_fight_outcome_processing_states",
+            "player_telemetry_processing_states",
             "match_care_package_events",
             "match_plane_routes",
             "match_phase_events",
@@ -113,7 +114,7 @@ class DatabaseSchemaTests(unittest.TestCase):
         ]:
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table_name}", schema)
 
-        self.assertEqual(SCHEMA_VERSION, 22)
+        self.assertEqual(SCHEMA_VERSION, 23)
         self.assertIn("fk_data_deletion_events_request", schema)
         self.assertIn("fk_data_deletion_confirmation_snapshot", schema)
         self.assertIn("uq_data_deletion_confirmation_snapshot", schema)
@@ -149,6 +150,7 @@ class DatabaseSchemaTests(unittest.TestCase):
         self.assertIn("idx_operational_drill_mode_time", schema)
         self.assertIn("idx_operational_drill_status_time", schema)
         self.assertIn("report_json JSON NOT NULL", schema)
+        self.assertIn("UNIQUE KEY uq_api_fetch_jobs_target", schema)
 
     def test_schema_tracks_official_rate_limit_headers(self) -> None:
         schema = "\n".join(schema_statements())

@@ -113,6 +113,26 @@ class PostProcessingWorkerTests(unittest.TestCase):
         self.assertEqual(history[0][1], "post_processing")
         self.assertEqual(history[0][2]["errors"], result.errors)
 
+    def test_run_post_processing_cycle_promotes_reported_failures_to_errors(self) -> None:
+        history: list[tuple[FakeConnection, str, dict[str, object]]] = []
+        result = run_post_processing_cycle(
+            _runtime_config(),
+            connection_factory=lambda database: FakeConnection(),
+            raw_store_factory=lambda root, compression: FakeRawStore(root, compression, []),
+            replay_store_factory=lambda root: FakeReplayStore(root, []),
+            combat_processor_factory=lambda *args, **kwargs: ReportedFailureTelemetryProcessor(),
+            item_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("items", *args, calls=[]),
+            movement_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("movement", *args, calls=[]),
+            loadout_processor_factory=lambda *args, **kwargs: FakeLoadoutProcessor(*args, calls=[]),
+            fight_outcome_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("fight_outcomes", *args, calls=[]),
+            map_snapshot_processor_factory=lambda *args, **kwargs: FakeReplayProcessor("map_snapshots", *args, calls=[]),
+            timeline_processor_factory=lambda *args, **kwargs: FakeReplayProcessor("replay_timelines", *args, calls=[]),
+            history_recorder=lambda conn, worker_name, cycle: history.append((conn, worker_name, cycle)),
+        )
+
+        self.assertEqual(result.errors, ["combat: reported failed_payloads=2"])
+        self.assertEqual(history[0][2]["errors"], result.errors)
+
     def test_run_post_processing_cycle_validates_limits(self) -> None:
         with self.assertRaises(PostProcessingWorkerError):
             run_post_processing_cycle(_runtime_config(), options=PostProcessingWorkerOptions(combat_limit=0))
@@ -170,6 +190,11 @@ class FakeTelemetryProcessor:
 class FailingTelemetryProcessor:
     def process_raw_telemetry(self, *, limit: int, force: bool) -> FakeResult:
         raise RuntimeError("boom")
+
+
+class ReportedFailureTelemetryProcessor:
+    def process_raw_telemetry(self, *, limit: int, force: bool) -> FakeResult:
+        return FakeResult({"parsed_payloads": 0, "failed_payloads": 2})
 
 
 class FakeLoadoutProcessor:

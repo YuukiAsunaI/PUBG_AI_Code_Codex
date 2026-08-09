@@ -51,6 +51,25 @@ class CollectorWorkerTests(unittest.TestCase):
         self.assertEqual(history[0][1], "collector")
         self.assertEqual(history[0][2]["collection"], {"queued_match_jobs": 2, "existing_match_jobs": 1})
 
+    def test_run_collector_cycle_promotes_reported_job_failures_to_errors(self) -> None:
+        history: list[tuple[FakeConnection, str, dict[str, object]]] = []
+        result = run_collector_cycle(
+            _runtime_config(),
+            connection_factory=lambda database: FakeConnection(),
+            pubg_client_factory=lambda key: FakePubgClient(key, []),
+            raw_store_factory=lambda root, compression: FakeRawStore(root, compression, []),
+            collector_factory=lambda *args, **kwargs: FakeCollector(*args, calls=[], **kwargs),
+            match_processor_factory=lambda *args, **kwargs: ReportedFailureMatchProcessor(),
+            telemetry_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor(*args, calls=[], **kwargs),
+            history_recorder=lambda conn, worker_name, cycle: history.append((conn, worker_name, cycle)),
+        )
+
+        self.assertEqual(
+            result.errors,
+            ["match_jobs: reported failed_jobs=1, terminal_failed_jobs=1"],
+        )
+        self.assertEqual(history[0][2]["errors"], result.errors)
+
     def test_run_collector_cycle_requires_pubg_key(self) -> None:
         config = _runtime_config(pubg_api_key=None)
 
@@ -149,6 +168,11 @@ class FakeMatchProcessor:
     def process_queued_matches(self, *, limit: int) -> FakeResult:
         self.calls.append(("match_jobs", limit))
         return FakeResult({"stored_matches": 2, "failed_jobs": 0})
+
+
+class ReportedFailureMatchProcessor:
+    def process_queued_matches(self, *, limit: int) -> FakeResult:
+        return FakeResult({"stored_matches": 0, "failed_jobs": 1, "terminal_failed_jobs": 1})
 
 
 class FakeTelemetryProcessor:

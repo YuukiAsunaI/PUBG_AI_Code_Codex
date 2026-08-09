@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from threading import Lock, RLock
+from typing import Any, Callable, Iterator, TypeVar
 import json
 import os
 import shutil
 import tempfile
+import time
 
+from pubg_ai.file_io import atomic_write_bytes
 from pubg_ai.storage_alerts import DEFAULT_MINIMUM_FREE_BYTES
 from pubg_ai.storage_contract import storage_root_contract_conflicts
 from pubg_ai.time_utils import isoformat_kst
@@ -183,6 +187,11 @@ DEFAULT_COMMAND_GROUPS["admin"] = sorted(
     )
 )
 
+_T = TypeVar("_T")
+_PROCESS_LOCKS: dict[str, RLock] = {}
+_PROCESS_LOCKS_GUARD = Lock()
+
+
 FORBIDDEN_LOCAL_SETTING_KEYS = {
     "PUBG_API_KEY",
     "DISCORD_BOT_TOKEN",
@@ -198,6 +207,7 @@ class LocalSettingsStore:
     def __init__(self, settings_file: Path, base_dir: Path | None = None) -> None:
         self.base_dir = base_dir or Path.cwd()
         self.settings_file = _resolve_config_path(settings_file, self.base_dir)
+        self.lock_file = self.settings_file.with_name(f"{self.settings_file.name}.lock")
 
     def load_storage_settings(self) -> StorageSettings | None:
         payload = self._read_settings()
@@ -349,9 +359,7 @@ class LocalSettingsStore:
             raw_compression=raw_compression,
             updated_at=isoformat_kst(),
         )
-        payload = self._read_settings() or {}
-        payload["storage"] = settings.to_record()
-        self._write_settings(payload)
+        self._update_settings_section("storage", settings.to_record())
         return settings
 
     def save_collector_settings(
@@ -367,9 +375,7 @@ class LocalSettingsStore:
             updated_at=isoformat_kst(),
         )
         _validate_collector_settings(settings)
-        payload = self._read_settings() or {}
-        payload["collector"] = settings.to_record()
-        self._write_settings(payload)
+        self._update_settings_section("collector", settings.to_record())
         return settings
 
     def save_discord_permission_settings(
@@ -387,10 +393,40 @@ class LocalSettingsStore:
             updated_at=isoformat_kst(),
         )
         _validate_discord_permission_settings(settings)
-        payload = self._read_settings() or {}
-        payload["discord_permissions"] = settings.to_record()
-        self._write_settings(payload)
+        self._update_settings_section("discord_permissions", settings.to_record())
         return settings
+
+    def update_discord_permission_settings(
+        self,
+        update: Callable[[DiscordPermissionSettings], DiscordPermissionSettings],
+    ) -> DiscordPermissionSettings:
+        def mutate(payload: dict[str, Any]) -> DiscordPermissionSettings:
+            current_record = payload.get("discord_permissions")
+            current = (
+                _discord_permissions_from_record(current_record)
+                if isinstance(current_record, dict)
+                else DiscordPermissionSettings(
+                    command_groups=_copy_groups(DEFAULT_COMMAND_GROUPS),
+                    user_grants={},
+                    guild_user_grants={},
+                    global_admin_user_ids=[],
+                )
+            )
+            candidate = update(current)
+            if not isinstance(candidate, DiscordPermissionSettings):
+                raise LocalSettingsError("Discord permission updater returned invalid settings.")
+            settings = DiscordPermissionSettings(
+                command_groups=_normalize_groups(candidate.command_groups),
+                user_grants=_normalize_groups(candidate.user_grants),
+                guild_user_grants=_normalize_guild_grants(candidate.guild_user_grants),
+                global_admin_user_ids=_normalize_id_list(candidate.global_admin_user_ids),
+                updated_at=isoformat_kst(),
+            )
+            _validate_discord_permission_settings(settings)
+            payload["discord_permissions"] = settings.to_record()
+            return settings
+
+        return self._mutate_settings(mutate)
 
     def save_discord_scope_settings(
         self,
@@ -402,9 +438,7 @@ class LocalSettingsStore:
             public_profile_default=public_profile_default,
             updated_at=isoformat_kst(),
         )
-        payload = self._read_settings() or {}
-        payload["discord_scopes"] = settings.to_record()
-        self._write_settings(payload)
+        self._update_settings_section("discord_scopes", settings.to_record())
         return settings
 
     def save_web_settings(self, local_web_base_url: str | None) -> WebSettings:
@@ -412,9 +446,7 @@ class LocalSettingsStore:
             local_web_base_url=_normalize_optional_url(local_web_base_url),
             updated_at=isoformat_kst(),
         )
-        payload = self._read_settings() or {}
-        payload["web"] = settings.to_record()
-        self._write_settings(payload)
+        self._update_settings_section("web", settings.to_record())
         return settings
 
     def save_alert_settings(
@@ -432,9 +464,7 @@ class LocalSettingsStore:
             updated_at=isoformat_kst(),
         )
         _validate_alert_settings(settings)
-        payload = self._read_settings() or {}
-        payload["alerts"] = settings.to_record()
-        self._write_settings(payload)
+        self._update_settings_section("alerts", settings.to_record())
         return settings
 
     def get_storage_status(self) -> dict[str, StoragePathStatus]:
@@ -454,25 +484,30 @@ class LocalSettingsStore:
             )
         return statuses
 
+    def _update_settings_section(self, section: str, record: dict[str, Any]) -> None:
+        def update(payload: dict[str, Any]) -> None:
+            payload[section] = record
+
+        self._mutate_settings(update)
+
+    def _mutate_settings(self, update: Callable[[dict[str, Any]], _T]) -> _T:
+        with _exclusive_settings_lock(self.lock_file):
+            payload = self._read_settings() or {}
+            result = update(payload)
+            self._write_settings_unlocked(payload)
+            return result
+
     def _write_settings(self, payload: dict[str, Any]) -> None:
+        with _exclusive_settings_lock(self.lock_file):
+            self._write_settings_unlocked(payload)
+
+    def _write_settings_unlocked(self, payload: dict[str, Any]) -> None:
         _reject_forbidden_secret_keys(payload)
         self.settings_file.parent.mkdir(parents=True, exist_ok=True)
         body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
 
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="wb",
-                delete=False,
-                dir=self.settings_file.parent,
-                prefix=f".{self.settings_file.name}.",
-                suffix=".tmp",
-            ) as temp_file:
-                temp_file.write(body)
-                temp_file.flush()
-                os.fsync(temp_file.fileno())
-                temp_path = Path(temp_file.name)
-
-            os.replace(temp_path, self.settings_file)
+            atomic_write_bytes(self.settings_file, body)
         except OSError as exc:
             raise LocalSettingsError(f"failed to save local settings: {exc}") from exc
 
@@ -489,6 +524,73 @@ class LocalSettingsStore:
         if not isinstance(payload, dict):
             raise LocalSettingsError("local settings root must be a JSON object.")
         return payload
+
+
+def _process_lock_for(path: Path) -> RLock:
+    key = str(path.resolve()).casefold()
+    with _PROCESS_LOCKS_GUARD:
+        return _PROCESS_LOCKS.setdefault(key, RLock())
+
+
+@contextmanager
+def _exclusive_settings_lock(lock_file: Path) -> Iterator[None]:
+    process_lock = _process_lock_for(lock_file)
+    with process_lock:
+        lock_file.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            handle = lock_file.open("a+b")
+            _acquire_file_lock(handle)
+        except OSError as exc:
+            try:
+                handle.close()
+            except (NameError, OSError):
+                pass
+            raise LocalSettingsError(f"failed to lock local settings: {exc}") from exc
+
+        try:
+            yield
+        finally:
+            try:
+                _release_file_lock(handle)
+            finally:
+                handle.close()
+
+
+def _acquire_file_lock(handle: Any) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        deadline = time.monotonic() + 30.0
+        while True:
+            handle.seek(0)
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                return
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("timed out waiting for the local settings lock")
+                time.sleep(0.05)
+
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+
+
+def _release_file_lock(handle: Any) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def check_storage_path(path: str | Path, create: bool = False) -> StoragePathStatus:

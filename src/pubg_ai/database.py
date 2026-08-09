@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 import re
@@ -8,7 +9,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 
 class DatabaseError(RuntimeError):
@@ -44,6 +45,7 @@ def connect_mysql(config: DatabaseConfig, *, include_database: bool = True) -> A
         "autocommit": True,
         "cursorclass": pymysql.cursors.DictCursor,
         "connect_timeout": 10,
+        "init_command": "SET time_zone = '+09:00'",
     }
     if include_database:
         kwargs["database"] = config.database
@@ -70,13 +72,15 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
             for statement in schema_statements():
                 cursor.execute(statement)
                 applied += 1
+            if _ensure_api_fetch_job_unique_index(cursor, config.database):
+                applied += 1
             cursor.execute(
                 """
                 INSERT INTO schema_migrations (version, description, applied_at_kst)
                 VALUES (%s, %s, NOW(6))
                 ON DUPLICATE KEY UPDATE description = VALUES(description)
                 """,
-                (SCHEMA_VERSION, "operational drill history and API retry recovery"),
+                (SCHEMA_VERSION, "per-account telemetry processing state and unique API jobs"),
             )
             applied += 1
     finally:
@@ -186,7 +190,7 @@ def schema_statements() -> list[str]:
             created_at_kst DATETIME(6) NOT NULL,
             updated_at_kst DATETIME(6) NOT NULL,
             KEY idx_api_fetch_jobs_status_next_run (status, next_run_at_kst),
-            KEY idx_api_fetch_jobs_target (job_type, shard, target_id)
+            UNIQUE KEY uq_api_fetch_jobs_target (job_type, shard, target_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """,
         """
@@ -1331,6 +1335,23 @@ def schema_statements() -> list[str]:
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """,
         """
+        CREATE TABLE IF NOT EXISTS player_telemetry_processing_states (
+            match_id VARCHAR(191) NOT NULL,
+            account_id VARCHAR(128) NOT NULL,
+            processor_name VARCHAR(64) NOT NULL,
+            parser_version VARCHAR(64) NOT NULL,
+            output_count INT UNSIGNED NOT NULL DEFAULT 0,
+            processed_at_kst DATETIME(6) NOT NULL,
+            updated_at_kst DATETIME(6) NOT NULL,
+            PRIMARY KEY (match_id, account_id, processor_name),
+            KEY idx_player_telemetry_states_account (account_id, processor_name, processed_at_kst),
+            KEY idx_player_telemetry_states_parser (processor_name, parser_version, processed_at_kst),
+            CONSTRAINT fk_player_telemetry_states_match
+                FOREIGN KEY (match_id) REFERENCES matches(match_id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
         CREATE TABLE IF NOT EXISTS match_care_package_events (
             id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
             match_id VARCHAR(191) NOT NULL,
@@ -1438,6 +1459,64 @@ def schema_statements() -> list[str]:
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """,
     ]
+
+
+@contextmanager
+def mysql_transaction(connection: Any) -> Iterator[None]:
+    begin = getattr(connection, "begin", None)
+    if not callable(begin):
+        yield
+        return
+
+    begin()
+    try:
+        yield
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
+def _ensure_api_fetch_job_unique_index(cursor: Any, database: str) -> bool:
+    cursor.execute(
+        """
+        SELECT COUNT(*) AS duplicate_groups
+        FROM (
+            SELECT job_type, shard, target_id
+            FROM api_fetch_jobs
+            WHERE shard IS NOT NULL AND target_id IS NOT NULL
+            GROUP BY job_type, shard, target_id
+            HAVING COUNT(*) > 1
+        ) duplicate_jobs
+        """
+    )
+    duplicate_row = cursor.fetchone() or {}
+    if int(duplicate_row.get("duplicate_groups") or 0) > 0:
+        raise DatabaseError(
+            "api_fetch_jobs contains duplicate targets; resolve them before applying the unique index."
+        )
+
+    cursor.execute(
+        """
+        SELECT 1
+        FROM information_schema.statistics
+        WHERE table_schema = %s
+          AND table_name = 'api_fetch_jobs'
+          AND index_name = 'uq_api_fetch_jobs_target'
+        LIMIT 1
+        """,
+        (database,),
+    )
+    if cursor.fetchone() is not None:
+        return False
+
+    cursor.execute(
+        """
+        ALTER TABLE api_fetch_jobs
+        ADD UNIQUE KEY uq_api_fetch_jobs_target (job_type, shard, target_id)
+        """
+    )
+    return True
 
 
 def count_tables(connection: Any) -> int:

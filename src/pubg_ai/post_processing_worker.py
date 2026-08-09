@@ -163,6 +163,7 @@ def run_post_processing_cycle(
                 limit=worker_options.combat_limit,
                 force=worker_options.force,
             ).to_record()
+            _append_reported_failures(errors, "combat", combat, "failed_payloads")
         except Exception as exc:
             errors.append(_safe_error("combat", exc))
 
@@ -171,6 +172,7 @@ def run_post_processing_cycle(
                 limit=worker_options.item_limit,
                 force=worker_options.force,
             ).to_record()
+            _append_reported_failures(errors, "items", items, "failed_payloads")
         except Exception as exc:
             errors.append(_safe_error("items", exc))
 
@@ -179,6 +181,7 @@ def run_post_processing_cycle(
                 limit=worker_options.movement_limit,
                 force=worker_options.force,
             ).to_record()
+            _append_reported_failures(errors, "movement", movement, "failed_payloads")
         except Exception as exc:
             errors.append(_safe_error("movement", exc))
 
@@ -187,6 +190,7 @@ def run_post_processing_cycle(
                 limit=worker_options.loadout_limit,
                 force=worker_options.force,
             ).to_record()
+            _append_reported_failures(errors, "loadout_snapshots", loadout_snapshots, "failed_matches")
         except Exception as exc:
             errors.append(_safe_error("loadout_snapshots", exc))
 
@@ -195,6 +199,7 @@ def run_post_processing_cycle(
                 limit=worker_options.fight_outcome_limit,
                 force=worker_options.force,
             ).to_record()
+            _append_reported_failures(errors, "fight_outcomes", fight_outcomes, "failed_payloads")
         except Exception as exc:
             errors.append(_safe_error("fight_outcomes", exc))
 
@@ -203,6 +208,7 @@ def run_post_processing_cycle(
                 limit=worker_options.map_snapshot_limit,
                 force=worker_options.force,
             ).to_record()
+            _append_reported_failures(errors, "map_snapshots", map_snapshots, "failed_snapshots")
         except Exception as exc:
             errors.append(_safe_error("map_snapshots", exc))
 
@@ -211,6 +217,7 @@ def run_post_processing_cycle(
                 limit=worker_options.timeline_limit,
                 force=worker_options.force,
             ).to_record()
+            _append_reported_failures(errors, "replay_timelines", replay_timelines, "failed_timelines")
         except Exception as exc:
             errors.append(_safe_error("replay_timelines", exc))
 
@@ -419,6 +426,21 @@ def _validate_options(options: PostProcessingWorkerOptions) -> None:
 
 def _interruptible_sleep(seconds: int, stop_event: Event) -> None:
     stop_event.wait(timeout=max(0, seconds))
+
+
+def _append_reported_failures(
+    errors: list[str],
+    stage: str,
+    result: dict[str, Any],
+    *fields: str,
+) -> None:
+    failures = [
+        f"{field}={int(result.get(field) or 0)}"
+        for field in fields
+        if int(result.get(field) or 0) > 0
+    ]
+    if failures:
+        errors.append(f"{stage}: reported " + ", ".join(failures))
 
 
 def _safe_error(stage: str, exc: Exception) -> str:

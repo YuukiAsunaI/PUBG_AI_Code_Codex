@@ -533,9 +533,11 @@ Packet text and comparison results remain in memory and are never persisted. No 
 evidence, production mutation, restore, quarantine, deletion, or execution capability is created. Version 22 adds no
 environment variable or table; at that feature slice, the schema remained version 20 with 44 tables.
 
-The current runtime schema is version 22 with 47 tables. It adds `operational_drill_runs` for secret-free simulated
-and live recovery evidence; rerun `python -m pubg_ai.cli init-db` after updating. Existing raw and replay artifacts
-are not rewritten by this migration. Schema version 21 introduced the two durable fight-outcome tables.
+The current runtime schema is version 23 with 48 tables. Version 23 adds per-account, per-processor telemetry
+completion state and a unique API-job target index; rerun `python -m pubg_ai.cli init-db` after updating. Existing raw
+and replay artifacts are not rewritten by this migration. Schema version 22 introduced `operational_drill_runs`, and
+schema version 21 introduced the two durable fight-outcome tables. See
+[`docs/PROJECT_AUDIT_2026-08-10.md`](docs/PROJECT_AUDIT_2026-08-10.md) for the latest full validation evidence.
 
 Each packet is guarded by six `ON DELETE RESTRICT` foreign keys. Generation appends only one version 20 audit row; it
 grants no authorization,

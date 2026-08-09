@@ -9,9 +9,10 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from pubg_ai.alert_history import (
     ALERT_HISTORY_EXPORT_LIMIT,
@@ -766,6 +767,34 @@ def create_app() -> Any:
         redoc_url=None,
         lifespan=lifespan,
     )
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"],
+    )
+
+    @app.middleware("http")
+    async def enforce_local_browser_boundary(request: Request, call_next: Any) -> Response:
+        blocked = False
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            fetch_site = request.headers.get("sec-fetch-site", "").strip().lower()
+            origin = request.headers.get("origin", "").strip()
+            expected_origin = str(request.base_url).rstrip("/")
+            blocked = (
+                fetch_site == "cross-site"
+                or origin == "null"
+                or bool(origin and origin.rstrip("/") != expected_origin)
+            )
+
+        response = (
+            Response(content="Cross-origin state changes are not allowed.", status_code=403)
+            if blocked
+            else await call_next(request)
+        )
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
@@ -4227,16 +4256,16 @@ _INDEX_HTML = """<!doctype html>
         fetch("/database/status").then((r) => r.json()).catch(() => ({ mysql_connection: "error" })),
       ]);
       statusGrid.innerHTML = [
-        cell("MySQL", `${database.mysql_connection || "unknown"} / ${database.database || "-"}`),
+        cell("MySQL", escapeHtml(`${database.mysql_connection || "unknown"} / ${database.database || "-"}`)),
         cell("PUBG API Key", settings.secrets.PUBG_API_KEY.configured ? "설정됨" : "없음"),
         cell("Discord Token", settings.secrets.DISCORD_BOT_TOKEN.configured ? "설정됨" : "없음"),
-        cell("Raw 저장소", settings.raw_data_dir),
-        cell("Replay 저장소", settings.replay_data_dir),
-        cell("Backup 저장소", settings.backup_data_dir),
-        cell("Quarantine 저장소", settings.quarantine_data_dir),
-        cell("수집 주기", `${settings.collector.poll_interval_seconds}초`),
-        cell("주기당 대상", `${settings.collector.cycle_player_limit}명`),
-        cell("조회 chunk", `${settings.collector.player_lookup_chunk_size}명`),
+        cell("Raw 저장소", escapeHtml(settings.raw_data_dir)),
+        cell("Replay 저장소", escapeHtml(settings.replay_data_dir)),
+        cell("Backup 저장소", escapeHtml(settings.backup_data_dir)),
+        cell("Quarantine 저장소", escapeHtml(settings.quarantine_data_dir)),
+        cell("수집 주기", escapeHtml(`${settings.collector.poll_interval_seconds}초`)),
+        cell("주기당 대상", escapeHtml(`${settings.collector.cycle_player_limit}명`)),
+        cell("조회 chunk", escapeHtml(`${settings.collector.player_lookup_chunk_size}명`)),
       ].join("");
       storageSettingsForm.elements.raw_data_dir.value = settings.raw_data_dir || "";
       storageSettingsForm.elements.replay_data_dir.value = settings.replay_data_dir || "";
@@ -7106,11 +7135,11 @@ _INDEX_HTML = """<!doctype html>
       const payload = await fetch("/jobs/matches?limit=50").then((r) => r.json());
       jobsBody.innerHTML = payload.jobs.map((job) => `
         <tr>
-          <td>${job.shard || ""}</td>
-          <td>${job.target_id || ""}</td>
-          <td>${job.status || ""}</td>
-          <td>${job.attempts || 0}</td>
-          <td>${job.created_at_kst || ""}</td>
+          <td>${escapeHtml(job.shard || "")}</td>
+          <td>${escapeHtml(job.target_id || "")}</td>
+          <td>${escapeHtml(job.status || "")}</td>
+          <td>${escapeHtml(job.attempts || 0)}</td>
+          <td>${escapeHtml(job.created_at_kst || "")}</td>
         </tr>
       `).join("");
     }
@@ -7119,11 +7148,11 @@ _INDEX_HTML = """<!doctype html>
       const payload = await fetch("/jobs/telemetry?limit=50").then((r) => r.json());
       telemetryJobsBody.innerHTML = payload.jobs.map((job) => `
         <tr>
-          <td>${job.shard || ""}</td>
-          <td>${job.target_id || ""}</td>
-          <td>${job.status || ""}</td>
-          <td>${job.attempts || 0}</td>
-          <td>${job.created_at_kst || ""}</td>
+          <td>${escapeHtml(job.shard || "")}</td>
+          <td>${escapeHtml(job.target_id || "")}</td>
+          <td>${escapeHtml(job.status || "")}</td>
+          <td>${escapeHtml(job.attempts || 0)}</td>
+          <td>${escapeHtml(job.created_at_kst || "")}</td>
         </tr>
       `).join("");
     }
@@ -7617,16 +7646,16 @@ _INDEX_HTML = """<!doctype html>
       updateTimelineOptions(payload.artifacts || [], options.artifact_id ?? replayArtifactFilter.artifact_id);
       replayArtifactsBody.innerHTML = payload.artifacts.map((artifact) => `
         <tr>
-          <td>${artifact.generated_at_kst || ""}</td>
-          <td>${artifact.artifact_type || ""}</td>
-          <td>${artifact.map_name || ""}</td>
-          <td>${artifact.game_mode || ""}</td>
-          <td>${artifact.match_id || ""}</td>
-          <td>${formatBytes(artifact.size_bytes || 0)}</td>
+          <td>${escapeHtml(artifact.generated_at_kst || "")}</td>
+          <td>${escapeHtml(artifact.artifact_type || "")}</td>
+          <td>${escapeHtml(artifact.map_name || "")}</td>
+          <td>${escapeHtml(artifact.game_mode || "")}</td>
+          <td>${escapeHtml(artifact.match_id || "")}</td>
+          <td>${escapeHtml(formatBytes(artifact.size_bytes || 0))}</td>
           <td>
             <div class="actions">
-              ${artifact.artifact_type === "timeline" ? `<button type="button" data-load-timeline="${artifact.id}">재생</button>` : ""}
-              <a href="${artifact.view_url}" target="_blank" rel="noreferrer">열기</a>
+              ${artifact.artifact_type === "timeline" ? `<button type="button" data-load-timeline="${attr(artifact.id)}">재생</button>` : ""}
+              <a href="${attr(artifact.view_url)}" target="_blank" rel="noreferrer">열기</a>
             </div>
           </td>
         </tr>

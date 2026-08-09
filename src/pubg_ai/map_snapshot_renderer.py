@@ -6,14 +6,17 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 import json
-import os
-import tempfile
 import urllib.error
 import urllib.request
 
 from PIL import Image, ImageDraw, ImageFont
 
-from pubg_ai.replay_storage import ReplayArtifactStore, StoredReplayArtifact
+from pubg_ai.file_io import atomic_write_bytes
+from pubg_ai.replay_storage import (
+    ReplayArtifactStore,
+    StoredReplayArtifact,
+    content_addressed_filename,
+)
 from pubg_ai.time_utils import now_kst, to_kst
 
 
@@ -159,18 +162,7 @@ class MapAssetProvider:
             return
 
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="wb",
-                delete=False,
-                dir=path.parent,
-                prefix=f".{path.name}.",
-                suffix=".tmp",
-            ) as temp_file:
-                temp_file.write(data)
-                temp_file.flush()
-                os.fsync(temp_file.fileno())
-                temp_path = Path(temp_file.name)
-            os.replace(temp_path, path)
+            atomic_write_bytes(path, data)
         except OSError:
             return
 
@@ -220,7 +212,11 @@ class MapSnapshotProcessor:
                     shard=context.shard,
                     match_id=context.match_id,
                     data=image_bytes,
-                    filename=f"player-{_short_account_id(context.account_id)}-route.jpg",
+                    filename=content_addressed_filename(
+                        stem=f"player-{_short_account_id(context.account_id)}-route",
+                        data=image_bytes,
+                        suffix=".jpg",
+                    ),
                     content_type="image/jpeg",
                     match_created_at=context.created_at_kst,
                 )

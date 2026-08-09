@@ -6,9 +6,8 @@ from pathlib import Path
 from typing import Any, Literal
 import hashlib
 import json
-import os
-import tempfile
 
+from pubg_ai.file_io import atomic_write_bytes, sha256_file
 from pubg_ai.time_utils import isoformat_kst, now_kst, to_kst
 
 
@@ -21,6 +20,11 @@ ReplayArtifactType = Literal[
     "gif",
     "cache",
 ]
+
+
+def content_addressed_filename(*, stem: str, data: bytes, suffix: str) -> str:
+    normalized_suffix = suffix if suffix.startswith(".") else f".{suffix}"
+    return f"{stem}-{hashlib.sha256(data).hexdigest()}{normalized_suffix}"
 
 
 class ReplayStorageError(RuntimeError):
@@ -132,7 +136,7 @@ class ReplayArtifactStore:
         path = self.resolve_path(stored.relative_path)
         if not path.exists():
             return False
-        return hashlib.sha256(path.read_bytes()).hexdigest() == stored.sha256
+        return sha256_file(path) == stored.sha256
 
     def _relative_path(
         self,
@@ -175,18 +179,6 @@ class ReplayArtifactStore:
     @staticmethod
     def _atomic_write(target_path: Path, data: bytes) -> None:
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="wb",
-                delete=False,
-                dir=target_path.parent,
-                prefix=f".{target_path.name}.",
-                suffix=".tmp",
-            ) as temp_file:
-                temp_file.write(data)
-                temp_file.flush()
-                os.fsync(temp_file.fileno())
-                temp_path = Path(temp_file.name)
-
-            os.replace(temp_path, target_path)
+            atomic_write_bytes(target_path, data)
         except OSError as exc:
             raise ReplayStorageError(f"failed to write replay artifact: {exc}") from exc

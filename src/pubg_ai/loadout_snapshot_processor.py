@@ -7,6 +7,7 @@ from typing import Any, Iterable, Mapping
 import json
 
 from pubg_ai.code_translator import translate_code
+from pubg_ai.database import mysql_transaction
 from pubg_ai.time_utils import now_kst
 from pubg_ai.weapon_stats import normalize_weapon_code
 
@@ -90,18 +91,15 @@ class LoadoutSnapshotProcessor:
         for candidate in candidates:
             match_id = str(candidate["match_id"])
             try:
-                if not force and self._snapshots_exist(match_id):
-                    skipped_existing += 1
-                    continue
                 if not self._item_events_exist(match_id):
                     skipped_no_items += 1
                     continue
 
-                if force:
-                    self._delete_snapshots(match_id)
-
                 snapshots = self._build_match_snapshots(match_id)
-                self._upsert_snapshots(snapshots)
+                with mysql_transaction(self.connection):
+                    if force:
+                        self._delete_snapshots(match_id)
+                    self._upsert_snapshots(snapshots)
                 generated_snapshots += len(snapshots)
                 processed_matches += 1
             except Exception:
@@ -125,6 +123,7 @@ class LoadoutSnapshotProcessor:
                         SELECT 1
                         FROM player_combat_loadout_snapshots snapshots
                         WHERE snapshots.match_id = location_events.match_id
+                          AND snapshots.account_id = location_events.account_id
                   )
             """
         )

@@ -86,7 +86,8 @@ On 2026-08-09 KST:
 - The live stale-recovery transaction recovered one match and one telemetry job, rolled back, and left zero rows.
 - The final live soak ran two Steam cycles with a 10-player cap and ended with zero queued, running, or failed jobs,
   zero duplicate groups, and 244 succeeded match plus 244 succeeded telemetry jobs.
-- The final 2026-08-10 automated suite passed 447 tests.
+- The operational-drill validation suite passed 447 tests at that checkpoint; the later full-project audit is
+  recorded in `PROJECT_AUDIT_2026-08-10.md`.
 - Chrome checks at desktop and 390 px mobile widths found no console error, page error, failed request, or document
   overflow; the UI executed and persisted an additional simulated drill.
 - Raw and replay audits each checked 488 metadata rows with zero missing files, size mismatches, or paths outside the

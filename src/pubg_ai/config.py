@@ -70,14 +70,23 @@ class AppConfig:
             collector_poll_interval_seconds=_env_int(
                 values.get("PUBG_COLLECTOR_POLL_INTERVAL_SECONDS"),
                 default=180,
+                minimum=60,
+                maximum=300,
+                label="PUBG_COLLECTOR_POLL_INTERVAL_SECONDS",
             ),
             collector_cycle_player_limit=_env_int(
                 values.get("PUBG_COLLECTOR_CYCLE_PLAYER_LIMIT"),
                 default=100,
+                minimum=1,
+                maximum=100,
+                label="PUBG_COLLECTOR_CYCLE_PLAYER_LIMIT",
             ),
             player_lookup_chunk_size=_env_int(
                 values.get("PUBG_PLAYER_LOOKUP_CHUNK_SIZE"),
                 default=10,
+                minimum=1,
+                maximum=10,
+                label="PUBG_PLAYER_LOOKUP_CHUNK_SIZE",
             ),
         )
 
@@ -182,7 +191,13 @@ class DatabaseConfig:
         values = env or os.environ
         return cls(
             host=values.get("MYSQL_HOST", "127.0.0.1").strip() or "127.0.0.1",
-            port=_env_int(values.get("MYSQL_PORT"), 3306),
+            port=_env_int(
+                values.get("MYSQL_PORT"),
+                3306,
+                minimum=1,
+                maximum=65535,
+                label="MYSQL_PORT",
+            ),
             database=values.get("MYSQL_DATABASE", "pubg_ai").strip() or "pubg_ai",
             user=values.get("MYSQL_USER", "pubg_ai").strip() or "pubg_ai",
             password=values.get("MYSQL_PASSWORD", ""),
@@ -236,13 +251,25 @@ def _config_path(value: str, base_dir: Path) -> Path:
     return path
 
 
-def _env_int(value: str | None, default: int) -> int:
+def _env_int(
+    value: str | None,
+    default: int,
+    *,
+    minimum: int | None = None,
+    maximum: int | None = None,
+    label: str = "integer setting",
+) -> int:
     if value is None:
         return default
     try:
-        return int(value)
-    except ValueError:
-        return default
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{label} must be an integer.") from exc
+    if minimum is not None and parsed < minimum:
+        raise ValueError(f"{label} must be at least {minimum}.")
+    if maximum is not None and parsed > maximum:
+        raise ValueError(f"{label} must be at most {maximum}.")
+    return parsed
 
 
 def _normalize_base_url(value: str | None) -> str | None:
