@@ -1,8 +1,8 @@
 # PUBG AI Local Analytics Research
 
-PUBG Open API, MySQL, Discord bot, and a local management app are planned as one local-first analytics system.
-This repository currently contains the first research pass: official API behavior, telemetry collection strategy,
-MySQL data model direction, 2D replay/live-view feasibility, and reference project survey.
+PUBG Open API, MySQL, Discord bot, and a localhost management app form one local-first analytics system.
+This repository contains the working collector, retained raw storage, telemetry analytics, post-match 2D replay,
+Discord command layer, operational controls, and the research and evidence behind those choices.
 
 ## Current Documents
 
@@ -12,6 +12,7 @@ MySQL data model direction, 2D replay/live-view feasibility, and reference proje
 - [Local Architecture and MySQL Model](docs/LOCAL_ARCHITECTURE_AND_MYSQL_MODEL.md)
 - [Implementation Decisions](docs/IMPLEMENTATION_DECISIONS.md)
 - [Data Lifecycle and Operations](docs/DATA_LIFECYCLE_AND_OPERATIONS.md)
+- [Operational Recovery and Drills](docs/OPERATIONAL_DRILLS.md)
 - [Code Translation](docs/CODE_TRANSLATION.md)
 - [Sample Match Analysis](docs/SAMPLE_MATCH_ANALYSIS.md)
 - [Configuration](docs/CONFIGURATION.md)
@@ -86,6 +87,9 @@ The first executable slice is now available:
   durable fight outcomes, map JPEG snapshots, and replay timelines
 - persistent worker run history in MySQL with a local manager table/detail panel for recent collector/post-processing
   cycles, summary metrics, and full stored errors
+- bounded PUBG request retries, durable match/telemetry job requeue, and 15-minute stale-running recovery
+- simulated and live operational drills with MySQL history and localhost controls for 429, storage, restart, recovery,
+  and idempotent soak checks
 - local and Discord alert settings for storage pressure and worker failures, including configurable Discord alert
   channel IDs, alert acknowledgement/snooze controls, and persisted alert history without storing bot tokens outside
   `.env`
@@ -235,6 +239,19 @@ the individual processing buttons:
 ```powershell
 python -m pubg_ai.cli run-post-processing --combat-limit 10 --item-limit 10 --movement-limit 10 --loadout-limit 50 --fight-outcome-limit 10 --map-snapshot-limit 10 --timeline-limit 10
 ```
+
+Run bounded operational recovery checks. `simulated` makes no PUBG requests and does not modify MySQL collection
+tables; unless `--no-record` is supplied, it still stores its secret-free drill report. Stop the automatic collector
+before `live`, which uses one active shard and at most one 10-player lookup batch per cycle:
+
+```powershell
+python -m pubg_ai.cli run-operational-drills --mode simulated --cycles 3
+python -m pubg_ai.cli run-operational-drills --mode live --cycles 2
+python -m pubg_ai.cli operational-drill-history --limit 20
+```
+
+See [Operational Recovery and Drills](docs/OPERATIONAL_DRILLS.md) for retry limits, safety boundaries, and verified
+local evidence.
 
 Parse raw telemetry into registered-player combat summaries and weapon stats:
 
@@ -490,9 +507,9 @@ Packet text and comparison results remain in memory and are never persisted. No 
 evidence, production mutation, restore, quarantine, deletion, or execution capability is created. Version 22 adds no
 environment variable or table; at that feature slice, the schema remained version 20 with 44 tables.
 
-The current runtime schema is version 21 with 46 tables. It adds `player_fight_outcomes` and
-`player_fight_outcome_processing_states`; rerun `python -m pubg_ai.cli init-db` after updating. Existing raw and
-replay artifacts are not rewritten by this migration or backfill.
+The current runtime schema is version 22 with 47 tables. It adds `operational_drill_runs` for secret-free simulated
+and live recovery evidence; rerun `python -m pubg_ai.cli init-db` after updating. Existing raw and replay artifacts
+are not rewritten by this migration. Schema version 21 introduced the two durable fight-outcome tables.
 
 Each packet is guarded by six `ON DELETE RESTRICT` foreign keys. Generation appends only one version 20 audit row; it
 grants no authorization,

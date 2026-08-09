@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any, Mapping
+from time import sleep, time
+from typing import Any, Callable, Mapping
 
 
 PUBG_API_BASE_URL = "https://api.pubg.com"
@@ -11,6 +12,46 @@ MAX_PLAYER_LOOKUP_IDS = 10
 
 class PubgApiError(RuntimeError):
     """Raised when the PUBG Open API returns an error or unexpected payload."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retryable: bool = False,
+        retry_after_seconds: float | None = None,
+        attempts: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retryable = retryable
+        self.retry_after_seconds = retry_after_seconds
+        self.attempts = attempts
+
+
+@dataclass(frozen=True)
+class PubgRetryPolicy:
+    max_attempts: int = 3
+    base_delay_seconds: float = 1.0
+    max_delay_seconds: float = 65.0
+    max_total_delay_seconds: float = 70.0
+    reset_buffer_seconds: float = 0.25
+    retryable_status_codes: tuple[int, ...] = (408, 425, 429, 500, 502, 503, 504)
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.max_attempts <= 10:
+            raise ValueError("max_attempts must be between 1 and 10.")
+        if self.base_delay_seconds < 0:
+            raise ValueError("base_delay_seconds must be non-negative.")
+        if self.max_delay_seconds < self.base_delay_seconds:
+            raise ValueError("max_delay_seconds must be at least base_delay_seconds.")
+        if self.max_total_delay_seconds < 0:
+            raise ValueError("max_total_delay_seconds must be non-negative.")
+        if self.reset_buffer_seconds < 0:
+            raise ValueError("reset_buffer_seconds must be non-negative.")
+
+    def to_record(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -117,37 +158,38 @@ class PubgApiClient:
         *,
         base_url: str = PUBG_API_BASE_URL,
         timeout_seconds: float = 20.0,
+        retry_policy: PubgRetryPolicy | None = None,
+        request_get: Callable[..., Any] | None = None,
+        sleep_func: Callable[[float], None] = sleep,
+        time_func: Callable[[], float] = time,
     ) -> None:
         if not api_key.strip():
             raise PubgApiError("PUBG_API_KEY is required.")
+        if timeout_seconds <= 0:
+            raise PubgApiError("timeout_seconds must be positive.")
         self.api_key = api_key.strip()
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self.retry_policy = retry_policy or PubgRetryPolicy()
+        self._request_get = request_get
+        self._sleep = sleep_func
+        self._time = time_func
 
     def lookup_players_by_names(self, shard: str, player_names: list[str]) -> PubgPlayerLookupResult:
-        import httpx
-
         shard = _required_text(shard, "shard").lower()
         names = [_required_text(name, "player name") for name in player_names]
         if len(names) > MAX_PLAYER_LOOKUP_NAMES:
             raise PubgApiError("PUBG player lookup supports at most 10 names per request.")
 
-        url = f"{self.base_url}/shards/{shard}/players"
-        try:
-            response = httpx.get(
-                url,
-                params={"filter[playerNames]": ",".join(names)},
-                headers=self._headers(),
-                timeout=self.timeout_seconds,
-            )
-        except httpx.HTTPError as exc:
-            raise PubgApiError(f"PUBG API request failed: {exc.__class__.__name__}") from exc
-
+        response = self._get(
+            f"{self.base_url}/shards/{shard}/players",
+            params={"filter[playerNames]": ",".join(names)},
+        )
         rate_limit = _rate_limit_from_headers(response.headers)
         if response.status_code == 404:
             return PubgPlayerLookupResult(players=[], rate_limit=rate_limit)
         if response.status_code >= 400:
-            raise PubgApiError(f"PUBG API returned HTTP {response.status_code} for player lookup.")
+            raise self._response_error(response, "player lookup")
 
         payload = response.json()
         players = parse_player_lookup_payload(payload, shard=shard)
@@ -157,57 +199,131 @@ class PubgApiClient:
         return self.lookup_players_by_names(shard, [player_name]).single(player_name)
 
     def refresh_players_by_ids(self, shard: str, account_ids: list[str]) -> PubgPlayerRefreshResult:
-        import httpx
-
         shard = _required_text(shard, "shard").lower()
         ids = [_required_text(account_id, "account id") for account_id in account_ids]
         if len(ids) > MAX_PLAYER_LOOKUP_IDS:
             raise PubgApiError("PUBG player lookup supports at most 10 account IDs per request.")
 
-        url = f"{self.base_url}/shards/{shard}/players"
-        try:
-            response = httpx.get(
-                url,
-                params={"filter[playerIds]": ",".join(ids)},
-                headers=self._headers(),
-                timeout=self.timeout_seconds,
-            )
-        except httpx.HTTPError as exc:
-            raise PubgApiError(f"PUBG API request failed: {exc.__class__.__name__}") from exc
-
+        response = self._get(
+            f"{self.base_url}/shards/{shard}/players",
+            params={"filter[playerIds]": ",".join(ids)},
+        )
         rate_limit = _rate_limit_from_headers(response.headers)
         if response.status_code == 404:
             return PubgPlayerRefreshResult(snapshots=[], rate_limit=rate_limit, raw_payload={"data": []})
         if response.status_code >= 400:
-            raise PubgApiError(f"PUBG API returned HTTP {response.status_code} for player refresh.")
+            raise self._response_error(response, "player refresh")
 
         payload = response.json()
         snapshots = parse_player_snapshot_payload(payload, shard=shard)
         return PubgPlayerRefreshResult(snapshots=snapshots, rate_limit=rate_limit, raw_payload=payload)
 
     def fetch_match(self, shard: str, match_id: str) -> PubgMatchDetails:
-        import httpx
-
         shard = _required_text(shard, "shard").lower()
         match_id = _required_text(match_id, "match id")
-        url = f"{self.base_url}/shards/{shard}/matches/{match_id}"
-        try:
-            response = httpx.get(
-                url,
-                headers=self._headers(),
-                timeout=self.timeout_seconds,
-            )
-        except httpx.HTTPError as exc:
-            raise PubgApiError(f"PUBG API request failed: {exc.__class__.__name__}") from exc
-
+        response = self._get(f"{self.base_url}/shards/{shard}/matches/{match_id}")
         rate_limit = _rate_limit_from_headers(response.headers)
         if response.status_code == 404:
-            raise PubgApiError(f"PUBG match not found: {match_id}")
+            raise PubgApiError(
+                f"PUBG match not found yet: {match_id}",
+                status_code=404,
+                retryable=True,
+                retry_after_seconds=15.0,
+                attempts=1,
+            )
         if response.status_code >= 400:
-            raise PubgApiError(f"PUBG API returned HTTP {response.status_code} for match fetch.")
+            raise self._response_error(response, "match fetch")
 
         payload = response.json()
         return parse_match_payload(payload, shard=shard, rate_limit=rate_limit)
+
+    def _get(self, url: str, *, params: Mapping[str, str] | None = None) -> Any:
+        import httpx
+
+        request_get = self._request_get or httpx.get
+        total_delay = 0.0
+        for attempt in range(1, self.retry_policy.max_attempts + 1):
+            try:
+                response = request_get(
+                    url,
+                    params=params,
+                    headers=self._headers(),
+                    timeout=self.timeout_seconds,
+                )
+            except httpx.HTTPError as exc:
+                if attempt >= self.retry_policy.max_attempts:
+                    raise PubgApiError(
+                        f"PUBG API request failed after {attempt} attempts: {exc.__class__.__name__}",
+                        retryable=True,
+                        attempts=attempt,
+                    ) from exc
+                delay = self._bounded_delay(
+                    self._exponential_delay(attempt),
+                    total_delay=total_delay,
+                )
+                if delay is None:
+                    raise PubgApiError(
+                        f"PUBG API retry delay budget exhausted after {attempt} attempts.",
+                        retryable=True,
+                        attempts=attempt,
+                    ) from exc
+                self._sleep(delay)
+                total_delay += delay
+                continue
+
+            status_code = int(response.status_code)
+            if status_code not in self.retry_policy.retryable_status_codes:
+                return response
+            if attempt >= self.retry_policy.max_attempts:
+                return response
+
+            delay = self._bounded_delay(
+                self._response_retry_delay(response, attempt),
+                total_delay=total_delay,
+            )
+            if delay is None:
+                return response
+            self._sleep(delay)
+            total_delay += delay
+
+        raise PubgApiError("PUBG API request retry loop ended unexpectedly.")
+
+    def _response_error(self, response: Any, operation: str) -> PubgApiError:
+        status_code = int(response.status_code)
+        return PubgApiError(
+            f"PUBG API returned HTTP {status_code} for {operation}.",
+            status_code=status_code,
+            retryable=status_code in self.retry_policy.retryable_status_codes,
+            retry_after_seconds=self._response_retry_delay(
+                response,
+                self.retry_policy.max_attempts,
+            ),
+            attempts=self.retry_policy.max_attempts if status_code in self.retry_policy.retryable_status_codes else 1,
+        )
+
+    def _response_retry_delay(self, response: Any, attempt: int) -> float:
+        status_code = int(response.status_code)
+        if status_code == 429:
+            reset_epoch = _rate_limit_from_headers(response.headers).reset_epoch
+            if reset_epoch is not None:
+                reset_delay = reset_epoch - self._time() + self.retry_policy.reset_buffer_seconds
+                if reset_delay > 0:
+                    return min(self.retry_policy.max_delay_seconds, reset_delay)
+
+        retry_after = _optional_float(_header_value(response.headers, "Retry-After"))
+        if retry_after is not None and retry_after >= 0:
+            return min(self.retry_policy.max_delay_seconds, retry_after)
+        return self._exponential_delay(attempt)
+
+    def _exponential_delay(self, attempt: int) -> float:
+        delay = self.retry_policy.base_delay_seconds * (2 ** max(0, attempt - 1))
+        return min(self.retry_policy.max_delay_seconds, delay)
+
+    def _bounded_delay(self, requested: float, *, total_delay: float) -> float | None:
+        remaining = self.retry_policy.max_total_delay_seconds - total_delay
+        if remaining <= 0:
+            return None
+        return max(0.0, min(requested, remaining))
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -395,6 +511,15 @@ def _optional_int(value: Any) -> int | None:
         return None
     try:
         return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return None
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from threading import Event, Lock, Thread
-from time import sleep
 from typing import Any, Callable
 
 from pubg_ai.config import RuntimeConfig
@@ -359,11 +358,7 @@ def _validate_options(options: CollectorWorkerOptions) -> None:
 
 
 def _interruptible_sleep(seconds: int, stop_event: Event) -> None:
-    remaining = seconds
-    while remaining > 0 and not stop_event.is_set():
-        delay = min(1, remaining)
-        sleep(delay)
-        remaining -= delay
+    stop_event.wait(timeout=max(0, seconds))
 
 
 def _safe_error(stage: str, exc: Exception) -> str:

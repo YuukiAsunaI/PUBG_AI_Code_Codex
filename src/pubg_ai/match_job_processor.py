@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any, Mapping
 import json
 
+from pubg_ai.api_job_retry import decide_api_job_retry, stale_running_cutoff
 from pubg_ai.match_classification import classify_match_payload
 from pubg_ai.match_population import detect_bot_player, summarize_match_population
 from pubg_ai.parser_policy import CURRENT_MATCH_METADATA_PARSER_VERSION
@@ -27,6 +28,9 @@ class MatchJobProcessingResult:
     existing_telemetry_jobs: int
     missing_telemetry_jobs: int
     failed_jobs: int
+    requeued_jobs: int
+    terminal_failed_jobs: int
+    recovered_stale_jobs: int
 
     def to_record(self) -> dict[str, int]:
         return asdict(self)
@@ -52,6 +56,7 @@ class MatchJobProcessor:
 
     def process_queued_matches(self, *, limit: int = 10) -> MatchJobProcessingResult:
         limit = max(1, min(limit, 500))
+        recovered_stale_jobs = self._recover_stale_running_jobs()
         jobs = self._list_queued_match_jobs(limit=limit)
 
         fetched_matches = 0
@@ -61,6 +66,8 @@ class MatchJobProcessor:
         existing_telemetry_jobs = 0
         missing_telemetry_jobs = 0
         failed_jobs = 0
+        requeued_jobs = 0
+        terminal_failed_jobs = 0
 
         for job in jobs:
             if not self._mark_job_running(job):
@@ -71,7 +78,10 @@ class MatchJobProcessor:
                 self._mark_job_succeeded(job["id"], processed_rate_limit=processed.rate_limit)
             except Exception as exc:
                 failed_jobs += 1
-                self._mark_job_failed(job["id"], exc)
+                if self._handle_job_failure(job, exc):
+                    requeued_jobs += 1
+                else:
+                    terminal_failed_jobs += 1
                 continue
 
             fetched_matches += 1
@@ -93,6 +103,9 @@ class MatchJobProcessor:
             existing_telemetry_jobs=existing_telemetry_jobs,
             missing_telemetry_jobs=missing_telemetry_jobs,
             failed_jobs=failed_jobs,
+            requeued_jobs=requeued_jobs,
+            terminal_failed_jobs=terminal_failed_jobs,
+            recovered_stale_jobs=recovered_stale_jobs,
         )
 
     def _process_job(self, job: Mapping[str, Any]) -> ProcessedMatchJob:
@@ -204,19 +217,49 @@ class MatchJobProcessor:
                 ),
             )
 
-    def _mark_job_failed(self, job_id: int, exc: Exception) -> None:
+    def _handle_job_failure(self, job: Mapping[str, Any], exc: Exception) -> bool:
         timestamp = _mysql_kst_now()
+        decision = decide_api_job_retry(job, exc, current_time=timestamp)
+        status = "queued" if decision.should_retry else "failed"
         with self.connection.cursor() as cursor:
             cursor.execute(
                 """
                 UPDATE api_fetch_jobs
-                SET status = 'failed',
+                SET status = %s,
+                    next_run_at_kst = %s,
                     last_error = %s,
                     updated_at_kst = %s
                 WHERE id = %s
                 """,
-                (_safe_error(exc), timestamp, job_id),
+                (
+                    status,
+                    decision.next_run_at_kst,
+                    decision.error,
+                    timestamp,
+                    job["id"],
+                ),
             )
+        return decision.should_retry
+
+    def _recover_stale_running_jobs(self) -> int:
+        timestamp = _mysql_kst_now()
+        cutoff = stale_running_cutoff(current_time=timestamp)
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE api_fetch_jobs
+                SET status = 'queued',
+                    attempts = CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END,
+                    next_run_at_kst = %s,
+                    last_error = 'recovered stale running match job after worker restart',
+                    updated_at_kst = %s
+                WHERE job_type = 'match'
+                  AND status = 'running'
+                  AND updated_at_kst < %s
+                """,
+                (timestamp, timestamp, cutoff),
+            )
+            return int(cursor.rowcount)
 
     def _upsert_match(
         self,

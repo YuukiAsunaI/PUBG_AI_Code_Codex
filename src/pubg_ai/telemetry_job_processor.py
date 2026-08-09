@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 import gzip
 
+from pubg_ai.api_job_retry import decide_api_job_retry, stale_running_cutoff
 from pubg_ai.parser_policy import CURRENT_TELEMETRY_PARSER_VERSION
 from pubg_ai.raw_storage import RawPayloadStore
 from pubg_ai.time_utils import now_kst, to_kst
@@ -12,6 +13,19 @@ from pubg_ai.time_utils import now_kst, to_kst
 
 class TelemetryJobProcessingError(RuntimeError):
     """Raised when queued PUBG telemetry jobs cannot be processed."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retryable: bool = False,
+        retry_after_seconds: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retryable = retryable
+        self.retry_after_seconds = retry_after_seconds
 
 
 @dataclass(frozen=True)
@@ -30,6 +44,9 @@ class TelemetryJobProcessingResult:
     failed_jobs: int
     downloaded_bytes: int
     stored_bytes: int
+    requeued_jobs: int
+    terminal_failed_jobs: int
+    recovered_stale_jobs: int
 
     def to_record(self) -> dict[str, int]:
         return asdict(self)
@@ -49,13 +66,18 @@ class TelemetryJobProcessor:
         raw_store: RawPayloadStore,
         *,
         timeout_seconds: float = 90.0,
+        request_get: Callable[..., Any] | None = None,
     ) -> None:
+        if timeout_seconds <= 0:
+            raise TelemetryJobProcessingError("timeout_seconds must be positive.")
         self.connection = connection
         self.raw_store = raw_store
         self.timeout_seconds = timeout_seconds
+        self._request_get = request_get
 
     def process_queued_telemetry(self, *, limit: int = 5) -> TelemetryJobProcessingResult:
         limit = max(1, min(limit, 200))
+        recovered_stale_jobs = self._recover_stale_running_jobs()
         jobs = self._list_queued_telemetry_jobs(limit=limit)
 
         downloaded_telemetry = 0
@@ -64,6 +86,8 @@ class TelemetryJobProcessor:
         failed_jobs = 0
         downloaded_bytes = 0
         stored_bytes = 0
+        requeued_jobs = 0
+        terminal_failed_jobs = 0
 
         for job in jobs:
             if not self._mark_job_running(job):
@@ -74,7 +98,10 @@ class TelemetryJobProcessor:
                 self._mark_job_succeeded(job["id"])
             except Exception as exc:
                 failed_jobs += 1
-                self._mark_job_failed(job["id"], exc)
+                if self._handle_job_failure(job, exc):
+                    requeued_jobs += 1
+                else:
+                    terminal_failed_jobs += 1
                 continue
 
             if processed.status == "existing":
@@ -93,6 +120,9 @@ class TelemetryJobProcessor:
             failed_jobs=failed_jobs,
             downloaded_bytes=downloaded_bytes,
             stored_bytes=stored_bytes,
+            requeued_jobs=requeued_jobs,
+            terminal_failed_jobs=terminal_failed_jobs,
+            recovered_stale_jobs=recovered_stale_jobs,
         )
 
     def list_telemetry_jobs(self, *, limit: int = 100) -> list[dict[str, Any]]:
@@ -153,8 +183,9 @@ class TelemetryJobProcessor:
     def _fetch_telemetry(self, telemetry_url: str) -> TelemetryDownload:
         import httpx
 
+        request_get = self._request_get or httpx.get
         try:
-            response = httpx.get(
+            response = request_get(
                 telemetry_url,
                 headers={
                     "Accept": "application/json",
@@ -166,19 +197,25 @@ class TelemetryJobProcessor:
             )
         except httpx.HTTPError as exc:
             raise TelemetryJobProcessingError(
-                f"telemetry download failed: {exc.__class__.__name__}"
+                f"telemetry download failed: {exc.__class__.__name__}",
+                retryable=True,
             ) from exc
 
         if response.status_code >= 400:
+            status_code = int(response.status_code)
             raise TelemetryJobProcessingError(
-                f"telemetry CDN returned HTTP {response.status_code}"
+                f"telemetry CDN returned HTTP {status_code}",
+                status_code=status_code,
+                retryable=status_code in {404, 408, 425, 429, 500, 502, 503, 504},
+                retry_after_seconds=_retry_after_seconds(response.headers),
             )
 
         content = _maybe_decompress_gzip(response.content)
         if not _looks_like_json_bytes(content):
             content_type = response.headers.get("content-type")
             raise TelemetryJobProcessingError(
-                f"telemetry response is not JSON-like; content_type={content_type or 'unknown'}"
+                f"telemetry response is not JSON-like; content_type={content_type or 'unknown'}",
+                retryable=True,
             )
 
         return TelemetryDownload(
@@ -236,19 +273,49 @@ class TelemetryJobProcessor:
                 (timestamp, job_id),
             )
 
-    def _mark_job_failed(self, job_id: int, exc: Exception) -> None:
+    def _handle_job_failure(self, job: Mapping[str, Any], exc: Exception) -> bool:
         timestamp = _mysql_kst_now()
+        decision = decide_api_job_retry(job, exc, current_time=timestamp)
+        status = "queued" if decision.should_retry else "failed"
         with self.connection.cursor() as cursor:
             cursor.execute(
                 """
                 UPDATE api_fetch_jobs
-                SET status = 'failed',
+                SET status = %s,
+                    next_run_at_kst = %s,
                     last_error = %s,
                     updated_at_kst = %s
                 WHERE id = %s
                 """,
-                (_safe_error(exc), timestamp, job_id),
+                (
+                    status,
+                    decision.next_run_at_kst,
+                    decision.error,
+                    timestamp,
+                    job["id"],
+                ),
             )
+        return decision.should_retry
+
+    def _recover_stale_running_jobs(self) -> int:
+        timestamp = _mysql_kst_now()
+        cutoff = stale_running_cutoff(current_time=timestamp)
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE api_fetch_jobs
+                SET status = 'queued',
+                    attempts = CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END,
+                    next_run_at_kst = %s,
+                    last_error = 'recovered stale running telemetry job after worker restart',
+                    updated_at_kst = %s
+                WHERE job_type = 'telemetry'
+                  AND status = 'running'
+                  AND updated_at_kst < %s
+                """,
+                (timestamp, timestamp, cutoff),
+            )
+            return int(cursor.rowcount)
 
     def _load_match_for_telemetry(self, *, match_id: str, shard: str) -> dict[str, Any]:
         with self.connection.cursor() as cursor:
@@ -367,6 +434,19 @@ def _optional_text(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _retry_after_seconds(headers: Mapping[str, Any]) -> float | None:
+    value = None
+    for key, candidate in headers.items():
+        if str(key).lower() == "retry-after":
+            value = candidate
+            break
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
 
 
 def _safe_error(exc: Exception) -> str:

@@ -19,6 +19,11 @@ from pubg_ai.local_settings import LocalSettingsError, LocalSettingsStore
 from pubg_ai.loadout_snapshot_processor import LoadoutSnapshotProcessor
 from pubg_ai.map_regions import map_region_catalog_record, resolve_map_region
 from pubg_ai.map_snapshot_renderer import MapSnapshotProcessor
+from pubg_ai.operational_drills import (
+    list_operational_drills,
+    record_operational_drill,
+    run_operational_drills,
+)
 from pubg_ai.post_processing_worker import PostProcessingWorkerOptions, run_post_processing_cycle
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.match_job_processor import MatchJobProcessor
@@ -251,6 +256,24 @@ def main(argv: list[str] | None = None) -> int:
     post_process_parser.add_argument("--timeline-limit", default=10, type=int)
     post_process_parser.add_argument("--force", action="store_true")
     post_process_parser.add_argument("--once", action="store_true", help="Run one post-processing cycle and exit.")
+
+    drill_parser = subparsers.add_parser(
+        "run-operational-drills",
+        help="Run bounded non-destructive retry, storage, restart, and soak drills.",
+    )
+    drill_parser.add_argument("--mode", choices=("simulated", "live"), default="simulated")
+    drill_parser.add_argument("--cycles", type=int, default=3)
+    drill_parser.add_argument(
+        "--no-record",
+        action="store_true",
+        help="Do not persist this drill report to MySQL.",
+    )
+
+    drill_history_parser = subparsers.add_parser(
+        "operational-drill-history",
+        help="Print recent persisted operational drill reports.",
+    )
+    drill_history_parser.add_argument("--limit", type=int, default=20)
 
     discord_parser = subparsers.add_parser("run-discord-bot", help="Run the Discord bot.")
     discord_parser.add_argument("--prefix", default=DEFAULT_DISCORD_PREFIX, help="Text command prefix.")
@@ -652,6 +675,27 @@ def main(argv: list[str] | None = None) -> int:
             _print_json(result.to_record())
         finally:
             connection.close()
+        return 0
+
+    if args.command == "run-operational-drills":
+        report = run_operational_drills(config, mode=args.mode, cycles=args.cycles)
+        run_id = None
+        if not args.no_record:
+            connection = connect_mysql(config.database)
+            try:
+                run_id = record_operational_drill(connection, report)
+            finally:
+                connection.close()
+        _print_json({"run_id": run_id, "operational_drill": report.to_record()})
+        return 0 if report.passed else 1
+
+    if args.command == "operational-drill-history":
+        connection = connect_mysql(config.database)
+        try:
+            records = list_operational_drills(connection, limit=args.limit)
+        finally:
+            connection.close()
+        _print_json({"operational_drill_runs": [record.to_record() for record in records]})
         return 0
 
     if args.command == "run-web":

@@ -8,7 +8,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 
 class DatabaseError(RuntimeError):
@@ -76,7 +76,7 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 VALUES (%s, %s, NOW(6))
                 ON DUPLICATE KEY UPDATE description = VALUES(description)
                 """,
-                (SCHEMA_VERSION, "durable player fight outcome schema"),
+                (SCHEMA_VERSION, "operational drill history and API retry recovery"),
             )
             applied += 1
     finally:
@@ -203,6 +203,24 @@ def schema_statements() -> list[str]:
             created_at_kst DATETIME(6) NOT NULL,
             KEY idx_worker_run_history_worker_time (worker_name, created_at_kst),
             KEY idx_worker_run_history_status_time (status, created_at_kst)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS operational_drill_runs (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            contract_version VARCHAR(64) NOT NULL,
+            mode ENUM('simulated', 'live') NOT NULL,
+            status ENUM('passed', 'failed') NOT NULL,
+            started_at_kst DATETIME(6) NOT NULL,
+            finished_at_kst DATETIME(6) NOT NULL,
+            duration_seconds FLOAT NOT NULL,
+            requested_cycles INT UNSIGNED NOT NULL,
+            check_count INT UNSIGNED NOT NULL,
+            passed_check_count INT UNSIGNED NOT NULL,
+            report_json JSON NOT NULL,
+            created_at_kst DATETIME(6) NOT NULL,
+            KEY idx_operational_drill_mode_time (mode, created_at_kst),
+            KEY idx_operational_drill_status_time (status, created_at_kst)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """,
         """

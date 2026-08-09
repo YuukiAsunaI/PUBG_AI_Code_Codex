@@ -1,6 +1,7 @@
 # Local Architecture and MySQL Model
 
 Research date: 2026-06-27
+Last updated: 2026-08-09 KST
 
 ## Target Shape
 
@@ -572,23 +573,30 @@ Completed slices:
      `player_fight_outcome_processing_states`. The v2 parser records kill/death and duo/squad DBNO win/loss events,
      prioritizes actual attack attachments for own loadout context, retains bot/friendly-fire/environment facts, and
      backfills without mutating immutable raw or replay files. CLI, localhost API/UI, Discord formatting, automatic
-     post-processing, deletion preview, and backup scope all understand the new tables. The current schema is version
-     21 with 46 tables.
+     post-processing, deletion preview, and backup scope all understand the new tables. At that feature slice, the
+     schema was version 21 with 46 tables.
 117. KST trend reporting is query-time and schema-neutral. `player_trends.py` joins existing match, participant, combat,
      and movement facts, groups by hour-of-day/date/Python ISO-week/month, and applies game-mode, team-mode,
      perspective, match-type, map, custom-status, shard, and inclusive KST-date filters. CLI, localhost API/UI, and
-     Discord use one report contract. No raw/replay file, normalized row, schema version, or worker is changed; schema
-     version 21 and 46 tables remain current.
+     Discord use one report contract. No raw/replay file, normalized row, schema version, or worker changed; schema
+     version 21 and 46 tables remained current at that feature slice.
 
 118. Versioned named-region resolution maps drop-cluster centroids to Korean place labels from pinned official PUBG map
      assets. It keeps stable cluster IDs and raw centimeter coordinates, exposes source commit/asset/SHA-256 metadata,
      treats Paramo as dynamic, and never forces unmatched points. CLI, localhost API/UI, recommendation reports, and
-     Discord formatting share the same query-time contract; schema version 21 and 46 tables remain current.
+     Discord formatting share the same query-time contract; schema version 21 and 46 tables remained current at that
+     feature slice.
+119. Database schema version 22 adds secret-free `operational_drill_runs`, bounded PUBG transport/status retries,
+     durable match/telemetry retry decisions, and 15-minute stale-running recovery. Simulated drills exercise the
+     production 429/reset client, low-space target classification, real controller stop/restart, and idempotent soak
+     behavior without external collection. Live mode selects one active shard and one 10-player batch per cycle,
+     transactionally verifies both MySQL stale-job recovery paths with complete rollback, and checks real collection
+     for errors, duplicate groups, and stranded running jobs. CLI, localhost API/UI, 423 tests, desktop/mobile Chrome,
+     and live run 3 all passed. The current schema is version 22 with 47 tables.
 
 Next slice:
 
 1. Run a real read-only Discord command acceptance check in an explicitly selected guild/channel.
-2. Run controlled rate-limit, low-space alert, worker restart/recovery, and bounded soak drills.
-3. Calibrate projectile, shell, and pellet hit/accuracy semantics with additional telemetry samples.
-4. Keep deletion execution out of scope until it is explicitly approved; the review and rehearsal tooling remains
+2. Calibrate projectile, shell, and pellet hit/accuracy semantics with additional telemetry samples.
+3. Keep deletion execution out of scope until it is explicitly approved; the review and rehearsal tooling remains
    read-only/non-destructive.

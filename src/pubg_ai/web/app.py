@@ -98,6 +98,12 @@ from pubg_ai.local_settings import LocalSettingsError, LocalSettingsStore, check
 from pubg_ai.loadout_snapshot_processor import LoadoutSnapshotProcessor
 from pubg_ai.map_regions import map_region_catalog_record, resolve_map_region
 from pubg_ai.map_snapshot_renderer import MAP_ASSET_FILENAMES, MapAssetProvider, MapSnapshotProcessor
+from pubg_ai.operational_drills import (
+    OperationalDrillError,
+    list_operational_drills,
+    record_operational_drill,
+    run_operational_drills,
+)
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.match_job_processor import MatchJobProcessor
 from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry
@@ -400,6 +406,11 @@ class PostProcessingWorkerStartRequest(BaseModel):
     map_snapshot_limit: int = Field(default=10, ge=1, le=200)
     timeline_limit: int = Field(default=10, ge=1, le=200)
     force: bool = False
+
+
+class OperationalDrillRunRequest(BaseModel):
+    mode: str = Field(default="simulated", pattern=r"^(simulated|live)$")
+    cycles: int = Field(default=3, ge=2, le=5)
 
 
 def create_app() -> Any:
@@ -1027,6 +1038,38 @@ def create_app() -> Any:
     @app.post("/post-processing/worker/stop")
     def stop_post_processing_worker() -> dict[str, Any]:
         return {"worker": post_processing_worker.stop().to_record()}
+
+    @app.post("/operations/drills")
+    def run_operations_drill(request: OperationalDrillRunRequest) -> dict[str, Any]:
+        if request.mode == "live" and collector_worker.status().running:
+            raise HTTPException(
+                status_code=409,
+                detail="Stop the automatic collector before running a live operational drill.",
+            )
+        try:
+            report = run_operational_drills(
+                current_config(),
+                mode=request.mode,  # type: ignore[arg-type]
+                cycles=request.cycles,
+            )
+        except OperationalDrillError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        connection = connect_mysql(current_config().database)
+        try:
+            run_id = record_operational_drill(connection, report)
+        finally:
+            connection.close()
+        return {"run_id": run_id, "operational_drill": report.to_record()}
+
+    @app.get("/operations/drills")
+    def operations_drill_history(limit: int = Query(default=20, ge=1, le=100)) -> dict[str, Any]:
+        connection = connect_mysql(current_config().database)
+        try:
+            records = list_operational_drills(connection, limit=limit)
+        finally:
+            connection.close()
+        return {"operational_drill_runs": [record.to_record() for record in records]}
 
     @app.get("/workers/runs")
     def worker_runs(
@@ -3021,6 +3064,15 @@ _INDEX_HTML = """<!doctype html>
     .table-badge-stack { display: grid; justify-items: start; gap: 5px; }
     .detail-table { margin-top: 8px; table-layout: auto; }
     .detail-table th, .detail-table td { font-size: 12px; padding: 7px; vertical-align: top; }
+    .operational-drill-table { min-width: 720px; table-layout: auto; }
+    .operational-drill-table th, .operational-drill-table td { white-space: nowrap; }
+    .operational-drill-table th:nth-child(1) { width: 54px; }
+    .operational-drill-table th:nth-child(2) { width: 94px; }
+    .operational-drill-table th:nth-child(3) { width: 84px; }
+    .operational-drill-table th:nth-child(4) { min-width: 190px; }
+    .operational-drill-table th:nth-child(5) { width: 88px; }
+    .operational-drill-table th:nth-child(6) { width: 70px; }
+    .operational-drill-table th:nth-child(7) { width: 74px; }
     .deletion-request-table { min-width: 720px; table-layout: auto; }
     .table-scroll { width: 100%; max-width: 100%; overflow-x: auto; }
     .table-scroll .detail-table { min-width: 680px; }
@@ -3771,6 +3823,40 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="postProcessingWorkerStatus" style="margin-top: 12px;">Post-processing stopped</div>
     </section>
+    <section id="operational-drills">
+      <h2>운영 훈련</h2>
+      <form id="operationalDrillForm">
+        <label>모드
+          <select name="mode">
+            <option value="simulated">시뮬레이션</option>
+            <option value="live">실환경 제한 실행</option>
+          </select>
+        </label>
+        <label>반복
+          <input name="cycles" type="number" min="2" max="5" value="3" required>
+        </label>
+        <button type="submit">실행</button>
+        <button class="secondary" type="button" id="operationalDrillsReload">새로고침</button>
+      </form>
+      <div class="status" id="operationalDrillsStatus" style="margin: 12px 0 8px;">대기 중</div>
+      <div class="table-scroll">
+        <table class="operational-drill-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>모드</th>
+              <th>상태</th>
+              <th>완료 KST</th>
+              <th>시간</th>
+              <th>체크</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="operationalDrillsBody"></tbody>
+        </table>
+      </div>
+      <div class="detail-panel" id="operationalDrillDetail">훈련 이력 대기 중</div>
+    </section>
     <section id="worker-runs">
       <h2>Worker Run History</h2>
       <form id="workerRunFilterForm" class="worker-run-filter">
@@ -3986,6 +4072,11 @@ _INDEX_HTML = """<!doctype html>
     const rankingBody = document.querySelector("#rankingBody");
     const jobsBody = document.querySelector("#jobsBody");
     const telemetryJobsBody = document.querySelector("#telemetryJobsBody");
+    const operationalDrillForm = document.querySelector("#operationalDrillForm");
+    const operationalDrillsReload = document.querySelector("#operationalDrillsReload");
+    const operationalDrillsStatus = document.querySelector("#operationalDrillsStatus");
+    const operationalDrillsBody = document.querySelector("#operationalDrillsBody");
+    const operationalDrillDetail = document.querySelector("#operationalDrillDetail");
     const workerRunFilterForm = document.querySelector("#workerRunFilterForm");
     const workerRunsBody = document.querySelector("#workerRunsBody");
     const workerRunsStatus = document.querySelector("#workerRunsStatus");
@@ -3994,6 +4085,7 @@ _INDEX_HTML = """<!doctype html>
     const workerRunsPrev = document.querySelector("#workerRunsPrev");
     const workerRunsNext = document.querySelector("#workerRunsNext");
     const workerRunDetail = document.querySelector("#workerRunDetail");
+    let operationalDrillRecords = [];
     const combatStatus = document.querySelector("#combatStatus");
     const itemStatus = document.querySelector("#itemStatus");
     const movementStatus = document.querySelector("#movementStatus");
@@ -7003,6 +7095,58 @@ _INDEX_HTML = """<!doctype html>
       `).join("");
     }
 
+    function renderOperationalDrillDetail(record) {
+      const report = record.report || {};
+      const checks = report.checks || [];
+      operationalDrillDetail.innerHTML = [
+        `<strong>#${escapeHtml(record.id)} ${escapeHtml(record.mode)} / ${escapeHtml(record.status)}</strong>`,
+        `계약: ${escapeHtml(record.contract_version || "-")} · 반복: ${escapeHtml(record.requested_cycles || 0)} · 시간: ${Number(record.duration_seconds || 0).toFixed(3)}초`,
+        checks.length
+          ? checks.map((check) => `${check.passed ? "PASS" : "FAIL"} · ${escapeHtml(check.name)} · ${escapeHtml(check.summary || "-")}<br><code>${escapeHtml(JSON.stringify(check.metrics || {}))}</code>`).join("<br>")
+          : "저장된 체크가 없습니다.",
+      ].join("<br>");
+    }
+
+    function renderOperationalDrills(records) {
+      operationalDrillRecords = records || [];
+      operationalDrillsBody.innerHTML = operationalDrillRecords.map((record) => `
+        <tr>
+          <td>${escapeHtml(record.id)}</td>
+          <td>${escapeHtml(record.mode)}</td>
+          <td><strong>${escapeHtml(record.status)}</strong></td>
+          <td>${escapeHtml(record.finished_at_kst || record.created_at_kst || "-")}</td>
+          <td>${Number(record.duration_seconds || 0).toFixed(3)}초</td>
+          <td>${escapeHtml(record.passed_check_count)}/${escapeHtml(record.check_count)}</td>
+          <td><button class="secondary" type="button" data-operational-drill-id="${attr(record.id)}">상세</button></td>
+        </tr>
+      `).join("") || `<tr><td colspan="7">저장된 운영 훈련이 없습니다.</td></tr>`;
+      operationalDrillsStatus.textContent = `${operationalDrillRecords.length}개 이력`;
+    }
+
+    async function loadOperationalDrills() {
+      const response = await fetch("/operations/drills?limit=20");
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const payload = await response.json();
+      renderOperationalDrills(payload.operational_drill_runs || []);
+    }
+
+    async function runOperationalDrill(event) {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const mode = String(form.get("mode") || "simulated");
+      const cycles = Number(form.get("cycles") || 3);
+      operationalDrillsStatus.textContent = `${mode} 실행 중`;
+      const payload = await postJson("/operations/drills", { mode, cycles });
+      const report = payload.operational_drill;
+      operationalDrillsStatus.textContent = `#${payload.run_id} ${report.passed ? "통과" : "실패"} · ${report.passed_check_count}/${report.check_count}`;
+      await loadOperationalDrills();
+      const saved = operationalDrillRecords.find((record) => String(record.id) === String(payload.run_id));
+      if (saved) renderOperationalDrillDetail(saved);
+    }
+
     async function loadWorkerRuns(options = {}) {
       try {
         const quickRange = normalizeWorkerRunQuickRange(
@@ -9033,6 +9177,38 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
+    operationalDrillForm.addEventListener("submit", async (event) => {
+      try {
+        await runOperationalDrill(event);
+        banner.textContent = "운영 훈련 완료";
+      } catch (error) {
+        event.preventDefault();
+        operationalDrillsStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    operationalDrillsReload.addEventListener("click", async () => {
+      try {
+        await loadOperationalDrills();
+        banner.textContent = "운영 훈련 이력 새로고침 완료";
+      } catch (error) {
+        operationalDrillsStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    operationalDrillsBody.addEventListener("click", (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("button[data-operational-drill-id]")
+        : null;
+      if (!button) return;
+      const record = operationalDrillRecords.find((item) => (
+        String(item.id) === String(button.dataset.operationalDrillId || "")
+      ));
+      if (record) renderOperationalDrillDetail(record);
+    });
+
     webSettingsForm.addEventListener("submit", async (event) => {
       try {
         await saveWebSettings(event);
@@ -9391,7 +9567,7 @@ _INDEX_HTML = """<!doctype html>
     const initialAlertHistoryFilterFromUrl = loadInitialAlertHistoryFiltersFromUrl();
     loadInitialWorkerRunFiltersFromUrl();
 
-    Promise.all([loadStatus(), loadAlerts(), loadDiscordPermissions(), loadDiscordScopes(), loadCollectorWorkerStatus(), loadPostProcessingWorkerStatus(), loadWorkerRuns(), loadPlayers(), loadDataDeletionRequests(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
+    Promise.all([loadStatus(), loadAlerts(), loadDiscordPermissions(), loadDiscordScopes(), loadCollectorWorkerStatus(), loadPostProcessingWorkerStatus(), loadOperationalDrills(), loadWorkerRuns(), loadPlayers(), loadDataDeletionRequests(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
       .then(() => initialAlertHistoryFilterFromUrl ? loadAlertHistory(alertHistoryPage) : null)
       .then(() => loadInitialAlertDetailFromUrl())
       .then(() => loadInitialWorkerRunDetailFromUrl())
@@ -9401,6 +9577,7 @@ _INDEX_HTML = """<!doctype html>
     setInterval(loadCollectorWorkerStatus, 10000);
     setInterval(loadPostProcessingWorkerStatus, 10000);
     setInterval(loadWorkerRuns, 30000);
+    setInterval(() => loadOperationalDrills().catch(() => {}), 30000);
     setInterval(() => {
       loadDataDeletionRequests().catch((error) => { dataDeletionStatus.textContent = `Error: ${error.message}`; });
     }, 30000);

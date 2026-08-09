@@ -1,6 +1,7 @@
 # Implementation Decisions
 
 Decision date: 2026-06-27
+Last updated: 2026-08-09 KST
 
 This file records product and data rules that should be treated as fixed unless an administrator intentionally
 changes them.
@@ -302,6 +303,20 @@ Suggested command groups:
 - Match and telemetry fetches are queued after match IDs are discovered.
 - The exact high-volume scheduling policy remains open until live API behavior is tested.
 - Polling interval, cycle player limit, and player lookup chunk size must be editable in the local management program.
+
+## API Retry And Recovery Policy
+
+- Player lookup follows the official default 10-request-per-minute limit and 10-player batch size.
+- Retry transport failures and HTTP `408`, `425`, `429`, `500`, `502`, `503`, and `504` at most three total attempts.
+- Prefer `X-RateLimit-Reset`, then `Retry-After`, then bounded exponential delay. Cap one delay at 65 seconds and total
+  request sleep at 70 seconds.
+- Only typed transient match/telemetry failures return to `queued`; permanent validation, storage-contract, checksum,
+  and missing-reference failures are terminal.
+- Durable API jobs receive at most five attempts with bounded queue delays. Recover a `running` job after 15 minutes
+  as interrupted work and restore the abandoned attempt before requeue.
+- Operational drills are bounded to two through five cycles. Live mode selects one active shard and one 10-player
+  batch per cycle, requires the automatic collector to be stopped, and never deletes retained data.
+- MySQL stale-recovery drill rows must exist only inside a transaction and must be absent after rollback.
 
 ## Raw Data Lifecycle
 

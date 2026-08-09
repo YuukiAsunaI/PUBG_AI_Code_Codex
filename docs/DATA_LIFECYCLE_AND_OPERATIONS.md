@@ -287,10 +287,12 @@ Implemented behavior:
   parameterized `SELECT`-only verification to both packets. Neither input nor the comparison is persisted, and no
   record, evidence, authorization, readiness, production source access or mutation, restore, quarantine, deletion, or
   execution capability is created. At that release, schema version 20 and its 44 tables were unchanged.
-- Current schema version 21 adds `player_fight_outcomes` and `player_fight_outcome_processing_states` to normalized
-  deletion preview, dry-run, and backup scope. Opponent account IDs are preserved references, while target-owned rows
-  and target-owned fight loadout snapshots follow the existing match/account lifecycle. No raw or replay file is
-  rewritten by fight-outcome parsing.
+- Schema version 21 adds `player_fight_outcomes` and `player_fight_outcome_processing_states` to normalized deletion
+  preview, dry-run, and backup scope. Opponent account IDs are preserved references, while target-owned rows and
+  target-owned fight loadout snapshots follow the existing match/account lifecycle. No raw or replay file is rewritten
+  by fight-outcome parsing.
+- Current schema version 22 adds `operational_drill_runs`. Reports contain bounded counts and safe metrics only; no
+  API key, Discord token, nickname, account ID, or temporary drill target ID is persisted.
 - The earlier non-executing rehearsal still rechecks live deletion impact, evidence times, artifact metadata, bound
   planner-generated capacity evidence, and current quarantine free space without changing targets.
   `executor_not_implemented` remains even after every available rehearsal passes; production restore, actual
@@ -308,14 +310,24 @@ many player summaries and team/weapon aggregates.
 
 | Failure | Action |
 | --- | --- |
-| Rate limit | Retry after backoff |
-| Match detail not yet available | Retry later |
-| Telemetry URL missing | Retry until match data is stable, then mark for review |
+| Rate limit | Honor `X-RateLimit-Reset`/`Retry-After`, then use bounded exponential retry |
+| Match detail not yet available | Treat a discovered-match `404` as transient and requeue, up to five job attempts |
+| Telemetry URL missing | Mark terminal after stable match validation; do not invent an asset URL |
 | Storage path missing | Notify local program and Discord, retry after operator fixes path |
 | Low disk capacity | Notify local program and Discord, pause writes for affected storage |
 | Raw checksum mismatch | Mark terminal until operator review |
 | Parser error | Preserve raw files, mark parse run failed, allow parser-version reparse |
-| MySQL connection failure | Retry after backoff |
+| MySQL connection failure | End the cycle, persist the worker failure when possible, and retry on the next poll |
+
+The HTTP client uses at most three attempts for transport failures and `408`, `425`, `429`, and selected `5xx`
+responses. One delay is capped at 65 seconds and total request sleep at 70 seconds. Match and telemetry queue jobs use
+at most five attempts with 15/30/60/120-second delays. A `running` API job older than 15 minutes is returned to
+`queued` on the next processor pass and its abandoned attempt is restored.
+
+Use `run-operational-drills` or the localhost `#operational-drills` panel to exercise the production retry client,
+storage alert classification, collector stop/restart, transactional MySQL stale recovery, and a bounded idempotent
+soak. See [Operational Recovery and Drills](OPERATIONAL_DRILLS.md). Live mode never deletes retained data, but ordinary
+collection may add newly completed matches.
 
 ## Administrative Actions
 

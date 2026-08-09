@@ -1,6 +1,6 @@
 # Requirement-to-Evidence Audit
 
-Last updated: 2026-08-02 KST
+Last updated: 2026-08-09 KST
 
 ## Purpose
 
@@ -14,59 +14,45 @@ Status meanings:
 - `PARTIAL`: useful behavior exists, but part of the requested contract or evidence is missing.
 - `PENDING`: no production implementation yet.
 
-The weighted completion estimate for the requested core product is **95 to 96 percent**. Collection, storage,
+The weighted completion estimate for the requested core product is **97 to 98 percent**. Collection, storage,
 telemetry parsing, durable fight-outcome and KST trend analytics, named drop-region resolution, post-match replay,
-recommendations, and local administration are operational. The largest remaining validation gaps are a real Discord
-command exchange and controlled rate-limit, storage, and worker recovery drills; weapon-family accuracy calibration
-remains a smaller analysis gap.
+recommendations, local administration, and bounded operational recovery are working. The remaining core validation
+gaps are a real Discord command exchange in a selected channel and weapon-family hit/accuracy calibration. Destructive
+deletion remains intentionally absent until the administrator explicitly approves that separate risk-bearing scope.
 
 ## Live Evidence Snapshot
 
-The following checks were run on 2026-08-02 KST without printing either secret:
+The following checks were run on 2026-08-09 KST without printing either secret:
 
-- Repository baseline before this implementation slice: `02b2fe5` (`Add KST player trend reports`).
-- Automated suite: `395 passed`, with one existing Starlette deprecation warning.
-- Python compile and `git diff --check`: passed.
-- Secret scan and mutation-route scan: passed.
-- MySQL: local `pubg_ai`, schema version 21, 46 tables.
-- Registered target: Steam player `Yuuki_Asuna---`; live nickname lookup returned the stored PUBG `accountId`.
-- Latest PUBG collection: 61 newly discovered matches, 61 match payloads, and 61 telemetry payloads, with zero failures.
-- Current retained corpus: 207 matches and 18,447 participants.
-- Current parsed corpus: 207 combat summaries, 679 weapon rows, 28,825 item events, 5,841 item-stat rows,
-  13,060 position samples, 1,427 combat locations, 923 loadout snapshots, 815 durable fight outcomes,
-  207 fight-processing states, 6,897 care-package events, 174 plane routes, and 29,991 phase events.
-- Artifact corpus: 207 JPEG map snapshots and 207 timeline JSON files.
-- Raw storage audit: 414 metadata rows, zero missing files, zero size mismatches, and zero paths outside the configured
+- Repository baseline before this implementation slice: `0076485` (`Add versioned PUBG map regions`).
+- Automated suite: `423 passed`, with one existing Starlette deprecation warning.
+- Python compile, `git diff --check`, and secret-pattern scan: passed. The actual `.env` is ignored and untracked;
+  only `.env.example` is tracked, and no JWT-like or Discord-token-like value was found outside `.env`.
+- MySQL: local `pubg_ai`, MySQL 8.0.41, schema version 22, 47 tables.
+- Registered target: Steam player `Yuuki_Asuna---`; collection continues by the stored PUBG `accountId`.
+- Operational drill evidence: simulated run 1 passed 4/4; live run 3 passed 5/5. The live transaction recovered one
+  stale match and one stale telemetry job, rolled back, and left zero drill rows. Two bounded Steam cycles ended with
+  zero queued/running/failed jobs and zero duplicate groups.
+- Latest PUBG collection: 37 newly retained matches and telemetry payloads were completed with zero terminal failure.
+- Current queue: 244 succeeded match jobs and 244 succeeded telemetry jobs; no other queue state remains.
+- Current retained corpus: 244 matches, 21,911 participants, 9 player snapshots, 244 match payloads, and 244 telemetry
+  payloads.
+- Current parsed corpus: 244 combat summaries, 795 weapon rows, 36,167 item events, 7,202 item-stat rows, 16,841
+  position samples, 1,644 combat locations, 1,059 loadout snapshots, 935 durable fight outcomes, 244 fight-processing
+  states, 9,076 care-package events, 211 plane routes, and 36,045 phase events.
+- Artifact corpus: 244 JPEG map snapshots and 244 timeline JSON files.
+- Raw storage audit: 488 metadata rows, zero missing files, zero size mismatches, and zero paths outside the configured
   root.
-- Replay storage audit: 414 metadata rows, zero missing files, zero size mismatches, and zero paths outside the
+- Replay storage audit: 488 metadata rows, zero missing files, zero size mismatches, and zero paths outside the
   configured root.
-- Discord read-only authentication: bot account authenticated, `/users/@me` returned 200,
-  `/users/@me/guilds` returned 200, and 16 guild memberships were visible. No message was sent.
-- Collector one-cycle run: one active target, no errors, and no remaining fetch backlog.
-- Post-processing one-cycle run: every processor, including parser-version-aware fight-outcome backfill, had zero
-  remaining candidates and zero errors.
-- Fight-outcome backfill: 207 match/player payloads produced 815 unique rows and 207 v2 processing states; state
-  counts equal outcome rows, duplicate key groups are zero, and immutable raw/replay files were not changed.
-- Live player report: after excluding one friendly-fire row by default, 814 fights produced 367 wins and 447 losses
-  (45.09 percent), split into 229 kill wins, 138 DBNO wins, 230 death losses, and 217 DBNO losses. Fifty-six
-  non-firearm contexts remain in the event ledger but are excluded from firearm/loadout rankings.
-- Local API and UI: the real profile returned M416, AUG, and Beryl firearm rankings; desktop and 390 px mobile
-  Playwright checks rendered the result with no horizontal overflow, console errors, or page errors.
-- KST trends: hour-of-day, date, ISO-week, and month reports produced 20, 15, 4, and 3 buckets respectively; every
-  bucket set summed to the same 207 matches. Team-mode counts `11 + 58 + 137 + 1` and perspective counts
-  `1 + 206 + 0` also partitioned the corpus exactly. A single-day inclusive filter returned all three August 2
-  matches. CLI and localhost API totals matched the existing profile totals.
-- KST trend UI: real monthly and squad/TPP/hour views rendered 3 and 17 rows on desktop and 390 px mobile with no
-  document overflow, console errors, or page errors. Discord formatter and option parser tests passed.
-- Named drop regions: a catalog pinned to official `pubg/api-assets` commit `32b13b5` contains more than 150 static
-  region definitions across ten canonical maps, explicit Paramo dynamic-map handling, and source-image SHA-256 values.
-  Fifteen of 20 live drop clusters matched named regions, representing 30 of 35 landing matches (85.7 percent);
-  unmatched points retained raw coordinates, stable cluster IDs, and grid labels.
-- Named-region UI: the real resolver returned Stalber with source/version metadata, while live recommendations rendered
-  Korean labels on desktop and 390 px mobile with no overflow, console errors, or page errors.
-- Browser replay check: a real `Savage_Main` timeline rendered a 960 by 960 nonblank canvas with 31 event buttons,
-  an advancing playback clock, no document overflow, no console errors, and no page errors. Visual inspection confirmed
-  the map, plane route, tracked player, three teammates, combat events, deaths, and care packages were legible.
+- Final post-processing cycle: every parser and artifact generator reported zero remaining candidates and zero errors.
+- Local operational UI: desktop and 390 px mobile Chrome checks executed a simulated drill and loaded persisted live
+  detail with no document overflow, console errors, page errors, failed requests, or error overlay. The mobile history
+  table uses a stable horizontal scroll layout.
+- Earlier 2026-08-02 acceptance evidence remains valid for KST trend partitions, recommendation output, official-asset
+  named regions, and nonblank 2D replay playback; all associated regression tests remain green.
+- Earlier read-only Discord authentication returned 200 for the bot account and guild list with 16 memberships. No
+  message has been sent, so real command and alert delivery remain external acceptance work.
 
 Configured local roots:
 
@@ -82,7 +68,7 @@ Configured local roots:
 | CFG-03 | Configure raw and replay roots from the local program | PROVEN | Settings UI/API and `tests/test_web_settings.py`; live roots are listed above. |
 | CFG-04 | Configure polling interval, cycle target limit, and lookup chunk size | PROVEN | Live settings are 180 seconds, 100 targets per cycle, and 10 names per lookup chunk. |
 | CFG-05 | Keep data indefinitely | PROVEN | Immutable raw and replay files are retained; no automatic expiry job exists. |
-| CFG-06 | Alert locally and in Discord when storage is low or unavailable | IMPLEMENTED | `storage_alerts.py`, `system_alerts.py`, and their tests; a real low-disk event has not been forced. |
+| CFG-06 | Alert locally and in Discord when storage is low or unavailable | IMPLEMENTED | The controlled low-space drill produced `local_program` and `discord` targets. Actual Discord-channel delivery remains part of the selected-channel acceptance run. |
 | CFG-07 | Never expose the local manager to other computers by default | PROVEN | Runtime and tests require loopback binding; the active server is `http://127.0.0.1:8018`. |
 
 ## Player And Match Collection
@@ -94,30 +80,30 @@ Configured local roots:
 | COL-03 | Use admin-managed tracking targets, not ownership claims | IMPLEMENTED | Registry and Discord permission tests enforce the tracking-target model. |
 | COL-04 | Collect only registered targets as the primary scope | PROVEN | Collector queried the one active registered target; no unregistered polling path exists. |
 | COL-05 | Stop collection on unregister but retain prior data | IMPLEMENTED | Registry and Discord command tests cover inactive retention. |
-| COL-06 | Discover match IDs from player data, then fetch each match | PROVEN | Live run discovered and processed 61 match IDs exactly through this flow. |
-| COL-07 | Process completed matches and telemetry after match completion | PROVEN | Match and telemetry jobs completed for all 61 discovered matches. PUBG provides this as post-match data. |
+| COL-06 | Discover match IDs from player data, then fetch each match | PROVEN | This live slice discovered and processed 37 new match IDs through the stored player account flow. |
+| COL-07 | Process completed matches and telemetry after match completion | PROVEN | All 37 new match and telemetry payloads completed; the final queue contains only 244+244 succeeded jobs. |
 | COL-08 | Collect every discoverable match for tracked players | PROVEN | Continuous polling stores every new ID exposed by the player endpoint, with idempotent jobs. Historical reach is limited by PUBG's player response window. |
 | COL-09 | Classify mode, perspective, match type, map, and shard immediately | PROVEN | `match_classification.py`, tests, and populated match rows. |
 | COL-10 | Store timestamps in KST | PROVEN | `time_utils.py`, tests, and live KST match-window inspection. |
-| COL-11 | Preserve raw player, match, and telemetry payloads | PROVEN | 3 player snapshots, 207 match payloads, and 207 telemetry payloads are retained. |
+| COL-11 | Preserve raw player, match, and telemetry payloads | PROVEN | 9 player snapshots, 244 match payloads, and 244 telemetry payloads are retained. |
 | COL-12 | Record total, human, and bot population | PROVEN | `match_population.py`, tests, and participant ingestion. |
-| COL-13 | Handle API limits, retries, and idempotency | PARTIAL | Headers, retry states, chunking, and tests exist. A controlled real 429 and recovery drill remains. |
+| COL-13 | Handle API limits, retries, and idempotency | PROVEN | Production client retries are bounded and honor official reset headers; controlled 429 recovery, live bounded collection, zero duplicate groups, queue retries, and stale recovery passed. |
 
 ## Telemetry And Match Facts
 
 | ID | Requirement | Status | Evidence and remaining note |
 | --- | --- | --- | --- |
-| TEL-01 | Record pickup, drop, use, equip, attach, and detach events | PROVEN | Item processor produced 28,825 retained item events. |
+| TEL-01 | Record pickup, drop, use, equip, attach, and detach events | PROVEN | Item processor produced 36,167 retained item events. |
 | TEL-02 | Translate item and weapon codes to Korean with raw-code fallback | PROVEN | `code_translator.py` and tests; unknown new codes remained visible verbatim in live output. |
 | TEL-03 | Record survival time, kills, damage, assists, rank, movement, and chicken result | PROVEN | Match participants and player combat/movement summaries cover these values. |
-| TEL-04 | Record total and per-weapon damage dealt and received | PROVEN | Combat summary and 679 per-weapon rows; live player statistics and recommendations loaded them. |
+| TEL-04 | Record total and per-weapon damage dealt and received | PROVEN | Combat summary and 795 per-weapon rows; live player statistics and recommendations loaded them. |
 | TEL-05 | Record shots fired, hits, body-part hits, and headshots per weapon | PARTIAL | Events and per-weapon counters are retained. Shotgun pellet hits can exceed shell fire events, so accuracy semantics need an explicit weapon-family rule instead of relying on the current clamp. |
 | TEL-06 | Record kills, assists, deaths, DBNO caused, and DBNO taken separately | PROVEN | Parser, summaries, per-weapon rows, and combat tests distinguish every requested direction. |
 | TEL-07 | Distinguish DBNO, finish, death, revive, and repeated life-state events | PROVEN | Event-indexed telemetry facts preserve repeated DBNO/death/revive sequences. |
-| TEL-08 | Count causing a DBNO as winning a duo or squad fight | PROVEN | Schema-backed outcomes persist duo/squad DBNO caused as wins and DBNO taken as losses; solo DBNO is ignored. The live report contains 138 DBNO wins and 217 eligible DBNO losses. |
+| TEL-08 | Count causing a DBNO as winning a duo or squad fight | PROVEN | Schema-backed outcomes persist duo/squad DBNO caused as wins and DBNO taken as losses; solo DBNO is ignored. The current durable fight ledger contains 935 outcomes. |
 | TEL-09 | Preserve winning and losing weapon plus attachment context | PROVEN | Parser v2 prioritizes actual `LogPlayerAttack.weapon.attachedItems`, then reconstructed item state/equip and damage-event fallback. Live backfill stores kill, DBNO-caused, DBNO-taken, and death contexts in the event ledger and shared snapshot table. |
-| TEL-10 | Record movement path, landing, kill, DBNO, death, and revive locations | PROVEN | Movement processor populated positions, landing facts, and 1,427 combat-location events. |
-| TEL-11 | Record plane route, care-package locations, and phase movement | PROVEN | 174 plane routes, 6,897 care-package events, and 29,991 phase events are retained. |
+| TEL-10 | Record movement path, landing, kill, DBNO, death, and revive locations | PROVEN | Movement processor populated positions, landing facts, and 1,644 combat-location events. |
+| TEL-11 | Record plane route, care-package locations, and phase movement | PROVEN | 211 plane routes, 9,076 care-package events, and 36,045 phase events are retained. |
 | TEL-12 | Highlight other registered players in the same match | PROVEN | Timeline data/UI distinguishes tracked, registered, and ordinary teammates; live replay inspection passed. |
 
 ## Analytics And Recommendations
@@ -133,16 +119,16 @@ Configured local roots:
 | ANA-07 | Analyze common drop locations from coordinates | PROVEN | Coordinate clustering and live drop-zone recommendations work. |
 | ANA-08 | Map coordinate clusters to named regions | PROVEN | Versioned official-asset-backed region circles, stable IDs, raw-coordinate fallback, CLI/API/UI/Discord integration, tests, and live coverage validation passed. |
 | ANA-09 | Group reports by hour, day, week, and month in KST | PROVEN | `player_trends.py` uses stored KST match times and Python ISO-week rules. CLI/API/UI and live all-unit invariants passed. |
-| ANA-10 | Group trends by solo, duo, squad, perspective, match type, map, and shard | PROVEN | One filter contract covers game mode, team mode, perspective, match type, map, shard, custom status, and inclusive KST dates. Real team/perspective partitions summed exactly to all 207 matches. |
+| ANA-10 | Group trends by solo, duo, squad, perspective, match type, map, and shard | PROVEN | One filter contract covers every requested dimension. Earlier live team/perspective partitions summed exactly, and the current 244-match pipeline remains covered by regression tests. |
 | ANA-11 | Compute durable fight win/loss rates by weapon and attachments | PROVEN | MySQL service, CLI, localhost API/UI, and Discord formatter expose total, reason, firearm, and exact loadout win/loss rates. Real API and desktop/mobile UI checks passed. |
 
 ## Replay And Local Management
 
 | ID | Requirement | Status | Evidence and remaining note |
 | --- | --- | --- | --- |
-| REP-01 | Generate and retain JPEG match maps | PROVEN | 207 JPEG artifacts exist under the configured replay root. |
+| REP-01 | Generate and retain JPEG match maps | PROVEN | 244 JPEG artifacts exist under the configured replay root. |
 | REP-02 | Show plane, parachute/landing, movement, kill, and death locations | PROVEN | Renderer/timeline tests and a real browser replay inspection passed. |
-| REP-03 | Generate and retain post-match 2D replay timelines | PROVEN | 207 timeline artifacts exist; playback advanced without browser errors. |
+| REP-03 | Generate and retain post-match 2D replay timelines | PROVEN | 244 timeline artifacts exist; playback advanced without browser errors in the prior live replay check. |
 | REP-04 | Provide true in-match live tracking | NOT APPLICABLE | The PUBG Open API exposes usable telemetry after match completion. The implemented product is a post-match 2D replay, matching the confirmed collection constraint. |
 | WEB-01 | Manage settings, targets, permissions, workers, artifacts, and analytics locally | PROVEN | Local web routes/UI and their test suites cover these workflows. |
 
@@ -157,27 +143,27 @@ Configured local roots:
 | DSC-05 | Authenticate the actual configured bot | PROVEN | Read-only Discord REST authentication and 16 guild memberships were verified. |
 | DSC-06 | Exercise a real command in a selected guild and channel | PENDING | Requires an explicitly selected test guild/channel and a harmless command invocation. |
 | OPS-01 | Run collector and post-processing workers | PROVEN | Both workers completed real one-cycle runs and left zero backlog. |
-| OPS-02 | Recover cleanly across long-running operation and restart | PARTIAL | Idempotent one-cycle behavior and run history exist; a soak, forced stop, restart, and backlog recovery drill remains. |
+| OPS-02 | Recover cleanly across long-running operation and restart | PROVEN | Controller stop/restart, bounded simulated and live soak, interruptible waits, and transactional MySQL match/telemetry stale recovery passed; live queue and duplicate counts ended at zero. |
 | OPS-03 | Let an administrator decide whether retained player data is deleted | PARTIAL | Request, preview, backup, verification, quarantine, restore rehearsal, and review tooling exist. There is intentionally no destructive executor yet. |
 
 ## Prioritized Remaining Roadmap
 
 1. **P0: real Discord command acceptance test**
    Run one read-only query and one disposable registration lifecycle in a user-selected test channel without exposing the
-   token.
-2. **P1: operational fault drills**
-   Exercise controlled 429/backoff behavior, a low-space alert, worker stop/restart recovery, and a bounded soak run.
-3. **P2: hit and accuracy calibration**
+   token; confirm one controlled alert delivery there as well.
+2. **P1: hit and accuracy calibration**
    Define shell, projectile, and pellet semantics per weapon family and report both raw hit events and a clearly named
    accuracy metric.
-4. **P3: destructive deletion execution, only when explicitly approved**
+3. **P2: destructive deletion execution, only when explicitly approved**
    Keep the existing review and backup gates. Do not add or invoke irreversible deletion as an incidental step.
 
 ## Completion Gates
 
 The original core scope can be called complete when:
 
-- One real Discord channel acceptance run succeeds with no secret disclosure.
-- The collector survives the bounded rate-limit and restart drills without duplicate or missing match jobs.
-- Raw and replay storage audits remain at zero missing, mismatched, or escaped files after the changes.
-- The full automated suite, compile check, diff check, and secret scan pass.
+- One real Discord channel acceptance run succeeds with no secret disclosure, including a controlled alert delivery.
+- Weapon-family shell/projectile/pellet semantics are calibrated against additional telemetry samples.
+- Raw and replay storage audits remain at zero missing, mismatched, or escaped files after later changes.
+- The full automated suite, compile check, diff check, and secret scan continue to pass.
+
+The bounded rate-limit, stop/restart, MySQL stale-recovery, and live idempotency gate is complete as of live drill run 3.

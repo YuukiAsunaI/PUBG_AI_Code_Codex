@@ -156,8 +156,9 @@ default database option reuses one connection for two read-only current-chain ch
 include the complete count and at most 1,000 field rows. At that release, schema version 20 and all 44 tables were
 unchanged.
 
-The current runtime schema is version 21 with 46 tables. Durable fight outcomes add no secret or environment
-variable. The localhost manager stores the automatic worker's `fight_outcome_limit` beside the existing processing
+The current runtime schema is version 22 with 47 tables. `operational_drill_runs` adds no secret or environment
+variable and stores only bounded, secret-free drill reports. Durable fight outcomes remain in the two schema-version
+21 tables. The localhost manager stores the automatic worker's `fight_outcome_limit` beside the existing processing
 limits, and the manual parser reads immutable telemetry from the configured raw-data root.
 
 KST trend reports add no environment variable, local setting, schema table, or background worker. The CLI, Discord
