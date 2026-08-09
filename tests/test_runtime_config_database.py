@@ -173,7 +173,10 @@ class DiscordCommandDefaultsTests(unittest.TestCase):
         self.assertIn("pubg-trends", DEFAULT_COMMAND_GROUPS["profile_read"])
         self.assertIn("pubg-weapon", DEFAULT_COMMAND_GROUPS["profile_read"])
         self.assertIn("랭킹", DEFAULT_COMMAND_GROUPS["ranking_read"])
-        self.assertIn("유저삭제", DEFAULT_COMMAND_GROUPS["admin"])
+        self.assertIn("유저삭제", DEFAULT_COMMAND_GROUPS["player_manage"])
+        self.assertIn("pubg-unregister", DEFAULT_COMMAND_GROUPS["player_manage"])
+        self.assertNotIn("유저삭제", DEFAULT_COMMAND_GROUPS["admin"])
+        self.assertNotIn("pubg-unregister", DEFAULT_COMMAND_GROUPS["admin"])
 
         self.assertIn("pubg-alerts", DEFAULT_COMMAND_GROUPS["admin"])
         self.assertIn("pubg-alert-ack", DEFAULT_COMMAND_GROUPS["admin"])

@@ -424,6 +424,7 @@ grant a command group to a Discord user ID:
 ```powershell
 python -m pubg_ai.cli add-discord-global-admin 123456789012345678
 python -m pubg_ai.cli grant-discord-permission 123456789012345678 register --guild-id 987654321098765432
+python -m pubg_ai.cli grant-discord-permission 123456789012345678 player_manage --guild-id 987654321098765432
 python -m pubg_ai.cli discord-permissions
 ```
 
@@ -434,8 +435,11 @@ global admin. Only global admins can run `!pubg-ranking-scope guild|global [guil
 remains local-program/CLI managed. The running bot reloads permission settings before each gated command, so local
 manager and CLI changes apply without restarting the bot.
 
-Permission groups currently include `register`, `profile_read`, `ranking_read`, `replay_read`, `settings_write`, and
-`admin`.
+Permission groups currently include `register`, `player_manage`, `profile_read`, `ranking_read`, `replay_read`,
+`settings_write`, and `admin`. `player_manage` grants only `유저삭제`/`pubg-unregister`, which stops future collection
+while retaining existing data. It does not grant permission management, destructive deletion review, alert control,
+or worker administration. Existing `admin` grants continue to imply `player_manage`, while a delegated
+`player_manage` grant does not imply `admin`.
 `!pubg-settings` returns a deliberately restricted summary: collector limits, raw compression mode, public-profile
 default, and the current guild ranking scope. It never returns API keys, bot tokens, database details, or storage
 paths. Global admins and users with a global `settings_write` grant can update collector limits or the public-profile

@@ -86,20 +86,24 @@ On 2026-08-09 KST:
 - The live stale-recovery transaction recovered one match and one telemetry job, rolled back, and left zero rows.
 - The final live soak ran two Steam cycles with a 10-player cap and ended with zero queued, running, or failed jobs,
   zero duplicate groups, and 244 succeeded match plus 244 succeeded telemetry jobs.
-- The full automated suite passed 423 tests.
+- The final 2026-08-10 automated suite passed 447 tests.
 - Chrome checks at desktop and 390 px mobile widths found no console error, page error, failed request, or document
   overflow; the UI executed and persisted an additional simulated drill.
 - Raw and replay audits each checked 488 metadata rows with zero missing files, size mismatches, or paths outside the
   configured roots.
 
-The remaining external operations acceptance gap is an actual Discord command and alert delivery in a user-selected
-guild/channel. The controlled storage drill proves alert classification and targets but deliberately does not fill a
-real disk or send a test Discord message.
-
 The guarded `discord-acceptance-probe`, `discord-acceptance-send-alert`, and `discord-acceptance-observe` CLI commands
 make that final run repeatable. Probe is read-only; send-alert requires exact explicit confirmation and verifies the
 created message by reading it back; observe pairs a human command with the bot's referenced reply without exposing
 message bodies. On 2026-08-10 KST, the production probe authenticated `SCA_Bot`, found 16 guild memberships, and
-verified view/send/history permissions plus a baseline message ID for the recommended test channel. The bot also
-connected to the Discord Gateway successfully. No test message was sent because the user-selected channel gate remains
-intentional.
+verified view/send/history permissions for the selected channel. Controlled test `16f7b14b2591` delivered message
+`1536044033988628610` and read it back successfully.
+
+A human author then completed referenced reply round trips for `배그도움말`, `유저등록`, `유저조회`, `유저삭제`,
+and restored `유저등록`; all bot responses arrived within two seconds. Soft unregister changed the tracked player to
+inactive while 244 matches and aggregates remained, and restore returned the same account/scope to active. The
+post-stop and post-restore storage measurements were identical: 489 raw files / 484,437,073 bytes and 497 replay
+files / 136,635,256 bytes. The live run also drove a least-privilege correction: soft unregister now uses the
+dedicated `player_manage` group instead of broad `admin`. The author never received `admin`, and all temporary grants
+were revoked after the lifecycle. This closes the external Discord operations acceptance gap without exposing message
+bodies, API keys, or the bot token.

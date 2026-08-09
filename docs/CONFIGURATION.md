@@ -52,18 +52,19 @@ Recommended JSON shape:
   "discord_permissions": {
     "command_groups": {
       "register": ["유저등록", "pubg-register"],
+      "player_manage": ["유저삭제", "pubg-unregister"],
       "profile_read": ["유저조회", "전적", "무기", "매치", "pubg-profile", "pubg-stats", "pubg-recent", "pubg-match", "pubg-weapon"],
       "ranking_read": ["랭킹", "pubg-ranking"],
       "replay_read": ["pubg-replay"],
       "settings_write": ["pubg-settings"],
-      "admin": ["유저삭제", "pubg-permission", "pubg-ranking-scope", "pubg-guild-scope", "pubg-unregister", "pubg-delete-data", "pubg-delete-cancel"]
+      "admin": ["pubg-permission", "pubg-ranking-scope", "pubg-guild-scope", "pubg-delete-data", "pubg-delete-cancel"]
     },
     "user_grants": {
       "discord-user-id": ["profile_read", "ranking_read"]
     },
     "guild_user_grants": {
       "guild-id": {
-        "discord-user-id": ["register", "profile_read"]
+        "discord-user-id": ["register", "player_manage", "profile_read"]
       }
     },
     "global_admin_user_ids": ["discord-admin-user-id"],
@@ -93,6 +94,12 @@ The current built-in `admin` command group also includes `pubg-alerts`, `pubg-al
 `pubg-worker-run`, plus `pubg-permission` and `pubg-ranking-scope`, for alert report lookup, suppression, annotation,
 note review, filtered alert history review, worker-run inspection, permission grants, and guild ranking-scope changes
 from Discord.
+
+The `player_manage` group contains only `유저삭제` and `pubg-unregister`. Both commands perform a soft unregister:
+future collection stops, while normalized rows and raw/replay files remain. This delegated group does not permit
+`pubg-delete-data`, `pubg-permission`, alert controls, or worker controls. For compatibility, an `admin` grant implies
+`player_manage`, but the reverse is never true. Legacy settings are normalized by moving the two soft-unregister
+command names out of the stored `admin` command list when loaded.
 
 The `settings_write` group enables `pubg-settings`. Guild-scoped grants may read only a restricted summary. Global
 admins and globally granted `settings_write` users may change collector limits and the default `public_profile` value.

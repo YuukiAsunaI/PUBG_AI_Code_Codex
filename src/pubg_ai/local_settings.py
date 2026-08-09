@@ -133,6 +133,7 @@ class AlertSettings:
 
 DEFAULT_COMMAND_GROUPS: dict[str, list[str]] = {
     "register": ["유저등록", "pubg-register"],
+    "player_manage": ["유저삭제", "pubg-unregister"],
     "profile_read": [
         "유저조회",
         "전적",
@@ -152,7 +153,7 @@ DEFAULT_COMMAND_GROUPS: dict[str, list[str]] = {
     "ranking_read": ["랭킹", "pubg-ranking"],
     "replay_read": ["pubg-replay"],
     "settings_write": ["pubg-settings"],
-    "admin": ["유저삭제", "pubg-permission", "pubg-unregister", "pubg-delete-data"],
+    "admin": ["pubg-permission", "pubg-delete-data"],
 }
 DEFAULT_COMMAND_GROUPS["admin"] = sorted(
     set(
@@ -671,6 +672,11 @@ def _merge_default_command_groups(groups: dict[str, list[str]]) -> dict[str, lis
     merged = _copy_groups(groups)
     for group, default_values in DEFAULT_COMMAND_GROUPS.items():
         merged[group] = sorted(set(merged.get(group, []) + default_values))
+    # Older settings placed soft unregister beside destructive admin commands.
+    # Keep the commands in their dedicated least-privilege group after upgrade.
+    merged["admin"] = sorted(
+        set(merged.get("admin", [])) - set(DEFAULT_COMMAND_GROUPS["player_manage"])
+    )
     return merged
 
 

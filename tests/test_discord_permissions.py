@@ -90,6 +90,42 @@ class DiscordPermissionCheckerTests(unittest.TestCase):
             checker.is_allowed(DiscordCommandIdentity(user_id="user-1"), "profile_read")
         )
 
+    def test_admin_grant_inherits_player_manage_without_exposing_admin_to_delegate(
+        self,
+    ) -> None:
+        checker = DiscordPermissionChecker(
+            DiscordPermissionSettings(
+                command_groups=DEFAULT_COMMAND_GROUPS,
+                user_grants={},
+                guild_user_grants={
+                    "guild-1": {
+                        "admin-user": ["admin"],
+                        "delegate-user": ["player_manage"],
+                    }
+                },
+                global_admin_user_ids=[],
+            )
+        )
+
+        self.assertTrue(
+            checker.is_allowed(
+                DiscordCommandIdentity(user_id="admin-user", guild_id="guild-1"),
+                "player_manage",
+            )
+        )
+        self.assertTrue(
+            checker.is_allowed(
+                DiscordCommandIdentity(user_id="delegate-user", guild_id="guild-1"),
+                "player_manage",
+            )
+        )
+        self.assertFalse(
+            checker.is_allowed(
+                DiscordCommandIdentity(user_id="delegate-user", guild_id="guild-1"),
+                "admin",
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

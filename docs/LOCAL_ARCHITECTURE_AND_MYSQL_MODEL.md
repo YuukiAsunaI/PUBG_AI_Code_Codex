@@ -309,7 +309,8 @@ can be added later after the permission model and response payloads settle.
 | `/pubg-replay match_id` | Local 2D replay link or rendered summary |
 | `/pubg-ranking scope` | Server-wide rankings |
 | `/pubg-permission user group allow` | Grant or revoke command group permissions; admin-only |
-| `/pubg-unregister nickname shard` | Stop future collection and retain existing data by default; admin/delegated-only |
+| `/pubg-unregister nickname shard` | Stop future collection and retain existing data; `player_manage` delegated permission or admin inheritance |
+| `/pubg-delete-data nickname shard scope` | Create a destructive-deletion review request; admin-only and non-executing by default |
 
 The same permission groups and per-user grants must be editable in the local management program.
 

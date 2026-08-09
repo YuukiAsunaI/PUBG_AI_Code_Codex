@@ -144,11 +144,12 @@ Suggested command groups:
 | Group | Examples |
 | --- | --- |
 | `register` | register player, update shard/name mapping |
+| `player_manage` | stop future collection while retaining all existing data |
 | `profile_read` | profile, recent matches, match details, weapon stats |
 | `ranking_read` | server ranking, global ranking for admins, map ranking, weapon ranking |
 | `replay_read` | replay link, replay summary |
 | `settings_write` | restricted Discord summary; global grants may change polling limits and public-profile default |
-| `admin` | grant permissions, unregister players, delete data |
+| `admin` | grant permissions, manage operations, create destructive deletion review requests |
 
 ## Secret Handling
 

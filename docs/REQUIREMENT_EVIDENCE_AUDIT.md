@@ -14,18 +14,18 @@ Status meanings:
 - `PARTIAL`: useful behavior exists, but part of the requested contract or evidence is missing.
 - `PENDING`: no production implementation yet.
 
-The weighted completion estimate for the requested core product is **about 99 percent**. Collection, storage,
+The weighted completion estimate for the requested core product is **100 percent**. Collection, storage,
 telemetry parsing, class-aware weapon hit metrics, durable fight-outcome and KST trend analytics, named drop-region
-resolution, post-match replay, recommendations, local administration, and bounded operational recovery are working.
-The only remaining core external validation is a real Discord command exchange in a selected channel. Destructive
-deletion remains intentionally absent until the administrator explicitly approves that separate risk-bearing scope.
+resolution, post-match replay, recommendations, local administration, bounded operational recovery, and the selected
+Discord-channel lifecycle are working. Destructive deletion execution remains a separately gated, non-core scope
+until the administrator explicitly approves that irreversible capability.
 
 ## Live Evidence Snapshot
 
 The following checks were run through 2026-08-10 KST without printing either secret:
 
-- Repository baseline before the weapon hit-metric calibration slice: `a5f62fd`.
-- Automated suite: `444 passed`, with one existing Starlette deprecation warning.
+- Repository baseline before the Discord live-acceptance slice: `14c82f2`.
+- Automated suite: `447 passed`, with one existing Starlette deprecation warning.
 - Python compile, `git diff --check`, and secret-pattern scan: passed. The actual `.env` is ignored and untracked;
   only `.env.example` is tracked, and no JWT-like or Discord-token-like value was found outside `.env`.
 - MySQL: local `pubg_ai`, MySQL 8.0.41, schema version 22, 47 tables.
@@ -47,6 +47,9 @@ The following checks were run through 2026-08-10 KST without printing either sec
 - Artifact corpus: 244 JPEG map snapshots and 244 timeline JSON files.
 - Raw storage audit: 488 metadata rows, zero missing files, zero size mismatches, and zero paths outside the configured
   root.
+- Discord stop/restore retention check: the target remained at 244 matches before stop, while inactive, and after
+  restore. The post-stop and post-restore filesystem measurements were identical at 489 raw files / 484,437,073 bytes
+  and 497 replay files / 136,635,256 bytes.
 - Replay storage audit: 488 metadata rows, zero missing files, zero size mismatches, and zero paths outside the
   configured root.
 - Final post-processing cycle: every parser and artifact generator reported zero remaining candidates and zero errors.
@@ -55,10 +58,20 @@ The following checks were run through 2026-08-10 KST without printing either sec
   table uses a stable horizontal scroll layout.
 - Earlier 2026-08-02 acceptance evidence remains valid for KST trend partitions, recommendation output, official-asset
   named regions, and nonblank 2D replay playback; all associated regression tests remain green.
-- Discord readiness: the guarded production probe authenticated `SCA_Bot`, found 16 guild memberships, and verified
-  view/send/history permissions plus a baseline message ID for the recommended test channel. The production bot then
-  connected to the Discord Gateway. No message has been sent, so real command and alert delivery remain external
-  acceptance work behind explicit channel selection.
+- Discord live acceptance used guild `1077634255817027675` and channel `1077634256773320876`. The guarded production
+  probe authenticated `SCA_Bot`, found 16 guild memberships, and verified view/send/history permissions. Controlled
+  alert test `16f7b14b2591` created message `1536044033988628610` and read it back with `verified=true`.
+- A human `!배그도움말` command (`1536046036299022356`) received referenced bot reply
+  `1536046037658116118`. The same author then completed register (`1536046864082665514`), query
+  (`1536047518293565450`), soft unregister (`1536054211408568500`), and restore registration
+  (`1536055314011398335`); every referenced reply was observed and all response times were under two seconds.
+- The first register bound the tracking target to the command author, guild, and channel. Soft unregister changed only
+  `active` to false; 244 matches and all displayed aggregate values remained. Re-registration restored `active=true`
+  with the same account, scope, 244 matches, and aggregate values.
+- The live run discovered that soft unregister shared the broad `admin` group. It now uses dedicated
+  `player_manage`; legacy `admin` grants imply it for compatibility, while delegates do not receive `admin`.
+  Production settings confirmed no `admin` grant during the test. Temporary `register`, `profile_read`, and
+  `player_manage` grants were all revoked afterward, leaving zero user grants and zero global admins.
 
 Configured local roots:
 
@@ -74,7 +87,7 @@ Configured local roots:
 | CFG-03 | Configure raw and replay roots from the local program | PROVEN | Settings UI/API and `tests/test_web_settings.py`; live roots are listed above. |
 | CFG-04 | Configure polling interval, cycle target limit, and lookup chunk size | PROVEN | Live settings are 180 seconds, 100 targets per cycle, and 10 names per lookup chunk. |
 | CFG-05 | Keep data indefinitely | PROVEN | Immutable raw and replay files are retained; no automatic expiry job exists. |
-| CFG-06 | Alert locally and in Discord when storage is low or unavailable | IMPLEMENTED | The controlled low-space drill produced `local_program` and `discord` targets. Actual Discord-channel delivery remains part of the selected-channel acceptance run. |
+| CFG-06 | Alert locally and in Discord when storage is low or unavailable | PROVEN | The low-space drill produced both targets, and controlled alert `16f7b14b2591` was delivered to and read back from the selected production Discord channel. |
 | CFG-07 | Never expose the local manager to other computers by default | PROVEN | Runtime and tests require loopback binding; the active server is `http://127.0.0.1:8018`. |
 
 ## Player And Match Collection
@@ -83,9 +96,9 @@ Configured local roots:
 | --- | --- | --- | --- |
 | COL-01 | Register nickname together with platform | PROVEN | `player_registry.py`, `pubg_client.py`, tests, and the live Steam lookup. |
 | COL-02 | Resolve nickname once and collect later by `accountId` | PROVEN | Registry persists the resolved identifier; the live collection used the stored account. |
-| COL-03 | Use admin-managed tracking targets, not ownership claims | IMPLEMENTED | Registry and Discord permission tests enforce the tracking-target model. |
+| COL-03 | Use admin-managed tracking targets, not ownership claims | PROVEN | Registry and permission tests enforce the model; the live Discord registration updated the existing tracking target and command scope without claiming PUBG-account ownership. |
 | COL-04 | Collect only registered targets as the primary scope | PROVEN | Collector queried the one active registered target; no unregistered polling path exists. |
-| COL-05 | Stop collection on unregister but retain prior data | IMPLEMENTED | Registry and Discord command tests cover inactive retention. |
+| COL-05 | Stop collection on unregister but retain prior data | PROVEN | Live Discord soft unregister set `active=false` while preserving 244 matches and aggregates; restore returned `active=true`, with identical post-stop/post-restore raw and replay measurements. |
 | COL-06 | Discover match IDs from player data, then fetch each match | PROVEN | This live slice discovered and processed 37 new match IDs through the stored player account flow. |
 | COL-07 | Process completed matches and telemetry after match completion | PROVEN | All 37 new match and telemetry payloads completed; the final queue contains only 244+244 succeeded jobs. |
 | COL-08 | Collect every discoverable match for tracked players | PROVEN | Continuous polling stores every new ID exposed by the player endpoint, with idempotent jobs. Historical reach is limited by PUBG's player response window. |
@@ -142,23 +155,19 @@ Configured local roots:
 
 | ID | Requirement | Status | Evidence and remaining note |
 | --- | --- | --- | --- |
-| DSC-01 | Register, query, and unregister a player in the command channel | IMPLEMENTED | Bot command and formatting tests pass. A real command reply has not been sent. |
-| DSC-02 | Assign command permissions through guild-scoped groups | IMPLEMENTED | Permission manager, Discord authorization, and web permission tests pass. |
-| DSC-03 | Allow a global administrator to inspect all guilds | IMPLEMENTED | Scope and authorization tests pass. |
-| DSC-04 | Provide guild rankings and optional public profiles | IMPLEMENTED | Ranking/public-profile tests pass. |
+| DSC-01 | Register, query, and unregister a player in the command channel | PROVEN | One human author completed help, register, query, soft unregister, and restore registration in the selected channel; every bot reply was paired by message reference. |
+| DSC-02 | Assign command permissions through guild-scoped groups | PROVEN | The live author received only guild-scoped `register`, `profile_read`, and dedicated `player_manage`; no `admin` grant appeared, and all temporary grants were revoked. |
+| DSC-03 | Allow a global administrator to inspect all guilds | PROVEN | Multi-guild scope/authorization tests cover global inspection, the production bot authenticated across 16 guilds, and global admins remain local-only managed. |
+| DSC-04 | Provide guild rankings and optional public profiles | PROVEN | Ranking/public-profile integration tests pass; the live registration/query exercised guild scope and the configured public profile through the production bot path. |
 | DSC-05 | Authenticate the actual configured bot | PROVEN | Guarded REST probing verified the bot account, 16 guild memberships, and selected-channel permissions; the production bot also connected to the Gateway. |
-| DSC-06 | Exercise a real command in a selected guild and channel | PENDING | Probe/send/observe tooling and a verified candidate are ready; explicit channel selection, controlled alert delivery, and a human command remain. |
+| DSC-06 | Exercise a real command in a selected guild and channel | PROVEN | Controlled alert delivery/read-back and five human-command round trips succeeded in the selected guild/channel without exposing message bodies or secrets. |
 | OPS-01 | Run collector and post-processing workers | PROVEN | Both workers completed real one-cycle runs and left zero backlog. |
 | OPS-02 | Recover cleanly across long-running operation and restart | PROVEN | Controller stop/restart, bounded simulated and live soak, interruptible waits, and transactional MySQL match/telemetry stale recovery passed; live queue and duplicate counts ended at zero. |
 | OPS-03 | Let an administrator decide whether retained player data is deleted | PARTIAL | Request, preview, backup, verification, quarantine, restore rehearsal, and review tooling exist. There is intentionally no destructive executor yet. |
 
-## Prioritized Remaining Roadmap
+## Separately Gated Roadmap
 
-1. **P0: real Discord command acceptance test**
-   Use the guarded probe baseline, send one controlled alert with explicit confirmation, then observe a human
-   `!배그도움말` round trip. Grant the detected author only the temporary command groups needed for one read-only query
-   and disposable registration lifecycle, then revoke them and confirm no secret disclosure.
-2. **P1: destructive deletion execution, only when explicitly approved**
+1. **Destructive deletion execution, only when explicitly approved**
    Keep the existing review and backup gates. Do not add or invoke irreversible deletion as an incidental step.
 
 ## Completion Gates
@@ -168,6 +177,9 @@ The original core scope can be called complete when:
 - One real Discord channel acceptance run succeeds with no secret disclosure, including a controlled alert delivery.
 - Raw and replay storage audits remain at zero missing, mismatched, or escaped files after later changes.
 - The full automated suite, compile check, diff check, and secret scan continue to pass.
+
+All three core gates passed on 2026-08-10 KST. The selected-channel alert and command lifecycle passed, storage audit
+invariants remained clean, and the 447-test suite plus compile/diff/secret checks passed.
 
 The bounded rate-limit, stop/restart, MySQL stale-recovery, and live idempotency gate is complete as of live drill run 3.
 The weapon-family shell/projectile/pellet calibration gate is complete as of the 2026-08-10 full-corpus reprocess.

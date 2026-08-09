@@ -1786,7 +1786,7 @@ def create_discord_bot(
 
     @bot.command(name="유저삭제", aliases=["pubg-unregister"])
     async def unregister_player_command(ctx: Any, shard: str, target: str) -> None:
-        if not await require_permission(ctx, "admin"):
+        if not await require_permission(ctx, "player_manage"):
             return
         guild_id = await require_scoped_guild(ctx)
         if guild_id is None and not has_global_scope(ctx):

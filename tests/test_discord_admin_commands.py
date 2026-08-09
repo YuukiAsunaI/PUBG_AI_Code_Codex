@@ -266,6 +266,87 @@ class DiscordAdminCommandTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("실제 삭제 미실행", ctx.replies[-1])
             self.assertIn("#data-deletions", ctx.replies[-1])
 
+    async def test_register_grant_cannot_stop_collection(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            _, _, bot = _bot_fixture(
+                base_dir,
+                guild_user_grants={"10": {"100": ["register"]}},
+            )
+            ctx = FakeContext(user_id=100, guild_id=10)
+            try:
+                with patch("pubg_ai.discord_bot.connect_mysql") as connect_mysql:
+                    await bot.get_command("유저삭제").callback(
+                        ctx,
+                        "steam",
+                        "Yuuki_Asuna---",
+                    )
+            finally:
+                await bot.close()
+
+            connect_mysql.assert_not_called()
+            self.assertEqual(ctx.replies, ["이 명령어를 사용할 권한이 없습니다."])
+
+    async def test_player_manage_can_stop_collection_without_admin_permission(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            _, checker, bot = _bot_fixture(
+                base_dir,
+                guild_user_grants={"10": {"100": ["player_manage"]}},
+            )
+            active_player = RegisteredPlayer(
+                id=1,
+                account_id="account.test",
+                shard="steam",
+                current_name="Yuuki_Asuna---",
+                active=True,
+                public_profile=True,
+                registered_guild_id="10",
+            )
+            inactive_player = RegisteredPlayer(
+                id=1,
+                account_id="account.test",
+                shard="steam",
+                current_name="Yuuki_Asuna---",
+                active=False,
+                public_profile=True,
+                registered_guild_id="10",
+            )
+            connection = FakeDatabaseConnection()
+            registry = MagicMock()
+            registry.get_player.return_value = active_player
+            registry.unregister_player.return_value = inactive_player
+            ctx = FakeContext(user_id=100, guild_id=10)
+            identity = DiscordCommandIdentity(user_id="100", guild_id="10")
+            try:
+                with (
+                    patch("pubg_ai.discord_bot.connect_mysql", return_value=connection),
+                    patch("pubg_ai.discord_bot.PlayerRegistry", return_value=registry),
+                ):
+                    await bot.get_command("유저삭제").callback(
+                        ctx,
+                        "steam",
+                        "Yuuki_Asuna---",
+                    )
+            finally:
+                await bot.close()
+
+            self.assertTrue(checker.is_allowed(identity, "player_manage"))
+            self.assertFalse(checker.is_allowed(identity, "admin"))
+            registry.get_player.assert_called_once_with(
+                shard="steam",
+                account_id=None,
+                name="Yuuki_Asuna---",
+                include_inactive=True,
+            )
+            registry.unregister_player.assert_called_once_with(
+                shard="steam",
+                account_id="account.test",
+            )
+            self.assertTrue(connection.closed)
+            self.assertIn("수집 중지 완료", ctx.replies[-1])
+            self.assertIn("#registered-players", ctx.replies[-1])
+
 
 class FakeContext:
     def __init__(self, *, user_id: int, guild_id: int | None) -> None:

@@ -388,6 +388,10 @@ class LocalSettingsStoreTests(unittest.TestCase):
 
             loaded = store.load_discord_permission_settings()
 
+            self.assertIn("유저삭제", loaded.command_groups["player_manage"])
+            self.assertIn("pubg-unregister", loaded.command_groups["player_manage"])
+            self.assertNotIn("유저삭제", loaded.command_groups["admin"])
+            self.assertNotIn("pubg-unregister", loaded.command_groups["admin"])
             self.assertIn("pubg-alert-ack", loaded.command_groups["admin"])
             self.assertIn("pubg-alert-snooze", loaded.command_groups["admin"])
             self.assertIn("pubg-alert-note", loaded.command_groups["admin"])
