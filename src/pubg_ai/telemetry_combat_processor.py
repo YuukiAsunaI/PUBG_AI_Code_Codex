@@ -47,7 +47,7 @@ class TelemetryCombatProcessor:
         limit: int = 10,
         force: bool = False,
     ) -> TelemetryCombatProcessingResult:
-        limit = max(1, min(limit, 200))
+        limit = max(1, min(limit, 1000))
         payloads = self._list_raw_telemetry_payloads(limit=limit, force=force)
 
         parsed_payloads = 0

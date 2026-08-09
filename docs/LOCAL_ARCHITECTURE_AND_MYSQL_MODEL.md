@@ -146,8 +146,8 @@ Use a two-layer storage model:
 | --- | --- |
 | `agg_player_daily` | Daily KDA, damage, wins, maps, modes, play volume |
 | `agg_player_monthly` | Monthly trend rollups |
-| `player_match_combat_summaries` | Per-match, per-player whole-match combat totals: damage dealt/taken, kills, assists, deaths, DBNOs caused/taken, finishes, headshots, shots fired/hit, and received hits |
-| `player_weapon_match_stats` | Per-match, per-player, per-weapon fired shots, hit shots, accuracy, body-part hits/taken, headshots, kills, assists, deaths, DBNOs, and finishes |
+| `player_match_combat_summaries` | Per-match, per-player whole-match combat totals: damage dealt/taken, kills, assists, deaths, DBNOs caused/taken, finishes, headshots, weapon attack/hit events, and received hits |
+| `player_weapon_match_stats` | Per-match, per-player, per-weapon attack and hit events, class-aware accuracy inputs, body-part hits/taken, headshots, kills, assists, deaths, DBNOs, and finishes |
 | `player_position_samples` | Registered-player `LogPlayerPosition` samples for route/replay layers |
 | `player_landing_events` | Registered-player parachute landing events; first event is used as first drop/landing point |
 | `player_movement_summaries` | Per-match first/last position, landing point, sampled movement distance, vehicle samples, DBNO samples, and altitude range |
@@ -210,8 +210,14 @@ unchanged so newly added PUBG content remains visible.
   summary and weapon aggregate tables.
 - Count total assists from `LogPlayerKillV2.assists_AccountId`; attribute weapon-level assists only from the
   assistant's prior gun damage history against the victim.
-- Treat `LogWeaponFireCount.fireCount` as the official reported fire-count aggregate. The official telemetry schema
-  describes it as reported in increments of 10, so keep it separate from per-shot attack/throwable event counts.
+- Count weapon attacks from in-match `LogPlayerAttack` events. Interpret supported single-projectile attacks as
+  rounds/bolts and shotgun attacks as shells.
+- Keep the maximum `LogWeaponFireCount.fireCount` value and event count in the parser result. The retained corpus
+  shows repeated values are cumulative checkpoints, so summing them inflates fire counts; use the maximum only when
+  no attack events are available. MySQL stores the selected attack count in `shots_fired`, while immutable raw
+  telemetry remains the durable checkpoint audit source.
+- Derive an estimated hit rate only for supported single-projectile families. Report shotgun pellet hit events per
+  shell separately and keep unclassified attacks out of both metrics.
 - Normalize weapon codes for weapon aggregates so `Item_Weapon_BerylM762_C`, `WeapBerylM762_C`, and weapon instance
   strings such as `WeapBerylM762_C_1` group under one weapon code.
 - Store raw `damageReason` alongside normalized body part so new PUBG hit locations do not disappear.
@@ -328,7 +334,7 @@ Completed slices:
 10. Discord bot MVP runner with permission-gated `유저등록`, `유저조회`, `유저삭제`, and `최근스냅샷`.
 11. Local web and CLI management for Discord command-group grants and global admins.
 12. First player profile stats service and `전적` lookup command using parsed summary tables.
-13. Weapon-specific lookup service and `무기` command for per-weapon damage, accuracy, DBNO, and hit-part stats.
+13. Weapon-specific lookup service and `무기` command for per-weapon damage, class-aware hit metrics, DBNO, and hit-part stats.
 14. Match detail lookup service and `매치` command for one completed match's map/mode/type, player/bot counts,
     combat totals, weapon rows, movement/landing summary, and generated map snapshot status.
 15. Player ranking service and `랭킹` command for KDA, win rate, average damage, total damage, kills, matches,
@@ -594,9 +600,15 @@ Completed slices:
      for errors, duplicate groups, and stranded running jobs. CLI, localhost API/UI, 423 tests, desktop/mobile Chrome,
      and live run 3 all passed. The current schema is version 22 with 47 tables.
 
-Next slice:
+120. Weapon hit-metric calibration counts `LogPlayerAttack` weapon events, treats `LogWeaponFireCount` as a
+     cumulative audit/fallback checkpoint, reports supported single-projectile estimated hit rate separately from
+     shotgun pellet hits per shell, and excludes unclassified attacks from both. All 244 retained telemetry payloads
+     (9,151,853 events) were reprocessed into 244 combat summaries and 826 weapon rows with zero failures. CLI,
+     localhost API/UI, Discord formatting, recommendations, rankings, trends, 434 automated tests, and desktop/mobile
+     browser checks all use the same semantic contract. Schema version 22 and 47 tables remain current.
+
+Remaining external acceptance:
 
 1. Run a real read-only Discord command acceptance check in an explicitly selected guild/channel.
-2. Calibrate projectile, shell, and pellet hit/accuracy semantics with additional telemetry samples.
-3. Keep deletion execution out of scope until it is explicitly approved; the review and rehearsal tooling remains
+2. Keep deletion execution out of scope until it is explicitly approved; the review and rehearsal tooling remains
    read-only/non-destructive.

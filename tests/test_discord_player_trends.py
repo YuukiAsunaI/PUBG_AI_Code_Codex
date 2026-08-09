@@ -5,6 +5,7 @@ import unittest
 
 from pubg_ai.discord_bot import format_player_trends, parse_player_trend_command_options
 from pubg_ai.player_registry import RegisteredPlayer
+from pubg_ai.weapon_accuracy import summarize_accuracy_rows
 from pubg_ai.player_trends import (
     PlayerTrendBucket,
     PlayerTrendFilters,
@@ -37,6 +38,9 @@ class DiscordPlayerTrendTests(unittest.TestCase):
             headshot_kill_rate=0.2,
             avg_survival_seconds=900,
             avg_movement_distance_m=2500,
+            accuracy_breakdown=summarize_accuracy_rows(
+                [{"weapon_code": "WeapHK416_C", "shots_fired": 1000, "shots_hit": 100}]
+            ),
         )
         report = PlayerTrendReport(
             player=RegisteredPlayer(
@@ -75,6 +79,7 @@ class DiscordPlayerTrendTests(unittest.TestCase):
 
         self.assertIn("Player KST 월별 추세 (steam)", body)
         self.assertIn("10전 2치킨/8비치킨 (20.0%)", body)
+        self.assertIn("일반 탄환 추정 10.0%", body)
         self.assertIn("team=squad, view=fpp, from=2026-07-01", body)
         self.assertIn("2026년 08월: 10전 2치킨 20.0%", body)
         self.assertIn("#trend-lookup", body)

@@ -1,6 +1,6 @@
 # Requirement-to-Evidence Audit
 
-Last updated: 2026-08-09 KST
+Last updated: 2026-08-10 KST
 
 ## Purpose
 
@@ -14,18 +14,18 @@ Status meanings:
 - `PARTIAL`: useful behavior exists, but part of the requested contract or evidence is missing.
 - `PENDING`: no production implementation yet.
 
-The weighted completion estimate for the requested core product is **97 to 98 percent**. Collection, storage,
-telemetry parsing, durable fight-outcome and KST trend analytics, named drop-region resolution, post-match replay,
-recommendations, local administration, and bounded operational recovery are working. The remaining core validation
-gaps are a real Discord command exchange in a selected channel and weapon-family hit/accuracy calibration. Destructive
+The weighted completion estimate for the requested core product is **about 99 percent**. Collection, storage,
+telemetry parsing, class-aware weapon hit metrics, durable fight-outcome and KST trend analytics, named drop-region
+resolution, post-match replay, recommendations, local administration, and bounded operational recovery are working.
+The only remaining core external validation is a real Discord command exchange in a selected channel. Destructive
 deletion remains intentionally absent until the administrator explicitly approves that separate risk-bearing scope.
 
 ## Live Evidence Snapshot
 
-The following checks were run on 2026-08-09 KST without printing either secret:
+The following checks were run through 2026-08-10 KST without printing either secret:
 
-- Repository baseline before this implementation slice: `0076485` (`Add versioned PUBG map regions`).
-- Automated suite: `423 passed`, with one existing Starlette deprecation warning.
+- Repository baseline before the weapon hit-metric calibration slice: `a5f62fd`.
+- Automated suite: `434 passed`, with one existing Starlette deprecation warning.
 - Python compile, `git diff --check`, and secret-pattern scan: passed. The actual `.env` is ignored and untracked;
   only `.env.example` is tracked, and no JWT-like or Discord-token-like value was found outside `.env`.
 - MySQL: local `pubg_ai`, MySQL 8.0.41, schema version 22, 47 tables.
@@ -37,9 +37,13 @@ The following checks were run on 2026-08-09 KST without printing either secret:
 - Current queue: 244 succeeded match jobs and 244 succeeded telemetry jobs; no other queue state remains.
 - Current retained corpus: 244 matches, 21,911 participants, 9 player snapshots, 244 match payloads, and 244 telemetry
   payloads.
-- Current parsed corpus: 244 combat summaries, 795 weapon rows, 36,167 item events, 7,202 item-stat rows, 16,841
+- Current parsed corpus: 244 combat summaries, 826 weapon rows, 36,167 item events, 7,202 item-stat rows, 16,841
   position samples, 1,644 combat locations, 1,059 loadout snapshots, 935 durable fight outcomes, 244 fight-processing
   states, 9,076 care-package events, 211 plane routes, and 36,045 phase events.
+- Weapon hit-metric calibration: 244/244 telemetry payloads parsed with zero failures; 12,650 supported
+  single-projectile attacks and 1,763 hit events yielded a 13.9368% estimate, while 68 shotgun shells and 213
+  pellet hit events yielded 3.13235 pellet hits per shell. Twenty-three unclassified attacks remain visible and
+  excluded from both metrics.
 - Artifact corpus: 244 JPEG map snapshots and 244 timeline JSON files.
 - Raw storage audit: 488 metadata rows, zero missing files, zero size mismatches, and zero paths outside the configured
   root.
@@ -96,8 +100,8 @@ Configured local roots:
 | TEL-01 | Record pickup, drop, use, equip, attach, and detach events | PROVEN | Item processor produced 36,167 retained item events. |
 | TEL-02 | Translate item and weapon codes to Korean with raw-code fallback | PROVEN | `code_translator.py` and tests; unknown new codes remained visible verbatim in live output. |
 | TEL-03 | Record survival time, kills, damage, assists, rank, movement, and chicken result | PROVEN | Match participants and player combat/movement summaries cover these values. |
-| TEL-04 | Record total and per-weapon damage dealt and received | PROVEN | Combat summary and 795 per-weapon rows; live player statistics and recommendations loaded them. |
-| TEL-05 | Record shots fired, hits, body-part hits, and headshots per weapon | PARTIAL | Events and per-weapon counters are retained. Shotgun pellet hits can exceed shell fire events, so accuracy semantics need an explicit weapon-family rule instead of relying on the current clamp. |
+| TEL-04 | Record total and per-weapon damage dealt and received | PROVEN | Combat summary and 826 per-weapon rows; live player statistics and recommendations loaded them. |
+| TEL-05 | Record shots fired, hits, body-part hits, and headshots per weapon | PROVEN | All 244 telemetry payloads were reprocessed from `LogPlayerAttack`: supported single-projectile estimated hit rate, shotgun pellet hits per shell, unclassified raw counts, body parts, and headshots are retained and exposed without clamping. |
 | TEL-06 | Record kills, assists, deaths, DBNO caused, and DBNO taken separately | PROVEN | Parser, summaries, per-weapon rows, and combat tests distinguish every requested direction. |
 | TEL-07 | Distinguish DBNO, finish, death, revive, and repeated life-state events | PROVEN | Event-indexed telemetry facts preserve repeated DBNO/death/revive sequences. |
 | TEL-08 | Count causing a DBNO as winning a duo or squad fight | PROVEN | Schema-backed outcomes persist duo/squad DBNO caused as wins and DBNO taken as losses; solo DBNO is ignored. The current durable fight ledger contains 935 outcomes. |
@@ -151,10 +155,7 @@ Configured local roots:
 1. **P0: real Discord command acceptance test**
    Run one read-only query and one disposable registration lifecycle in a user-selected test channel without exposing the
    token; confirm one controlled alert delivery there as well.
-2. **P1: hit and accuracy calibration**
-   Define shell, projectile, and pellet semantics per weapon family and report both raw hit events and a clearly named
-   accuracy metric.
-3. **P2: destructive deletion execution, only when explicitly approved**
+2. **P1: destructive deletion execution, only when explicitly approved**
    Keep the existing review and backup gates. Do not add or invoke irreversible deletion as an incidental step.
 
 ## Completion Gates
@@ -162,8 +163,8 @@ Configured local roots:
 The original core scope can be called complete when:
 
 - One real Discord channel acceptance run succeeds with no secret disclosure, including a controlled alert delivery.
-- Weapon-family shell/projectile/pellet semantics are calibrated against additional telemetry samples.
 - Raw and replay storage audits remain at zero missing, mismatched, or escaped files after later changes.
 - The full automated suite, compile check, diff check, and secret scan continue to pass.
 
 The bounded rate-limit, stop/restart, MySQL stale-recovery, and live idempotency gate is complete as of live drill run 3.
+The weapon-family shell/projectile/pellet calibration gate is complete as of the 2026-08-10 full-corpus reprocess.

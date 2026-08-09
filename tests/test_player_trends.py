@@ -62,6 +62,33 @@ class PlayerTrendSummaryTests(unittest.TestCase):
         self.assertEqual(report.totals.avg_survival_seconds, 1100.0)
         self.assertAlmostEqual(report.buckets[1].metrics.win_rate, 0.5)
 
+    def test_accuracy_uses_single_projectile_events_and_keeps_pellet_evidence(self) -> None:
+        row = self.row(
+            created_at_kst=datetime(2026, 8, 1, 1, 20),
+            win_place=1,
+        )
+        row["shots_fired"] = 110
+        row["shots_hit"] = 120
+        row["weapon_accuracy_rows"] = [
+            {
+                "weapon_code": "WeapHK416_C",
+                "shots_fired": 100,
+                "shots_hit": 30,
+            },
+            {
+                "weapon_code": "WeapSaiga12_C",
+                "shots_fired": 10,
+                "shots_hit": 90,
+            },
+        ]
+
+        report = summarize_player_trends([row], granularity="month")
+
+        self.assertAlmostEqual(report.totals.accuracy, 0.3)
+        self.assertEqual(report.totals.shots_fired, 110)
+        self.assertEqual(report.totals.shots_hit, 120)
+        self.assertEqual(report.totals.accuracy_breakdown.pellet_shells, 10)
+        self.assertEqual(report.totals.accuracy_breakdown.pellet_hit_events, 90)
     def test_uses_iso_weeks_and_hour_of_day_buckets(self) -> None:
         weekly = summarize_player_trends(self.rows, granularity="week")
         hourly = summarize_player_trends(self.rows, granularity="시간대")
@@ -181,6 +208,50 @@ class PlayerTrendServiceTests(unittest.TestCase):
         self.assertEqual(params[:2], ["account.test", "steam"])
         self.assertEqual(params[-1], datetime(2026, 8, 3))
 
+    def test_loads_weapon_accuracy_rows_for_filtered_matches(self) -> None:
+        match_row = PlayerTrendSummaryTests.row(
+            created_at_kst=datetime(2026, 8, 1, 1, 20),
+            win_place=1,
+        )
+        match_row["match_id"] = "match-1"
+        connection = FakeConnection(
+            [
+                {
+                    "id": 1,
+                    "account_id": "account.test",
+                    "shard": "steam",
+                    "current_name": "Player",
+                    "active": 1,
+                    "public_profile": 1,
+                    "registered_by_discord_user_id": None,
+                    "registered_guild_id": "guild-1",
+                    "registered_channel_id": None,
+                },
+                [match_row],
+                [
+                    {
+                        "match_id": "match-1",
+                        "weapon_code": "WeapHK416_C",
+                        "shots_fired": 100,
+                        "shots_hit": 25,
+                    }
+                ],
+            ]
+        )
+
+        report = PlayerTrendService(connection).get_report(
+            shard="steam",
+            name="Player",
+            guild_id="guild-1",
+        )
+
+        self.assertIsNotNone(report)
+        assert report is not None
+        self.assertAlmostEqual(report.totals.accuracy, 0.25)
+        self.assertEqual(report.totals.accuracy_breakdown.single_projectile_attacks, 100)
+        query, params = connection.executions[2]
+        self.assertIn("weapon_stats.match_id IN ( %s )", " ".join(query.split()))
+        self.assertEqual(params, ["account.test", "steam", "match-1"])
 
 class FakeCursor:
     def __init__(self, connection: "FakeConnection") -> None:

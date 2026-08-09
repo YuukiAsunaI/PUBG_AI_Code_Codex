@@ -8,6 +8,12 @@ import json
 from pubg_ai.code_translator import translate_code
 from pubg_ai.player_registry import RegisteredPlayer
 from pubg_ai.replay_artifact_catalog import ReplayArtifactRecord, list_replay_artifacts
+from pubg_ai.weapon_accuracy import (
+    AccuracyBreakdown,
+    WeaponAccuracyMetric,
+    summarize_accuracy_rows,
+    weapon_accuracy_metric,
+)
 from pubg_ai.weapon_stats import normalize_weapon_code
 
 
@@ -35,6 +41,7 @@ class PlayerCombatTotals:
     avg_movement_distance_m: float
     first_match_at_kst: datetime | None = None
     last_match_at_kst: datetime | None = None
+    accuracy_breakdown: AccuracyBreakdown | None = None
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
@@ -57,6 +64,7 @@ class PlayerWeaponStats:
     shots_hit: int
     accuracy: float
     headshot_kills: int
+    accuracy_metric: WeaponAccuracyMetric | None = None
 
     def to_record(self) -> dict[str, Any]:
         return asdict(self)
@@ -109,6 +117,7 @@ class PlayerWeaponDetailTotals:
     headshot_kill_rate: float
     hit_parts: dict[str, int]
     taken_hit_parts: dict[str, int]
+    accuracy_metric: WeaponAccuracyMetric | None = None
 
     def to_record(self) -> dict[str, Any]:
         return asdict(self)
@@ -129,6 +138,7 @@ class PlayerWeaponRecentMatch:
     shots_fired: int
     shots_hit: int
     accuracy: float
+    accuracy_metric: WeaponAccuracyMetric | None = None
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
@@ -171,6 +181,7 @@ class PlayerMatchWeaponStats:
     headshot_kills: int
     hit_parts: dict[str, int]
     taken_hit_parts: dict[str, int]
+    accuracy_metric: WeaponAccuracyMetric | None = None
 
     def to_record(self) -> dict[str, Any]:
         return asdict(self)
@@ -220,6 +231,7 @@ class PlayerMatchDetail:
     movement_distance_m: float | None
     weapons: list[PlayerMatchWeaponStats]
     replay_artifact: ReplayArtifactRecord | None
+    accuracy_breakdown: AccuracyBreakdown | None = None
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -252,6 +264,9 @@ class PlayerMatchDetail:
             "shots_hit": self.shots_hit,
             "hits_taken": self.hits_taken,
             "accuracy": self.accuracy,
+            "accuracy_breakdown": (
+                self.accuracy_breakdown.to_record() if self.accuracy_breakdown else None
+            ),
             "headshot_hits": self.headshot_hits,
             "headshot_hits_taken": self.headshot_hits_taken,
             "headshot_kills": self.headshot_kills,
@@ -396,6 +411,8 @@ class PlayerStatsService:
             match_id=match_id,
             account_id=player.account_id,
         )
+        weapons = self._get_match_weapons(player, match_id=match_id, limit=max(weapon_limit, 20))
+        accuracy_breakdown = self._get_accuracy_breakdown(player, match_id=match_id)
 
         return PlayerMatchDetail(
             player=player,
@@ -426,7 +443,7 @@ class PlayerStatsService:
             shots_fired=shots_fired,
             shots_hit=shots_hit,
             hits_taken=_int(row.get("hits_taken")),
-            accuracy=_safe_divide(shots_hit, shots_fired),
+            accuracy=accuracy_breakdown.estimated_hit_rate or 0.0,
             headshot_hits=_int(row.get("headshot_hits")),
             headshot_hits_taken=_int(row.get("headshot_hits_taken")),
             headshot_kills=_int(row.get("headshot_kills")),
@@ -438,8 +455,9 @@ class PlayerStatsService:
             survival_seconds=_survival_seconds_from_row(row),
             landing_distance_m=_optional_float(row.get("landing_distance_m")),
             movement_distance_m=_movement_distance_from_row(row),
-            weapons=self._get_match_weapons(player, match_id=match_id, limit=weapon_limit),
+            weapons=weapons[: max(1, min(int(weapon_limit), 20))],
             replay_artifact=artifacts[0] if artifacts else None,
+            accuracy_breakdown=accuracy_breakdown,
         )
 
     def _get_player(
@@ -643,6 +661,7 @@ class PlayerStatsService:
             weapon_code = str(row["weapon_code"])
             shots_fired = _int(row.get("shots_fired"))
             shots_hit = _int(row.get("shots_hit"))
+            metric = weapon_accuracy_metric(weapon_code, shots_fired, shots_hit)
             weapons.append(
                 PlayerMatchWeaponStats(
                     weapon_code=weapon_code,
@@ -656,10 +675,11 @@ class PlayerStatsService:
                     damage_taken=_float(row.get("damage_taken")),
                     shots_fired=shots_fired,
                     shots_hit=shots_hit,
-                    accuracy=_safe_divide(shots_hit, shots_fired),
+                    accuracy=metric.estimated_hit_rate or 0.0,
                     headshot_kills=_int(row.get("headshot_kills")),
                     hit_parts=_part_map(row.get("hit_parts")),
                     taken_hit_parts=_part_map(row.get("taken_hit_parts")),
+                    accuracy_metric=metric,
                 )
             )
         return weapons
@@ -716,6 +736,7 @@ class PlayerStatsService:
         headshot_kills = _int(row.get("headshot_kills"))
         damage_dealt = _float(row.get("damage_dealt"))
         damage_taken = _float(row.get("damage_taken"))
+        accuracy_breakdown = self._get_accuracy_breakdown(player)
 
         return PlayerCombatTotals(
             match_count=match_count,
@@ -734,13 +755,48 @@ class PlayerStatsService:
             avg_damage_taken=_safe_divide(damage_taken, match_count),
             win_rate=_safe_divide(_int(row.get("wins")), match_count),
             kda=_safe_divide(kills + assists, deaths if deaths > 0 else 1),
-            accuracy=_safe_divide(shots_hit, shots_fired),
+            accuracy=accuracy_breakdown.estimated_hit_rate or 0.0,
             headshot_kill_rate=_safe_divide(headshot_kills, kills),
             avg_survival_seconds=_float(row.get("avg_survival_seconds")),
             avg_movement_distance_m=_float(row.get("avg_movement_distance_m")),
             first_match_at_kst=row.get("first_match_at_kst"),
             last_match_at_kst=row.get("last_match_at_kst"),
+            accuracy_breakdown=accuracy_breakdown,
         )
+
+    def _get_accuracy_breakdown(
+        self,
+        player: RegisteredPlayer,
+        *,
+        match_id: str | None = None,
+    ) -> AccuracyBreakdown:
+        match_condition = ""
+        params: list[Any] = [player.account_id, player.shard]
+        if match_id is not None:
+            match_condition = "AND weapon_stats.match_id = %s"
+            params.append(match_id)
+
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    weapon_stats.weapon_code,
+                    COALESCE(SUM(weapon_stats.shots_fired), 0) AS shots_fired,
+                    COALESCE(SUM(weapon_stats.shots_hit), 0) AS shots_hit
+                FROM player_weapon_match_stats weapon_stats
+                INNER JOIN matches
+                    ON matches.match_id = weapon_stats.match_id
+                WHERE weapon_stats.account_id = %s
+                  AND matches.shard = %s
+                """
+                + match_condition
+                + """
+                GROUP BY weapon_stats.weapon_code
+                """,
+                params,
+            )
+            rows = cursor.fetchall()
+        return summarize_accuracy_rows(rows)
 
     def _get_top_weapons(self, player: RegisteredPlayer, *, limit: int) -> list[PlayerWeaponStats]:
         limit = max(1, min(int(limit), 20))
@@ -777,6 +833,7 @@ class PlayerStatsService:
             weapon_code = str(row["weapon_code"])
             shots_fired = _int(row.get("shots_fired"))
             shots_hit = _int(row.get("shots_hit"))
+            metric = weapon_accuracy_metric(weapon_code, shots_fired, shots_hit)
             weapons.append(
                 PlayerWeaponStats(
                     weapon_code=weapon_code,
@@ -789,8 +846,9 @@ class PlayerStatsService:
                     damage_dealt=_float(row.get("damage_dealt")),
                     shots_fired=shots_fired,
                     shots_hit=shots_hit,
-                    accuracy=_safe_divide(shots_hit, shots_fired),
+                    accuracy=metric.estimated_hit_rate or 0.0,
                     headshot_kills=_int(row.get("headshot_kills")),
+                    accuracy_metric=metric,
                 )
             )
         return weapons
@@ -971,6 +1029,7 @@ def _weapon_detail_from_rows(
     headshot_dbnos = sum(_int(row.get("headshot_dbnos")) for row in rows)
     hit_parts = _sum_part_maps(row.get("hit_parts") for row in rows)
     taken_hit_parts = _sum_part_maps(row.get("taken_hit_parts") for row in rows)
+    accuracy_metric = weapon_accuracy_metric(weapon_code, shots_fired, shots_hit)
 
     return PlayerWeaponDetail(
         player=player,
@@ -994,12 +1053,13 @@ def _weapon_detail_from_rows(
             headshot_hits=headshot_hits,
             headshot_kills=headshot_kills,
             headshot_dbnos=headshot_dbnos,
-            accuracy=_safe_divide(shots_hit, shots_fired),
+            accuracy=accuracy_metric.estimated_hit_rate or 0.0,
             avg_damage_dealt=_safe_divide(damage_dealt, match_count),
             win_rate=_safe_divide(wins, match_count),
             headshot_kill_rate=_safe_divide(headshot_kills, kills),
             hit_parts=hit_parts,
             taken_hit_parts=taken_hit_parts,
+            accuracy_metric=accuracy_metric,
         ),
         recent_matches=[
             PlayerWeaponRecentMatch(
@@ -1015,7 +1075,19 @@ def _weapon_detail_from_rows(
                 damage_dealt=_float(row.get("damage_dealt")),
                 shots_fired=_int(row.get("shots_fired")),
                 shots_hit=_int(row.get("shots_hit")),
-                accuracy=_safe_divide(_int(row.get("shots_hit")), _int(row.get("shots_fired"))),
+                accuracy=(
+                    weapon_accuracy_metric(
+                        weapon_code,
+                        _int(row.get("shots_fired")),
+                        _int(row.get("shots_hit")),
+                    ).estimated_hit_rate
+                    or 0.0
+                ),
+                accuracy_metric=weapon_accuracy_metric(
+                    weapon_code,
+                    _int(row.get("shots_fired")),
+                    _int(row.get("shots_hit")),
+                ),
             )
             for row in rows[: max(1, min(int(recent_limit), 20))]
         ],

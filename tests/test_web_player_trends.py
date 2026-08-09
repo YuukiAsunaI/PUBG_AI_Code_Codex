@@ -44,6 +44,14 @@ class WebPlayerTrendTests(unittest.TestCase):
                         "in_game_sampled_distance_m": 3000,
                     }
                 ],
+                [
+                    {
+                        "match_id": "match-1",
+                        "weapon_code": "WeapHK416_C",
+                        "shots_fired": 100,
+                        "shots_hit": 20,
+                    }
+                ],
             ]
         )
 
@@ -58,7 +66,12 @@ class WebPlayerTrendTests(unittest.TestCase):
         self.assertEqual(report["timezone"], "Asia/Seoul")
         self.assertEqual(report["granularity"], "hour")
         self.assertEqual(report["filters"]["team_mode"], "squad")
-        self.assertEqual(report["totals"]["wins"], 1)
+        self.assertEqual(report["totals"].get("wins"), 1)
+        self.assertAlmostEqual(report["totals"].get("accuracy"), 0.2)
+        self.assertEqual(
+            report["totals"].get("accuracy_breakdown", {}).get("single_projectile_attacks"),
+            100,
+        )
         self.assertEqual(report["buckets"][0]["period_key"], "21")
         self.assertTrue(connection.closed)
 
@@ -86,6 +99,10 @@ class WebPlayerTrendTests(unittest.TestCase):
         self.assertIn("/players/trends?", response.text)
         self.assertIn('if (!text) return fallback;', response.text)
         self.assertIn("KST 추세 조회 완료", response.text)
+        self.assertIn("<th>명중 지표</th>", response.text)
+        self.assertIn("function accuracyMetricText", response.text)
+        self.assertIn("function accuracyBreakdownText", response.text)
+        self.assertIn("셸당 펠릿", response.text)
 
 
 class FakeCursor:

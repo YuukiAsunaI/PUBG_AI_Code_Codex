@@ -4,6 +4,8 @@ from datetime import datetime
 import unittest
 
 from pubg_ai.discord_bot import (
+    _accuracy_breakdown_text,
+    _accuracy_metric_text,
     _discord_permission_action,
     _discord_public_profile_default,
     _discord_ranking_scope,
@@ -57,10 +59,29 @@ from pubg_ai.player_stats import (
 )
 from pubg_ai.replay_artifact_catalog import ReplayArtifactRecord
 from pubg_ai.time_utils import KST
+from pubg_ai.weapon_accuracy import summarize_accuracy_rows, weapon_accuracy_metric
 from pubg_ai.worker_run_history import WorkerRunPage, WorkerRunRecord
 
 
 class DiscordBotFormattingTests(unittest.TestCase):
+    def test_accuracy_labels_separate_rounds_and_shotgun_pellets(self) -> None:
+        shotgun = weapon_accuracy_metric("WeapSaiga12_C", 2, 6)
+        breakdown = summarize_accuracy_rows(
+            [
+                {"weapon_code": "WeapHK416_C", "shots_fired": 100, "shots_hit": 25},
+                {"weapon_code": "WeapSaiga12_C", "shots_fired": 2, "shots_hit": 6},
+            ]
+        )
+
+        self.assertEqual(_accuracy_metric_text(0.0, shotgun), "셸당 펠릿 3.00회")
+        self.assertEqual(
+            _accuracy_breakdown_text(0.0, breakdown),
+            "일반 탄환 추정 25.0% · 산탄 셸당 3.00회",
+        )
+        self.assertEqual(
+            _accuracy_breakdown_text(0.0, summarize_accuracy_rows([])),
+            "측정 불가",
+        )
     def test_alert_action_result_formats_discord_admin_response(self) -> None:
         record = AlertHistoryRecord(
             id=7,
@@ -1101,6 +1122,9 @@ class DiscordBotFormattingTests(unittest.TestCase):
             shots_hit=50,
             hits_taken=8,
             accuracy=0.25,
+            accuracy_breakdown=summarize_accuracy_rows(
+                [{"weapon_code": "WeapHK416_C", "shots_fired": 200, "shots_hit": 50}]
+            ),
             headshot_hits=10,
             headshot_hits_taken=2,
             headshot_kills=2,
@@ -1126,6 +1150,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
                     shots_fired=120,
                     shots_hit=36,
                     accuracy=0.3,
+                    accuracy_metric=weapon_accuracy_metric("WeapHK416_C", 120, 36),
                     headshot_kills=1,
                     hit_parts={"head": 6},
                     taken_hit_parts={"arm": 1},
@@ -1140,8 +1165,8 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("match-123456789", body)
         self.assertIn("총 100명, 사람 96명, 봇 4명", body)
         self.assertIn("4/1/1/5", body)
-        self.assertIn("200/50/25.0%", body)
-        self.assertIn("M416 3킬/4기절/420딜/30.0%", body)
+        self.assertIn("200/50/일반 탄환 추정 25.0%", body)
+        self.assertIn("M416 3킬/4기절/420딜/추정 30.0%", body)
         self.assertIn("!최근스냅샷 match-123456789", body)
 
         body_with_link = format_player_match_detail(detail, detail_base_url="http://127.0.0.1:8000/")

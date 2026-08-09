@@ -85,6 +85,68 @@ class PlayerRankingServiceTests(unittest.TestCase):
         self.assertEqual(ranking.rows[0].player.current_name, "Alpha")
         self.assertEqual(connection.executed[0][1], ["steam", 1])
 
+    def test_accuracy_ranking_excludes_shotgun_pellet_hits(self) -> None:
+        connection = FakeConnection(
+            [
+                [
+                    _ranking_row(
+                        player_id=1,
+                        account_id="account.one",
+                        name="Alpha",
+                        match_count=5,
+                        wins=1,
+                        kills=5,
+                        assists=1,
+                        deaths=2,
+                        damage_dealt=1000.0,
+                    ),
+                    _ranking_row(
+                        player_id=2,
+                        account_id="account.two",
+                        name="Bravo",
+                        match_count=5,
+                        wins=1,
+                        kills=5,
+                        assists=1,
+                        deaths=2,
+                        damage_dealt=1000.0,
+                    ),
+                ],
+                [
+                    {
+                        "account_id": "account.one",
+                        "weapon_code": "WeapHK416_C",
+                        "shots_fired": 100,
+                        "shots_hit": 30,
+                    },
+                    {
+                        "account_id": "account.one",
+                        "weapon_code": "WeapSaiga12_C",
+                        "shots_fired": 10,
+                        "shots_hit": 90,
+                    },
+                    {
+                        "account_id": "account.two",
+                        "weapon_code": "WeapHK416_C",
+                        "shots_fired": 100,
+                        "shots_hit": 25,
+                    },
+                ],
+            ]
+        )
+
+        ranking = PlayerRankingService(connection).get_player_ranking(
+            shard="steam",
+            metric="명중률",
+            global_scope=True,
+        )
+
+        self.assertEqual(ranking.metric_label, "추정 명중률(일반 탄환)")
+        self.assertEqual([row.player.current_name for row in ranking.rows], ["Alpha", "Bravo"])
+        self.assertAlmostEqual(ranking.rows[0].score, 0.3)
+        self.assertAlmostEqual(ranking.rows[1].score, 0.25)
+        self.assertEqual(ranking.rows[0].accuracy_breakdown.pellet_shells, 10)
+        self.assertEqual(connection.executed[1][1], ["steam", "account.one", "account.two"])
     def test_resolve_metric_aliases(self) -> None:
         self.assertEqual(resolve_ranking_metric("승률").key, "win_rate")
         self.assertEqual(resolve_ranking_metric("킬").key, "kills")

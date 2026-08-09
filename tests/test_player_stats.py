@@ -42,6 +42,13 @@ class PlayerStatsServiceTests(unittest.TestCase):
                 [
                     {
                         "weapon_code": "WeapBerylM762_C",
+                        "shots_fired": 1000,
+                        "shots_hit": 210,
+                    }
+                ],
+                [
+                    {
+                        "weapon_code": "WeapBerylM762_C",
                         "match_count": 6,
                         "kills": 12,
                         "assists": 2,
@@ -88,10 +95,16 @@ class PlayerStatsServiceTests(unittest.TestCase):
         self.assertAlmostEqual(profile.totals.win_rate, 0.2)
         self.assertAlmostEqual(profile.totals.kda, 3.75)
         self.assertAlmostEqual(profile.totals.accuracy, 0.21)
+        self.assertEqual(profile.totals.accuracy_breakdown.single_projectile_attacks, 1000)
+        self.assertEqual(profile.totals.accuracy_breakdown.single_projectile_hit_events, 210)
         self.assertAlmostEqual(profile.totals.headshot_kill_rate, 0.24)
         self.assertEqual(profile.top_weapons[0].weapon_code, "WeapBerylM762_C")
         self.assertEqual(profile.top_weapons[0].weapon_name, "베릴 M762")
         self.assertAlmostEqual(profile.top_weapons[0].accuracy, 0.19)
+        self.assertEqual(
+            profile.top_weapons[0].accuracy_metric.metric_kind,
+            "estimated_hit_rate",
+        )
         self.assertEqual(profile.recent_matches[0].match_id, "match-2")
         self.assertEqual(profile.recent_matches[0].survival_seconds, 1788.5)
 
@@ -315,6 +328,13 @@ class PlayerStatsServiceTests(unittest.TestCase):
                         "taken_hit_parts": {"arm": 1},
                     }
                 ],
+                [
+                    {
+                        "weapon_code": "WeapHK416_C",
+                        "shots_fired": 200,
+                        "shots_hit": 50,
+                    }
+                ],
             ]
         )
 
@@ -337,11 +357,14 @@ class PlayerStatsServiceTests(unittest.TestCase):
         self.assertEqual(detail.dbnos_caused, 5)
         self.assertEqual(detail.dbnos_taken, 1)
         self.assertAlmostEqual(detail.accuracy, 0.25)
+        self.assertEqual(detail.accuracy_breakdown.single_projectile_attacks, 200)
+        self.assertEqual(detail.accuracy_breakdown.single_projectile_hit_events, 50)
         self.assertEqual(detail.hit_parts, {"head": 10, "torso": 34})
         self.assertEqual(detail.survival_seconds, 1750.5)
         self.assertEqual(detail.movement_distance_m, 3500.0)
         self.assertEqual(detail.weapons[0].weapon_name, "M416")
         self.assertAlmostEqual(detail.weapons[0].accuracy, 0.3)
+        self.assertEqual(detail.weapons[0].accuracy_metric.metric_kind, "estimated_hit_rate")
         self.assertIsNotNone(detail.replay_artifact)
         assert detail.replay_artifact is not None
         self.assertEqual(detail.replay_artifact.view_url, "/replay/artifacts/10/file")
@@ -404,6 +427,13 @@ class PlayerStatsServiceTests(unittest.TestCase):
                 },
                 [],
                 [],
+                [
+                    {
+                        "weapon_code": "WeapHK416_C",
+                        "shots_fired": 10,
+                        "shots_hit": 5,
+                    }
+                ],
             ]
         )
 

@@ -730,7 +730,7 @@ def format_player_profile_stats(profile: PlayerProfileStats, *, detail_base_url:
         f"- 경기/치킨: {totals.match_count}전 {totals.wins}치킨 ({_percent(totals.win_rate)})",
         f"- K/D/A: {totals.kills}/{totals.deaths}/{totals.assists} · KDA {_number(totals.kda, 2)}",
         f"- 평균 딜/받은 딜: {_number(totals.avg_damage_dealt, 1)} / {_number(totals.avg_damage_taken, 1)}",
-        f"- 명중률/헤드샷 킬: {_percent(totals.accuracy)} / {totals.headshot_kills}",
+        f"- 명중 지표/헤드샷 킬: {_accuracy_breakdown_text(totals.accuracy, totals.accuracy_breakdown)} / {totals.headshot_kills}",
         f"- 평균 생존/이동: {_minutes(totals.avg_survival_seconds)} / {_distance_km(totals.avg_movement_distance_m)}",
     ]
 
@@ -778,6 +778,7 @@ def format_player_trends(
         f"- 합계: {totals.match_count}전 {totals.wins}치킨/{totals.non_wins}비치킨 ({_percent(totals.win_rate)})",
         f"- K/D/A: {totals.kills}/{totals.deaths}/{totals.assists} · KDA {totals.kda:.2f}",
         f"- 평균 딜/받은 딜: {totals.avg_damage_dealt:.1f}/{totals.avg_damage_taken:.1f}",
+        f"- 명중 지표: {_accuracy_breakdown_text(totals.accuracy, totals.accuracy_breakdown)}",
         f"- 필터: {_trend_filter_label(report.filters)}",
     ]
     if report.buckets:
@@ -786,7 +787,8 @@ def format_player_trends(
             metrics = bucket.metrics
             lines.append(
                 f"- {bucket.period_label}: {metrics.match_count}전 {metrics.wins}치킨 "
-                f"{_percent(metrics.win_rate)} · KDA {metrics.kda:.2f} · 평딜 {metrics.avg_damage_dealt:.1f}"
+                f"{_percent(metrics.win_rate)} · KDA {metrics.kda:.2f} · 평딜 {metrics.avg_damage_dealt:.1f} "
+                f"· {_accuracy_breakdown_text(metrics.accuracy, metrics.accuracy_breakdown)}"
             )
     else:
         lines.append("조건에 맞는 완료 경기 데이터가 없습니다.")
@@ -957,7 +959,8 @@ def format_player_weapon_detail(detail: PlayerWeaponDetail, *, detail_base_url: 
         f"- 사용 경기/치킨: {totals.match_count}전 {totals.wins}치킨 ({_percent(totals.win_rate)})",
         f"- 킬/어시/기절: {totals.kills}/{totals.assists}/{totals.dbnos}",
         f"- 딜/평균 딜: {_number(totals.damage_dealt, 0)} / {_number(totals.avg_damage_dealt, 1)}",
-        f"- 명중률: {_percent(totals.accuracy)} ({totals.shots_hit}/{totals.shots_fired})",
+        f"- 명중 지표: {_accuracy_metric_text(totals.accuracy, totals.accuracy_metric)} "
+        f"({totals.shots_hit}/{totals.shots_fired})",
         f"- 헤드샷 킬/기절: {totals.headshot_kills}/{totals.headshot_dbnos}",
     ]
 
@@ -972,7 +975,7 @@ def format_player_weapon_detail(detail: PlayerWeaponDetail, *, detail_base_url: 
             lines.append(
                 f"- {_short_match_id(match.match_id)} {rank} "
                 f"{match.kills}킬/{match.dbnos}기절/{_number(match.damage_dealt, 0)}딜 "
-                f"{_percent(match.accuracy)}"
+                f"{_accuracy_metric_text(match.accuracy, match.accuracy_metric)}"
             )
 
     local_link = _local_section_url(
@@ -1001,7 +1004,8 @@ def format_player_match_detail(detail: PlayerMatchDetail, *, detail_base_url: st
         f"- K/D/A/기절: {detail.kills}/{detail.deaths}/{detail.assists}/{detail.dbnos_caused}"
         f" (당한 기절 {detail.dbnos_taken})",
         f"- 딜/받은 딜: {_number(detail.damage_dealt, 1)} / {_number(detail.damage_taken, 1)}",
-        f"- 발사/명중/명중률: {detail.shots_fired}/{detail.shots_hit}/{_percent(detail.accuracy)}",
+        f"- 공격/피격/명중 지표: {detail.shots_fired}/{detail.shots_hit}/"
+        f"{_accuracy_breakdown_text(detail.accuracy, detail.accuracy_breakdown)}",
         f"- 헤드샷 킬/기절: {detail.headshot_kills}/{detail.headshot_dbnos_caused}",
         f"- 생존/이동/낙하: {_optional_minutes(detail.survival_seconds)} / "
         f"{_optional_distance_km(detail.movement_distance_m)} / {_optional_distance_m(detail.landing_distance_m)}",
@@ -1012,7 +1016,8 @@ def format_player_match_detail(detail: PlayerMatchDetail, *, detail_base_url: st
         for weapon in detail.weapons[:4]:
             weapon_lines.append(
                 f"{weapon.weapon_name} {weapon.kills}킬/{weapon.dbnos}기절/"
-                f"{_number(weapon.damage_dealt, 0)}딜/{_percent(weapon.accuracy)}"
+                f"{_number(weapon.damage_dealt, 0)}딜/"
+                f"{_accuracy_metric_text(weapon.accuracy, weapon.accuracy_metric)}"
             )
         lines.append(f"- 사용 무기: {', '.join(weapon_lines)}")
 
@@ -1088,7 +1093,8 @@ def format_player_recommendations(
     if report.weapons:
         lines.append("- weapons: " + ", ".join(
             f"{item.weapon_name} score {_number(item.score, 1)} "
-            f"({_number(item.avg_damage_dealt, 1)} dmg, {_percent(item.win_rate)} win)"
+            f"({_number(item.avg_damage_dealt, 1)} dmg, {_percent(item.win_rate)} win, "
+            f"{_accuracy_metric_text(item.accuracy, item.accuracy_metric)})"
             for item in report.weapons[:3]
         ))
     else:
@@ -3272,6 +3278,39 @@ def _discord_single_line(value: str, max_length: int) -> str:
         return normalized
     return f"{normalized[: max(0, max_length - 3)]}..."
 
+
+def _accuracy_metric_text(value: float, metric: Any | None) -> str:
+    if metric is None:
+        return _percent(value)
+    metric_value = getattr(metric, "metric_value", None)
+    metric_kind = getattr(metric, "metric_kind", "unavailable")
+    if metric_kind == "estimated_hit_rate" and metric_value is not None:
+        return f"추정 {_percent(float(metric_value))}"
+    if metric_kind == "pellet_hits_per_shell" and metric_value is not None:
+        return f"셸당 펠릿 {_number(float(metric_value), 2)}회"
+    if metric_kind == "hit_events_per_attack" and metric_value is not None:
+        return f"공격당 피격 {_number(float(metric_value), 2)}회"
+    return "측정 불가"
+
+
+def _accuracy_breakdown_text(value: float, breakdown: Any | None) -> str:
+    if breakdown is None:
+        return _percent(value)
+    parts: list[str] = []
+    estimated = getattr(breakdown, "estimated_hit_rate", None)
+    single_attacks = int(getattr(breakdown, "single_projectile_attacks", 0) or 0)
+    if estimated is not None:
+        parts.append(f"일반 탄환 추정 {_percent(float(estimated))}")
+    elif single_attacks:
+        parts.append("일반 탄환 측정 불가")
+    pellet_shells = int(getattr(breakdown, "pellet_shells", 0) or 0)
+    pellet_ratio = getattr(breakdown, "pellet_hits_per_shell", None)
+    if pellet_shells and pellet_ratio is not None:
+        parts.append(f"산탄 셸당 {_number(float(pellet_ratio), 2)}회")
+    unclassified = int(getattr(breakdown, "unclassified_attacks", 0) or 0)
+    if unclassified:
+        parts.append(f"분류 제외 {unclassified}회")
+    return " · ".join(parts) or "측정 불가"
 
 def _percent(value: float) -> str:
     return f"{value * 100:.1f}%"

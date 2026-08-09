@@ -113,8 +113,14 @@ Official telemetry schema notes to carry into parsers:
   fetch job remains authoritative.
 - `LogMatchStart.characters` and `LogMatchEnd.characters` are arrays of character wrappers.
 - `LogPlayerTakeDamage.damage` is net health damage after armor.
-- `LogWeaponFireCount.fireCount` is reported in increments of 10. Store the official `fireCount` aggregate and avoid
-  describing it as a per-shot event stream.
+- The official schema describes `LogWeaponFireCount.fireCount` as increasing in increments of 10. Across the retained
+  corpus, repeated events for one player/weapon behave as cumulative checkpoints; keep the maximum for audit/fallback
+  and never sum the checkpoints.
+- Use in-match `LogPlayerAttack` events with `attackType = Weapon` as the primary attack count. Based on retained
+  corpus behavior, the parser interprets a supported single-projectile event as a round/bolt and a shotgun event as
+  a shell; this interpretation remains explicitly versioned and reprocessable from raw telemetry.
+- `LogPlayerTakeDamage` gun events represent projectile or pellet hit events. Therefore, report supported
+  single-projectile estimated hit rate separately from shotgun pellet hits per shell.
 - Location values are measured in centimeters, with `(0, 0)` at the top-left of the map.
 
 ## Death, DBNO, Revive, and Win/Loss Semantics

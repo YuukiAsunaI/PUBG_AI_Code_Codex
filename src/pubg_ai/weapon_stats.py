@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable, Mapping
 
 from pubg_ai.code_translator import DAMAGE_CAUSER_KO
+from pubg_ai.weapon_accuracy import is_ballistic_weapon, weapon_accuracy_metric
 
 
 BODY_PART_BY_DAMAGE_REASON = {
@@ -24,6 +25,9 @@ class WeaponCombatStats:
     weapon_code: str
     shots_fired: int = 0
     shots_hit: int = 0
+    fire_count_checkpoint: int = 0
+    fire_count_events: int = 0
+    shot_count_source: str = "none"
     hits_taken: int = 0
     damage_dealt: float = 0.0
     damage_taken: float = 0.0
@@ -47,13 +51,16 @@ class WeaponCombatStats:
 
     @property
     def accuracy(self) -> float | None:
-        if self.shots_fired <= 0:
-            return None
-        return self.shots_hit / self.shots_fired
+        return self.accuracy_metric.estimated_hit_rate
+
+    @property
+    def accuracy_metric(self) -> Any:
+        return weapon_accuracy_metric(self.weapon_code, self.shots_fired, self.shots_hit)
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
         record["accuracy"] = self.accuracy
+        record["accuracy_metric"] = self.accuracy_metric.to_record()
         return record
 
 
@@ -103,9 +110,20 @@ def summarize_weapon_combat_stats(
     *,
     include_lobby: bool = False,
 ) -> list[WeaponCombatStats]:
+    event_list = events if isinstance(events, list) else list(events)
     tracked = set(tracked_account_ids) if tracked_account_ids is not None else None
     stats_by_key: dict[tuple[str, str], WeaponCombatStats] = {}
     last_gun_damage_weapon_by_pair: dict[tuple[str, str], str] = {}
+    fire_count_keys: set[tuple[str, str]] = set()
+    for event in event_list:
+        if not include_lobby and not _is_in_game_event(event):
+            continue
+        if event.get("_T") != "LogWeaponFireCount":
+            continue
+        account_id = _character_account_id(event.get("character"))
+        weapon_code = normalize_weapon_code(event.get("weaponId"))
+        if account_id and weapon_code and (tracked is None or account_id in tracked):
+            fire_count_keys.add((account_id, weapon_code))
 
     def get_stats(account_id: str | None, weapon_code: str | None) -> WeaponCombatStats | None:
         if not account_id or not weapon_code:
@@ -121,7 +139,7 @@ def summarize_weapon_combat_stats(
             )
         return stats_by_key[key]
 
-    for event in events:
+    for event in event_list:
         if not include_lobby and not _is_in_game_event(event):
             continue
 
@@ -132,7 +150,25 @@ def summarize_weapon_combat_stats(
                 normalize_weapon_code(event.get("weaponId")),
             )
             if stats is not None:
-                stats.shots_fired += _int_or_zero(event.get("fireCount"))
+                stats.fire_count_checkpoint = max(
+                    stats.fire_count_checkpoint,
+                    _int_or_zero(event.get("fireCount")),
+                )
+                stats.fire_count_events += 1
+
+        elif event_type == "LogPlayerAttack" and event.get("attackType") == "Weapon":
+            weapon = event.get("weapon")
+            weapon_code = normalize_weapon_code(
+                weapon.get("itemId") if isinstance(weapon, Mapping) else None
+            )
+            account_id = _character_account_id(event.get("attacker"))
+            if weapon_code and account_id and (
+                is_ballistic_weapon(weapon_code) or (account_id, weapon_code) in fire_count_keys
+            ):
+                stats = get_stats(account_id, weapon_code)
+                if stats is not None:
+                    stats.shots_fired += 1
+                    stats.shot_count_source = "player_attack"
 
         elif event_type == "LogPlayerTakeDamage":
             if event.get("damageTypeCategory") != "Damage_Gun":
@@ -186,6 +222,11 @@ def summarize_weapon_combat_stats(
             _apply_kill_event(event, get_stats)
             _apply_assist_event(event, get_stats, last_gun_damage_weapon_by_pair)
 
+    for stats in stats_by_key.values():
+        if stats.shots_fired <= 0 and stats.fire_count_checkpoint > 0:
+            stats.shots_fired = stats.fire_count_checkpoint
+            stats.shot_count_source = "fire_count_checkpoint_fallback"
+
     return sorted(
         stats_by_key.values(),
         key=lambda stats: (stats.account_id, stats.weapon_code),
@@ -199,7 +240,7 @@ def summarize_player_match_combat(
     *,
     include_lobby: bool = False,
 ) -> list[PlayerMatchCombatSummary]:
-    event_list = list(events)
+    event_list = events if isinstance(events, list) else list(events)
     tracked = set(tracked_account_ids) if tracked_account_ids is not None else None
     summaries_by_account: dict[str, PlayerMatchCombatSummary] = {}
 
@@ -389,6 +430,10 @@ def _character_account_id(value: Any) -> str | None:
 
 
 def _strip_weapon_instance_suffix(code: str) -> str:
+    if code.endswith("_C"):
+        prefix, separator, suffix = code[:-2].rpartition("_")
+        if separator and suffix.isdigit():
+            return f"{prefix}_C"
     parts = code.rsplit("_", 1)
     if len(parts) == 2 and parts[1].isdigit():
         return parts[0]

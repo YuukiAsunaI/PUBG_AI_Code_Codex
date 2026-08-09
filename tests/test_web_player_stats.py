@@ -145,6 +145,13 @@ class WebPlayerStatsTests(unittest.TestCase):
                         "taken_hit_parts": {},
                     }
                 ],
+                [
+                    {
+                        "weapon_code": "WeapHK416_C",
+                        "shots_fired": 100,
+                        "shots_hit": 25,
+                    }
+                ],
             ]
         )
 
@@ -159,6 +166,7 @@ class WebPlayerStatsTests(unittest.TestCase):
         self.assertEqual(payload["total_players"], 100)
         self.assertEqual(payload["bot_players"], 2)
         self.assertEqual(payload["weapons"][0]["weapon_name"], "M416")
+        self.assertEqual(payload["accuracy_breakdown"]["estimated_hit_rate"], 0.25)
         self.assertTrue(connection.closed)
 
     def test_player_ranking_endpoint_returns_rows(self) -> None:

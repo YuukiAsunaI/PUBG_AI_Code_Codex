@@ -90,9 +90,15 @@ changes them.
 - Assists come from `LogPlayerKillV2.assists_AccountId` for the total player summary.
 - Weapon-level assists should be attributed from the assistant's prior gun damage history against the victim when a
   weapon can be linked. Do not guess weapon-level assists from the final killer's weapon.
-- Fired count comes from `LogWeaponFireCount.fireCount`; official telemetry describes it as reported in increments of
-  10, so store it as the PUBG-reported fire count aggregate rather than a per-shot event stream.
-- Hit bullet count comes from `LogPlayerTakeDamage` where `damageTypeCategory = Damage_Gun`.
+- Count weapon attacks from `LogPlayerAttack` where `attackType = Weapon`. For supported single-projectile weapons,
+  one attack event represents one round or bolt; for shotguns, it represents one shell.
+- Treat `LogWeaponFireCount.fireCount` as a cumulative checkpoint for a player/weapon pair. Track the maximum
+  checkpoint and event count while parsing, and use the maximum only as a fallback when no attack events exist. Never
+  sum repeated checkpoints; immutable raw telemetry remains the durable audit source.
+- Count gun hit events from `LogPlayerTakeDamage` where `damageTypeCategory = Damage_Gun`.
+- Report single-projectile weapons as an estimated hit rate only when hit events do not exceed attack events. Report
+  shotguns as pellet hit events per shell, and exclude unclassified weapon attacks from either metric while exposing
+  their raw counts.
 - Body-part hit counts come from `damageReason`, grouped at least as head, torso, pelvis, arm, leg, non-specific,
   none, and unknown/new raw reason.
 - Store both directions:

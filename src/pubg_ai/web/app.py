@@ -3631,8 +3631,8 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="trendSummary" style="margin-top: 12px;">조회 대기 중</div>
       <div class="table-scroll" style="margin-top: 10px;">
         <table class="trend-table">
-          <thead><tr><th>구간</th><th>경기</th><th>치킨</th><th>승률</th><th>K/D/A</th><th>KDA</th><th>평균 딜/받은 딜</th><th>기절 +/-</th><th>평균 생존</th></tr></thead>
-          <tbody id="trendBody"><tr><td colspan="9">조회 대기 중</td></tr></tbody>
+          <thead><tr><th>구간</th><th>경기</th><th>치킨</th><th>승률</th><th>K/D/A</th><th>KDA</th><th>평균 딜/받은 딜</th><th>명중 지표</th><th>기절 +/-</th><th>평균 생존</th></tr></thead>
+          <tbody id="trendBody"><tr><td colspan="10">조회 대기 중</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -3735,7 +3735,7 @@ _INDEX_HTML = """<!doctype html>
             <option value="damage">총 딜</option>
             <option value="kills">킬</option>
             <option value="dbnos">기절</option>
-            <option value="accuracy">명중률</option>
+            <option value="accuracy">추정 명중률(일반 탄환)</option>
             <option value="headshot_rate">헤드샷 킬 비율</option>
             <option value="matches">경기 수</option>
           </select>
@@ -6711,7 +6711,7 @@ _INDEX_HTML = """<!doctype html>
         `경기/치킨: ${totals.match_count}전 ${totals.wins}치킨 (${percent(totals.win_rate)})`,
         `K/D/A: ${totals.kills}/${totals.deaths}/${totals.assists} · KDA ${Number(totals.kda).toFixed(2)}`,
         `평균 딜/받은 딜: ${Number(totals.avg_damage_dealt).toFixed(1)} / ${Number(totals.avg_damage_taken).toFixed(1)}`,
-        `명중률: ${percent(totals.accuracy)}`,
+        `명중 지표: ${accuracyBreakdownText(totals.accuracy, totals.accuracy_breakdown)}`,
         `주무기: ${weapons}`,
         `교전 승/패: ${fightTotals.wins}승 ${fightTotals.losses}패 (${percent(fightTotals.fight_win_rate)})`,
         `교전 상세: 킬승 ${fightTotals.kill_wins} · 기절승 ${fightTotals.dbno_wins} · 사망패 ${fightTotals.death_losses} · 기절패 ${fightTotals.dbno_losses}`,
@@ -6767,6 +6767,7 @@ _INDEX_HTML = """<!doctype html>
       trendSummary.innerHTML = [
         `<strong>${escapeHtml(report.player.current_name)} · KST ${escapeHtml(granularityLabel)}</strong>`,
         `${totals.match_count}전 ${totals.wins}치킨/${totals.non_wins}비치킨 (${percent(totals.win_rate)}) · KDA ${Number(totals.kda).toFixed(2)} · 평딜 ${Number(totals.avg_damage_dealt).toFixed(1)}`,
+        `명중 지표: ${accuracyBreakdownText(totals.accuracy, totals.accuracy_breakdown)}`,
         `필터: ${filterText}`,
         report.truncated ? `최근 ${report.returned_bucket_count}/${report.available_bucket_count}개 구간 표시` : `${report.returned_bucket_count}개 구간`,
       ].join("<br>");
@@ -6779,10 +6780,11 @@ _INDEX_HTML = """<!doctype html>
           <td>${bucket.kills}/${bucket.deaths}/${bucket.assists}</td>
           <td>${Number(bucket.kda).toFixed(2)}</td>
           <td>${Number(bucket.avg_damage_dealt).toFixed(1)} / ${Number(bucket.avg_damage_taken).toFixed(1)}</td>
+          <td>${accuracyBreakdownText(bucket.accuracy, bucket.accuracy_breakdown)}</td>
           <td>${bucket.dbnos_caused} / ${bucket.dbnos_taken}</td>
           <td>${minutes(bucket.avg_survival_seconds)}</td>
         </tr>
-      `).join("") || `<tr><td colspan="9">조건에 맞는 완료 경기 데이터가 없습니다.</td></tr>`;
+      `).join("") || `<tr><td colspan="10">조건에 맞는 완료 경기 데이터가 없습니다.</td></tr>`;
     }
 
     async function loadPlayerWeapon(target, weapon, shard) {
@@ -6808,7 +6810,7 @@ _INDEX_HTML = """<!doctype html>
         `사용 경기/치킨: ${totals.match_count}전 ${totals.wins}치킨 (${percent(totals.win_rate)})`,
         `킬/어시/기절: ${totals.kills}/${totals.assists}/${totals.dbnos}`,
         `딜/평균 딜: ${Number(totals.damage_dealt).toFixed(0)} / ${Number(totals.avg_damage_dealt).toFixed(1)}`,
-        `명중률: ${percent(totals.accuracy)} (${totals.shots_hit}/${totals.shots_fired})`,
+        `명중 지표: ${accuracyMetricText(totals.accuracy, totals.accuracy_metric)} (${totals.shots_hit}/${totals.shots_fired})`,
         `최근 사용 경기:<br>${recent}`,
       ].join("<br>");
     }
@@ -6873,7 +6875,7 @@ _INDEX_HTML = """<!doctype html>
       const payload = await response.json();
       const report = payload.recommendations;
       const weapons = recommendationLines(report.weapons, (item) => (
-        `${escapeHtml(item.weapon_name)} score ${Number(item.score).toFixed(1)} / ${item.match_count} matches / ${Number(item.avg_damage_dealt).toFixed(1)} avg dmg / ${percent(item.win_rate)} win`
+        `${escapeHtml(item.weapon_name)} score ${Number(item.score).toFixed(1)} / ${item.match_count} matches / ${Number(item.avg_damage_dealt).toFixed(1)} avg dmg / ${percent(item.win_rate)} win / ${accuracyMetricText(item.accuracy, item.accuracy_metric)}`
       ));
       const weaponParts = recommendationLines(report.weapon_attachments, (item) => (
         `<span>${escapeHtml(item.weapon_name)} + ${escapeHtml(item.attachment_name)} score ${Number(item.score).toFixed(1)} / ${item.match_count} matches / ${item.event_count || item.attached_events} events / ${distanceM(item.avg_distance_m)} avg</span>
@@ -6978,7 +6980,7 @@ _INDEX_HTML = """<!doctype html>
       const payload = await response.json();
       const detail = payload.match;
       const weapons = (detail.weapons || []).slice(0, 4).map((weapon) => (
-        `${escapeHtml(weapon.weapon_name)} ${weapon.kills}킬/${weapon.dbnos}기절/${Number(weapon.damage_dealt).toFixed(0)}딜/${percent(weapon.accuracy)}`
+        `${escapeHtml(weapon.weapon_name)} ${weapon.kills}킬/${weapon.dbnos}기절/${Number(weapon.damage_dealt).toFixed(0)}딜/${accuracyMetricText(weapon.accuracy, weapon.accuracy_metric)}`
       )).join(", ") || "-";
       const snapshot = detail.replay_artifact
         ? `<a href="${detail.replay_artifact.view_url}" target="_blank" rel="noreferrer">2D 스냅샷 열기</a>`
@@ -6990,7 +6992,7 @@ _INDEX_HTML = """<!doctype html>
         `인원: 총 ${detail.total_players ?? "-"}명, 사람 ${detail.human_players ?? "-"}명, 봇 ${detail.bot_players ?? "-"}명`,
         `K/D/A/기절: ${detail.kills}/${detail.deaths}/${detail.assists}/${detail.dbnos_caused} (당한 기절 ${detail.dbnos_taken})`,
         `딜/받은 딜: ${Number(detail.damage_dealt).toFixed(1)} / ${Number(detail.damage_taken).toFixed(1)}`,
-        `발사/명중/명중률: ${detail.shots_fired}/${detail.shots_hit}/${percent(detail.accuracy)}`,
+        `공격/피격/명중 지표: ${detail.shots_fired}/${detail.shots_hit}/${accuracyBreakdownText(detail.accuracy, detail.accuracy_breakdown)}`,
         `생존/이동/낙하: ${minutes(detail.survival_seconds)} / ${distanceKm(detail.movement_distance_m)} / ${distanceM(detail.landing_distance_m)}`,
         `사용 무기: ${weapons}`,
         `2D 스냅샷: ${snapshot}`,
@@ -7043,6 +7045,37 @@ _INDEX_HTML = """<!doctype html>
       `;
     }
 
+    function accuracyMetricText(value, metric) {
+      if (!metric) return percent(value);
+      const metricValue = metric.metric_value;
+      if (metric.metric_kind === "estimated_hit_rate" && metricValue !== null && metricValue !== undefined) {
+        return `추정 ${percent(metricValue)}`;
+      }
+      if (metric.metric_kind === "pellet_hits_per_shell" && metricValue !== null && metricValue !== undefined) {
+        return `셸당 펠릿 ${Number(metricValue).toFixed(2)}회`;
+      }
+      if (metric.metric_kind === "hit_events_per_attack" && metricValue !== null && metricValue !== undefined) {
+        return `공격당 피격 ${Number(metricValue).toFixed(2)}회`;
+      }
+      return "측정 불가";
+    }
+
+    function accuracyBreakdownText(value, breakdown) {
+      if (!breakdown) return percent(value);
+      const parts = [];
+      if (breakdown.estimated_hit_rate !== null && breakdown.estimated_hit_rate !== undefined) {
+        parts.push(`일반 탄환 추정 ${percent(breakdown.estimated_hit_rate)}`);
+      } else if (Number(breakdown.single_projectile_attacks || 0) > 0) {
+        parts.push("일반 탄환 측정 불가");
+      }
+      if (Number(breakdown.pellet_shells || 0) > 0 && breakdown.pellet_hits_per_shell !== null && breakdown.pellet_hits_per_shell !== undefined) {
+        parts.push(`산탄 셸당 ${Number(breakdown.pellet_hits_per_shell).toFixed(2)}회`);
+      }
+      if (Number(breakdown.unclassified_attacks || 0) > 0) {
+        parts.push(`분류 제외 ${Number(breakdown.unclassified_attacks)}회`);
+      }
+      return parts.join(" · ") || "측정 불가";
+    }
     function percent(value) {
       return `${(Number(value || 0) * 100).toFixed(1)}%`;
     }

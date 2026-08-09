@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, time, timedelta
 from typing import Any, Iterable, Literal, Mapping
 import json
 
 from pubg_ai.player_registry import RegisteredPlayer
+from pubg_ai.weapon_accuracy import AccuracyBreakdown, summarize_accuracy_rows
 
 
 TrendGranularity = Literal["hour", "date", "week", "month"]
@@ -85,6 +86,7 @@ class PlayerTrendMetrics:
     headshot_kill_rate: float
     avg_survival_seconds: float
     avg_movement_distance_m: float
+    accuracy_breakdown: AccuracyBreakdown | None = None
 
     def to_record(self) -> dict[str, Any]:
         return asdict(self)
@@ -290,7 +292,42 @@ class PlayerTrendService:
                 + " ORDER BY matches.created_at_kst ASC, summaries.match_id ASC",
                 params,
             )
-            return list(cursor.fetchall())
+            rows = [dict(row) for row in cursor.fetchall()]
+
+        if not rows:
+            return []
+        match_ids = [str(row["match_id"]) for row in rows]
+        placeholders = ", ".join(["%s"] * len(match_ids))
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    weapon_stats.match_id,
+                    weapon_stats.weapon_code,
+                    COALESCE(SUM(weapon_stats.shots_fired), 0) AS shots_fired,
+                    COALESCE(SUM(weapon_stats.shots_hit), 0) AS shots_hit
+                FROM player_weapon_match_stats weapon_stats
+                INNER JOIN matches
+                    ON matches.match_id = weapon_stats.match_id
+                WHERE weapon_stats.account_id = %s
+                  AND matches.shard = %s
+                  AND weapon_stats.match_id IN (
+                """
+                + placeholders
+                + """
+                  )
+                GROUP BY weapon_stats.match_id, weapon_stats.weapon_code
+                """,
+                [player.account_id, player.shard, *match_ids],
+            )
+            accuracy_rows = cursor.fetchall()
+
+        accuracy_by_match: dict[str, list[dict[str, Any]]] = {}
+        for accuracy_row in accuracy_rows:
+            accuracy_by_match.setdefault(str(accuracy_row["match_id"]), []).append(accuracy_row)
+        for row in rows:
+            row["weapon_accuracy_rows"] = accuracy_by_match.get(str(row["match_id"]), [])
+        return rows
 
 
 @dataclass(frozen=True)
@@ -317,6 +354,7 @@ class _TrendAccumulator:
     headshot_kills: int = 0
     survival_seconds: float = 0.0
     movement_distance_m: float = 0.0
+    accuracy_rows: list[Mapping[str, Any]] = field(default_factory=list)
     first_match_at_kst: datetime | None = None
     last_match_at_kst: datetime | None = None
 
@@ -332,6 +370,11 @@ class _TrendAccumulator:
         self.damage_taken += _float(row.get("damage_taken"))
         self.shots_fired += _int(row.get("shots_fired"))
         self.shots_hit += _int(row.get("shots_hit"))
+        weapon_accuracy_rows = row.get("weapon_accuracy_rows")
+        if isinstance(weapon_accuracy_rows, list):
+            self.accuracy_rows.extend(
+                item for item in weapon_accuracy_rows if isinstance(item, Mapping)
+            )
         self.headshot_kills += _int(row.get("headshot_kills"))
         self.survival_seconds += _survival_seconds(row)
         self.movement_distance_m += _float(row.get("in_game_sampled_distance_m"))
@@ -342,6 +385,16 @@ class _TrendAccumulator:
 
     def metrics(self) -> PlayerTrendMetrics:
         non_wins = self.match_count - self.wins
+        accuracy_breakdown = (
+            summarize_accuracy_rows(self.accuracy_rows)
+            if self.accuracy_rows
+            else None
+        )
+        accuracy = (
+            _safe_divide(self.shots_hit, self.shots_fired)
+            if accuracy_breakdown is None
+            else accuracy_breakdown.estimated_hit_rate or 0.0
+        )
         return PlayerTrendMetrics(
             match_count=self.match_count,
             wins=self.wins,
@@ -359,11 +412,12 @@ class _TrendAccumulator:
             avg_damage_taken=_safe_divide(self.damage_taken, self.match_count),
             shots_fired=self.shots_fired,
             shots_hit=self.shots_hit,
-            accuracy=_safe_divide(self.shots_hit, self.shots_fired),
+            accuracy=accuracy,
             headshot_kills=self.headshot_kills,
             headshot_kill_rate=_safe_divide(self.headshot_kills, self.kills),
             avg_survival_seconds=_safe_divide(self.survival_seconds, self.match_count),
             avg_movement_distance_m=_safe_divide(self.movement_distance_m, self.match_count),
+            accuracy_breakdown=accuracy_breakdown,
         )
 
 

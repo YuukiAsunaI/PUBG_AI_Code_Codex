@@ -20,6 +20,84 @@ class WeaponStatsTests(unittest.TestCase):
     def test_normalizes_damage_causer_case_to_known_dictionary_code(self) -> None:
         self.assertEqual(normalize_weapon_code("WeapFamasG2_C"), "WeapFAMASG2_C")
         self.assertEqual(normalize_weapon_code("Item_Weapon_FAMASG2_C"), "WeapFAMASG2_C")
+        self.assertEqual(normalize_weapon_code("WeapCrossbow_1_C"), "WeapCrossbow_C")
+
+    def test_counts_attack_events_instead_of_summing_fire_checkpoints(self) -> None:
+        events = [
+            {
+                "_T": "LogWeaponFireCount",
+                "character": {"accountId": "account.attacker"},
+                "weaponId": "Item_Weapon_BerylM762_C",
+                "fireCount": fire_count,
+                "common": {"isGame": 1},
+            }
+            for fire_count in (10, 20)
+        ]
+        events.extend(
+            {
+                "_T": "LogPlayerAttack",
+                "attackType": "Weapon",
+                "attacker": {"accountId": "account.attacker"},
+                "weapon": {"itemId": "Item_Weapon_BerylM762_C"},
+                "common": {"isGame": 1},
+            }
+            for _ in range(3)
+        )
+        events.append(
+            {
+                "_T": "LogPlayerTakeDamage",
+                "attacker": {"accountId": "account.attacker"},
+                "victim": {"accountId": "account.victim"},
+                "damageTypeCategory": "Damage_Gun",
+                "damageReason": "TorsoShot",
+                "damage": 20.0,
+                "damageCauserName": "WeapBerylM762_C",
+                "common": {"isGame": 1},
+            }
+        )
+
+        stats = summarize_weapon_combat_stats(events, match_id="match-1")
+        attacker = next(item for item in stats if item.account_id == "account.attacker")
+
+        self.assertEqual(attacker.shots_fired, 3)
+        self.assertEqual(attacker.fire_count_checkpoint, 20)
+        self.assertEqual(attacker.fire_count_events, 2)
+        self.assertEqual(attacker.shot_count_source, "player_attack")
+        self.assertAlmostEqual(attacker.accuracy, 1 / 3)
+
+    def test_reports_shotgun_pellet_hits_per_shell_instead_of_percentage(self) -> None:
+        events = [
+            {
+                "_T": "LogPlayerAttack",
+                "attackType": "Weapon",
+                "attacker": {"accountId": "account.attacker"},
+                "weapon": {"itemId": "Item_Weapon_Saiga12_C"},
+                "common": {"isGame": 1},
+            }
+            for _ in range(2)
+        ]
+        events.extend(
+            {
+                "_T": "LogPlayerTakeDamage",
+                "attacker": {"accountId": "account.attacker"},
+                "victim": {"accountId": "account.victim"},
+                "damageTypeCategory": "Damage_Gun",
+                "damageReason": "TorsoShot",
+                "damage": 10.0,
+                "damageCauserName": "WeapSaiga12_C",
+                "common": {"isGame": 1},
+            }
+            for _ in range(4)
+        )
+
+        stats = summarize_weapon_combat_stats(events, match_id="match-1")
+        attacker = next(item for item in stats if item.account_id == "account.attacker")
+
+        self.assertEqual(attacker.shots_fired, 2)
+        self.assertEqual(attacker.shots_hit, 4)
+        self.assertIsNone(attacker.accuracy)
+        self.assertEqual(attacker.accuracy_metric.metric_kind, "pellet_hits_per_shell")
+        self.assertEqual(attacker.accuracy_metric.metric_value, 2.0)
 
     def test_maps_damage_reason_to_body_part(self) -> None:
         self.assertEqual(body_part_from_damage_reason("HeadShot"), "head")

@@ -152,9 +152,13 @@ The current local runtime can parse raw telemetry into registered-player combat 
 
 - `TelemetryCombatProcessor.process_raw_telemetry(...)` reads stored telemetry files from `PUBG_RAW_DATA_DIR`.
 - Only registered tracking targets that participated in the match are written to player summary tables.
-- `player_match_combat_summaries` stores per-match totals for shots fired, shots hit, hits taken, damage dealt,
-  damage taken, kills, assists, deaths, DBNOs caused/taken, finishes, headshot counts, and body-part hit maps.
-- `player_weapon_match_stats` stores the same combat facts split by normalized weapon/damage-causer code.
+- `player_match_combat_summaries` stores per-match totals for weapon attack events, gun hit events, hits taken,
+  damage dealt/taken, kills, assists, deaths, DBNOs caused/taken, finishes, headshots, and body-part hit maps.
+- `player_weapon_match_stats` stores the same combat facts split by normalized weapon/damage-causer code. Its
+  compatibility column `shots_fired` contains the parser-selected attack count; immutable raw telemetry retains the
+  cumulative fire-count checkpoints for audit.
+- Query services derive supported single-projectile estimated hit rate and shotgun pellet hits per shell separately;
+  unclassified attacks stay visible but are excluded from both metrics.
 - Weapon codes are canonicalized before storage so telemetry variants such as `WeapFamasG2_C` and
   `WeapFAMASG2_C` collapse into one weapon row.
 - `python -m pubg_ai.cli parse-telemetry-combat --limit 10` runs one parse pass.
@@ -327,13 +331,13 @@ The current Discord bot slice is intentionally small and reuses the same local M
 - `!유저등록 steam 닉네임` resolves the PUBG nickname, stores the tracking target, and records the Discord
   user/guild/channel context.
 - `!유저조회 [닉네임] [shard]` lists registered targets or loads one registered target including inactive rows.
-- `!전적 닉네임 [shard]` reads parsed MySQL summaries and returns matches, chickens, KDA, damage, accuracy,
+- `!전적 닉네임 [shard]` reads parsed MySQL summaries and returns matches, chickens, KDA, damage, class-aware hit metrics,
   average survival/movement, top weapons, and recent match rows.
 - `!무기 닉네임 무기명 [shard]` resolves common names such as `M416` to PUBG weapon codes and returns weapon-specific
-  usage matches, chickens, kills, assists, DBNOs, damage, accuracy, body-part hits, and recent weapon rows.
+  usage matches, chickens, kills, assists, DBNOs, damage, the weapon-family hit metric, body-part hits, and recent weapon rows.
 - `!매치 match_id [닉네임|accountId] [shard]` reads one completed-match summary for a registered target, including
   map/mode/type, chicken/non-chicken, total/human/bot player counts, kills, deaths, assists, caused/taken DBNOs,
-  damage, accuracy, survival/movement/landing distance, top weapons, hit parts, and generated 2D snapshot status.
+  damage, class-aware hit metrics, survival/movement/landing distance, top weapons, hit parts, and generated 2D snapshot status.
 - `!랭킹 [지표] [shard] [limit] [전체]` ranks registered targets from completed-match summary tables. Server channels
   default to that `guild_id` scope; global admins can request the full local ranking with `전체`.
 - `!추천 닉네임 [shard]` reads parsed summary tables and returns recommendations for weapons, distance-weighted

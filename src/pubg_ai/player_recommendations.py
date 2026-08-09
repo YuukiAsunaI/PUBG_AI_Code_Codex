@@ -10,6 +10,12 @@ from pubg_ai.distance_buckets import WeaponFamily, distance_bucket
 from pubg_ai.map_regions import resolve_map_region
 from pubg_ai.map_snapshot_renderer import DEFAULT_WORLD_SIZE_CM, MAP_WORLD_SIZE_CM
 from pubg_ai.player_registry import RegisteredPlayer
+from pubg_ai.weapon_accuracy import (
+    WeaponAccuracyMetric,
+    distance_weapon_family,
+    recommendation_accuracy_score,
+    weapon_accuracy_metric,
+)
 from pubg_ai.weapon_stats import normalize_weapon_code
 
 
@@ -136,6 +142,7 @@ class WeaponRecommendation:
     avg_damage_dealt: float
     accuracy: float
     reason: str
+    accuracy_metric: WeaponAccuracyMetric | None = None
     range_score: float = 0.0
     top_distance_buckets: list[WeaponDistanceBucketRecommendation] = field(default_factory=list)
 
@@ -443,8 +450,9 @@ class PlayerRecommendationService:
             damage_dealt = _float(row.get("damage_dealt"))
             shots_fired = _int(row.get("shots_fired"))
             shots_hit = _int(row.get("shots_hit"))
-            accuracy = _accuracy(shots_hit, shots_fired)
             weapon_code = str(row["weapon_code"])
+            accuracy_metric = weapon_accuracy_metric(weapon_code, shots_fired, shots_hit)
+            accuracy = accuracy_metric.estimated_hit_rate or 0.0
             top_distance_buckets = list(distance_by_weapon.get(weapon_code, []))[:3]
             range_score = sum(bucket.score for bucket in top_distance_buckets[:2]) * 0.05
             score = _performance_score(
@@ -455,8 +463,7 @@ class PlayerRecommendationService:
                 deaths=deaths,
                 dbnos=dbnos,
                 damage_dealt=damage_dealt,
-                shots_fired=shots_fired,
-                shots_hit=shots_hit,
+                accuracy_score=recommendation_accuracy_score(accuracy_metric),
             ) + range_score
             recommendations.append(
                 WeaponRecommendation(
@@ -478,6 +485,7 @@ class PlayerRecommendationService:
                     avg_damage_dealt=_safe_divide(damage_dealt, match_count),
                     accuracy=accuracy,
                     reason=_reason(match_count, wins, damage_dealt, kills),
+                    accuracy_metric=accuracy_metric,
                     range_score=range_score,
                     top_distance_buckets=top_distance_buckets,
                 )
@@ -1402,13 +1410,7 @@ def _weapon_attachment_evidence_totals(snapshots: list[WeaponAttachmentSnapshotE
 
 
 def _weapon_family(weapon_code: str) -> WeaponFamily:
-    if weapon_code in AR_WEAPONS:
-        return "AR"
-    if weapon_code in DMR_WEAPONS:
-        return "DMR"
-    if weapon_code in SR_WEAPONS:
-        return "SR"
-    return "OTHER"
+    return distance_weapon_family(weapon_code)
 
 
 def _performance_score(
@@ -1420,8 +1422,7 @@ def _performance_score(
     deaths: int = 0,
     dbnos: int = 0,
     damage_dealt: float = 0.0,
-    shots_fired: int = 0,
-    shots_hit: int = 0,
+    accuracy_score: float = 0.0,
 ) -> float:
     if match_count <= 0:
         return 0.0
@@ -1431,7 +1432,6 @@ def _performance_score(
     assists_per_match = _safe_divide(assists, match_count)
     deaths_per_match = _safe_divide(deaths, match_count)
     win_rate = _safe_divide(wins, match_count)
-    accuracy = _accuracy(shots_hit, shots_fired)
     confidence = min(1.0, match_count / 5)
     raw_score = (
         avg_damage
@@ -1439,7 +1439,7 @@ def _performance_score(
         + dbnos_per_match * 35
         + assists_per_match * 20
         + win_rate * 120
-        + accuracy * 60
+        + accuracy_score * 60
         - deaths_per_match * 25
     )
     return max(0.0, raw_score) * (0.65 + confidence * 0.35)
@@ -1549,46 +1549,5 @@ def _safe_divide(numerator: float | int, denominator: float | int) -> float:
     return float(numerator) / float(denominator)
 
 
-def _accuracy(shots_hit: int, shots_fired: int) -> float:
-    return min(1.0, _safe_divide(shots_hit, shots_fired))
-
-
 def _clamped(value: float) -> float:
     return max(0.0, min(1.0, value))
-
-
-AR_WEAPONS = {
-    "WeapACE32_C",
-    "WeapAK47_C",
-    "WeapAUG_C",
-    "WeapBerylM762_C",
-    "WeapFAMASG2_C",
-    "WeapG36C_C",
-    "WeapGroza_C",
-    "WeapHK416_C",
-    "WeapK2_C",
-    "WeapM16A4_C",
-    "WeapMk47Mutant_C",
-    "WeapQBZ95_C",
-    "WeapSCAR-L_C",
-}
-
-DMR_WEAPONS = {
-    "WeapDragunov_C",
-    "WeapFNFal_C",
-    "WeapMini14_C",
-    "WeapMk12_C",
-    "WeapMk14_C",
-    "WeapQBU88_C",
-    "WeapSKS_C",
-    "WeapVSS_C",
-}
-
-SR_WEAPONS = {
-    "WeapAWM_C",
-    "WeapKar98k_C",
-    "WeapL6_C",
-    "WeapM24_C",
-    "WeapMosinNagant_C",
-    "WeapWin94_C",
-}

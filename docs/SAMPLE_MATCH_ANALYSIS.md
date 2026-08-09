@@ -69,14 +69,20 @@ because telemetry files are large and contain player names/account IDs.
 
 ## Weapon Accuracy / Hit-Part Sample
 
-Using `LogWeaponFireCount`, gun-type `LogPlayerTakeDamage`, `LogPlayerMakeGroggy`, and `LogPlayerKillV2`, the parser
-can derive the following match-wide weapon facts:
+Using in-match `LogPlayerAttack` weapon events, gun-type `LogPlayerTakeDamage`, `LogPlayerMakeGroggy`, and
+`LogPlayerKillV2`, the parser derives the following match-wide weapon facts. `LogWeaponFireCount` is inspected as
+a cumulative audit/fallback checkpoint in the immutable raw telemetry.
 
 | Metric | Value |
 | --- | ---: |
-| Player/weapon stat rows | 277 |
-| Fired count from `LogWeaponFireCount` | 14,630 |
-| Gun hit events from `LogPlayerTakeDamage` | 905 |
+| Player/weapon stat rows | 290 |
+| Weapon attack events | 3,851 |
+| Supported single-projectile attacks / hit events | 3,750 / 687 |
+| Supported single-projectile estimated hit rate | 18.32% |
+| Shotgun shells / pellet hit events | 82 / 218 |
+| Shotgun pellet hit events per shell | 2.66 |
+| Unclassified attacks / hit events | 19 / 0 |
+| All gun hit events from `LogPlayerTakeDamage` | 905 |
 | Head hit events | 122 |
 | Final kills | 79 |
 | Headshot final kills | 19 |
@@ -97,23 +103,23 @@ Body-part hit distribution:
 
 Top weapons by gun hit events:
 
-| Weapon | Fired | Hit events | Kills | Headshot kills | DBNOs |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| `WeapMP5K_C` | 7,520 | 172 | 17 | 2 | 15 |
-| `WeapSaiga12_C` | 10 | 110 | 6 | 1 | 7 |
-| `WeapWinchester_C` | 10 | 90 | 4 | 1 | 4 |
-| `WeapVector_C` | 1,060 | 86 | 7 | 3 | 6 |
-| `WeapBerylM762_C` | 2,300 | 76 | 12 | 6 | 5 |
+| Weapon | Attacks/shells | Hit events | Semantic hit metric | Kills | Headshot kills | DBNOs |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `WeapMP5K_C` | 1,084 | 172 | 15.87% estimated | 17 | 2 | 15 |
+| `WeapSaiga12_C` | 34 | 110 | 3.24 pellets/shell | 6 | 1 | 7 |
+| `WeapWinchester_C` | 39 | 90 | 2.31 pellets/shell | 4 | 1 | 4 |
+| `WeapVector_C` | 323 | 86 | 26.63% estimated | 7 | 3 | 6 |
+| `WeapBerylM762_C` | 588 | 76 | 12.93% estimated | 12 | 6 | 5 |
 
-Important caveat: shotgun/pellet weapons can produce more hit events than fired shell count. Store fired count and hit
-event count separately, and interpret accuracy by weapon class instead of clamping it to 100%.
+Shotgun pellet hit events can exceed fired shell count, so they are never displayed as a percentage or clamped to
+100%. Unknown or non-ballistic attack codes remain visible but are excluded from both calibrated metrics.
 
 The same parser output should be stored in two query-friendly shapes:
 
 - `player_match_combat_summaries`: one row per player/match with total damage dealt, damage taken, kills, assists,
-  deaths, DBNOs caused, DBNOs taken, finishes, headshots, fired shots, hit shots, and received hits.
+  deaths, DBNOs caused, DBNOs taken, finishes, headshots, weapon attack events, hit events, and received hits.
 - `player_weapon_match_stats`: one row per player/match/weapon with weapon-attributable damage dealt/taken, kills,
-  assists, deaths, DBNOs caused/taken, finishes, fired shots, hit shots, and body-part hit counts.
+  assists, deaths, DBNOs caused/taken, finishes, attack events, hit events, and body-part hit counts.
 
 Assists are available directly from `LogPlayerKillV2.assists_AccountId` for the total player summary. Weapon-level
 assist attribution should use the assistant's prior gun damage history against the victim when a weapon can be linked;
@@ -319,9 +325,14 @@ Damage categories from `LogPlayerTakeDamage`:
 
 | Metric | Value |
 | --- | ---: |
-| Player/weapon stat rows | 344 |
-| Fired count from `LogWeaponFireCount` | 25,520 |
-| Gun hit events from `LogPlayerTakeDamage` | 1,041 |
+| Player/weapon stat rows | 359 |
+| Weapon attack events | 6,039 |
+| Supported single-projectile attacks / hit events | 5,756 / 811 |
+| Supported single-projectile estimated hit rate | 14.09% |
+| Shotgun shells / pellet hit events | 68 / 230 |
+| Shotgun pellet hit events per shell | 3.38 |
+| Unclassified attacks / hit events | 215 / 0 |
+| All gun hit events from `LogPlayerTakeDamage` | 1,041 |
 | Head hit events | 136 |
 | Final kills | 90 |
 | Headshot final kills | 22 |
@@ -343,18 +354,30 @@ Body-part hit distribution:
 
 Top weapons by gun hit events:
 
-| Weapon | Fired | Hit events | Kills | Headshot kills | DBNOs | Assists |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `WeapSaiga12_C` | 30 | 133 | 8 | 2 | 6 | 1 |
-| `WeapACE32_C` | 6,270 | 106 | 10 | 1 | 12 | 5 |
-| `WeapMP5K_C` | 1,840 | 100 | 11 | 1 | 7 | 0 |
-| `WeapAUG_C` | 2,980 | 99 | 9 | 2 | 11 | 1 |
-| `WeapHK416_C` | 3,360 | 96 | 5 | 1 | 4 | 3 |
-| `WeapWinchester_C` | 0 | 57 | 3 | 2 | 4 | 0 |
-| `WeapAK47_C` | 610 | 52 | 6 | 3 | 6 | 0 |
-| `WeapVector_C` | 240 | 49 | 4 | 0 | 3 | 0 |
-| `WeapSCAR-L_C` | 690 | 46 | 5 | 2 | 5 | 2 |
-| `WeapMini14_C` | 420 | 38 | 1 | 0 | 2 | 4 |
+| Weapon | Attacks/shells | Hit events | Semantic hit metric | Kills | Headshot kills | DBNOs | Assists |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `WeapSaiga12_C` | 44 | 133 | 3.02 pellets/shell | 8 | 2 | 6 | 1 |
+| `WeapACE32_C` | 940 | 106 | 11.28% estimated | 10 | 1 | 12 | 5 |
+| `WeapMP5K_C` | 497 | 100 | 20.12% estimated | 11 | 1 | 7 | 0 |
+| `WeapAUG_C` | 763 | 99 | 12.98% estimated | 9 | 2 | 11 | 1 |
+| `WeapHK416_C` | 825 | 96 | 11.64% estimated | 5 | 1 | 4 | 3 |
+| `WeapWinchester_C` | 16 | 57 | 3.56 pellets/shell | 3 | 2 | 4 | 0 |
+| `WeapAK47_C` | 232 | 52 | 22.41% estimated | 6 | 3 | 6 | 0 |
+| `WeapVector_C` | 121 | 49 | 40.50% estimated | 4 | 0 | 3 | 0 |
+| `WeapSCAR-L_C` | 230 | 46 | 20.00% estimated | 5 | 2 | 5 | 2 |
+| `WeapMini14_C` | 196 | 38 | 19.39% estimated | 1 | 0 | 2 | 4 |
+
+## Corpus-Wide Accuracy Calibration
+
+On 2026-08-10 KST, all 244 retained telemetry payloads (9,151,853 events) were reprocessed with zero failures. The
+current tracked-player corpus contains 12,741 weapon attack events and 1,976 gun hit events. The calibrated breakdown
+is 12,650 supported single-projectile attacks with 1,763 hit events (13.9368% estimated), 68 shotgun shells with 213
+pellet hit events (3.13235 per shell), and 23 unclassified attacks with zero hit events. The unclassified attacks are
+18 pickaxe, 1 stun-gun, and 4 zipline-gun events and are excluded from both displayed accuracy metrics.
+
+The previous 60,283 fire count was inflated by summing cumulative `LogWeaponFireCount` checkpoints. Reprocessing
+from `LogPlayerAttack` produced 244 combat summaries and 826 per-player/per-weapon rows. Player profile, weapon,
+match, recommendation, ranking, trend, local web, and Discord outputs now use the same class-aware contract.
 
 ## Sample 2 Parser Findings
 

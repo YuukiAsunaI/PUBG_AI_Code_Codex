@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from pubg_ai.player_registry import RegisteredPlayer
+from pubg_ai.weapon_accuracy import AccuracyBreakdown, summarize_accuracy_rows
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,7 @@ class PlayerRankingRow:
     avg_survival_seconds: float
     avg_movement_distance_m: float
     last_match_at_kst: datetime | None
+    accuracy_breakdown: AccuracyBreakdown | None = None
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
@@ -208,10 +210,61 @@ class PlayerRankingService:
             )
             raw_rows = cursor.fetchall()
 
+        accuracy_by_account = (
+            self._load_accuracy_breakdowns(shard=shard, raw_rows=raw_rows)
+            if metric.key == "accuracy"
+            else {}
+        )
         return [
-            _ranking_row_from_record(row, rank=0, metric=metric)
+            _ranking_row_from_record(
+                row,
+                rank=0,
+                metric=metric,
+                accuracy_breakdown=accuracy_by_account.get(str(row["account_id"])),
+            )
             for row in raw_rows
         ]
+
+    def _load_accuracy_breakdowns(
+        self,
+        *,
+        shard: str,
+        raw_rows: list[dict[str, Any]],
+    ) -> dict[str, AccuracyBreakdown]:
+        account_ids = sorted({str(row["account_id"]) for row in raw_rows})
+        if not account_ids:
+            return {}
+        placeholders = ", ".join(["%s"] * len(account_ids))
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    weapon_stats.account_id,
+                    weapon_stats.weapon_code,
+                    COALESCE(SUM(weapon_stats.shots_fired), 0) AS shots_fired,
+                    COALESCE(SUM(weapon_stats.shots_hit), 0) AS shots_hit
+                FROM player_weapon_match_stats weapon_stats
+                INNER JOIN matches
+                    ON matches.match_id = weapon_stats.match_id
+                WHERE matches.shard = %s
+                  AND weapon_stats.account_id IN (
+                """
+                + placeholders
+                + """
+                  )
+                GROUP BY weapon_stats.account_id, weapon_stats.weapon_code
+                """,
+                [shard, *account_ids],
+            )
+            accuracy_rows = cursor.fetchall()
+
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in accuracy_rows:
+            grouped.setdefault(str(row["account_id"]), []).append(row)
+        return {
+            account_id: summarize_accuracy_rows(rows)
+            for account_id, rows in grouped.items()
+        }
 
 
 def resolve_ranking_metric(value: str) -> RankingMetric:
@@ -223,7 +276,13 @@ def resolve_ranking_metric(value: str) -> RankingMetric:
     return metric
 
 
-def _ranking_row_from_record(row: dict[str, Any], *, rank: int, metric: RankingMetric) -> PlayerRankingRow:
+def _ranking_row_from_record(
+    row: dict[str, Any],
+    *,
+    rank: int,
+    metric: RankingMetric,
+    accuracy_breakdown: AccuracyBreakdown | None = None,
+) -> PlayerRankingRow:
     match_count = _int(row.get("match_count"))
     kills = _int(row.get("kills"))
     assists = _int(row.get("assists"))
@@ -248,7 +307,11 @@ def _ranking_row_from_record(row: dict[str, Any], *, rank: int, metric: RankingM
     }
     win_rate = _safe_divide(wins, match_count)
     kda = _safe_divide(kills + assists, deaths if deaths > 0 else 1)
-    accuracy = _safe_divide(shots_hit, shots_fired)
+    accuracy = (
+        _safe_divide(shots_hit, shots_fired)
+        if accuracy_breakdown is None
+        else accuracy_breakdown.estimated_hit_rate or 0.0
+    )
     headshot_kill_rate = _safe_divide(headshot_kills, kills)
     avg_damage_dealt = _safe_divide(damage_dealt, match_count)
     avg_damage_taken = _safe_divide(damage_taken, match_count)
@@ -291,6 +354,7 @@ def _ranking_row_from_record(row: dict[str, Any], *, rank: int, metric: RankingM
         avg_survival_seconds=_float(row.get("avg_survival_seconds")),
         avg_movement_distance_m=_float(row.get("avg_movement_distance_m")),
         last_match_at_kst=row.get("last_match_at_kst"),
+        accuracy_breakdown=accuracy_breakdown,
     )
 
 
@@ -348,7 +412,7 @@ RANKING_METRICS = {
     "damage": RankingMetric(key="damage", label="총 딜"),
     "kills": RankingMetric(key="kills", label="킬"),
     "matches": RankingMetric(key="matches", label="경기 수"),
-    "accuracy": RankingMetric(key="accuracy", label="명중률"),
+    "accuracy": RankingMetric(key="accuracy", label="추정 명중률(일반 탄환)"),
     "headshot_rate": RankingMetric(key="headshot_rate", label="헤드샷 킬 비율"),
     "dbnos": RankingMetric(key="dbnos", label="기절"),
 }

@@ -14,6 +14,7 @@ from pubg_ai.player_recommendations import (
     WeaponRecommendation,
 )
 from pubg_ai.player_registry import RegisteredPlayer
+from pubg_ai.weapon_accuracy import weapon_accuracy_metric
 
 
 class DiscordRecommendationFormattingTests(unittest.TestCase):
@@ -48,6 +49,7 @@ class DiscordRecommendationFormattingTests(unittest.TestCase):
                     avg_damage_dealt=360.0,
                     accuracy=0.3,
                     reason="test",
+                    accuracy_metric=weapon_accuracy_metric("WeapHK416_C", 600, 180),
                 )
             ],
             weapon_attachments=[
@@ -176,6 +178,7 @@ class DiscordRecommendationFormattingTests(unittest.TestCase):
 
         self.assertIn("Yuuki_Asuna--- recommendations", body)
         self.assertIn("M416", body)
+        self.assertIn("추정 30.0%", body)
         self.assertIn("Vertical Grip", body)
         self.assertIn("M416 + Vertical Grip", body)
         self.assertIn("M416 10-15m", body)

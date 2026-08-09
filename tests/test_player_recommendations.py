@@ -171,9 +171,21 @@ class PlayerRecommendationServiceTests(unittest.TestCase):
         self.assertEqual(report.weapons[0].weapon_code, "WeapHK416_C")
         self.assertEqual(report.weapons[0].weapon_name, "M416")
         self.assertAlmostEqual(report.weapons[0].accuracy, 0.3)
+        self.assertEqual(
+            report.weapons[0].accuracy_metric.metric_kind,
+            "estimated_hit_rate",
+        )
         self.assertGreater(report.weapons[0].range_score, 0)
         self.assertEqual(report.weapons[0].top_distance_buckets[0].bucket_label, "10-15m")
-        self.assertEqual(report.weapons[1].accuracy, 1.0)
+        self.assertEqual(report.weapons[1].accuracy, 0.0)
+        self.assertEqual(
+            report.weapons[1].accuracy_metric.metric_kind,
+            "hit_events_per_attack",
+        )
+        self.assertEqual(
+            report.weapons[1].accuracy_metric.quality,
+            "hit_events_exceed_attacks",
+        )
         self.assertEqual(report.weapon_ranges[0].weapon_code, "WeapHK416_C")
         self.assertEqual(report.weapon_ranges[0].bucket_label, "10-15m")
         self.assertEqual(report.weapon_attachments[0].weapon_code, "WeapHK416_C")
