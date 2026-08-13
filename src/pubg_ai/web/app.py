@@ -414,14 +414,14 @@ class OperationalDrillRunRequest(BaseModel):
     cycles: int = Field(default=3, ge=2, le=5)
 
 
-def create_app() -> Any:
-    base_dir = Path.cwd()
-    config = RuntimeConfig.from_sources(base_dir=base_dir)
-    settings_store = _local_settings_store(base_dir)
+def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
+    base_dir = (base_dir or Path.cwd()).resolve()
+    config = RuntimeConfig.from_sources(base_dir=base_dir, env_file=env_file)
+    settings_store = _local_settings_store(base_dir, env_file=env_file)
     permission_manager = DiscordPermissionManager(settings_store)
 
     def current_config() -> RuntimeConfig:
-        return RuntimeConfig.from_sources(base_dir=base_dir)
+        return RuntimeConfig.from_sources(base_dir=base_dir, env_file=env_file)
 
     def build_data_deletion_confirmation_service(
         connection: Any,
@@ -2948,8 +2948,8 @@ def _public_profile_default(settings_store: LocalSettingsStore) -> bool:
     return settings.public_profile_default
 
 
-def _local_settings_store(base_dir: Path) -> LocalSettingsStore:
-    values = load_dotenv_values(base_dir / ".env")
+def _local_settings_store(base_dir: Path, *, env_file: str = ".env") -> LocalSettingsStore:
+    values = load_dotenv_values(base_dir / env_file)
     merged = dict(values)
     merged.update(os.environ)
     settings_file = merged.get("PUBG_LOCAL_SETTINGS_FILE", "./config/local_settings.json")
@@ -3224,32 +3224,562 @@ _INDEX_HTML = """<!doctype html>
       .replay-detail-layout { grid-template-columns: 1fr; }
       header { align-items: flex-start; flex-direction: column; }
     }
+
+    :root {
+      color-scheme: dark;
+      font-family: "Segoe UI", "Malgun Gothic", Arial, sans-serif;
+      --bg: #0b0d0f;
+      --panel: #111417;
+      --panel-strong: #171b1f;
+      --panel-soft: #0e1113;
+      --text: #e7ebee;
+      --muted: #8f99a3;
+      --line: #2a3036;
+      --line-strong: #3a424a;
+      --accent: #42d3a4;
+      --accent-ink: #07130f;
+      --info: #69b8e8;
+      --warning: #e6c15d;
+      --danger: #df6670;
+    }
+    html, body { min-height: 100%; }
+    body {
+      height: 100vh;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+    }
+    button, input, select, textarea { font-family: inherit; }
+    .app-header {
+      min-height: 62px;
+      padding: 9px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #0d0f11;
+      display: grid;
+      grid-template-columns: 218px minmax(280px, 1fr) auto;
+      align-items: center;
+      gap: 14px;
+    }
+    .brand-lockup {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+    .brand-mark {
+      display: grid;
+      width: 36px;
+      height: 36px;
+      place-items: center;
+      border: 1px solid var(--accent);
+      border-radius: 5px;
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .brand-lockup h1 {
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+    .brand-lockup div > span,
+    .rail-header > span,
+    .side-heading > span,
+    #workspaceEyebrow {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+    .command-strip {
+      min-width: 0;
+      min-height: 40px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 7px 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel-soft);
+    }
+    .command-message {
+      min-width: 0;
+      overflow: hidden;
+      color: #cbd2d8;
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .live-indicator {
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: 6px;
+      color: var(--accent);
+      font-size: 10px;
+      font-weight: 800;
+    }
+    .live-indicator i,
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 10px rgba(66, 211, 164, 0.55);
+    }
+    .header-meta {
+      display: grid;
+      grid-template-columns: auto auto;
+      align-items: center;
+      gap: 12px;
+      white-space: nowrap;
+    }
+    .header-meta span {
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .header-meta strong {
+      color: var(--warning);
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 16px;
+      font-variant-numeric: tabular-nums;
+    }
+    .app-shell {
+      height: calc(100vh - 62px);
+      display: grid;
+      grid-template-columns: 218px minmax(0, 1fr) 252px;
+      overflow: hidden;
+    }
+    .side-panel,
+    .system-rail {
+      min-width: 0;
+      overflow-y: auto;
+      background: #0d1012;
+    }
+    .side-panel {
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--line);
+    }
+    .side-heading,
+    .rail-header {
+      padding: 15px 14px 11px;
+      border-bottom: 1px solid var(--line);
+    }
+    .side-heading strong,
+    .rail-header strong {
+      display: block;
+      margin-top: 4px;
+      font-size: 13px;
+    }
+    .side-nav {
+      display: grid;
+      padding: 8px;
+      gap: 4px;
+    }
+    .side-nav button {
+      min-height: 42px;
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr);
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border: 1px solid transparent;
+      border-radius: 5px;
+      background: transparent;
+      color: #b2bac1;
+      font-size: 13px;
+      text-align: left;
+    }
+    .side-nav button span {
+      color: #68727b;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 10px;
+    }
+    .side-nav button:hover {
+      border-color: var(--line);
+      background: var(--panel);
+      color: var(--text);
+    }
+    .side-nav button.active {
+      border-color: #2d5548;
+      background: #14211d;
+      color: var(--accent);
+    }
+    .side-nav button.active span { color: var(--accent); }
+    .side-foot {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: center;
+      gap: 9px;
+      margin-top: auto;
+      padding: 14px;
+      border-top: 1px solid var(--line);
+    }
+    .side-foot strong,
+    .side-foot span {
+      display: block;
+      font-size: 11px;
+    }
+    .side-foot div > span {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 10px;
+    }
+    main {
+      max-width: none;
+      min-width: 0;
+      margin: 0;
+      padding: 0 18px 24px;
+      display: block;
+      overflow-y: auto;
+      background: #0a0c0e;
+    }
+    .workspace-heading {
+      position: sticky;
+      z-index: 10;
+      top: 0;
+      min-height: 92px;
+      margin: 0 -18px 16px;
+      padding: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(10, 12, 14, 0.97);
+    }
+    .workspace-heading h2 {
+      margin: 4px 0 0;
+      font-size: 20px;
+    }
+    .workspace-heading p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    main > section[data-view] {
+      display: none;
+      min-width: 0;
+      margin: 0 0 14px;
+      padding: 16px;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel);
+    }
+    body[data-active-view="overview"] main > section[data-view="overview"],
+    body[data-active-view="players"] main > section[data-view="players"],
+    body[data-active-view="replay"] main > section[data-view="replay"],
+    body[data-active-view="collection"] main > section[data-view="collection"],
+    body[data-active-view="discord"] main > section[data-view="discord"],
+    body[data-active-view="operations"] main > section[data-view="operations"],
+    body[data-active-view="settings"] main > section[data-view="settings"] {
+      display: block;
+    }
+    main > section h2 {
+      margin: 0 0 14px;
+      color: #f0f3f5;
+      font-size: 14px;
+      font-weight: 700;
+    }
+    h3 { color: #dce1e5; font-size: 13px; }
+    .grid {
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 8px;
+    }
+    .kv {
+      min-height: 72px;
+      padding: 10px 11px;
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--accent);
+      border-radius: 4px;
+      background: var(--panel-soft);
+    }
+    .kv span { color: var(--muted); font-size: 10px; }
+    .kv strong { color: #e6eaed; font-size: 12px; }
+    form,
+    form.alert-history-filter,
+    form.worker-run-filter,
+    form.trend-filter,
+    form.backup-evidence-form,
+    form.review-packet-verifier-form,
+    form.review-packet-comparer-form {
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    }
+    label { color: #99a3ac; font-size: 11px; }
+    input, select, textarea {
+      min-height: 38px;
+      border-color: var(--line-strong);
+      border-radius: 5px;
+      background: #0b0e10;
+      color: var(--text);
+      outline: none;
+    }
+    input:focus, select:focus, textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(66, 211, 164, 0.12);
+    }
+    input::placeholder, textarea::placeholder { color: #68717a; }
+    button {
+      border: 1px solid #50c79f;
+      border-radius: 5px;
+      background: var(--accent);
+      color: var(--accent-ink);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    button:hover { filter: brightness(1.08); }
+    button:disabled { cursor: not-allowed; filter: grayscale(0.7); opacity: 0.55; }
+    button.secondary {
+      border-color: var(--line-strong);
+      background: #20262b;
+      color: #d5dbe0;
+    }
+    button.danger {
+      border-color: #bd515b;
+      background: #a83f49;
+      color: #fff;
+    }
+    .compact-button { min-height: 34px; padding: 6px 10px; }
+    .actions { flex-wrap: wrap; }
+    table { background: transparent; }
+    th, td {
+      border-bottom-color: var(--line);
+      color: #cbd2d8;
+      font-size: 12px;
+    }
+    th {
+      background: #101316;
+      color: #8e99a2;
+      font-size: 10px;
+    }
+    tbody tr:hover td { background: #14191c; }
+    .status { color: var(--muted); font-size: 11px; }
+    .detail-panel,
+    .timeline-event-detail {
+      border-left-color: var(--info);
+      background: #0d1114;
+    }
+    .timeline-event-row,
+    .team-member {
+      border-color: var(--line);
+      background: #0d1114;
+      color: var(--text);
+    }
+    .timeline-event-row.active {
+      border-color: var(--accent);
+      background: #13211d;
+    }
+    .team-member.registered {
+      border-color: var(--info);
+      background: #111d24;
+    }
+    tr.linked-row td { background: #211d12; }
+    .replay-canvas-wrap {
+      border-color: var(--line-strong);
+      border-radius: 4px;
+      background: #060708;
+    }
+    .alert-state-active,
+    .alert-severity-ok { background: #143126; color: #75e6bd; border-color: #2e725b; }
+    .alert-state-acknowledged,
+    .alert-severity-unknown { background: #20262b; color: #c3cad0; border-color: #46515a; }
+    .alert-state-snoozed,
+    .alert-severity-warning { background: #382f15; color: #f0d479; border-color: #756226; }
+    .alert-state-resolved,
+    .alert-severity-info { background: #142b39; color: #8bd3f5; border-color: #285a73; }
+    .alert-severity-error { background: #3a181d; color: #f29aa2; border-color: #7a3039; }
+    .system-rail { border-left: 1px solid var(--line); }
+    .rail-group { padding: 4px 12px 10px; }
+    .rail-row {
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      border-bottom: 1px solid #1f2428;
+    }
+    .rail-row span { color: var(--muted); font-size: 10px; }
+    .rail-row strong {
+      max-width: 132px;
+      overflow: hidden;
+      color: #cfd5da;
+      font-size: 10px;
+      text-align: right;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .rail-row strong.ok { color: var(--accent); }
+    .rail-row strong.error { color: var(--danger); }
+    .rail-row strong.warning { color: var(--warning); }
+    .rail-storage {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 7px;
+      padding: 10px 12px 14px;
+    }
+    .rail-storage > div {
+      min-width: 0;
+      min-height: 62px;
+      padding: 9px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--panel-soft);
+    }
+    .rail-storage span,
+    .rail-storage strong { display: block; }
+    .rail-storage span { color: var(--muted); font-size: 9px; }
+    .rail-storage strong {
+      margin-top: 8px;
+      overflow: hidden;
+      color: var(--warning);
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .rail-activity {
+      margin: 0;
+      padding: 12px 14px 20px;
+      color: #aeb7be;
+      font-size: 11px;
+      line-height: 1.55;
+      overflow-wrap: anywhere;
+    }
+    .desktop-only { display: none; }
+    body.desktop-host .desktop-only { display: inline-flex; }
+    .path-input-row {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 6px;
+    }
+    .path-picker { min-width: 48px; padding: 7px 9px; }
+    @media (max-width: 1180px) {
+      .app-shell { grid-template-columns: 190px minmax(0, 1fr); }
+      .system-rail { display: none; }
+      .app-header { grid-template-columns: 190px minmax(260px, 1fr) auto; }
+    }
+    @media (max-width: 820px) {
+      body { height: auto; overflow: auto; }
+      .app-header {
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+      }
+      .command-strip { grid-column: 1 / -1; grid-row: 2; }
+      .app-shell { height: auto; display: block; overflow: visible; }
+      .side-panel { border-right: 0; border-bottom: 1px solid var(--line); }
+      .side-heading, .side-foot { display: none; }
+      .side-nav { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .side-nav button { grid-template-columns: auto; justify-items: center; text-align: center; }
+      .side-nav button span { display: none; }
+      main { padding: 0 12px 18px; overflow: visible; }
+      .workspace-heading { margin: 0 -12px 12px; padding: 14px 12px; }
+      main > section[data-view] { padding: 13px; }
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 520px) {
+      .app-header { padding: 8px 10px; }
+      .brand-mark { width: 32px; height: 32px; }
+      .header-meta { gap: 7px; }
+      .header-meta strong { font-size: 13px; }
+      .command-message { white-space: normal; }
+      .side-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .workspace-heading { align-items: flex-start; flex-direction: column; }
+      .grid { grid-template-columns: 1fr; }
+      form,
+      form.alert-history-filter,
+      form.worker-run-filter,
+      form.trend-filter,
+      form.backup-evidence-form,
+      form.review-packet-verifier-form,
+      form.review-packet-comparer-form {
+        grid-template-columns: 1fr;
+      }
+    }
   </style>
 </head>
-<body>
-  <header>
-    <h1>PUBG AI Local Manager</h1>
-    <div class="status" id="banner">localhost 전용 관리 화면</div>
+<body data-active-view="overview">
+  <header class="app-header">
+    <div class="brand-lockup">
+      <span class="brand-mark">PA</span>
+      <div>
+        <h1>PUBG AI</h1>
+        <span>LOCAL OPERATIONS</span>
+      </div>
+    </div>
+    <div class="command-strip">
+      <span class="live-indicator"><i></i> LOCAL ONLY</span>
+      <span class="command-message" id="banner">localhost 전용 관리 화면</span>
+    </div>
+    <div class="header-meta">
+      <span id="runtimeMode">BROWSER</span>
+      <strong id="kstClock">--:--:--</strong>
+    </div>
   </header>
-  <main>
-    <section>
+  <div class="app-shell">
+    <aside class="side-panel" aria-label="관리 화면 탐색">
+      <div class="side-heading">
+        <span>CONTROL DECK</span>
+        <strong>관리 콘솔</strong>
+      </div>
+      <nav class="side-nav" id="workspaceNav">
+        <button type="button" data-view-target="overview"><span>01</span>개요</button>
+        <button type="button" data-view-target="players"><span>02</span>플레이어</button>
+        <button type="button" data-view-target="replay"><span>03</span>2D 리플레이</button>
+        <button type="button" data-view-target="collection"><span>04</span>수집·처리</button>
+        <button type="button" data-view-target="discord"><span>05</span>Discord</button>
+        <button type="button" data-view-target="operations"><span>06</span>운영·알림</button>
+        <button type="button" data-view-target="settings"><span>07</span>설정</button>
+      </nav>
+      <div class="side-foot">
+        <span class="status-dot"></span>
+        <div><strong>127.0.0.1</strong><span>외부 접속 차단</span></div>
+      </div>
+    </aside>
+    <main id="workspace">
+      <div class="workspace-heading">
+        <div>
+          <span id="workspaceEyebrow">SYSTEM OVERVIEW</span>
+          <h2 id="workspaceTitle">운영 개요</h2>
+          <p id="workspaceDescription">로컬 데이터 수집과 저장 상태를 한눈에 확인합니다.</p>
+        </div>
+        <button class="secondary compact-button" type="button" id="refreshWorkspace">새로고침</button>
+      </div>
+    <section id="overview-status" data-view="overview">
       <h2>상태</h2>
       <div class="grid" id="statusGrid"></div>
     </section>
-    <section id="storage-settings">
+    <section id="storage-settings" data-view="settings">
       <h2>Storage Settings</h2>
       <form id="storageSettingsForm">
         <label>Raw directory
-          <input name="raw_data_dir" autocomplete="off" required>
+          <span class="path-input-row">
+            <input name="raw_data_dir" autocomplete="off" required>
+            <button class="secondary desktop-only path-picker" type="button" data-path-purpose="raw" data-path-input="raw_data_dir" title="Raw 저장 폴더 선택">찾기</button>
+          </span>
         </label>
         <label>Replay directory
-          <input name="replay_data_dir" autocomplete="off" required>
+          <span class="path-input-row">
+            <input name="replay_data_dir" autocomplete="off" required>
+            <button class="secondary desktop-only path-picker" type="button" data-path-purpose="replay" data-path-input="replay_data_dir" title="Replay 저장 폴더 선택">찾기</button>
+          </span>
         </label>
         <label>Deletion backup directory
-          <input name="backup_data_dir" autocomplete="off" required>
+          <span class="path-input-row">
+            <input name="backup_data_dir" autocomplete="off" required>
+            <button class="secondary desktop-only path-picker" type="button" data-path-purpose="backup" data-path-input="backup_data_dir" title="백업 저장 폴더 선택">찾기</button>
+          </span>
         </label>
         <label>Deletion quarantine directory
-          <input name="quarantine_data_dir" autocomplete="off" required>
+          <span class="path-input-row">
+            <input name="quarantine_data_dir" autocomplete="off" required>
+            <button class="secondary desktop-only path-picker" type="button" data-path-purpose="quarantine" data-path-input="quarantine_data_dir" title="격리 저장 폴더 선택">찾기</button>
+          </span>
         </label>
         <label>Compression
           <select name="raw_compression">
@@ -3261,7 +3791,7 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="storageSettingsStatus" style="margin-top: 12px;">Waiting</div>
     </section>
-    <section id="alerts">
+    <section id="alerts" data-view="operations">
       <h2>Alert Settings</h2>
       <form id="alertSettingsForm">
         <label>Minimum free GB
@@ -3374,7 +3904,7 @@ _INDEX_HTML = """<!doctype html>
         Select an alert history row.
       </div>
     </section>
-    <section id="collector-settings">
+    <section id="collector-settings" data-view="collection">
       <h2>Collector Settings</h2>
       <form id="collectorSettingsForm">
         <label>Poll seconds
@@ -3410,7 +3940,7 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="collectorWorkerStatus" style="margin-top: 12px;">Auto collector stopped</div>
     </section>
-    <section>
+    <section id="web-link-settings" data-view="settings">
       <h2>Local Web Link</h2>
       <form id="webSettingsForm">
         <label>Base URL
@@ -3420,7 +3950,7 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="webSettingsStatus" style="margin-top: 12px;">Waiting</div>
     </section>
-    <section id="discord-permissions">
+    <section id="discord-permissions" data-view="discord">
       <h2>Discord 권한</h2>
       <form id="discordGrantForm">
         <label>User ID
@@ -3452,7 +3982,7 @@ _INDEX_HTML = """<!doctype html>
         <tbody id="discordPermissionsBody"></tbody>
       </table>
     </section>
-    <section id="discord-scopes">
+    <section id="discord-scopes" data-view="discord">
       <h2>Discord Scope Settings</h2>
       <form id="discordScopeForm">
         <label>Guild ID
@@ -3486,7 +4016,7 @@ _INDEX_HTML = """<!doctype html>
         <tbody id="discordScopesBody"></tbody>
       </table>
     </section>
-    <section>
+    <section id="player-registration" data-view="players">
       <h2>유저 등록</h2>
     <form id="registerForm">
         <label>플랫폼
@@ -3510,7 +4040,7 @@ _INDEX_HTML = """<!doctype html>
         <button type="submit">등록</button>
       </form>
     </section>
-    <section id="registered-players">
+    <section id="registered-players" data-view="players">
       <h2>등록 유저</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="refreshCollection()">최근 매치 수집</button>
@@ -3529,7 +4059,7 @@ _INDEX_HTML = """<!doctype html>
         <tbody id="playersBody"></tbody>
       </table>
     </section>
-    <section id="data-deletions">
+    <section id="data-deletions" data-view="operations">
       <h2>Data Deletion Review</h2>
       <form id="dataDeletionFilterForm">
         <label>Status
@@ -3608,7 +4138,7 @@ _INDEX_HTML = """<!doctype html>
         Select a request to inspect its audit history and read-only impact preview.
       </div>
     </section>
-    <section id="profile-lookup">
+    <section id="profile-lookup" data-view="players">
       <h2>전적 조회</h2>
       <form id="profileForm">
         <label>플랫폼
@@ -3624,7 +4154,7 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="profileBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
-    <section id="trend-lookup">
+    <section id="trend-lookup" data-view="players">
       <h2>KST 추세 조회</h2>
       <form id="trendForm" class="trend-filter">
         <label>플랫폼
@@ -3665,7 +4195,7 @@ _INDEX_HTML = """<!doctype html>
         </table>
       </div>
     </section>
-    <section id="weapon-lookup">
+    <section id="weapon-lookup" data-view="players">
       <h2>무기 조회</h2>
       <form id="weaponForm">
         <label>플랫폼
@@ -3684,7 +4214,7 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="weaponBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
-    <section id="recommendation-lookup">
+    <section id="recommendation-lookup" data-view="players">
       <h2>Recommendation 조회</h2>
       <form id="recommendationForm">
         <label>플랫폼
@@ -3703,7 +4233,7 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="recommendationBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
-    <section id="map-region-lookup">
+    <section id="map-region-lookup" data-view="replay">
       <h2>맵 좌표 지역 확인</h2>
       <form id="mapRegionForm">
         <label>맵
@@ -3728,7 +4258,7 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="mapRegionBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
-    <section id="match-lookup">
+    <section id="match-lookup" data-view="players">
       <h2>매치 조회</h2>
       <form id="matchForm">
         <label>플랫폼
@@ -3747,7 +4277,7 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="matchBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
-    <section id="ranking-lookup">
+    <section id="ranking-lookup" data-view="players">
       <h2>랭킹 조회</h2>
       <form id="rankingForm">
         <label>플랫폼
@@ -3779,7 +4309,7 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="rankingBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
-    <section>
+    <section id="match-job-queue" data-view="collection">
       <h2>Match 수집 큐</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="processMatchJobs()">상세 저장</button>
@@ -3798,7 +4328,7 @@ _INDEX_HTML = """<!doctype html>
         <tbody id="jobsBody"></tbody>
       </table>
     </section>
-    <section>
+    <section id="telemetry-job-queue" data-view="collection">
       <h2>Telemetry 수집 큐</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="processTelemetryJobs()">Telemetry 저장</button>
@@ -3817,7 +4347,7 @@ _INDEX_HTML = """<!doctype html>
         <tbody id="telemetryJobsBody"></tbody>
       </table>
     </section>
-    <section>
+    <section id="post-processing-worker" data-view="collection">
       <h2>Post-processing Worker</h2>
       <form id="postProcessingWorkerForm">
         <label>Combat
@@ -3852,7 +4382,7 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="postProcessingWorkerStatus" style="margin-top: 12px;">Post-processing stopped</div>
     </section>
-    <section id="operational-drills">
+    <section id="operational-drills" data-view="operations">
       <h2>운영 훈련</h2>
       <form id="operationalDrillForm">
         <label>모드
@@ -3886,7 +4416,7 @@ _INDEX_HTML = """<!doctype html>
       </div>
       <div class="detail-panel" id="operationalDrillDetail">훈련 이력 대기 중</div>
     </section>
-    <section id="worker-runs">
+    <section id="worker-runs" data-view="operations">
       <h2>Worker Run History</h2>
       <form id="workerRunFilterForm" class="worker-run-filter">
         <label>Worker
@@ -3949,7 +4479,7 @@ _INDEX_HTML = """<!doctype html>
         Select a worker run row.
       </div>
     </section>
-    <section>
+    <section id="combat-parser" data-view="collection">
       <h2>Combat 파싱</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="parseTelemetryCombat(false)">전투 파싱</button>
@@ -3957,7 +4487,7 @@ _INDEX_HTML = """<!doctype html>
       </div>
       <div class="status" id="combatStatus">대기 중</div>
     </section>
-    <section>
+    <section id="item-parser" data-view="collection">
       <h2>Item 파싱</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="parseTelemetryItems(false)">아이템 파싱</button>
@@ -3965,7 +4495,7 @@ _INDEX_HTML = """<!doctype html>
       </div>
       <div class="status" id="itemStatus">대기 중</div>
     </section>
-    <section>
+    <section id="movement-parser" data-view="collection">
       <h2>Movement 파싱</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="parseTelemetryMovement(false)">위치 파싱</button>
@@ -3973,7 +4503,7 @@ _INDEX_HTML = """<!doctype html>
       </div>
       <div class="status" id="movementStatus">대기 중</div>
     </section>
-    <section>
+    <section id="loadout-generator" data-view="collection">
       <h2>Loadout Snapshot 생성</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="generateLoadoutSnapshots(false)">파츠 스냅샷 생성</button>
@@ -3981,7 +4511,7 @@ _INDEX_HTML = """<!doctype html>
       </div>
       <div class="status" id="loadoutSnapshotStatus">대기 중</div>
     </section>
-    <section>
+    <section id="fight-outcome-generator" data-view="collection">
       <h2>Fight Outcome 생성</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="generateFightOutcomes(false)">승패 생성</button>
@@ -3989,7 +4519,7 @@ _INDEX_HTML = """<!doctype html>
       </div>
       <div class="status" id="fightOutcomeStatus">대기 중</div>
     </section>
-    <section>
+    <section id="map-snapshot-generator" data-view="collection">
       <h2>Map Snapshot 생성</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="generateMapSnapshots(false)">JPEG 생성</button>
@@ -3997,7 +4527,7 @@ _INDEX_HTML = """<!doctype html>
       </div>
       <div class="status" id="mapSnapshotStatus">대기 중</div>
     </section>
-    <section>
+    <section id="timeline-generator" data-view="collection">
       <h2>Replay Timeline 생성</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="generateReplayTimelines(false)">JSON 생성</button>
@@ -4005,7 +4535,7 @@ _INDEX_HTML = """<!doctype html>
       </div>
       <div class="status" id="timelineStatus">대기 중</div>
     </section>
-    <section id="replay-player">
+    <section id="replay-player" data-view="replay">
       <h2>2D Replay Player</h2>
       <div class="player-controls">
         <label>Timeline
@@ -4057,7 +4587,7 @@ _INDEX_HTML = """<!doctype html>
       </div>
       <div class="status" id="replayPlayerStatus" style="margin-top: 12px;">대기 중</div>
     </section>
-    <section id="replay-artifacts">
+    <section id="replay-artifacts" data-view="replay">
       <h2>Replay Artifact 목록</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button class="secondary" type="button" onclick="loadReplayArtifacts()">새로고침</button>
@@ -4077,7 +4607,40 @@ _INDEX_HTML = """<!doctype html>
         <tbody id="replayArtifactsBody"></tbody>
       </table>
     </section>
-  </main>
+    </main>
+    <aside class="system-rail" aria-label="실시간 시스템 상태">
+      <div class="rail-header">
+        <span>LIVE STATUS</span>
+        <strong>시스템</strong>
+      </div>
+      <div class="rail-group">
+        <div class="rail-row"><span>MySQL</span><strong id="railDatabase">확인 중</strong></div>
+        <div class="rail-row"><span>PUBG API</span><strong id="railPubgApi">확인 중</strong></div>
+        <div class="rail-row"><span>Discord</span><strong id="railDiscord">확인 중</strong></div>
+      </div>
+      <div class="rail-header">
+        <span>WORKERS</span>
+        <strong>자동 처리</strong>
+      </div>
+      <div class="rail-group">
+        <div class="rail-row"><span>수집기</span><strong id="railCollector">중지</strong></div>
+        <div class="rail-row"><span>후처리</span><strong id="railPostProcessing">중지</strong></div>
+      </div>
+      <div class="rail-header">
+        <span>STORAGE</span>
+        <strong>저장 공간</strong>
+      </div>
+      <div class="rail-storage">
+        <div><span>RAW</span><strong id="railRawStorage">확인 중</strong></div>
+        <div><span>REPLAY</span><strong id="railReplayStorage">확인 중</strong></div>
+      </div>
+      <div class="rail-header">
+        <span>RECENT ACTIVITY</span>
+        <strong>최근 상태</strong>
+      </div>
+      <p class="rail-activity" id="railActivity">관리 화면을 준비하고 있습니다.</p>
+    </aside>
+  </div>
   <script>
     const statusGrid = document.querySelector("#statusGrid");
     const playersBody = document.querySelector("#playersBody");
@@ -4155,6 +4718,22 @@ _INDEX_HTML = """<!doctype html>
     const webSettingsForm = document.querySelector("#webSettingsForm");
     const webSettingsStatus = document.querySelector("#webSettingsStatus");
     const banner = document.querySelector("#banner");
+    const workspaceNav = document.querySelector("#workspaceNav");
+    const workspaceTitle = document.querySelector("#workspaceTitle");
+    const workspaceEyebrow = document.querySelector("#workspaceEyebrow");
+    const workspaceDescription = document.querySelector("#workspaceDescription");
+    const refreshWorkspace = document.querySelector("#refreshWorkspace");
+    const runtimeMode = document.querySelector("#runtimeMode");
+    const kstClock = document.querySelector("#kstClock");
+    const railDatabase = document.querySelector("#railDatabase");
+    const railPubgApi = document.querySelector("#railPubgApi");
+    const railDiscord = document.querySelector("#railDiscord");
+    const railCollector = document.querySelector("#railCollector");
+    const railPostProcessing = document.querySelector("#railPostProcessing");
+    const railRawStorage = document.querySelector("#railRawStorage");
+    const railReplayStorage = document.querySelector("#railReplayStorage");
+    const railActivity = document.querySelector("#railActivity");
+    const pathPickerButtons = document.querySelectorAll("[data-path-purpose][data-path-input]");
     const timelineSelect = document.querySelector("#timelineSelect");
     const timelineSpeed = document.querySelector("#timelineSpeed");
     const timelinePlayButton = document.querySelector("#timelinePlayButton");
@@ -4233,6 +4812,176 @@ _INDEX_HTML = """<!doctype html>
       updated_at: null,
     };
 
+    const workspaceViews = {
+      overview: {
+        eyebrow: "SYSTEM OVERVIEW",
+        title: "운영 개요",
+        description: "로컬 데이터 수집과 저장 상태를 한눈에 확인합니다.",
+      },
+      players: {
+        eyebrow: "PLAYER INTELLIGENCE",
+        title: "플레이어 분석",
+        description: "추적 대상 등록, 전적, 무기, 추세와 추천 정보를 조회합니다.",
+      },
+      replay: {
+        eyebrow: "TACTICAL REPLAY",
+        title: "2D 리플레이",
+        description: "비행 동선, 이동, 교전과 사망 위치를 타임라인으로 확인합니다.",
+      },
+      collection: {
+        eyebrow: "DATA PIPELINE",
+        title: "수집 및 처리",
+        description: "매치 수집 큐와 텔레메트리 후처리 작업을 제어합니다.",
+      },
+      discord: {
+        eyebrow: "DISCORD CONTROL",
+        title: "Discord 권한",
+        description: "서버별 명령 권한, 관리자와 랭킹 범위를 관리합니다.",
+      },
+      operations: {
+        eyebrow: "OPERATIONS CENTER",
+        title: "운영 및 알림",
+        description: "저장소 경고, 작업 이력, 운영 훈련과 삭제 검토를 확인합니다.",
+      },
+      settings: {
+        eyebrow: "LOCAL CONFIGURATION",
+        title: "로컬 설정",
+        description: "저장 경로와 로컬 상세 링크를 이 컴퓨터에만 저장합니다.",
+      },
+    };
+
+    function setRailStatus(element, value, state = "") {
+      element.textContent = value;
+      element.classList.remove("ok", "warning", "error");
+      if (state) element.classList.add(state);
+    }
+
+    function storageRailText(status) {
+      if (!status?.exists || !status?.is_dir || !status?.writable) return "확인 필요";
+      return formatBytes(Number(status.free_bytes || 0)) + " 여유";
+    }
+
+    function workspaceViewFromLocation() {
+      const hash = decodeURIComponent(window.location.hash.replace(/^#/, ""));
+      if (hash.startsWith("workspace-")) {
+        const requested = hash.slice("workspace-".length);
+        if (workspaceViews[requested]) return requested;
+      }
+      const target = hash ? document.getElementById(hash) : null;
+      const targetView = target?.closest("[data-view]")?.dataset.view;
+      return targetView && workspaceViews[targetView]
+        ? targetView
+        : "overview";
+    }
+
+    function activateWorkspace(view, options = {}) {
+      const nextView = workspaceViews[view] ? view : "overview";
+      const details = workspaceViews[nextView];
+      document.body.dataset.activeView = nextView;
+      workspaceEyebrow.textContent = details.eyebrow;
+      workspaceTitle.textContent = details.title;
+      workspaceDescription.textContent = details.description;
+      for (const button of workspaceNav.querySelectorAll("[data-view-target]")) {
+        const active = button.dataset.viewTarget === nextView;
+        button.classList.toggle("active", active);
+        if (active) {
+          button.setAttribute("aria-current", "page");
+        } else {
+          button.removeAttribute("aria-current");
+        }
+      }
+      if (options.updateUrl) {
+        const url = new URL(window.location.href);
+        url.hash = "workspace-" + nextView;
+        window.history.pushState({}, "", url);
+      }
+      if (options.focusId) {
+        requestAnimationFrame(() => {
+          document.getElementById(options.focusId)?.scrollIntoView({ block: "start" });
+        });
+      } else {
+        document.querySelector("main")?.scrollTo({ top: 0, behavior: options.smooth ? "smooth" : "auto" });
+      }
+    }
+
+    function syncWorkspaceToLocation() {
+      const hash = decodeURIComponent(window.location.hash.replace(/^#/, ""));
+      activateWorkspace(workspaceViewFromLocation(), {
+        focusId: hash && !hash.startsWith("workspace-") ? hash : "",
+      });
+    }
+
+    function updateKstClock() {
+      kstClock.textContent = new Intl.DateTimeFormat("ko-KR", {
+        timeZone: "Asia/Seoul",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      }).format(new Date());
+    }
+
+    async function enableDesktopFeatures() {
+      if (!window.pywebview?.api) return false;
+      document.body.classList.add("desktop-host");
+      runtimeMode.textContent = "DESKTOP";
+      try {
+        const status = await window.pywebview.api.runtime_status();
+        runtimeMode.title = status.base_url + " / " + status.project_dir;
+      } catch (error) {
+        runtimeMode.title = "Desktop bridge error: " + error.message;
+      }
+      return true;
+    }
+
+    async function chooseStorageDirectory(button) {
+      if (!window.pywebview?.api) throw new Error("폴더 선택은 데스크톱 프로그램에서 사용할 수 있습니다.");
+      button.disabled = true;
+      try {
+        const result = await window.pywebview.api.choose_directory(button.dataset.pathPurpose || "");
+        if (!result?.selected || !result.path) return;
+        const input = storageSettingsForm.elements[button.dataset.pathInput || ""];
+        if (!input) throw new Error("저장 경로 입력란을 찾을 수 없습니다.");
+        input.value = result.path;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        storageSettingsStatus.textContent = "선택한 경로를 적용하려면 Save를 누르세요.";
+        banner.textContent = result.path + " 선택됨";
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    async function refreshActiveWorkspace() {
+      const activeView = document.body.dataset.activeView || "overview";
+      const refreshers = {
+        overview: () => Promise.all([loadStatus(), loadAlerts({ renderHistory: false })]),
+        players: () => loadPlayers(),
+        replay: () => loadReplayArtifacts(),
+        collection: () => Promise.all([
+          loadCollectorWorkerStatus(),
+          loadPostProcessingWorkerStatus(),
+          loadJobs(),
+          loadTelemetryJobs(),
+        ]),
+        discord: () => Promise.all([loadDiscordPermissions(), loadDiscordScopes()]),
+        operations: () => Promise.all([
+          loadAlerts(),
+          loadOperationalDrills(),
+          loadWorkerRuns(),
+          loadDataDeletionRequests(),
+        ]),
+        settings: () => loadStatus(),
+      };
+      refreshWorkspace.disabled = true;
+      banner.textContent = workspaceViews[activeView].title + " 새로고침 중";
+      try {
+        await refreshers[activeView]();
+        banner.textContent = workspaceViews[activeView].title + " 새로고침 완료";
+      } finally {
+        refreshWorkspace.disabled = false;
+      }
+    }
+
     function cell(label, value) {
       return `<div class="kv"><span>${label}</span><strong>${value}</strong></div>`;
     }
@@ -4255,6 +5004,28 @@ _INDEX_HTML = """<!doctype html>
         fetch("/settings/status").then((r) => r.json()),
         fetch("/database/status").then((r) => r.json()).catch(() => ({ mysql_connection: "error" })),
       ]);
+      const databaseReady = database.mysql_connection === "ok";
+      setRailStatus(
+        railDatabase,
+        databaseReady ? (database.database || "연결됨") : "연결 오류",
+        databaseReady ? "ok" : "error",
+      );
+      const pubgReady = Boolean(settings.secrets.PUBG_API_KEY.configured);
+      const discordReady = Boolean(settings.secrets.DISCORD_BOT_TOKEN.configured);
+      setRailStatus(railPubgApi, pubgReady ? "키 설정됨" : "키 없음", pubgReady ? "ok" : "error");
+      setRailStatus(railDiscord, discordReady ? "토큰 설정됨" : "토큰 없음", discordReady ? "ok" : "error");
+      const rawStorage = settings.storage_status?.raw_data_dir;
+      const replayStorage = settings.storage_status?.replay_data_dir;
+      setRailStatus(
+        railRawStorage,
+        storageRailText(rawStorage),
+        rawStorage?.exists && rawStorage?.is_dir && rawStorage?.writable ? "ok" : "error",
+      );
+      setRailStatus(
+        railReplayStorage,
+        storageRailText(replayStorage),
+        replayStorage?.exists && replayStorage?.is_dir && replayStorage?.writable ? "ok" : "error",
+      );
       statusGrid.innerHTML = [
         cell("MySQL", escapeHtml(`${database.mysql_connection || "unknown"} / ${database.database || "-"}`)),
         cell("PUBG API Key", settings.secrets.PUBG_API_KEY.configured ? "설정됨" : "없음"),
@@ -8621,11 +9392,17 @@ _INDEX_HTML = """<!doctype html>
     function renderCollectorWorkerStatus(worker) {
       if (!worker) {
         collectorWorkerStatus.textContent = "Auto collector status unavailable";
+        setRailStatus(railCollector, "상태 오류", "error");
         return;
       }
       const state = worker.running
         ? (worker.stop_requested ? "stopping" : "running")
         : "stopped";
+      setRailStatus(
+        railCollector,
+        state === "running" ? "실행 중" : (state === "stopping" ? "종료 중" : "중지"),
+        state === "running" ? "ok" : (state === "stopping" ? "warning" : ""),
+      );
       const lastCycle = worker.last_cycle;
       const lastSummary = lastCycle
         ? [
@@ -8670,11 +9447,17 @@ _INDEX_HTML = """<!doctype html>
     function renderPostProcessingWorkerStatus(worker) {
       if (!worker) {
         postProcessingWorkerStatus.textContent = "Post-processing status unavailable";
+        setRailStatus(railPostProcessing, "상태 오류", "error");
         return;
       }
       const state = worker.running
         ? (worker.stop_requested ? "stopping" : "running")
         : "stopped";
+      setRailStatus(
+        railPostProcessing,
+        state === "running" ? "실행 중" : (state === "stopping" ? "종료 중" : "중지"),
+        state === "running" ? "ok" : (state === "stopping" ? "warning" : ""),
+      );
       const lastCycle = worker.last_cycle;
       const lastSummary = lastCycle
         ? [
@@ -9624,6 +10407,44 @@ _INDEX_HTML = """<!doctype html>
     }
     timelineZoom.addEventListener("change", renderReplayFrame);
 
+    workspaceNav.addEventListener("click", (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("button[data-view-target]")
+        : null;
+      if (!button) return;
+      activateWorkspace(button.dataset.viewTarget || "overview", {
+        updateUrl: true,
+        smooth: true,
+      });
+    });
+    refreshWorkspace.addEventListener("click", async () => {
+      try {
+        await refreshActiveWorkspace();
+      } catch (error) {
+        banner.textContent = "새로고침 오류: " + error.message;
+      }
+    });
+    for (const button of pathPickerButtons) {
+      button.addEventListener("click", async () => {
+        try {
+          await chooseStorageDirectory(button);
+        } catch (error) {
+          storageSettingsStatus.textContent = "Error: " + error.message;
+          banner.textContent = "Error: " + error.message;
+        }
+      });
+    }
+    window.addEventListener("hashchange", syncWorkspaceToLocation);
+    window.addEventListener("popstate", syncWorkspaceToLocation);
+    window.addEventListener("pywebviewready", enableDesktopFeatures);
+    new MutationObserver(() => {
+      railActivity.textContent = banner.textContent || "대기 중";
+    }).observe(banner, { childList: true, characterData: true, subtree: true });
+
+    syncWorkspaceToLocation();
+    updateKstClock();
+    setInterval(updateKstClock, 1000);
+    enableDesktopFeatures();
     drawEmptyReplayCanvas();
     loadInitialLookupPrefillFromUrl();
     const initialAlertHistoryFilterFromUrl = loadInitialAlertHistoryFiltersFromUrl();

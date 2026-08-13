@@ -604,7 +604,31 @@ and rehearsal require current plan/fingerprint bindings. Every view and mutation
 deletion execution is disabled and not ready.
 Permission-denied and blocked privilege-boundary attempts remain plain text by design.
 
-Run the local management app:
+Run the Windows desktop manager (recommended):
+
+```powershell
+python -m pip install -e ".[desktop]"
+python -m pubg_ai.cli run-desktop --maximized
+```
+
+After the desktop dependency is installed, `run_desktop.cmd` provides the same maximized launch by double-click.
+Desktop mode starts the FastAPI manager on the configured localhost URL, or reuses it when the same manager is
+already running. The native window exposes Windows folder pickers for Raw, Replay, deletion-backup, and quarantine
+roots; the selected value is not persisted until the Storage Settings Save button is pressed. Closing the window
+stops only a web server that the desktop launcher started itself. The bind boundary remains localhost-only.
+
+Build the local Windows executable:
+
+```powershell
+python -m pip install -e ".[desktop-build]"
+python -m PyInstaller --clean --noconfirm pubg_ai_desktop.spec
+```
+
+The result is `dist/PUBG_AI_Manager.exe`. The repository-root `run_desktop.cmd` launches that executable when it
+exists and otherwise falls back to the Python desktop command. The executable searches its parent directories for
+the project `.env` and `config` directory; `PUBG_AI_BASE_DIR` can override that location explicitly.
+
+Run the browser-only local manager instead:
 
 ```powershell
 python -m pubg_ai.cli run-web --host 127.0.0.1 --port 8000

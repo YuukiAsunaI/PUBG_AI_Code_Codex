@@ -238,6 +238,15 @@ def main(argv: list[str] | None = None) -> int:
     web_parser.add_argument("--host", default="127.0.0.1", help="Bind host. Defaults to localhost only.")
     web_parser.add_argument("--port", default=8000, type=int, help="Bind port.")
 
+    desktop_parser = subparsers.add_parser(
+        "run-desktop",
+        help="Run the local management app in a native desktop window.",
+    )
+    desktop_parser.add_argument("--host", default=None, help="Optional localhost override.")
+    desktop_parser.add_argument("--port", default=None, type=int, help="Optional local port override.")
+    desktop_parser.add_argument("--debug", action="store_true", help="Enable webview debugging tools.")
+    desktop_parser.add_argument("--maximized", action="store_true", help="Open the desktop window maximized.")
+
     collector_parser = subparsers.add_parser(
         "run-collector",
         help="Run the automatic completed-match collector loop.",
@@ -735,6 +744,23 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "run-web":
         _run_web_app(host=args.host, port=args.port, base_dir=base_dir, env_file=args.env_file)
+        return 0
+
+    if args.command == "run-desktop":
+        from pubg_ai.desktop import DesktopLaunchError, run_desktop_app
+
+        try:
+            run_desktop_app(
+                base_dir=base_dir,
+                configured_base_url=config.app.local_web_base_url,
+                env_file=args.env_file,
+                host=args.host,
+                port=args.port,
+                debug=args.debug,
+                maximized=args.maximized,
+            )
+        except DesktopLaunchError as exc:
+            raise SystemExit(str(exc)) from exc
         return 0
 
     if args.command == "run-collector":
