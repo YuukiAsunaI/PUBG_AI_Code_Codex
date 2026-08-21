@@ -146,6 +146,11 @@ class PlayerWeaponDetailTotals:
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
+        record["avg_kills"] = _safe_divide(self.kills, self.match_count)
+        record["avg_assists"] = _safe_divide(self.assists, self.match_count)
+        record["avg_dbnos"] = _safe_divide(self.dbnos, self.match_count)
+        record["avg_deaths_taken"] = _safe_divide(self.deaths_taken, self.match_count)
+        record["avg_damage_taken"] = _safe_divide(self.damage_taken, self.match_count)
         record["headshot_hit_rate"] = _safe_divide(self.headshot_hits, self.shots_hit)
         record["headshot_hit_taken_rate"] = _safe_divide(
             self.taken_hit_parts.get("head", 0),
@@ -200,6 +205,41 @@ class PlayerWeaponFightRange:
 
 
 @dataclass(frozen=True)
+class PlayerWeaponTrendPoint:
+    period_key: str
+    period_label: str
+    first_match_at_kst: datetime
+    last_match_at_kst: datetime
+    totals: PlayerWeaponDetailTotals
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "period_key": self.period_key,
+            "period_label": self.period_label,
+            "first_match_at_kst": self.first_match_at_kst.isoformat(),
+            "last_match_at_kst": self.last_match_at_kst.isoformat(),
+            **self.totals.to_record(),
+        }
+
+
+@dataclass(frozen=True)
+class PlayerWeaponTrendSeries:
+    granularity: str
+    points: list[PlayerWeaponTrendPoint]
+    available_point_count: int
+    truncated: bool
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "granularity": self.granularity,
+            "points": [point.to_record() for point in self.points],
+            "available_point_count": self.available_point_count,
+            "returned_point_count": len(self.points),
+            "truncated": self.truncated,
+        }
+
+
+@dataclass(frozen=True)
 class PlayerWeaponDetail:
     player: RegisteredPlayer
     weapon_code: str
@@ -208,6 +248,7 @@ class PlayerWeaponDetail:
     recent_matches: list[PlayerWeaponRecentMatch]
     filters: PlayerTrendFilters = field(default_factory=PlayerTrendFilters)
     effective_ranges: list[PlayerWeaponFightRange] = field(default_factory=list)
+    trend_series: dict[str, PlayerWeaponTrendSeries] = field(default_factory=dict)
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -218,6 +259,10 @@ class PlayerWeaponDetail:
             "recent_matches": [match.to_record() for match in self.recent_matches],
             "filters": self.filters.to_record(),
             "effective_ranges": [item.to_record() for item in self.effective_ranges],
+            "trend_series": {
+                key: series.to_record()
+                for key, series in self.trend_series.items()
+            },
         }
 
 
@@ -1054,11 +1099,9 @@ class PlayerStatsService:
                   AND (
                     weapon_stats.shots_fired > 0
                     OR weapon_stats.damage_dealt > 0
-                    OR weapon_stats.damage_taken > 0
                     OR weapon_stats.kills > 0
                     OR weapon_stats.assists > 0
                     OR weapon_stats.dbnos > 0
-                    OR weapon_stats.dbnos_taken > 0
                   )
                 GROUP BY weapon_stats.weapon_code
                 ORDER BY match_count DESC, weapon_stats.weapon_code ASC
@@ -1258,6 +1301,7 @@ class PlayerStatsService:
             cursor.execute(
                 """
                 SELECT
+                    outcomes.match_id,
                     outcomes.outcome_type,
                     outcomes.distance_m
                 FROM player_fight_outcomes outcomes
@@ -1338,15 +1382,11 @@ def weapon_code_from_identifier(value: str) -> str:
     return normalize_weapon_code(value) or value.strip()
 
 
-def _weapon_detail_from_rows(
-    *,
-    player: RegisteredPlayer,
+def _weapon_totals_from_rows(
     weapon_code: str,
     rows: list[dict[str, Any]],
-    recent_limit: int,
-    filters: PlayerTrendFilters,
-    fight_rows: list[dict[str, Any]] | None = None,
-) -> PlayerWeaponDetail:
+    fight_rows: list[dict[str, Any]],
+) -> PlayerWeaponDetailTotals:
     match_count = len({str(row["match_id"]) for row in rows})
     wins = sum(1 for row in rows if _optional_int(row.get("win_place")) == 1)
     kills = sum(_int(row.get("kills")) for row in rows)
@@ -1367,46 +1407,125 @@ def _weapon_detail_from_rows(
     hit_parts = _sum_part_maps(row.get("hit_parts") for row in rows)
     taken_hit_parts = _sum_part_maps(row.get("taken_hit_parts") for row in rows)
     accuracy_metric = weapon_accuracy_metric(weapon_code, shots_fired, shots_hit)
-    eligible_fights = list(fight_rows or [])
-    fight_wins = sum(str(row.get("outcome_type")) == "win" for row in eligible_fights)
-    fight_losses = sum(str(row.get("outcome_type")) == "loss" for row in eligible_fights)
+    fight_wins = sum(str(row.get("outcome_type")) == "win" for row in fight_rows)
+    fight_losses = sum(str(row.get("outcome_type")) == "loss" for row in fight_rows)
     fight_count = fight_wins + fight_losses
+    return PlayerWeaponDetailTotals(
+        match_count=match_count,
+        wins=wins,
+        kills=kills,
+        assists=assists,
+        deaths_taken=deaths_taken,
+        dbnos=dbnos,
+        dbnos_taken=dbnos_taken,
+        finishes=finishes,
+        finishes_taken=finishes_taken,
+        damage_dealt=damage_dealt,
+        damage_taken=damage_taken,
+        shots_fired=shots_fired,
+        shots_hit=shots_hit,
+        hits_taken=hits_taken,
+        headshot_hits=headshot_hits,
+        headshot_kills=headshot_kills,
+        headshot_dbnos=headshot_dbnos,
+        accuracy=accuracy_metric.estimated_hit_rate or 0.0,
+        avg_damage_dealt=_safe_divide(damage_dealt, match_count),
+        win_rate=_safe_divide(wins, match_count),
+        headshot_kill_rate=_safe_divide(headshot_kills, kills),
+        hit_parts=hit_parts,
+        taken_hit_parts=taken_hit_parts,
+        accuracy_metric=accuracy_metric,
+        fight_count=fight_count,
+        fight_wins=fight_wins,
+        fight_losses=fight_losses,
+        fight_win_rate=_safe_divide(fight_wins, fight_count),
+        avg_fights_per_match=_safe_divide(fight_count, match_count),
+    )
+
+
+def _weapon_trend_series(
+    weapon_code: str,
+    rows: list[dict[str, Any]],
+    fight_rows: list[dict[str, Any]],
+    *,
+    point_limit: int = 500,
+) -> dict[str, PlayerWeaponTrendSeries]:
+    fights_by_match: dict[str, list[dict[str, Any]]] = {}
+    for fight_row in fight_rows:
+        match_id = str(fight_row.get("match_id") or "")
+        if match_id:
+            fights_by_match.setdefault(match_id, []).append(fight_row)
+
+    result: dict[str, PlayerWeaponTrendSeries] = {}
+    for granularity in ("date", "month"):
+        grouped: dict[str, tuple[str, list[dict[str, Any]]]] = {}
+        for row in rows:
+            created_at_kst = row.get("created_at_kst")
+            if not isinstance(created_at_kst, datetime):
+                continue
+            if granularity == "date":
+                period_key = created_at_kst.strftime("%Y-%m-%d")
+                period_label = period_key
+            else:
+                period_key = created_at_kst.strftime("%Y-%m")
+                period_label = created_at_kst.strftime("%Y년 %m월")
+            grouped.setdefault(period_key, (period_label, []))[1].append(row)
+
+        points: list[PlayerWeaponTrendPoint] = []
+        for period_key in sorted(grouped):
+            period_label, period_rows = grouped[period_key]
+            period_fights = [
+                fight
+                for row in period_rows
+                for fight in fights_by_match.get(str(row.get("match_id") or ""), [])
+            ]
+            timestamps = [
+                row["created_at_kst"]
+                for row in period_rows
+                if isinstance(row.get("created_at_kst"), datetime)
+            ]
+            points.append(
+                PlayerWeaponTrendPoint(
+                    period_key=period_key,
+                    period_label=period_label,
+                    first_match_at_kst=min(timestamps),
+                    last_match_at_kst=max(timestamps),
+                    totals=_weapon_totals_from_rows(
+                        weapon_code,
+                        period_rows,
+                        period_fights,
+                    ),
+                )
+            )
+        normalized_limit = max(1, min(int(point_limit), 500))
+        available_point_count = len(points)
+        selected = points[-normalized_limit:]
+        result[granularity] = PlayerWeaponTrendSeries(
+            granularity=granularity,
+            points=selected,
+            available_point_count=available_point_count,
+            truncated=available_point_count > len(selected),
+        )
+    return result
+
+
+def _weapon_detail_from_rows(
+    *,
+    player: RegisteredPlayer,
+    weapon_code: str,
+    rows: list[dict[str, Any]],
+    recent_limit: int,
+    filters: PlayerTrendFilters,
+    fight_rows: list[dict[str, Any]] | None = None,
+) -> PlayerWeaponDetail:
+    eligible_fights = list(fight_rows or [])
+    totals = _weapon_totals_from_rows(weapon_code, rows, eligible_fights)
 
     return PlayerWeaponDetail(
         player=player,
         weapon_code=weapon_code,
         weapon_name=translate_code(weapon_code, "damage_causer"),
-        totals=PlayerWeaponDetailTotals(
-            match_count=match_count,
-            wins=wins,
-            kills=kills,
-            assists=assists,
-            deaths_taken=deaths_taken,
-            dbnos=dbnos,
-            dbnos_taken=dbnos_taken,
-            finishes=finishes,
-            finishes_taken=finishes_taken,
-            damage_dealt=damage_dealt,
-            damage_taken=damage_taken,
-            shots_fired=shots_fired,
-            shots_hit=shots_hit,
-            hits_taken=hits_taken,
-            headshot_hits=headshot_hits,
-            headshot_kills=headshot_kills,
-            headshot_dbnos=headshot_dbnos,
-            accuracy=accuracy_metric.estimated_hit_rate or 0.0,
-            avg_damage_dealt=_safe_divide(damage_dealt, match_count),
-            win_rate=_safe_divide(wins, match_count),
-            headshot_kill_rate=_safe_divide(headshot_kills, kills),
-            hit_parts=hit_parts,
-            taken_hit_parts=taken_hit_parts,
-            accuracy_metric=accuracy_metric,
-            fight_count=fight_count,
-            fight_wins=fight_wins,
-            fight_losses=fight_losses,
-            fight_win_rate=_safe_divide(fight_wins, fight_count),
-            avg_fights_per_match=_safe_divide(fight_count, match_count),
-        ),
+        totals=totals,
         recent_matches=[
             PlayerWeaponRecentMatch(
                 match_id=str(row["match_id"]),
@@ -1439,6 +1558,11 @@ def _weapon_detail_from_rows(
         ],
         filters=filters,
         effective_ranges=_weapon_fight_ranges(weapon_code, eligible_fights),
+        trend_series=_weapon_trend_series(
+            weapon_code,
+            rows,
+            eligible_fights,
+        ),
     )
 
 

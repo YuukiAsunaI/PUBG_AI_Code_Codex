@@ -242,10 +242,26 @@ class PlayerStatsServiceTests(unittest.TestCase):
                     },
                 ],
                 [
-                    {"outcome_type": "win", "distance_m": 42.0},
-                    {"outcome_type": "win", "distance_m": 48.0},
-                    {"outcome_type": "loss", "distance_m": 45.0},
-                    {"outcome_type": "loss", "distance_m": 112.0},
+                    {
+                        "match_id": "match-2",
+                        "outcome_type": "win",
+                        "distance_m": 42.0,
+                    },
+                    {
+                        "match_id": "match-2",
+                        "outcome_type": "win",
+                        "distance_m": 48.0,
+                    },
+                    {
+                        "match_id": "match-2",
+                        "outcome_type": "loss",
+                        "distance_m": 45.0,
+                    },
+                    {
+                        "match_id": "match-1",
+                        "outcome_type": "loss",
+                        "distance_m": 112.0,
+                    },
                 ],
             ]
         )
@@ -287,6 +303,22 @@ class PlayerStatsServiceTests(unittest.TestCase):
         self.assertEqual(detail.effective_ranges[0].losses, 1)
         self.assertEqual(detail.recent_matches[0].match_id, "match-2")
         self.assertEqual(detail.filters.year, 2026)
+        daily = detail.trend_series["date"]
+        self.assertEqual(daily.available_point_count, 2)
+        self.assertFalse(daily.truncated)
+        self.assertEqual([point.period_key for point in daily.points], ["2026-06-28", "2026-06-29"])
+        self.assertEqual(daily.points[0].totals.match_count, 1)
+        self.assertAlmostEqual(daily.points[0].totals.headshot_hits / daily.points[0].totals.shots_hit, 0.2)
+        self.assertEqual(daily.points[0].totals.fight_losses, 1)
+        self.assertAlmostEqual(daily.points[1].totals.fight_win_rate, 2 / 3)
+        monthly = detail.trend_series["month"]
+        self.assertEqual(monthly.available_point_count, 1)
+        self.assertEqual(monthly.points[0].totals.match_count, detail.totals.match_count)
+        self.assertEqual(monthly.points[0].totals.kills, detail.totals.kills)
+        serialized = detail.to_record()
+        self.assertAlmostEqual(serialized["totals"]["headshot_hit_rate"], 8 / 40)
+        self.assertAlmostEqual(serialized["totals"]["avg_kills"], 2.0)
+        self.assertEqual(serialized["trend_series"]["date"]["returned_point_count"], 2)
         query, params = connection.executed[2]
         self.assertIn("matches.map_name = %s", query)
         self.assertIn("matches.season_state = %s", query)
@@ -297,6 +329,7 @@ class PlayerStatsServiceTests(unittest.TestCase):
         self.assertIn(datetime(2026, 6, 29), params)
         fight_query, fight_params = connection.executed[3]
         self.assertIn("outcomes.is_friendly_fire = 0", fight_query)
+        self.assertIn("outcomes.match_id", fight_query)
         self.assertIn("matches.map_name = %s", fight_query)
         self.assertEqual(fight_params[:3], ["account.test", "steam", "WeapHK416_C"])
 
@@ -353,6 +386,11 @@ class PlayerStatsServiceTests(unittest.TestCase):
         self.assertEqual(catalog.facets["maps"], ["Erangel_Main"])
         self.assertEqual(catalog.facets["years"], [2026])
         self.assertEqual(catalog.to_record()["matches"][0]["map_name_ko"], "에란겔")
+        weapon_catalog_query, _ = connection.executed[1]
+        self.assertIn("weapon_stats.shots_fired > 0", weapon_catalog_query)
+        self.assertIn("weapon_stats.assists > 0", weapon_catalog_query)
+        self.assertNotIn("weapon_stats.damage_taken > 0", weapon_catalog_query)
+        self.assertNotIn("weapon_stats.dbnos_taken > 0", weapon_catalog_query)
 
     def test_builds_match_detail_with_weapon_and_replay_summary(self) -> None:
         connection = FakeConnection(

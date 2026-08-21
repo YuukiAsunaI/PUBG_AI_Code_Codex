@@ -611,11 +611,15 @@ deletion execution is disabled and not ready.
 Permission-denied and blocked privilege-boundary attempts remain plain text by design.
 
 The local player-analysis forms use registered-player nickname search backed by stored account IDs. Weapon and match
-selection come from that player's local catalog instead of requiring raw codes or memorized match IDs. Weapon and
-trend views expose map/mode/season-state and KST year/quarter/month/date/hour filters, while recommendation results lead
-with a close/mid plus DMR/SR/Crossbow two-weapon combination and weapon-specific translated attachments. Accuracy,
-headshot-hit probability, fight-win probability, hit/taken body-part distributions, and per-match combat averages are
-available in current totals and trend graphs. Headshot-hit probability is head hits divided by hits, never by misses.
+selection come from that player's local catalog instead of requiring raw codes or memorized match IDs. The selected
+registered player remains active across profile, trend, weapon, recommendation, drop-zone, and match views until the
+operator explicitly releases it. Weapon and trend views expose map/mode/season-state and KST
+year/quarter/month/date/hour filters. Chronological groupings render real line charts with denominator and match-sample
+notes; categorical groupings retain comparison charts. Each weapon also provides daily/monthly graphs for combat,
+accuracy, damage, kill, DBNO, death, and usage metrics. Recommendation results lead with a close/mid plus
+DMR/SR/Crossbow two-weapon combination and weapon-specific translated attachments. Accuracy, headshot-hit probability,
+fight-win probability, hit/taken body-part distributions, and per-match combat averages are available in current
+totals and trends. Headshot-hit probability is head hits divided by hits, never by misses.
 Loadout score details expose their performance components and the heuristic PUBG inventory-unit cost of mixed ammo,
 shared ammo pools, and LMG reserve ammunition.
 

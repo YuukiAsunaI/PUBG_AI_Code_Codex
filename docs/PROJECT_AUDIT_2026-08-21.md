@@ -17,7 +17,7 @@ Audit snapshot:
 - Database checkpoint: 6 registered/active targets, 1,454 matches, 1,454 raw match payloads, 1,454 raw telemetry
   payloads, and no pending or failed API jobs.
 - Latest replay corpus: 1,783 `player-timeline-v6` JSON files and 1,783 `map-snapshot-v5` JPEG files.
-- The rebuilt `dist/PUBG_AI_Manager.exe` is 50,676,570 bytes. A packaged-process smoke test found the real GUI child
+- The rebuilt `dist/PUBG_AI_Manager.exe` is 50,684,415 bytes. A packaged-process smoke test found the real GUI child
   window, confirmed `local_only=true`, closed it through the Windows close message, and verified that no child
   process or listening port remained.
 
@@ -103,6 +103,49 @@ claim that a loadout score is an objective PUBG win probability.
   non-empty queue is shown as stopped/waiting rather than as an unexplained processing failure.
 - The manager remains bound to `127.0.0.1`; external Host and cross-site write protections remain covered by tests.
 
+## Player Analysis Follow-Up - 2026-08-22 KST
+
+The player workspace was reviewed again as a player-centered analysis tool rather than as a collection of unrelated
+forms.
+
+- Selecting an exact registered player now establishes one in-memory analysis context shared by profile, trend,
+  weapon, recommendation, drop-zone, and match views. Result/filter resets preserve that context; only the explicit
+  release action clears it.
+- A stale-response guard prevents a slower weapon/match catalog request for the previous player from overwriting a
+  newer player selection.
+- Date, week, month, quarter, and year trend views render chronological SVG line charts. Map, mode, and other
+  categorical groupings retain comparison bars. Every chart reports its metric definition, displayed/available
+  buckets, and match sample size.
+- Weapon details expose daily and monthly time series for fight win rate, match win rate, class-aware accuracy,
+  headshot hit rate, damage dealt/taken, kills, DBNOs, deaths, and usage count.
+- Weapon catalog usage now has the same outgoing-use contract as weapon detail: shots fired, damage dealt, kills,
+  assists, or DBNOs. In the live check, M416 showed **75 matches** in both the selector and detail result.
+- A failed auxiliary fight-outcome request is shown as a partial-data warning and unavailable fight metrics instead
+  of misleading zero-valued performance.
+- Registration, collection-stop, status, alert, and worker requests now share checked response handling; periodic
+  refresh failures are surfaced without creating unhandled browser promise errors.
+
+Verification:
+
+- Full Python suite: **550 passed**, 33 dependency deprecation warnings.
+- Embedded JavaScript: parsed successfully with Node `vm.Script`.
+- Live MySQL: 8.0.41, database `pubg_ai`, 48 tables, connection successful.
+- Live Edge/Playwright check: registered-player context persisted through weapon changes and the trend view; the
+  checked daily chart rendered 25 points and the monthly chart 3 points.
+- Desktop and 390 x 844 mobile checks had no document/workspace overflow, console errors, or page errors.
+
+The collection design remains aligned with the official player-to-match-to-telemetry flow described in
+[PUBG telemetry](https://documentation.pubg.com/en/telemetry.html) and the event contracts in
+[PUBG telemetry events](https://documentation.pubg.com/en/telemetry-events.html). Player lookups continue to cache
+account IDs because player endpoints are rate limited while match and telemetry requests have different limits, as
+documented in [PUBG rate limits](https://documentation.pubg.com/en/rate-limits.html). The API key remains server-side
+in ignored local environment configuration in accordance with
+[PUBG API key guidance](https://documentation.pubg.com/en/api-keys.html).
+
+Comparable stat products such as [PUBG Statistics](https://pubgstatistics.com/) and
+[PUBG Stats](https://www.pubgstats.app/) were reviewed for useful interaction patterns: persistent player context,
+stats over time, weapon drill-down, and visible sample evidence. No third-party source code was copied.
+
 ## Official Evidence
 
 - Telemetry IDs and map assets remain grounded in the authoritative
@@ -140,4 +183,4 @@ python -m pubg_ai.cli db-status
 python -m PyInstaller --clean --noconfirm pubg_ai_desktop.spec
 ```
 
-The audited development manager is available only on this machine at `http://127.0.0.1:8765`.
+The audited development manager is available only on this machine at `http://127.0.0.1:8766`.

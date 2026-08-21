@@ -28,6 +28,28 @@ class WebPlayerStatsTests(unittest.TestCase):
         self.assertIn('<label>서버 범위', body)
         self.assertIn('class="advanced-filters"', body)
         self.assertIn('id="trendCards"', body)
+        self.assertIn('id="analysisPlayerContextName"', body)
+        self.assertIn('id="clearAnalysisPlayer"', body)
+        self.assertIn('<option value="date" selected>일자</option>', body)
+        self.assertIn('class="trend-line-chart"', body)
+        self.assertIn('data-trend-granularity="month"', body)
+        self.assertIn('data-weapon-trend-metric', body)
+        self.assertIn("await setActiveAnalysisPlayer(player);", body)
+        self.assertIn(
+            'activeAnalysisPlayer.shard + ":" + activeAnalysisPlayer.account_id !== selectionKey',
+            body,
+        )
+        self.assertIn(
+            'activeAnalysisPlayer.shard + ":" + activeAnalysisPlayer.account_id !== preservedPlayerKey',
+            body,
+        )
+        self.assertIn('await postJson("/players/register"', body)
+        self.assertIn('await postJson("/players/unregister"', body)
+        self.assertIn("교전 데이터 일부를 불러오지 못했습니다", body)
+        self.assertNotIn(
+            "await loadPlayerWeapon(formElement);\n        clearRegisteredPlayerSearch(formElement);",
+            body,
+        )
         self.assertIn('data-catalog-facet="maps"', body)
         self.assertIn('<option value="quarter">분기</option>', body)
         self.assertIn('<option value="map">맵</option>', body)
@@ -98,6 +120,11 @@ class WebPlayerStatsTests(unittest.TestCase):
         self.assertEqual(payload["totals"]["match_count"], 1)
         self.assertEqual(payload["totals"]["kills"], 2)
         self.assertEqual(payload["totals"]["hit_parts"], {"head": 5, "torso": 20})
+        self.assertAlmostEqual(payload["totals"]["headshot_hit_rate"], 0.2)
+        self.assertAlmostEqual(payload["totals"]["avg_kills"], 2.0)
+        self.assertEqual(payload["trend_series"]["date"]["available_point_count"], 1)
+        self.assertEqual(payload["trend_series"]["date"]["points"][0]["period_key"], "2026-06-29")
+        self.assertEqual(payload["trend_series"]["month"]["points"][0]["match_count"], 1)
         self.assertTrue(connection.closed)
 
     def test_player_match_endpoint_returns_match_detail(self) -> None:

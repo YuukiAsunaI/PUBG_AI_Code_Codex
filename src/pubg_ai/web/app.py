@@ -3400,6 +3400,16 @@ _INDEX_HTML = """<!doctype html>
       min-width: 0;
       color: var(--text);
     }
+    .result-warning {
+      border: 1px solid #756226;
+      border-left: 3px solid var(--warning);
+      border-radius: 4px;
+      padding: 9px 10px;
+      background: #211d12;
+      color: #f0d479;
+      font-size: 10px;
+      overflow-wrap: anywhere;
+    }
     .result-heading {
       display: flex;
       align-items: flex-start;
@@ -3632,6 +3642,22 @@ _INDEX_HTML = """<!doctype html>
       gap: 8px;
     }
     .recommendation-chart-toolbar label { width: min(280px, 100%); }
+    #trendViewControls {
+      justify-content: space-between;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+    .weapon-trend-toolbar {
+      justify-content: space-between;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    .trend-control-cluster {
+      display: flex;
+      align-items: end;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
     .metric-chart-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3691,6 +3717,75 @@ _INDEX_HTML = """<!doctype html>
       font-size: 10px;
       font-variant-numeric: tabular-nums;
       white-space: nowrap;
+    }
+    .trend-chart-overview {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .trend-chart-stat {
+      min-width: 0;
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--panel-soft);
+    }
+    .trend-chart-stat span,
+    .trend-chart-stat small {
+      display: block;
+      color: var(--muted);
+      font-size: 9px;
+    }
+    .trend-chart-stat strong {
+      display: block;
+      margin: 4px 0 2px;
+      color: var(--text);
+      font-size: 14px;
+      font-variant-numeric: tabular-nums;
+      overflow-wrap: anywhere;
+    }
+    .trend-line-frame {
+      width: 100%;
+      min-width: 0;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: #0a0d0f;
+    }
+    .trend-line-chart {
+      display: block;
+      width: 100%;
+      min-width: 680px;
+      height: auto;
+      aspect-ratio: 920 / 330;
+    }
+    .trend-line-grid { stroke: #253037; stroke-width: 1; }
+    .trend-line-axis { stroke: #44515a; stroke-width: 1; }
+    .trend-line-path {
+      fill: none;
+      stroke: var(--accent);
+      stroke-width: 3;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .trend-line-point {
+      fill: #0a0d0f;
+      stroke: var(--accent);
+      stroke-width: 2;
+    }
+    .trend-line-point.latest { fill: var(--accent); }
+    .trend-line-chart text {
+      fill: #8f9aa3;
+      font-size: 10px;
+      letter-spacing: 0;
+      font-variant-numeric: tabular-nums;
+    }
+    .trend-chart-note {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.5;
     }
     .trend-card-list { display: none; gap: 8px; margin-top: 10px; }
     .trend-card {
@@ -4149,6 +4244,42 @@ _INDEX_HTML = """<!doctype html>
       background: #14231e;
       color: var(--accent);
     }
+    .analysis-player-context {
+      display: none;
+      min-width: 0;
+      margin: -4px 0 14px;
+      padding: 10px 12px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--accent);
+      border-radius: 5px;
+      background: #0f1416;
+    }
+    body[data-active-view="players"] .analysis-player-context { display: flex; }
+    .analysis-player-context-copy {
+      display: grid;
+      min-width: 0;
+      gap: 3px;
+    }
+    .analysis-player-context-copy > span {
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .analysis-player-context-copy > strong {
+      color: var(--text);
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+    .analysis-player-context-copy > small {
+      color: var(--muted);
+      font-size: 10px;
+      overflow-wrap: anywhere;
+    }
+    .analysis-player-context button { flex: 0 0 auto; }
     main > section[data-view] {
       display: none;
       min-width: 0;
@@ -4424,6 +4555,7 @@ _INDEX_HTML = """<!doctype html>
       main { padding: 0 12px 18px; overflow: visible; }
       .workspace-heading { margin: 0 -12px 12px; padding: 14px 12px; }
       .workspace-section-tabs { margin-top: 0; }
+      .analysis-player-context { align-items: flex-start; }
       main > section[data-view] { padding: 13px; }
       .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .trend-table-wrap { display: none; }
@@ -4447,6 +4579,10 @@ _INDEX_HTML = """<!doctype html>
       .side-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .workspace-heading { align-items: flex-start; flex-direction: column; }
       .workspace-section-tabs { margin-right: -12px; padding-right: 12px; }
+      .analysis-player-context {
+        align-items: stretch;
+        flex-direction: column;
+      }
       .grid { grid-template-columns: 1fr; }
       #statusGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .query-primary, .filter-grid { grid-template-columns: 1fr; }
@@ -4458,8 +4594,10 @@ _INDEX_HTML = """<!doctype html>
       .metric-chart-grid { grid-template-columns: 1fr; }
       .metric-chart-row { grid-template-columns: minmax(0, 1fr) auto; }
       .metric-chart-track { grid-column: 1 / -1; grid-row: 2; }
+      .trend-chart-overview { grid-template-columns: 1fr; }
       .recommendation-chart-toolbar { justify-content: stretch; }
       .recommendation-chart-toolbar label { width: 100%; }
+      .trend-control-cluster { width: 100%; }
       form,
       form.query-form,
       form.analysis-form,
@@ -4526,6 +4664,14 @@ _INDEX_HTML = """<!doctype html>
         <button class="secondary compact-button" type="button" id="refreshWorkspace">새로고침</button>
       </div>
       <nav class="workspace-section-tabs" id="workspaceSections" aria-label="현재 화면 세부 메뉴" role="tablist"></nav>
+      <div class="analysis-player-context" id="analysisPlayerContext" aria-live="polite">
+        <div class="analysis-player-context-copy">
+          <span>ANALYSIS TARGET</span>
+          <strong id="analysisPlayerContextName">분석 대상을 선택하세요</strong>
+          <small id="analysisPlayerContextMeta">한 번 선택하면 전적·추세·무기·추천·낙하·매치 탭에서 유지됩니다.</small>
+        </div>
+        <button class="secondary compact-button" id="clearAnalysisPlayer" type="button" disabled>분석 대상 해제</button>
+      </div>
     <section id="overview-status" data-view="overview">
       <h2>상태</h2>
       <div class="grid" id="statusGrid"></div>
@@ -5007,7 +5153,7 @@ _INDEX_HTML = """<!doctype html>
           <input class="registered-player-input" name="target" list="registeredPlayerOptions" autocomplete="off" placeholder="닉네임 일부 입력" required>
         </label>
         <button type="submit">조회</button>
-        <button class="secondary" type="button" data-reset-analysis-form="profileForm">초기화</button>
+        <button class="secondary" type="button" data-reset-analysis-form="profileForm">결과 초기화</button>
       </form>
       <div class="status" id="profileBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
@@ -5021,8 +5167,8 @@ _INDEX_HTML = """<!doctype html>
           <label>등록 유저<input class="registered-player-input" name="target" list="registeredPlayerOptions" autocomplete="off" placeholder="닉네임 일부 입력" required></label>
           <label>집계 기준
             <select name="granularity">
-              <option value="hour">시간대</option><option value="date">일자</option>
-              <option value="week">ISO 주차</option><option value="month" selected>월</option>
+              <option value="hour">시간대</option><option value="date" selected>일자</option>
+              <option value="week">ISO 주차</option><option value="month">월</option>
               <option value="quarter">분기</option><option value="year">연도</option>
               <option value="map">맵</option><option value="game_mode">게임 모드</option>
               <option value="team_mode">팀 모드</option><option value="perspective">시점</option>
@@ -5030,7 +5176,7 @@ _INDEX_HTML = """<!doctype html>
             </select>
           </label>
           <button type="submit">조회</button>
-          <button class="secondary" type="button" data-reset-analysis-form="trendForm">초기화</button>
+          <button class="secondary" type="button" data-reset-analysis-form="trendForm">필터 초기화</button>
         </div>
         <details class="advanced-filters">
           <summary>상세 필터</summary>
@@ -5057,9 +5203,16 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="trendSummary" style="margin-top: 12px;">조회 대기 중</div>
       <div id="trendViewControls" class="recommendation-chart-toolbar" hidden>
-        <div class="recommendation-view-switch" role="group" aria-label="추세 보기 방식">
-          <button class="secondary active" type="button" data-trend-view="table">표</button>
-          <button class="secondary" type="button" data-trend-view="chart">그래프</button>
+        <div class="trend-control-cluster">
+          <div class="recommendation-view-switch" role="group" aria-label="추세 보기 방식">
+            <button class="secondary active" type="button" data-trend-view="table">표</button>
+            <button class="secondary" type="button" data-trend-view="chart">그래프</button>
+          </div>
+          <div class="recommendation-view-switch" role="group" aria-label="시간 집계 빠른 선택">
+            <button class="secondary" type="button" data-trend-granularity="date">일</button>
+            <button class="secondary" type="button" data-trend-granularity="week">주</button>
+            <button class="secondary" type="button" data-trend-granularity="month">월</button>
+          </div>
         </div>
         <label>그래프 지표
           <select id="trendChartMetric">
@@ -5117,7 +5270,7 @@ _INDEX_HTML = """<!doctype html>
           <label>등록 유저<input class="registered-player-input" name="target" list="registeredPlayerOptions" autocomplete="off" placeholder="닉네임 일부 입력" required></label>
           <label>무기<select name="weapon" required><option value="">유저를 먼저 선택하세요</option></select></label>
           <button type="submit">조회</button>
-          <button class="secondary" type="button" data-reset-analysis-form="weaponForm">초기화</button>
+          <button class="secondary" type="button" data-reset-analysis-form="weaponForm">필터 초기화</button>
         </div>
         <details class="advanced-filters">
           <summary>상세 필터</summary>
@@ -5157,7 +5310,7 @@ _INDEX_HTML = """<!doctype html>
           <input name="min_matches" type="number" min="1" step="1" value="1" inputmode="numeric" title="무기·파츠 추천에 포함할 최소 경기 수">
         </label>
         <button type="submit">조회</button>
-        <button class="secondary" type="button" data-reset-analysis-form="recommendationForm">초기화</button>
+        <button class="secondary" type="button" data-reset-analysis-form="recommendationForm">필터 초기화</button>
       </form>
       <div class="status" id="recommendationBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
@@ -5191,7 +5344,7 @@ _INDEX_HTML = """<!doctype html>
           </select>
         </label>
         <button type="submit">조회</button>
-        <button class="secondary" type="button" data-reset-analysis-form="dropZoneForm">초기화</button>
+        <button class="secondary" type="button" data-reset-analysis-form="dropZoneForm">필터 초기화</button>
       </form>
       <div class="status" id="dropZoneBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
@@ -5239,7 +5392,7 @@ _INDEX_HTML = """<!doctype html>
           <select name="match_id" required><option value="">유저를 먼저 선택하세요</option></select>
         </label>
         <button type="submit">조회</button>
-        <button class="secondary" type="button" data-reset-analysis-form="matchForm">초기화</button>
+        <button class="secondary" type="button" data-reset-analysis-form="matchForm">필터 초기화</button>
       </form>
       <div class="status" id="matchBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
@@ -5665,12 +5818,16 @@ _INDEX_HTML = """<!doctype html>
     const statusGrid = document.querySelector("#statusGrid");
     const playersBody = document.querySelector("#playersBody");
     const registeredPlayerOptions = document.querySelector("#registeredPlayerOptions");
+    const analysisPlayerContextName = document.querySelector("#analysisPlayerContextName");
+    const analysisPlayerContextMeta = document.querySelector("#analysisPlayerContextMeta");
+    const clearAnalysisPlayerButton = document.querySelector("#clearAnalysisPlayer");
     const profileForm = document.querySelector("#profileForm");
     const trendForm = document.querySelector("#trendForm");
     const weaponForm = document.querySelector("#weaponForm");
     const recommendationForm = document.querySelector("#recommendationForm");
     const dropZoneForm = document.querySelector("#dropZoneForm");
     const matchForm = document.querySelector("#matchForm");
+    const analysisForms = [profileForm, trendForm, weaponForm, recommendationForm, dropZoneForm, matchForm];
     const rankingForm = document.querySelector("#rankingForm");
     const rankingGuildSelect = document.querySelector("#rankingGuildSelect");
     const rankingGuildRefresh = document.querySelector("#rankingGuildRefresh");
@@ -5836,9 +5993,13 @@ _INDEX_HTML = """<!doctype html>
     let replayLastFrameMs = 0;
     let replayPlaying = false;
     let activeReplayPlayer = null;
+    let activeAnalysisPlayer = null;
     let activeProfilePlayer = null;
     let activeTrendReport = null;
     let activeTrendView = "table";
+    let activeWeaponDetail = null;
+    let activeWeaponTrendGranularity = "month";
+    let activeWeaponTrendMetric = "fight_win_rate";
     let activeRecommendationTarget = "";
     let activeRecommendationShard = "steam";
     let activeRecommendationReport = null;
@@ -6311,8 +6472,8 @@ _INDEX_HTML = """<!doctype html>
 
     async function loadStatus() {
       const [settings, database] = await Promise.all([
-        fetch("/settings/status").then((r) => r.json()),
-        fetch("/database/status").then((r) => r.json()).catch(() => ({ mysql_connection: "error" })),
+        requestJson("/settings/status", "GET"),
+        requestJson("/database/status", "GET").catch(() => ({ mysql_connection: "error" })),
       ]);
       const databaseReady = database.mysql_connection === "ok";
       setRailStatus(
@@ -6420,7 +6581,7 @@ _INDEX_HTML = """<!doctype html>
 
     async function loadAlerts(options = {}) {
       try {
-        const payload = await fetch("/alerts/status").then((r) => r.json());
+        const payload = await requestJson("/alerts/status", "GET");
         renderAlertStatus(payload, options.renderHistory !== false);
       } catch (error) {
         alertSettingsStatus.textContent = `Error: ${error.message}`;
@@ -6448,7 +6609,7 @@ _INDEX_HTML = """<!doctype html>
         limit: String(limit),
         offset: String(offset),
       });
-      const payload = await fetch(`/alerts/history?${params.toString()}`).then((r) => r.json());
+      const payload = await requestJson(`/alerts/history?${params.toString()}`, "GET");
       if (payload.detail) throw new Error(payload.detail);
       renderAlertHistory(payload.alert_history || [], payload.alert_history_page || {}, true);
       if (options.updateUrl) {
@@ -6822,7 +6983,7 @@ _INDEX_HTML = """<!doctype html>
       activeAlertHistoryDetailAlert = alert;
       activeAlertHistoryNoteType = noteType === "resolution" ? "resolution" : "note";
       alertHistoryDetail.innerHTML = `<div class="status">Loading alert #${escapeHtml(alert.id)} notes...</div>`;
-      const payload = await fetch(`/alerts/history/${encodeURIComponent(alert.id)}/notes`).then((r) => r.json());
+      const payload = await requestJson(`/alerts/history/${encodeURIComponent(alert.id)}/notes`, "GET");
       if (payload.detail) throw new Error(payload.detail);
       renderAlertHistoryDetail(alert, payload.notes || []);
       if (focusEditor) {
@@ -6835,7 +6996,7 @@ _INDEX_HTML = """<!doctype html>
       activeAlertHistoryDetailId = alertId;
       activeAlertHistoryNoteType = noteType === "resolution" ? "resolution" : "note";
       alertHistoryDetail.innerHTML = `<div class="status">Loading alert #${escapeHtml(alertId)} detail...</div>`;
-      const payload = await fetch(`/alerts/history/${encodeURIComponent(alertId)}`).then((r) => r.json());
+      const payload = await requestJson(`/alerts/history/${encodeURIComponent(alertId)}`, "GET");
       if (payload.detail) throw new Error(payload.detail);
       const alert = payload.alert;
       if (!alert) throw new Error("alert history row was not returned");
@@ -7281,7 +7442,7 @@ _INDEX_HTML = """<!doctype html>
     }
 
     async function loadDiscordScopes() {
-      const payload = await fetch("/discord/scopes").then((r) => r.json());
+      const payload = await requestJson("/discord/scopes", "GET");
       activeDiscordScopes = payload.discord_scopes || {
         guild_ranking_scopes: {},
         public_profile_default: true,
@@ -7396,9 +7557,35 @@ _INDEX_HTML = """<!doctype html>
 
     function selectedRegisteredPlayer(formElement) {
       const input = formElement.elements.target;
-      const player = resolveRegisteredPlayer(input?.value, formElement.elements.shard?.value || "");
+      const requested = String(input?.value || "").trim();
+      let player = resolveRegisteredPlayer(requested, formElement.elements.shard?.value || "");
+      if (
+        !player
+        && !requested
+        && activeAnalysisPlayer
+        && analysisForms.includes(formElement)
+        && (!formElement.elements.shard?.value || formElement.elements.shard.value === activeAnalysisPlayer.shard)
+      ) {
+        player = activeAnalysisPlayer;
+      }
       if (!player) throw new Error("등록 유저 목록에서 닉네임을 선택하세요.");
       return player;
+    }
+
+    function renderAnalysisPlayerContext() {
+      if (!activeAnalysisPlayer) {
+        analysisPlayerContextName.textContent = "분석 대상을 선택하세요";
+        analysisPlayerContextMeta.textContent = "한 번 선택하면 전적·추세·무기·추천·낙하·매치 탭에서 유지됩니다.";
+        clearAnalysisPlayerButton.disabled = true;
+        return;
+      }
+      analysisPlayerContextName.textContent = activeAnalysisPlayer.current_name;
+      analysisPlayerContextMeta.textContent = [
+        activeAnalysisPlayer.shard,
+        activeAnalysisPlayer.active ? "수집 중" : "수집 중지",
+        "Account " + String(activeAnalysisPlayer.account_id || "").slice(-12),
+      ].join(" · ");
+      clearAnalysisPlayerButton.disabled = false;
     }
 
     function renderRegisteredPlayerOptions() {
@@ -7530,20 +7717,61 @@ _INDEX_HTML = """<!doctype html>
       if (!input) return;
       const player = resolveRegisteredPlayer(input.value, formElement.elements.shard?.value || "");
       if (!player) return;
+      if (analysisForms.includes(formElement)) {
+        await setActiveAnalysisPlayer(player);
+        return player;
+      }
       input.value = player.current_name;
       input.dataset.accountId = player.account_id;
       if (formElement.elements.shard) formElement.elements.shard.value = player.shard;
-      if ([trendForm, weaponForm, matchForm].includes(formElement)) {
-        applyPlayerCatalog(formElement, await loadPlayerCatalog(player));
+      return player;
+    }
+
+    async function setActiveAnalysisPlayer(player) {
+      const refreshedPlayer = registeredPlayers.find((candidate) => (
+        candidate.account_id === player.account_id && candidate.shard === player.shard
+      )) || player;
+      const selectionKey = refreshedPlayer.shard + ":" + refreshedPlayer.account_id;
+      activeAnalysisPlayer = refreshedPlayer;
+      for (const formElement of analysisForms) {
+        const input = formElement.elements.target;
+        if (input) {
+          input.value = refreshedPlayer.current_name;
+          input.dataset.accountId = refreshedPlayer.account_id;
+        }
+        if (formElement.elements.shard) formElement.elements.shard.value = refreshedPlayer.shard;
       }
+      renderAnalysisPlayerContext();
+      const catalog = await loadPlayerCatalog(refreshedPlayer);
+      if (
+        !activeAnalysisPlayer
+        || activeAnalysisPlayer.shard + ":" + activeAnalysisPlayer.account_id !== selectionKey
+      ) {
+        return activeAnalysisPlayer;
+      }
+      for (const formElement of [trendForm, weaponForm, matchForm]) {
+        applyPlayerCatalog(formElement, catalog);
+      }
+      return refreshedPlayer;
     }
 
     async function initializeRegisteredPlayerForms() {
-      const forms = [profileForm, trendForm, weaponForm, recommendationForm, dropZoneForm, matchForm];
-      const prefilled = forms.filter((formElement) => (
+      if (activeAnalysisPlayer) {
+        const refreshedPlayer = registeredPlayers.find((candidate) => (
+          candidate.account_id === activeAnalysisPlayer.account_id
+          && candidate.shard === activeAnalysisPlayer.shard
+        ));
+        if (refreshedPlayer) {
+          await setActiveAnalysisPlayer(refreshedPlayer);
+        } else {
+          await clearAnalysisPlayerSelection();
+        }
+        return;
+      }
+      const prefilled = analysisForms.filter((formElement) => (
         String(formElement.elements.target?.value || "").trim()
       ));
-      await Promise.allSettled(prefilled.map((formElement) => syncRegisteredPlayerForm(formElement)));
+      if (prefilled.length) await syncRegisteredPlayerForm(prefilled[0]);
     }
 
     function clearRegisteredPlayerSearch(formElement) {
@@ -7553,9 +7781,17 @@ _INDEX_HTML = """<!doctype html>
       delete input.dataset.accountId;
     }
 
-    function resetAnalysisForm(formElement) {
+    async function resetAnalysisForm(formElement, { preservePlayer = true } = {}) {
+      const preservedWeapon = formElement === weaponForm
+        ? String(formElement.elements.weapon?.value || "")
+        : "";
+      const preservedPlayer = preservePlayer && activeAnalysisPlayer && analysisForms.includes(formElement)
+        ? activeAnalysisPlayer
+        : null;
+      const preservedPlayerKey = preservedPlayer
+        ? preservedPlayer.shard + ":" + preservedPlayer.account_id
+        : "";
       formElement.reset();
-      clearRegisteredPlayerSearch(formElement);
       for (const details of formElement.querySelectorAll("details")) details.open = false;
       catalogByForm.delete(formElement);
 
@@ -7570,9 +7806,12 @@ _INDEX_HTML = """<!doctype html>
         trendTableWrap.hidden = false;
         trendCards.hidden = false;
         trendSummary.textContent = "조회 대기 중";
-        trendBody.innerHTML = '<tr><td colspan="9">조회 대기 중</td></tr>';
+        trendBody.innerHTML = '<tr><td colspan="11">조회 대기 중</td></tr>';
         trendCards.innerHTML = "";
       } else if (formElement === weaponForm) {
+        activeWeaponDetail = null;
+        activeWeaponTrendGranularity = "month";
+        activeWeaponTrendMetric = "fight_win_rate";
         formElement.elements.weapon.innerHTML = '<option value="">유저를 먼저 선택하세요</option>';
         weaponBody.textContent = "조회 대기 중";
       } else if (formElement === recommendationForm) {
@@ -7585,6 +7824,42 @@ _INDEX_HTML = """<!doctype html>
         formElement.elements.match_search.value = "";
         matchBody.textContent = "조회 대기 중";
       }
+
+      if (preservedPlayer) {
+        const input = formElement.elements.target;
+        if (input) {
+          input.value = preservedPlayer.current_name;
+          input.dataset.accountId = preservedPlayer.account_id;
+        }
+        if (formElement.elements.shard) formElement.elements.shard.value = preservedPlayer.shard;
+        if ([trendForm, weaponForm, matchForm].includes(formElement)) {
+          const catalog = await loadPlayerCatalog(preservedPlayer);
+          if (
+            !activeAnalysisPlayer
+            || activeAnalysisPlayer.shard + ":" + activeAnalysisPlayer.account_id !== preservedPlayerKey
+          ) {
+            return;
+          }
+          applyPlayerCatalog(formElement, catalog);
+        }
+        if (
+          formElement === weaponForm
+          && preservedWeapon
+          && [...formElement.elements.weapon.options].some((option) => option.value === preservedWeapon)
+        ) {
+          formElement.elements.weapon.value = preservedWeapon;
+        }
+      } else if (analysisForms.includes(formElement)) {
+        clearRegisteredPlayerSearch(formElement);
+      }
+    }
+
+    async function clearAnalysisPlayerSelection() {
+      activeAnalysisPlayer = null;
+      renderAnalysisPlayerContext();
+      await Promise.all(analysisForms.map((formElement) => (
+        resetAnalysisForm(formElement, { preservePlayer: false })
+      )));
     }
 
     document.querySelectorAll('select[name="hour"]').forEach((select) => {
@@ -7595,7 +7870,7 @@ _INDEX_HTML = """<!doctype html>
     });
 
     async function loadPlayers() {
-      const payload = await fetch("/players?active_only=false").then((r) => r.json());
+      const payload = await requestJson("/players?active_only=false", "GET");
       registeredPlayers = payload.players || [];
       playerCatalogCache.clear();
       renderRegisteredPlayerOptions();
@@ -9299,9 +9574,11 @@ _INDEX_HTML = """<!doctype html>
       } else {
         params.set("name", target);
       }
-      const [profileResponse, fightResponse] = await Promise.all([
+      const [profileResponse, fightResult] = await Promise.all([
         fetch(`/players/profile?${params.toString()}`),
-        fetch(`/players/fight-outcomes?${params.toString()}&weapon_limit=3&loadout_limit=3&recent_limit=5`),
+        fetch(`/players/fight-outcomes?${params.toString()}&weapon_limit=3&loadout_limit=3&recent_limit=5`)
+          .then((response) => ({ response }))
+          .catch((error) => ({ error })),
       ]);
       if (!profileResponse.ok) {
         const error = await profileResponse.json().catch(() => ({ detail: profileResponse.statusText }));
@@ -9309,7 +9586,18 @@ _INDEX_HTML = """<!doctype html>
       }
       const profile = (await profileResponse.json()).profile;
       activeProfilePlayer = profile.player;
-      const fights = fightResponse.ok ? (await fightResponse.json()).fight_outcomes : null;
+      const fightResponse = fightResult.response;
+      let fights = null;
+      let fightLoadWarning = "";
+      if (fightResponse?.ok) {
+        fights = (await fightResponse.json()).fight_outcomes;
+      } else if (fightResponse) {
+        const error = await fightResponse.json().catch(() => ({ detail: fightResponse.statusText }));
+        fightLoadWarning = error.detail || fightResponse.statusText || "알 수 없는 오류";
+      } else {
+        fightLoadWarning = fightResult.error?.message || "네트워크 연결 오류";
+      }
+      const fightMetricsAvailable = Boolean(fights);
       const totals = profile.totals;
       const fightTotals = fights?.totals || {
         fight_count: 0,
@@ -9334,8 +9622,12 @@ _INDEX_HTML = """<!doctype html>
         ["명중 확률", accuracyBreakdownText(totals.accuracy, totals.accuracy_breakdown)],
         ["헤드샷 명중 확률", `${percent(totals.headshot_hit_rate)} · ${totals.headshot_hits || 0}/${totals.shots_hit || 0}명중`],
         ["헤드샷 킬 비율", `${percent(totals.headshot_kill_rate)} · ${totals.headshot_kills || 0}/${totals.kills || 0}킬`],
-        ["교전 승리 확률", `${percent(fightTotals.fight_win_rate)} · ${fightTotals.wins}/${fightTotals.fight_count || 0}교전`],
-        ["경기당 평균 교전", `${Number((fightTotals.fight_count || 0) / Math.max(1, totals.match_count || 0)).toFixed(2)}회`],
+        ["교전 승리 확률", fightMetricsAvailable
+          ? `${percent(fightTotals.fight_win_rate)} · ${fightTotals.wins}/${fightTotals.fight_count || 0}교전`
+          : "불러오기 실패"],
+        ["경기당 평균 교전", fightMetricsAvailable
+          ? `${Number((fightTotals.fight_count || 0) / Math.max(1, totals.match_count || 0)).toFixed(2)}회`
+          : "불러오기 실패"],
       ];
       const topWeaponRows = (profile.top_weapons || []).slice(0, 5).map((weapon, index) => `
         <div class="result-row">
@@ -9343,18 +9635,19 @@ _INDEX_HTML = """<!doctype html>
           <strong>${escapeHtml(weapon.weapon_name)}</strong>
           <p>${weapon.kills}킬 · ${Number(weapon.damage_dealt).toFixed(0)}딜 · 명중 ${percent(weapon.accuracy)} · 헤드샷 명중 ${percent(weapon.headshot_hit_rate)}</p>
         </div>`).join("") || '<span class="result-caption">무기 기록 없음</span>';
-      const fightWeaponRows = (fights?.weapons || []).map((weapon) => `
+      const fightUnavailable = '<span class="result-caption">교전 데이터를 불러오지 못했습니다.</span>';
+      const fightWeaponRows = fightMetricsAvailable ? ((fights?.weapons || []).map((weapon) => `
         <div class="result-row">
           <span>교전 ${weapon.fight_count}회</span>
           <strong>${escapeHtml(weapon.weapon_name)}</strong>
           <p>${weapon.wins}승 ${weapon.losses}패 · ${percent(weapon.fight_win_rate)}</p>
-        </div>`).join("") || '<span class="result-caption">총기 교전 기록 없음</span>';
-      const fightLoadoutRows = (fights?.loadouts || []).map((loadout) => `
+        </div>`).join("") || '<span class="result-caption">총기 교전 기록 없음</span>') : fightUnavailable;
+      const fightLoadoutRows = fightMetricsAvailable ? ((fights?.loadouts || []).map((loadout) => `
         <div class="result-row">
           <span>${escapeHtml(loadout.weapon_name)}</span>
           <strong>${escapeHtml((loadout.attachment_names || []).join(" · ") || "파츠 없음")}</strong>
           <p>${loadout.wins}승 ${loadout.losses}패 · ${percent(loadout.fight_win_rate)}</p>
-        </div>`).join("") || '<span class="result-caption">교전 조합 기록 없음</span>';
+        </div>`).join("") || '<span class="result-caption">교전 조합 기록 없음</span>') : fightUnavailable;
       const recentRows = (profile.recent_matches || []).map((match) => (
         '<tr><td>' + escapeHtml(String(match.created_at_kst || "-").replace("T", " ").slice(0, 16)) + '</td>'
         + '<td>' + escapeHtml(match.map_name_ko || match.map_name || "-") + '</td>'
@@ -9372,14 +9665,17 @@ _INDEX_HTML = """<!doctype html>
           profile.player.active ? "success" : "",
         )}
         ${resultMetricGrid(metricCells)}
+        ${fightLoadWarning
+          ? `<div class="result-warning">교전 데이터 일부를 불러오지 못했습니다: ${escapeHtml(fightLoadWarning)}</div>`
+          : ""}
         <div class="result-columns">
           ${resultSection("주요 무기", `<div class="result-list">${topWeaponRows}</div>`)}
-          ${resultSection("교전 요약", resultTextRows([
+          ${resultSection("교전 요약", fightMetricsAvailable ? resultTextRows([
             ["교전 승/패", `${fightTotals.wins} / ${fightTotals.losses} · ${percent(fightTotals.fight_win_rate)}`],
             ["승리 원인", `킬 ${fightTotals.kill_wins} · 기절 ${fightTotals.dbno_wins}`],
             ["패배 원인", `사망 ${fightTotals.death_losses} · 기절 ${fightTotals.dbno_losses}`],
             ["명중 지표", accuracyBreakdownText(totals.accuracy, totals.accuracy_breakdown)],
-          ]))}
+          ]) : fightUnavailable)}
         </div>
         <div class="result-columns">
           ${resultSection("부위별 명중 확률", resultChips(hitPartEntries(totals.hit_parts, totals.hit_part_rates)))}
@@ -9522,11 +9818,41 @@ _INDEX_HTML = """<!doctype html>
 
     function trendMetricDefinition(metric) {
       const definitions = {
-        win_rate: { label: "승률", value: (bucket) => bucket.win_rate, format: percent, percentage: true },
-        fight_win_rate: { label: "교전 승리 확률", value: (bucket) => bucket.fight_win_rate, format: percent, percentage: true },
-        accuracy: { label: "명중 확률", value: (bucket) => bucket.accuracy, format: percent, percentage: true },
-        headshot_hit_rate: { label: "헤드샷 명중 확률", value: (bucket) => bucket.headshot_hit_rate, format: percent, percentage: true },
-        headshot_kill_rate: { label: "헤드샷 킬 비율", value: (bucket) => bucket.headshot_kill_rate, format: percent, percentage: true },
+        win_rate: {
+          label: "승률",
+          value: (bucket) => bucket.win_rate,
+          format: percent,
+          percentage: true,
+          basis: "치킨 경기 수 ÷ 완료 경기 수",
+        },
+        fight_win_rate: {
+          label: "교전 승리 확률",
+          value: (bucket) => bucket.fight_win_rate,
+          format: percent,
+          percentage: true,
+          basis: "기록된 승리 결과(킬·가한 기절) ÷ 승리·패배 결과",
+        },
+        accuracy: {
+          label: "명중 확률",
+          value: (bucket) => bucket.accuracy,
+          format: percent,
+          percentage: true,
+          basis: "일반 탄환의 명중 이벤트 ÷ 발사 이벤트; 산탄은 별도 셸당 펠릿 지표",
+        },
+        headshot_hit_rate: {
+          label: "헤드샷 명중 확률",
+          value: (bucket) => bucket.headshot_hit_rate,
+          format: percent,
+          percentage: true,
+          basis: "머리 명중 횟수 ÷ 전체 명중 횟수; 빗나간 탄은 분모에서 제외",
+        },
+        headshot_kill_rate: {
+          label: "헤드샷 킬 비율",
+          value: (bucket) => bucket.headshot_kill_rate,
+          format: percent,
+          percentage: true,
+          basis: "헤드샷 킬 수 ÷ 전체 킬 수",
+        },
         kda: { label: "KDA", value: (bucket) => bucket.kda, format: (value) => Number(value).toFixed(2) },
         avg_kills: { label: "경기당 평균 킬", value: (bucket) => bucket.avg_kills, format: (value) => Number(value).toFixed(2) },
         avg_assists: { label: "경기당 평균 어시스트", value: (bucket) => bucket.avg_assists, format: (value) => Number(value).toFixed(2) },
@@ -9554,13 +9880,29 @@ _INDEX_HTML = """<!doctype html>
       return definitions[metric] || definitions.win_rate;
     }
 
-    function renderTrendChart() {
-      if (!activeTrendReport) {
-        trendChartPanel.innerHTML = '<span class="result-caption">조회된 추세가 없습니다.</span>';
-        return;
+    function isTemporalTrendGranularity(granularity) {
+      return ["date", "week", "month", "quarter", "year"].includes(String(granularity || ""));
+    }
+
+    function trendDeltaText(definition, current, previous) {
+      if (!Number.isFinite(previous)) return "비교 구간 없음";
+      const difference = current - previous;
+      const sign = difference > 0 ? "+" : "";
+      if (definition.percentage) return sign + (difference * 100).toFixed(1) + "%p";
+      return sign + definition.format(difference);
+    }
+
+    function trendAxisText(definition, value) {
+      if (definition.percentage) {
+        const percentage = value * 100;
+        return percentage < 10 && percentage > 0
+          ? percentage.toFixed(1) + "%"
+          : percentage.toFixed(0) + "%";
       }
-      const definition = trendMetricDefinition(trendChartMetric.value);
-      const buckets = activeTrendReport.buckets || [];
+      return definition.format(value);
+    }
+
+    function renderTrendComparisonChart(definition, buckets) {
       const values = buckets.map((bucket) => Math.max(0, Number(definition.value(bucket) || 0)));
       const maximum = definition.percentage ? 1 : Math.max(1, ...values);
       const rows = buckets.map((bucket, index) => {
@@ -9572,7 +9914,117 @@ _INDEX_HTML = """<!doctype html>
           <span class="metric-chart-value">${escapeHtml(definition.format(value))}</span>
         </div>`;
       }).join("");
-      trendChartPanel.innerHTML = `<h3>${escapeHtml(definition.label)} 변동</h3><div class="metric-chart-list">${rows || '<span class="result-caption">표시할 구간이 없습니다.</span>'}</div>`;
+      return `
+        <h3>${escapeHtml(definition.label)} 구간 비교</h3>
+        <div class="metric-chart-list">${rows || '<span class="result-caption">표시할 구간이 없습니다.</span>'}</div>
+        <p class="trend-chart-note">시간 순서가 없는 맵·모드·시점 등의 집계는 항목 비교 막대로 표시합니다.${definition.basis ? " 산식: " + escapeHtml(definition.basis) + "." : ""}</p>`;
+    }
+
+    function renderTimeSeriesLineChart(definition, buckets, options = {}) {
+      if (!buckets.length) return '<span class="result-caption">표시할 시간 구간이 없습니다.</span>';
+      const values = buckets.map((bucket) => Math.max(0, Number(definition.value(bucket) || 0)));
+      const highest = Math.max(0, ...values);
+      const maximum = definition.percentage
+        ? Math.min(1, Math.max(0.05, highest * 1.15))
+        : Math.max(1, highest * 1.12);
+      const width = 920;
+      const height = 330;
+      const plot = { left: 68, right: 24, top: 28, bottom: 58 };
+      const plotWidth = width - plot.left - plot.right;
+      const plotHeight = height - plot.top - plot.bottom;
+      const x = (index) => (
+        buckets.length === 1
+          ? plot.left + plotWidth / 2
+          : plot.left + index / (buckets.length - 1) * plotWidth
+      );
+      const y = (value) => plot.top + (1 - value / maximum) * plotHeight;
+      const points = values.map((value, index) => [x(index), y(value)]);
+      const path = points.map((point, index) => (
+        (index ? "L" : "M") + point[0].toFixed(2) + " " + point[1].toFixed(2)
+      )).join(" ");
+      const gridLines = Array.from({ length: 5 }, (_, index) => {
+        const ratio = index / 4;
+        const gridY = plot.top + ratio * plotHeight;
+        const gridValue = maximum * (1 - ratio);
+        return `
+          <line class="trend-line-grid" x1="${plot.left}" y1="${gridY.toFixed(2)}" x2="${width - plot.right}" y2="${gridY.toFixed(2)}"></line>
+          <text x="${plot.left - 10}" y="${(gridY + 4).toFixed(2)}" text-anchor="end">${escapeHtml(trendAxisText(definition, gridValue))}</text>`;
+      }).join("");
+      const labelCount = Math.min(7, buckets.length);
+      const labelIndexes = new Set(Array.from({ length: labelCount }, (_, index) => (
+        labelCount === 1 ? 0 : Math.round(index * (buckets.length - 1) / (labelCount - 1))
+      )));
+      const xLabels = [...labelIndexes].map((index) => `
+        <text x="${x(index).toFixed(2)}" y="${height - 24}" text-anchor="middle">${escapeHtml(buckets[index].period_label)}</text>
+      `).join("");
+      const circles = points.map((point, index) => {
+        const bucket = buckets[index];
+        const radius = Math.min(6, 3 + Math.sqrt(Math.max(1, Number(bucket.match_count || 0))) / 5);
+        return `<circle
+          class="trend-line-point${index === points.length - 1 ? ' latest' : ''}"
+          cx="${point[0].toFixed(2)}"
+          cy="${point[1].toFixed(2)}"
+          r="${radius.toFixed(2)}"
+        ><title>${escapeHtml(bucket.period_label)} · ${escapeHtml(definition.format(values[index]))} · ${bucket.match_count}경기</title></circle>`;
+      }).join("");
+      const latestIndex = values.length - 1;
+      const latest = values[latestIndex];
+      const previous = latestIndex > 0 ? values[latestIndex - 1] : Number.NaN;
+      const totals = options.totals || {};
+      const overall = Math.max(0, Number(definition.value(totals) || 0));
+      const availablePointCount = Number(options.availablePointCount || buckets.length);
+      const note = options.truncated
+        ? `전체 ${availablePointCount}개 중 최근 ${buckets.length}개 구간을 표시합니다.`
+        : `전체 ${buckets.length}개 구간을 표시합니다.`;
+      return `
+        <h3>${escapeHtml(options.title || definition.label + " KST 시계열")}</h3>
+        <div class="trend-chart-overview">
+          <div class="trend-chart-stat">
+            <span>최근 · ${escapeHtml(buckets[latestIndex].period_label)}</span>
+            <strong>${escapeHtml(definition.format(latest))}</strong>
+            <small>${buckets[latestIndex].match_count}경기 표본</small>
+          </div>
+          <div class="trend-chart-stat">
+            <span>직전 구간 대비 증감</span>
+            <strong>${escapeHtml(trendDeltaText(definition, latest, previous))}</strong>
+            <small>증감은 향상·악화 판정이 아닌 값의 차이입니다.</small>
+          </div>
+          <div class="trend-chart-stat">
+            <span>현재 조회 조건 전체</span>
+            <strong>${escapeHtml(definition.format(overall))}</strong>
+            <small>${totals.match_count || 0}경기 집계</small>
+          </div>
+        </div>
+        <div class="trend-line-frame">
+          <svg class="trend-line-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${attr(definition.label)} 시간 변화 선 그래프">
+            ${gridLines}
+            <line class="trend-line-axis" x1="${plot.left}" y1="${height - plot.bottom}" x2="${width - plot.right}" y2="${height - plot.bottom}"></line>
+            <path class="trend-line-path" d="${attr(path)}"></path>
+            ${circles}
+            ${xLabels}
+          </svg>
+        </div>
+        <p class="trend-chart-note">${escapeHtml(note)} 점 크기는 해당 구간의 경기 수를 반영하며, 표본이 적은 구간은 변동이 크게 보일 수 있습니다.${definition.basis ? " 산식: " + escapeHtml(definition.basis) + "." : ""}</p>`;
+    }
+
+    function renderTrendLineChart(definition, buckets) {
+      return renderTimeSeriesLineChart(definition, buckets, {
+        totals: activeTrendReport?.totals || {},
+        availablePointCount: activeTrendReport?.available_bucket_count || buckets.length,
+        truncated: Boolean(activeTrendReport?.truncated),
+      });
+    }
+
+    function renderTrendChart() {
+      if (!activeTrendReport) {
+        trendChartPanel.innerHTML = '<span class="result-caption">조회된 추세가 없습니다.</span>';
+        return;
+      }
+      const definition = trendMetricDefinition(trendChartMetric.value);
+      const buckets = activeTrendReport.buckets || [];
+      trendChartPanel.innerHTML = isTemporalTrendGranularity(activeTrendReport.granularity)
+        ? renderTrendLineChart(definition, buckets)
+        : renderTrendComparisonChart(definition, buckets);
     }
 
     function renderTrendView() {
@@ -9583,7 +10035,110 @@ _INDEX_HTML = """<!doctype html>
       for (const button of trendViewControls.querySelectorAll("[data-trend-view]")) {
         button.classList.toggle("active", button.dataset.trendView === activeTrendView);
       }
+      for (const button of trendViewControls.querySelectorAll("[data-trend-granularity]")) {
+        button.classList.toggle(
+          "active",
+          button.dataset.trendGranularity === String(activeTrendReport?.granularity || "")
+        );
+      }
       if (chart) renderTrendChart();
+    }
+
+    function weaponTrendMetricDefinition(metric, detail) {
+      const accuracyMetric = detail?.totals?.accuracy_metric || {};
+      const accuracyIsPercentage = Boolean(accuracyMetric.is_percentage);
+      const accuracyLabel = accuracyMetric.metric_kind === "pellet_hits_per_shell"
+        ? "셸당 펠릿 명중"
+        : accuracyMetric.metric_kind === "hit_events_per_attack"
+          ? "공격당 피격 이벤트"
+          : "명중 확률";
+      const definitions = {
+        fight_win_rate: {
+          label: "교전 승리 확률",
+          value: (point) => point.fight_win_rate,
+          format: percent,
+          percentage: true,
+          basis: "이 무기로 기록된 승리 결과(킬·가한 기절) ÷ 승리·패배 결과",
+        },
+        win_rate: {
+          label: "사용 경기 승률",
+          value: (point) => point.win_rate,
+          format: percent,
+          percentage: true,
+          basis: "이 무기를 사용한 치킨 경기 수 ÷ 이 무기를 사용한 완료 경기 수",
+        },
+        accuracy: {
+          label: accuracyLabel,
+          value: (point) => point.accuracy_metric?.metric_value ?? point.accuracy ?? 0,
+          format: accuracyIsPercentage
+            ? percent
+            : (value) => Number(value).toFixed(2) + "회",
+          percentage: accuracyIsPercentage,
+          basis: accuracyIsPercentage
+            ? "이 무기의 명중 이벤트 ÷ 발사 이벤트"
+            : "산탄·다중 피격 무기는 일반 탄환 명중률과 분리한 이벤트 비율",
+        },
+        headshot_hit_rate: {
+          label: "헤드샷 명중 확률",
+          value: (point) => point.headshot_hit_rate,
+          format: percent,
+          percentage: true,
+          basis: "이 무기의 머리 명중 횟수 ÷ 전체 명중 횟수; 빗나간 탄은 제외",
+        },
+        avg_damage_dealt: {
+          label: "경기당 준 피해",
+          value: (point) => point.avg_damage_dealt,
+          format: (value) => Number(value).toFixed(1),
+        },
+        avg_damage_taken: {
+          label: "경기당 받은 피해",
+          value: (point) => point.avg_damage_taken,
+          format: (value) => Number(value).toFixed(1),
+        },
+        avg_kills: {
+          label: "경기당 킬",
+          value: (point) => point.avg_kills,
+          format: (value) => Number(value).toFixed(2),
+        },
+        avg_dbnos: {
+          label: "경기당 가한 기절",
+          value: (point) => point.avg_dbnos,
+          format: (value) => Number(value).toFixed(2),
+        },
+        avg_deaths_taken: {
+          label: "경기당 사망",
+          value: (point) => point.avg_deaths_taken,
+          format: (value) => Number(value).toFixed(2),
+        },
+        match_count: {
+          label: "사용 경기 수",
+          value: (point) => point.match_count,
+          format: (value) => Math.round(Number(value)) + "경기",
+        },
+      };
+      return definitions[metric] || definitions.fight_win_rate;
+    }
+
+    function renderWeaponTrendChart() {
+      const panel = document.querySelector("#weaponTrendChart");
+      if (!panel || !activeWeaponDetail) return;
+      const series = activeWeaponDetail.trend_series?.[activeWeaponTrendGranularity];
+      const points = series?.points || [];
+      const definition = weaponTrendMetricDefinition(activeWeaponTrendMetric, activeWeaponDetail);
+      for (const button of weaponBody.querySelectorAll("[data-weapon-trend-granularity]")) {
+        button.classList.toggle(
+          "active",
+          button.dataset.weaponTrendGranularity === activeWeaponTrendGranularity
+        );
+      }
+      const metricSelect = weaponBody.querySelector("[data-weapon-trend-metric]");
+      if (metricSelect) metricSelect.value = activeWeaponTrendMetric;
+      panel.innerHTML = renderTimeSeriesLineChart(definition, points, {
+        title: activeWeaponDetail.weapon_name + " · " + definition.label,
+        totals: activeWeaponDetail.totals || {},
+        availablePointCount: series?.available_point_count || points.length,
+        truncated: Boolean(series?.truncated),
+      });
     }
 
     async function loadPlayerWeapon(formElement) {
@@ -9620,6 +10175,7 @@ _INDEX_HTML = """<!doctype html>
       }
       const payload = await response.json();
       const detail = payload.weapon;
+      activeWeaponDetail = detail;
       const totals = detail.totals;
       const effectiveRanges = (detail.effective_ranges || []).map((item, index) => `
         <div class="result-row">
@@ -9653,9 +10209,33 @@ _INDEX_HTML = """<!doctype html>
           ${resultSection("부위별 명중 확률", resultChips(hitPartEntries(totals.hit_parts, totals.hit_part_rates)))}
           ${resultSection("부위별 피격 확률", resultChips(hitPartEntries(totals.taken_hit_parts, totals.taken_hit_part_rates)))}
         </div>
+        ${resultSection("무기 성과 시간 변화", `
+          <div class="recommendation-chart-toolbar weapon-trend-toolbar">
+            <div class="recommendation-view-switch" role="group" aria-label="무기 추세 집계 기준">
+              <button class="secondary" type="button" data-weapon-trend-granularity="date">일별</button>
+              <button class="secondary" type="button" data-weapon-trend-granularity="month">월별</button>
+            </div>
+            <label>그래프 지표
+              <select data-weapon-trend-metric>
+                <option value="fight_win_rate">교전 승리 확률</option>
+                <option value="win_rate">사용 경기 승률</option>
+                <option value="accuracy">명중 지표</option>
+                <option value="headshot_hit_rate">헤드샷 명중 확률</option>
+                <option value="avg_damage_dealt">경기당 준 피해</option>
+                <option value="avg_damage_taken">경기당 받은 피해</option>
+                <option value="avg_kills">경기당 킬</option>
+                <option value="avg_dbnos">경기당 가한 기절</option>
+                <option value="avg_deaths_taken">경기당 사망</option>
+                <option value="match_count">사용 경기 수</option>
+              </select>
+            </label>
+          </div>
+          <div id="weaponTrendChart" class="metric-chart"></div>
+        `)}
         ${resultSection("효율 교전 거리", `<div class="result-list">${effectiveRanges}</div>`)}
         ${resultSection("최근 사용 경기", `<div class="result-list">${recentRows}</div>`)}
       </div>`;
+      renderWeaponTrendChart();
     }
 
     function dropZoneLocation(item) {
@@ -10487,7 +11067,7 @@ _INDEX_HTML = """<!doctype html>
           limit: String(limit),
           offset: String(offset),
         });
-        const payload = await fetch(`/workers/runs?${params.toString()}`).then((r) => r.json());
+        const payload = await requestJson(`/workers/runs?${params.toString()}`, "GET");
         if (payload.detail) throw new Error(payload.detail);
         const page = payload.worker_run_page || {
           records: payload.runs || [],
@@ -10690,7 +11270,7 @@ _INDEX_HTML = """<!doctype html>
 
     async function loadWorkerRunDetail(runId, options = {}) {
       workerRunDetail.innerHTML = `<div class="status">작업 #${escapeHtml(runId)} 상세 정보를 불러오는 중...</div>`;
-      const payload = await fetch(`/workers/runs/${encodeURIComponent(runId)}`).then((r) => r.json());
+      const payload = await requestJson(`/workers/runs/${encodeURIComponent(runId)}`, "GET");
       if (payload.detail) throw new Error(payload.detail);
       if (!payload.run) throw new Error("작업 이력이 반환되지 않았습니다.");
       renderWorkerRunDetail(payload.run);
@@ -12188,12 +12768,13 @@ _INDEX_HTML = """<!doctype html>
     }
 
     async function unregisterPlayer(shard, accountId) {
-      await fetch("/players/unregister", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ shard, account_id: accountId }),
-      });
-      await loadPlayers();
+      try {
+        await postJson("/players/unregister", { shard, account_id: accountId });
+        await loadPlayers();
+        banner.textContent = "수집 중지 완료";
+      } catch (error) {
+        banner.textContent = `수집 중지 오류: ${error.message}`;
+      }
     }
 
     async function requestJson(url, method, payload = null) {
@@ -12251,7 +12832,7 @@ _INDEX_HTML = """<!doctype html>
     }
 
     async function loadCollectorWorkerStatus() {
-      const payload = await fetch("/collector/worker/status").then((r) => r.json());
+      const payload = await requestJson("/collector/worker/status", "GET");
       renderCollectorWorkerStatus(payload.worker);
     }
 
@@ -12306,7 +12887,7 @@ _INDEX_HTML = """<!doctype html>
     }
 
     async function loadPostProcessingWorkerStatus() {
-      const payload = await fetch("/post-processing/worker/status").then((r) => r.json());
+      const payload = await requestJson("/post-processing/worker/status", "GET");
       renderPostProcessingWorkerStatus(payload.worker);
     }
 
@@ -12419,7 +13000,7 @@ _INDEX_HTML = """<!doctype html>
       button.addEventListener("click", async () => {
         const formElement = document.getElementById(button.dataset.resetAnalysisForm || "");
         if (!formElement) return;
-        resetAnalysisForm(formElement);
+        await resetAnalysisForm(formElement);
         if (formElement === workerRunFilterForm) {
           workerRunPage = {
             total: 0,
@@ -12455,24 +13036,29 @@ _INDEX_HTML = """<!doctype html>
     matchForm.elements.match_search.addEventListener("input", (event) => {
       renderMatchOptions(matchForm, event.currentTarget.value);
     });
+    clearAnalysisPlayerButton.addEventListener("click", async () => {
+      await clearAnalysisPlayerSelection();
+      banner.textContent = "분석 대상을 해제했습니다.";
+    });
 
     registerForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const formElement = event.currentTarget;
       const form = new FormData(formElement);
-      await fetch("/players/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      try {
+        await postJson("/players/register", {
           shard: form.get("shard"),
           current_name: form.get("current_name"),
           account_id: form.get("account_id") || null,
           public_profile: form.get("public_profile") === "true",
-        }),
-      });
-      formElement.reset();
-      applyPublicProfileDefault();
-      await loadPlayers();
+        });
+        formElement.reset();
+        applyPublicProfileDefault();
+        await loadPlayers();
+        banner.textContent = "유저 등록 완료";
+      } catch (error) {
+        banner.textContent = `유저 등록 오류: ${error.message}`;
+      }
     });
 
     profileForm.addEventListener("submit", async (event) => {
@@ -12481,7 +13067,6 @@ _INDEX_HTML = """<!doctype html>
       try {
         const player = selectedRegisteredPlayer(formElement);
         await loadPlayerProfile(player.account_id, player.shard);
-        clearRegisteredPlayerSearch(formElement);
         banner.textContent = "전적 조회 완료";
       } catch (error) {
         profileBody.textContent = `오류: ${error.message}`;
@@ -12512,11 +13097,10 @@ _INDEX_HTML = """<!doctype html>
       const formElement = event.currentTarget;
       try {
         await loadPlayerTrends(formElement);
-        clearRegisteredPlayerSearch(formElement);
         banner.textContent = "KST 추세 조회 완료";
       } catch (error) {
         trendSummary.textContent = `오류: ${error.message}`;
-        trendBody.innerHTML = `<tr><td colspan="9">오류: ${escapeHtml(error.message)}</td></tr>`;
+        trendBody.innerHTML = `<tr><td colspan="11">오류: ${escapeHtml(error.message)}</td></tr>`;
         trendCards.innerHTML = `<span class="result-caption">오류: ${escapeHtml(error.message)}</span>`;
         banner.textContent = `오류: ${error.message}`;
       }
@@ -12527,12 +13111,27 @@ _INDEX_HTML = """<!doctype html>
       const formElement = event.currentTarget;
       try {
         await loadPlayerWeapon(formElement);
-        clearRegisteredPlayerSearch(formElement);
         banner.textContent = "무기 조회 완료";
       } catch (error) {
         weaponBody.textContent = `오류: ${error.message}`;
         banner.textContent = `오류: ${error.message}`;
       }
+    });
+    weaponBody.addEventListener("click", (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("button[data-weapon-trend-granularity]")
+        : null;
+      if (!button || !activeWeaponDetail) return;
+      activeWeaponTrendGranularity = button.dataset.weaponTrendGranularity || "month";
+      renderWeaponTrendChart();
+    });
+    weaponBody.addEventListener("change", (event) => {
+      const select = event.target instanceof Element
+        ? event.target.closest("select[data-weapon-trend-metric]")
+        : null;
+      if (!select || !activeWeaponDetail) return;
+      activeWeaponTrendMetric = select.value || "fight_win_rate";
+      renderWeaponTrendChart();
     });
 
     document.querySelector("#mapRegionForm").addEventListener("submit", async (event) => {
@@ -12556,7 +13155,6 @@ _INDEX_HTML = """<!doctype html>
           player.shard,
           Number(form.get("min_matches") || 1),
         );
-        clearRegisteredPlayerSearch(formElement);
         banner.textContent = "추천 조회 완료";
       } catch (error) {
         recommendationBody.textContent = `오류: ${error.message}`;
@@ -12569,7 +13167,6 @@ _INDEX_HTML = """<!doctype html>
       const formElement = event.currentTarget;
       try {
         await loadDropZoneAnalysis(formElement);
-        clearRegisteredPlayerSearch(formElement);
         banner.textContent = "낙하 지역 분석 완료";
       } catch (error) {
         dropZoneBody.textContent = `오류: ${error.message}`;
@@ -12609,7 +13206,6 @@ _INDEX_HTML = """<!doctype html>
           player.account_id,
           player.shard,
         );
-        clearRegisteredPlayerSearch(formElement);
         banner.textContent = "매치 조회 완료";
       } catch (error) {
         matchBody.textContent = `오류: ${error.message}`;
@@ -13540,6 +14136,14 @@ _INDEX_HTML = """<!doctype html>
     });
 
     trendViewControls.addEventListener("click", (event) => {
+      const granularityButton = event.target instanceof Element
+        ? event.target.closest("button[data-trend-granularity]")
+        : null;
+      if (granularityButton) {
+        trendForm.elements.granularity.value = granularityButton.dataset.trendGranularity || "date";
+        trendForm.requestSubmit();
+        return;
+      }
       const button = event.target instanceof Element
         ? event.target.closest("button[data-trend-view]")
         : null;
@@ -13680,9 +14284,14 @@ _INDEX_HTML = """<!doctype html>
       .then(() => deletionRequestHighlightId ? loadDataDeletionRequestDetail(deletionRequestHighlightId) : null)
       .then(() => { banner.textContent = "localhost 전용 관리 화면"; })
       .catch((error) => { banner.textContent = `오류: ${error.message}`; });
-    setInterval(loadCollectorWorkerStatus, 10000);
-    setInterval(loadPostProcessingWorkerStatus, 10000);
-    setInterval(loadWorkerRuns, 30000);
+    function runBackgroundRefresh(label, task) {
+      task().catch((error) => {
+        banner.textContent = `${label} 자동 갱신 오류: ${error.message}`;
+      });
+    }
+    setInterval(() => runBackgroundRefresh("수집기", loadCollectorWorkerStatus), 10000);
+    setInterval(() => runBackgroundRefresh("후처리", loadPostProcessingWorkerStatus), 10000);
+    setInterval(() => runBackgroundRefresh("작업 이력", loadWorkerRuns), 30000);
     setInterval(() => loadOperationalDrills().catch(() => {}), 30000);
     setInterval(() => {
       loadDataDeletionRequests().catch((error) => { dataDeletionStatus.textContent = `Error: ${error.message}`; });
