@@ -114,7 +114,10 @@ class DatabaseSchemaTests(unittest.TestCase):
         ]:
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table_name}", schema)
 
-        self.assertEqual(SCHEMA_VERSION, 24)
+        self.assertEqual(SCHEMA_VERSION, 25)
+        self.assertIn("vehicle_type VARCHAR(64)", schema)
+        self.assertIn("vehicle_id VARCHAR(128)", schema)
+        self.assertIn("vehicle_unique_id BIGINT", schema)
         self.assertIn(
             "artifact_name,\n                account_id,\n                renderer_version",
             schema,

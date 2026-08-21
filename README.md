@@ -335,14 +335,24 @@ GET /replay/artifacts?artifact_type=&limit=50
 GET /replay/artifacts/{artifact_id}/file
 ```
 
-The local web app includes a 2D replay player that loads generated `timeline` JSON artifacts, uses cached official
-map PNG assets as the canvas background when available, and renders movement, plane route, phase rings, landing,
-combat, care-package, and revive markers when telemetry has the related events. The player also includes a
-time-sorted event list and a detail panel so fight, landing, and care-package events can be clicked to seek directly
-to that moment. Timeline JSON also carries the tracked player's
-team roster and marks registered teammates, so the local replay panel can show who was in the squad for that match.
-When teammate position samples exist, the player can draw teammate route overlays with current-position labels.
-The replay view also supports map zoom and tracked-player follow mode for inspecting dense fight moments.
+The local web app includes a 2D replay player that loads generated `player-timeline-v9` JSON artifacts, uses cached
+official map PNG assets as the canvas background when available, and renders movement, plane route, phase rings,
+landing, combat, care-package, and revive markers when telemetry has the related events. The player includes one
+time-sorted event list and a KST detail panel, so a shot, verified hit, DBNO, kill, death, revive, landing, or care
+package event can seek playback directly to that moment. Movement is classified as airborne, vehicle, on-foot, or
+DBNO for the tracked player and every available teammate track. Actor colors remain distinct while movement colors,
+combat symbols, and engagement rings keep event meaning consistent.
+
+Attack normalization requires a non-empty PUBG weapon item ID. Firearm shots, throwable uses, melee attacks, and
+other attacks are classified separately from item category/subcategory with item-code fallbacks for partial older
+events. Empty weapon placeholder attacks remain in immutable raw telemetry but are not presented as measured shots.
+
+Timeline JSON carries the tracked player's team roster, teammate position/combat tracks, registered-player emphasis,
+engagement clusters, and vehicle identity when telemetry provides it. A shot always gets a location marker. A
+direction line is only marked as verified when the telemetry event contains both attacker and target coordinates;
+the PUBG telemetry schema does not expose a general aim vector for a missed shot, so the replay never invents one.
+The replay view also supports layer toggles, map zoom, tracked-player follow mode, player/match filtering, and a
+scrollable event inspector for dense fights.
 
 Run the Discord bot MVP:
 
@@ -414,6 +424,12 @@ Fight win/loss lookup uses `!교전 닉네임 [shard]` or `!pubg-fights nickname
 `!추세 닉네임 [month|week|date|hour] [shard] [key=value filters]` or `!pubg-trends`; both share the
 `profile_read` permission group. When `PUBG_LOCAL_WEB_BASE_URL` is set, trend replies include a prefilled local
 manager link.
+
+The local player-analysis view also provides KST time-of-day analysis and player, weapon, and map comparison. Time
+rows separate match share, chicken/win rate, fights per match, accuracy, headshot share among hits, and average
+damage with their sample denominators. Comparison supports two to five catalog-selected subjects, shared detailed
+filters, selectable metrics, and chart/table views. Player selection is retained while moving between weapon,
+trend, time, comparison, and match tools, while profile search itself starts and returns to an empty query field.
 If `PUBG_LOCAL_WEB_BASE_URL` is set, weapon+attachment recommendation rows include local web evidence links for
 supporting combat snapshots, and `pubg-alert-history` rows include local alert-detail links, a filtered local manager
 page link, and a filtered CSV export link. This can be set from the local manager's `Local Web Link` section or through

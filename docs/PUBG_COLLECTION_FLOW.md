@@ -314,6 +314,13 @@ audit read 1,065,488,505 bytes across 3,566 latest-version files: 1,783 timeline
 configured-root confinement, catalog size and SHA-256 checks, JSON/JPEG decoding, schema and identity checks, monotonic
 time/index checks, map bounds, count contracts, and discontinuous-path checks. The audit found zero issues.
 
+The 2026-08-22 combat replay rebuild advances playable timelines to `player-timeline-v9`. Movement parser v6 stores
+vehicle identity and normalizes all tracked-team position and combat events. It rejects empty weapon placeholder
+attacks and separates firearm shots, throwable uses, melee attacks, and other attacks. Timeline v9 adds per-actor
+attacks, hits, DBNOs, kills/deaths, finishes, revives, engagement clusters, actor-aware movement modes, and verified
+direction metadata. The full retained timeline set was regenerated: 1,845 generated, zero failed, and zero stale
+candidates remaining. See `docs/REPLAY_COMBAT_AND_COMPARISON_2026-08-22.md` for display and evidence contracts.
+
 ## Implemented Automatic Post-processing Worker Slice
 
 The current local runtime can automate the analysis and replay-artifact side after raw telemetry has been stored:

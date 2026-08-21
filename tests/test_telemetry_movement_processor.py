@@ -14,6 +14,152 @@ from pubg_ai.telemetry_movement_processor import (
 
 
 class TelemetryMovementProcessorTests(unittest.TestCase):
+    def test_classifies_throwables_and_skips_empty_weapon_attacks(self) -> None:
+        attacker = {
+            "accountId": "account.tracked",
+            "location": {"x": 10000, "y": 20000, "z": 0},
+        }
+        events = [
+            {
+                "_T": "LogPlayerAttack",
+                "_D": "2026-08-21T00:00:10Z",
+                "attackType": "Weapon",
+                "attacker": attacker,
+                "weapon": {
+                    "itemId": "Item_Weapon_SmokeBomb_C",
+                    "category": "Equipment",
+                    "subCategory": "Throwable",
+                },
+                "common": {"isGame": 1},
+            },
+            {
+                "_T": "LogPlayerAttack",
+                "_D": "2026-08-21T00:00:11Z",
+                "attackType": "Weapon",
+                "attacker": attacker,
+                "weapon": {
+                    "itemId": "Item_Weapon_Pan_C",
+                    "category": "Weapon",
+                    "subCategory": "Melee",
+                },
+                "common": {"isGame": 1},
+            },
+            {
+                "_T": "LogPlayerAttack",
+                "_D": "2026-08-21T00:00:12Z",
+                "attackType": "Weapon",
+                "attacker": attacker,
+                "weapon": {"itemId": "", "category": "", "subCategory": ""},
+                "common": {"isGame": 1},
+            },
+        ]
+
+        combat = parse_combat_location_events(
+            events,
+            match_id="match-attacks",
+            tracked_account_ids={"account.tracked"},
+        )
+
+        self.assertEqual([event.action for event in combat], ["throw", "melee"])
+        self.assertEqual(combat[0].damage_causer_name, "Item_Weapon_SmokeBomb_C")
+        self.assertEqual(combat[0].damage_type_category, "Damage_Throwable")
+        self.assertEqual(combat[1].damage_type_category, "Damage_Melee")
+
+    def test_parses_team_vehicle_shots_and_verified_hit_directions(self) -> None:
+        events = [
+            {
+                "_T": "LogPlayerPosition",
+                "_D": "2026-08-21T00:00:10Z",
+                "character": {
+                    "accountId": "account.teammate",
+                    "location": {"x": 10000, "y": 20000, "z": 0},
+                    "isInVehicle": True,
+                    "isDBNO": False,
+                },
+                "vehicle": {
+                    "vehicleType": "WheeledVehicle",
+                    "vehicleId": "Dacia_A_01_v2_C",
+                    "vehicleUniqueId": 4321,
+                },
+                "elapsedTime": 70,
+                "numAlivePlayers": 80,
+                "common": {"isGame": 1},
+            },
+            {
+                "_T": "LogPlayerAttack",
+                "_D": "2026-08-21T00:00:11Z",
+                "attackId": 991,
+                "attackType": "Weapon",
+                "fireWeaponStackCount": 4,
+                "attacker": {
+                    "accountId": "account.teammate",
+                    "location": {"x": 10100, "y": 20100, "z": 0},
+                },
+                "weapon": {"itemId": "Item_Weapon_HK416_C"},
+                "common": {"isGame": 1},
+            },
+            {
+                "_T": "LogPlayerTakeDamage",
+                "_D": "2026-08-21T00:00:12Z",
+                "attackId": 991,
+                "attacker": {
+                    "accountId": "account.teammate",
+                    "location": {"x": 10100, "y": 20100, "z": 0},
+                },
+                "victim": {
+                    "accountId": "account.enemy",
+                    "location": {"x": 13100, "y": 24100, "z": 0},
+                },
+                "damage": 31.5,
+                "damageReason": "TorsoShot",
+                "damageTypeCategory": "Damage_Gun",
+                "damageCauserName": "WeapHK416_C",
+                "common": {"isGame": 1},
+            },
+            {
+                "_T": "LogPlayerTakeDamage",
+                "_D": "2026-08-21T00:00:13Z",
+                "attackId": 992,
+                "attacker": {
+                    "accountId": "account.enemy",
+                    "location": {"x": 15100, "y": 25100, "z": 0},
+                },
+                "victim": {
+                    "accountId": "account.teammate",
+                    "location": {"x": 11100, "y": 22100, "z": 0},
+                },
+                "damage": 22.0,
+                "damageReason": "ArmShot",
+                "damageTypeCategory": "Damage_Gun",
+                "damageCauserName": "WeapAK47_C",
+                "common": {"isGame": 1},
+            },
+        ]
+
+        samples = parse_position_samples(
+            events,
+            match_id="match-team",
+            tracked_account_ids={"account.tracked", "account.teammate"},
+        )
+        combat = parse_combat_location_events(
+            events,
+            match_id="match-team",
+            tracked_account_ids={"account.tracked", "account.teammate"},
+        )
+
+        self.assertEqual(len(samples), 1)
+        self.assertEqual(samples[0].account_id, "account.teammate")
+        self.assertEqual(samples[0].vehicle_type, "WheeledVehicle")
+        self.assertEqual(samples[0].vehicle_id, "Dacia_A_01_v2_C")
+        self.assertEqual(samples[0].vehicle_unique_id, 4321)
+        self.assertEqual([event.action for event in combat], ["shot", "hit_caused", "hit_taken"])
+        self.assertEqual(combat[0].damage_causer_name, "Item_Weapon_HK416_C")
+        self.assertIsNone(combat[0].related_account_id)
+        self.assertAlmostEqual(combat[1].distance_m or 0.0, 50.0)
+        self.assertEqual(combat[1].related_account_id, "account.enemy")
+        self.assertEqual(combat[2].account_id, "account.teammate")
+        self.assertEqual(combat[2].related_account_id, "account.enemy")
+
     def test_parses_tracked_position_landing_and_summary_distance(self) -> None:
         events = [
             {

@@ -9,7 +9,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 
 class DatabaseError(RuntimeError):
@@ -76,13 +76,15 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 applied += 1
             if _ensure_replay_artifact_versioned_unique_index(cursor, config.database):
                 applied += 1
+            if _ensure_player_position_vehicle_columns(cursor, config.database):
+                applied += 1
             cursor.execute(
                 """
                 INSERT INTO schema_migrations (version, description, applied_at_kst)
                 VALUES (%s, %s, NOW(6))
                 ON DUPLICATE KEY UPDATE description = VALUES(description)
                 """,
-                (SCHEMA_VERSION, "versioned replay artifacts and per-account telemetry state"),
+                (SCHEMA_VERSION, "team combat replay events and vehicle-aware position samples"),
             )
             applied += 1
     finally:
@@ -1142,6 +1144,9 @@ def schema_statements() -> list[str]:
             y FLOAT NULL,
             z FLOAT NULL,
             is_in_vehicle TINYINT(1) NULL,
+            vehicle_type VARCHAR(64) NULL,
+            vehicle_id VARCHAR(128) NULL,
+            vehicle_unique_id BIGINT NULL,
             is_in_blue_zone TINYINT(1) NULL,
             is_in_red_zone TINYINT(1) NULL,
             in_special_zone VARCHAR(64) NULL,
@@ -1581,6 +1586,35 @@ def _ensure_replay_artifact_versioned_unique_index(cursor: Any, database: str) -
             )
             """
         )
+    return True
+
+
+def _ensure_player_position_vehicle_columns(cursor: Any, database: str) -> bool:
+    expected = {
+        "vehicle_type": "VARCHAR(64) NULL AFTER is_in_vehicle",
+        "vehicle_id": "VARCHAR(128) NULL AFTER vehicle_type",
+        "vehicle_unique_id": "BIGINT NULL AFTER vehicle_id",
+    }
+    cursor.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = %s
+          AND table_name = 'player_position_samples'
+          AND column_name IN ('vehicle_type', 'vehicle_id', 'vehicle_unique_id')
+        """,
+        (database,),
+    )
+    existing = {
+        str(row.get("column_name") or row.get("COLUMN_NAME") or "")
+        for row in cursor.fetchall()
+    }
+    missing = [(name, definition) for name, definition in expected.items() if name not in existing]
+    if not missing:
+        return False
+
+    clauses = ", ".join(f"ADD COLUMN {name} {definition}" for name, definition in missing)
+    cursor.execute(f"ALTER TABLE player_position_samples {clauses}")
     return True
 
 

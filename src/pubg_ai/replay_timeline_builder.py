@@ -18,7 +18,7 @@ from pubg_ai.replay_storage import (
 from pubg_ai.time_utils import KST, now_kst, to_kst
 
 
-TIMELINE_RENDERER_VERSION = "player-timeline-v6"
+TIMELINE_RENDERER_VERSION = "player-timeline-v9"
 MAX_PATH_SAMPLE_GAP_SECONDS = 45.0
 MAX_PATH_HORIZONTAL_SPEED_MPS = 120.0
 TRANSPORT_AIRCRAFT_ALTITUDE_CM = 100000.0
@@ -194,15 +194,34 @@ class ReplayTimelineProcessor:
         positions = _filter_timeline_positions(positions, plane_route=plane_route)
         phase_events = self._load_phase_events(match_id=match_id, world_size_cm=world_size_cm)
         team_members = self._load_team_members(match_id=match_id, account_id=account_id, shard=str(job["shard"]))
+        self_member = next(
+            (member for member in team_members if member.get("account_id") == account_id),
+            {
+                "account_id": account_id,
+                "name": _optional_text(job.get("current_name")),
+                "registered": True,
+                "is_self": True,
+                "is_ai_or_bot": False,
+            },
+        )
+        _annotate_actor_events(combat_events, self_member)
+        _annotate_actor_events(landings, self_member)
         team_tracks = self._load_team_position_tracks(
             match_id=match_id,
             tracked_account_id=account_id,
             team_members=team_members,
+            shard=str(job["shard"]),
             world_size_cm=world_size_cm,
             plane_route=plane_route,
         )
         _set_team_position_counts(team_members=team_members, tracked_account_id=account_id, positions=positions)
         _set_team_track_counts(team_members=team_members, team_tracks=team_tracks)
+        _set_team_combat_counts(
+            team_members=team_members,
+            tracked_account_id=account_id,
+            combat_events=combat_events,
+            team_tracks=team_tracks,
+        )
         anchor_events = list(positions)
         for track in team_tracks:
             anchor_events.extend(track["positions"])
@@ -217,12 +236,35 @@ class ReplayTimelineProcessor:
         _apply_timeline_clock(care_packages, clock_anchors)
         _apply_timeline_clock(phase_events, clock_anchors)
         _assign_position_segments(positions)
+        drop_starts = _derive_drop_starts(positions)
+        _annotate_actor_events(drop_starts, self_member)
+        _assign_movement_modes(positions, drop_starts=drop_starts, landings=landings)
         for track in team_tracks:
             _apply_timeline_clock(track["positions"], clock_anchors)
+            _apply_timeline_clock(track["landings"], clock_anchors)
+            _apply_timeline_clock(track["combat_events"], clock_anchors)
             _assign_position_segments(track["positions"])
             track["drop_starts"] = _derive_drop_starts(track["positions"])
+            actor = {
+                "account_id": track.get("account_id"),
+                "name": track.get("name"),
+                "registered": track.get("registered"),
+                "is_self": False,
+                "is_ai_or_bot": track.get("is_ai_or_bot"),
+            }
+            _annotate_actor_events(track["landings"], actor)
+            _annotate_actor_events(track["drop_starts"], actor)
+            _assign_movement_modes(
+                track["positions"],
+                drop_starts=track["drop_starts"],
+                landings=track["landings"],
+            )
         _apply_plane_route_clock(plane_route, clock_anchors)
-        drop_starts = _derive_drop_starts(positions)
+        all_combat_events = [
+            *combat_events,
+            *(event for track in team_tracks for event in track["combat_events"]),
+        ]
+        engagements = _derive_engagements(all_combat_events)
 
         return {
             "schema_version": TIMELINE_RENDERER_VERSION,
@@ -261,9 +303,11 @@ class ReplayTimelineProcessor:
                 "positions": len(positions),
                 "team_tracks": len(team_tracks),
                 "team_position_samples": sum(track["sample_count"] for track in team_tracks),
+                "team_combat_events": sum(len(track["combat_events"]) for track in team_tracks),
                 "drop_starts": len(drop_starts),
                 "landings": len(landings),
                 "combat_events": len(combat_events),
+                "engagements": len(engagements),
                 "care_packages": len(care_packages),
                 "has_plane_route": plane_route is not None,
                 "phase_events": len(phase_events),
@@ -275,6 +319,7 @@ class ReplayTimelineProcessor:
             "drop_starts": drop_starts,
             "landings": landings,
             "combat_events": combat_events,
+            "engagements": engagements,
             "care_packages": care_packages,
         }
 
@@ -292,6 +337,9 @@ class ReplayTimelineProcessor:
                     y,
                     z,
                     is_in_vehicle,
+                    vehicle_type,
+                    vehicle_id,
+                    vehicle_unique_id,
                     is_in_blue_zone,
                     is_in_red_zone,
                     in_special_zone,
@@ -317,6 +365,10 @@ class ReplayTimelineProcessor:
                 "z": _optional_float(row.get("z")),
                 "map": _map_point(row.get("x"), row.get("y"), world_size_cm),
                 "is_in_vehicle": _optional_bool(row.get("is_in_vehicle")),
+                "vehicle_type": _optional_text(row.get("vehicle_type")),
+                "vehicle_id": _optional_text(row.get("vehicle_id")),
+                "vehicle_unique_id": _optional_int(row.get("vehicle_unique_id")),
+                "vehicle_label": _vehicle_label(row.get("vehicle_id"), row.get("vehicle_type")),
                 "is_in_blue_zone": _optional_bool(row.get("is_in_blue_zone")),
                 "is_in_red_zone": _optional_bool(row.get("is_in_red_zone")),
                 "in_special_zone": _optional_text(row.get("in_special_zone")),
@@ -331,6 +383,7 @@ class ReplayTimelineProcessor:
         match_id: str,
         tracked_account_id: str,
         team_members: list[dict[str, Any]],
+        shard: str,
         world_size_cm: float,
         plane_route: Mapping[str, Any] | None,
     ) -> list[dict[str, Any]]:
@@ -345,8 +398,20 @@ class ReplayTimelineProcessor:
                 world_size_cm=world_size_cm,
             )
             positions = _filter_timeline_positions(positions, plane_route=plane_route)
-            if not positions:
+            landings = self._load_landings(
+                match_id=match_id,
+                account_id=account_id,
+                world_size_cm=world_size_cm,
+            )
+            combat_events = self._load_combat_events(
+                match_id=match_id,
+                account_id=account_id,
+                shard=shard,
+                world_size_cm=world_size_cm,
+            )
+            if not positions and not landings and not combat_events:
                 continue
+            _annotate_actor_events(combat_events, member)
             tracks.append(
                 {
                     "account_id": account_id,
@@ -358,6 +423,8 @@ class ReplayTimelineProcessor:
                     "is_ai_or_bot": bool(member.get("is_ai_or_bot")),
                     "sample_count": len(positions),
                     "positions": positions,
+                    "landings": landings,
+                    "combat_events": combat_events,
                 }
             )
         return tracks
@@ -422,7 +489,8 @@ class ReplayTimelineProcessor:
                     events.z,
                     events.related_x,
                     events.related_y,
-                    events.related_z
+                    events.related_z,
+                    events.raw_event
                 FROM player_combat_location_events events
                 LEFT JOIN match_participants related_participant
                     ON related_participant.match_id = events.match_id
@@ -437,8 +505,13 @@ class ReplayTimelineProcessor:
             )
             rows = cursor.fetchall()
 
-        return [
-            {
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            raw_event = _json_object(row.get("raw_event"))
+            weapon = _json_object(raw_event.get("weapon"))
+            weapon_code = _optional_text(weapon.get("itemId")) or _optional_text(row.get("damage_causer_name"))
+            result.append(
+                {
                 "event_index": _int(row.get("event_index")),
                 "event_type": _optional_text(row.get("event_type")),
                 "action": _optional_text(row.get("action")),
@@ -453,6 +526,12 @@ class ReplayTimelineProcessor:
                 "damage_type_category": _optional_text(row.get("damage_type_category")),
                 "damage_causer_name": _optional_text(row.get("damage_causer_name")),
                 "damage_causer_label": _damage_causer_label(row.get("damage_causer_name")),
+                "attack_id": _optional_int(raw_event.get("attackId")),
+                "attack_type": _optional_text(raw_event.get("attackType")),
+                "fire_weapon_stack_count": _optional_int(raw_event.get("fireWeaponStackCount")),
+                "damage": _optional_float(raw_event.get("damage")),
+                "weapon_code": weapon_code,
+                "weapon_label": _weapon_label(weapon_code),
                 "damage_reason": _optional_text(row.get("damage_reason")),
                 "is_headshot": bool(row.get("is_headshot")),
                 "distance_m": _optional_float(row.get("distance_m")),
@@ -464,9 +543,13 @@ class ReplayTimelineProcessor:
                 "related_y": _optional_float(row.get("related_y")),
                 "related_z": _optional_float(row.get("related_z")),
                 "related_map": _map_point(row.get("related_x"), row.get("related_y"), world_size_cm),
-            }
-            for row in rows
-        ]
+                "has_verified_direction": (
+                    _map_point(row.get("x"), row.get("y"), world_size_cm) is not None
+                    and _map_point(row.get("related_x"), row.get("related_y"), world_size_cm) is not None
+                ),
+                }
+            )
+        return result
 
     def _load_team_members(self, *, match_id: str, account_id: str, shard: str) -> list[dict[str, Any]]:
         with self.connection.cursor() as cursor:
@@ -535,6 +618,7 @@ class ReplayTimelineProcessor:
                 "public_profile": _optional_bool(row.get("public_profile")),
                 "is_self": bool(row.get("is_self")),
                 "position_sample_count": 0,
+                "combat_event_count": 0,
             }
             for row in rows
         ]
@@ -984,6 +1068,156 @@ def _derive_drop_starts(positions: list[dict[str, Any]]) -> list[dict[str, Any]]
     return starts
 
 
+def _assign_movement_modes(
+    positions: list[dict[str, Any]],
+    *,
+    drop_starts: list[dict[str, Any]],
+    landings: list[dict[str, Any]],
+) -> None:
+    landing_times = sorted(
+        time_value
+        for landing in landings
+        if (time_value := _optional_float(landing.get("time_seconds"))) is not None
+    )
+    airborne_intervals: list[tuple[float, float]] = []
+    for start in drop_starts:
+        start_time = _optional_float(start.get("time_seconds"))
+        if start_time is None:
+            continue
+        landing_time = next((value for value in landing_times if value >= start_time), float("inf"))
+        airborne_intervals.append((start_time, landing_time))
+
+    labels = {
+        "airborne": "낙하 중",
+        "vehicle": "차량 이동",
+        "on_foot": "도보 이동",
+        "dbno": "기절 상태",
+    }
+    for position in positions:
+        time_value = _optional_float(position.get("time_seconds"))
+        if position.get("is_dbno") is True:
+            mode = "dbno"
+        elif position.get("is_in_vehicle") is True:
+            mode = "vehicle"
+        elif time_value is not None and any(start <= time_value <= end for start, end in airborne_intervals):
+            mode = "airborne"
+        else:
+            mode = "on_foot"
+        position["movement_mode"] = mode
+        position["movement_label"] = labels[mode]
+
+
+def _annotate_actor_events(events: list[dict[str, Any]], actor: Mapping[str, Any]) -> None:
+    for event in events:
+        event["actor_account_id"] = _optional_text(actor.get("account_id"))
+        event["actor_name"] = _optional_text(actor.get("name"))
+        event["actor_registered"] = bool(actor.get("registered"))
+        event["actor_is_self"] = bool(actor.get("is_self"))
+        event["actor_is_ai_or_bot"] = bool(actor.get("is_ai_or_bot"))
+
+
+def _derive_engagements(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    combat_actions = {
+        "shot",
+        "throw",
+        "melee",
+        "attack",
+        "hit_caused",
+        "hit_taken",
+        "dbno_caused",
+        "dbno_taken",
+        "kill",
+        "death",
+        "finish",
+        "finished_taken",
+    }
+    by_actor: dict[str, list[dict[str, Any]]] = {}
+    for event in events:
+        actor_id = _optional_text(event.get("actor_account_id"))
+        time_value = _optional_float(event.get("time_seconds"))
+        if actor_id is None or time_value is None or event.get("action") not in combat_actions:
+            continue
+        by_actor.setdefault(actor_id, []).append(event)
+
+    engagements: list[dict[str, Any]] = []
+    for actor_id, actor_events in by_actor.items():
+        actor_events.sort(key=lambda item: (_optional_float(item.get("time_seconds")) or 0.0, _int(item.get("event_index"))))
+        clusters: list[list[dict[str, Any]]] = []
+        for event in actor_events:
+            if not clusters:
+                clusters.append([event])
+                continue
+            previous_time = _optional_float(clusters[-1][-1].get("time_seconds")) or 0.0
+            current_time = _optional_float(event.get("time_seconds")) or 0.0
+            if current_time - previous_time > 20.0:
+                clusters.append([event])
+            else:
+                clusters[-1].append(event)
+
+        for cluster_index, cluster in enumerate(clusters, start=1):
+            actions = [str(event.get("action") or "") for event in cluster]
+            map_points = [event["map"] for event in cluster if isinstance(event.get("map"), Mapping)]
+            related_ids = sorted(
+                {
+                    related_id
+                    for event in cluster
+                    if (related_id := _optional_text(event.get("related_account_id"))) is not None
+                }
+            )
+            weapon_labels = sorted(
+                {
+                    weapon
+                    for event in cluster
+                    if (weapon := _optional_text(event.get("weapon_label") or event.get("damage_causer_label"))) is not None
+                }
+            )
+            wins = actions.count("kill") + actions.count("dbno_caused")
+            losses = actions.count("death") + actions.count("dbno_taken")
+            outcome = "won" if wins > losses else "lost" if losses > wins else "contested"
+            first = cluster[0]
+            last = cluster[-1]
+            engagements.append(
+                {
+                    "engagement_id": f"{_short_account_id(actor_id)}-{cluster_index}",
+                    "actor_account_id": actor_id,
+                    "actor_name": first.get("actor_name"),
+                    "actor_registered": bool(first.get("actor_registered")),
+                    "actor_is_self": bool(first.get("actor_is_self")),
+                    "start_time_seconds": first.get("time_seconds"),
+                    "end_time_seconds": last.get("time_seconds"),
+                    "start_at_kst": first.get("event_at_kst"),
+                    "end_at_kst": last.get("event_at_kst"),
+                    "event_count": len(cluster),
+                    "shots": actions.count("shot"),
+                    "throws": actions.count("throw"),
+                    "melee_attacks": actions.count("melee"),
+                    "hits_caused": actions.count("hit_caused"),
+                    "hits_taken": actions.count("hit_taken"),
+                    "dbnos_caused": actions.count("dbno_caused"),
+                    "dbnos_taken": actions.count("dbno_taken"),
+                    "kills": actions.count("kill"),
+                    "deaths": actions.count("death"),
+                    "damage_caused": round(
+                        sum(_optional_float(event.get("damage")) or 0.0 for event in cluster if event.get("action") == "hit_caused"),
+                        1,
+                    ),
+                    "outcome": outcome,
+                    "opponent_account_ids": related_ids,
+                    "weapons": weapon_labels,
+                    "map": (
+                        {
+                            "x_pct": sum(float(point["x_pct"]) for point in map_points) / len(map_points),
+                            "y_pct": sum(float(point["y_pct"]) for point in map_points) / len(map_points),
+                        }
+                        if map_points
+                        else None
+                    ),
+                }
+            )
+    engagements.sort(key=lambda item: (_optional_float(item.get("start_time_seconds")) or 0.0, str(item.get("actor_name") or "")))
+    return engagements
+
+
 def _record_datetime(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         return to_kst(value)
@@ -1036,6 +1270,25 @@ def _damage_causer_label(value: Any) -> str | None:
     return translate_code(text, "damage_causer")
 
 
+def _weapon_label(value: Any) -> str | None:
+    text = _optional_text(value)
+    if text is None:
+        return None
+    category = "item" if text.startswith("Item_") else "damage_causer"
+    return translate_code(text, category)
+
+
+def _vehicle_label(vehicle_id: Any, vehicle_type: Any) -> str | None:
+    code = _optional_text(vehicle_id) or _optional_text(vehicle_type)
+    if code is None:
+        return None
+    translated = translate_code(code, "vehicle")
+    if translated != code:
+        return translated
+    readable = code.removeprefix("BP_").removesuffix("_C").replace("_", " ").strip()
+    return readable or code
+
+
 def _set_team_position_counts(
     *,
     team_members: list[dict[str, Any]],
@@ -1056,6 +1309,19 @@ def _set_team_track_counts(*, team_members: list[dict[str, Any]], team_tracks: l
             member["position_sample_count"] = counts[account_id]
 
 
+def _set_team_combat_counts(
+    *,
+    team_members: list[dict[str, Any]],
+    tracked_account_id: str,
+    combat_events: list[dict[str, Any]],
+    team_tracks: list[dict[str, Any]],
+) -> None:
+    counts = {track["account_id"]: len(track["combat_events"]) for track in team_tracks}
+    counts[tracked_account_id] = len(combat_events)
+    for member in team_members:
+        member["combat_event_count"] = counts.get(member.get("account_id"), 0)
+
+
 def _json_list(value: Any) -> list[Any]:
     if isinstance(value, str):
         try:
@@ -1063,6 +1329,15 @@ def _json_list(value: Any) -> list[Any]:
         except json.JSONDecodeError:
             return []
     return value if isinstance(value, list) else []
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+    return dict(value) if isinstance(value, Mapping) else {}
 
 
 def _datetime_record(value: Any) -> str | None:

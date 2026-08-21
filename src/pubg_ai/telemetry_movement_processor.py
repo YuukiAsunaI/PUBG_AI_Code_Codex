@@ -21,7 +21,7 @@ from pubg_ai.time_utils import now_kst, to_kst
 
 
 PROCESSOR_NAME = "movement"
-PARSER_VERSION = "movement-v4"
+PARSER_VERSION = "movement-v6"
 MAX_CONTINUOUS_SAMPLE_GAP_SECONDS = 45.0
 MAX_CONTINUOUS_HORIZONTAL_SPEED_MPS = 120.0
 TRANSPORT_AIRCRAFT_ALTITUDE_CM = 100000.0
@@ -49,6 +49,9 @@ class PositionSample:
     in_special_zone: str | None
     is_dbno: bool | None
     zone: Any
+    vehicle_type: str | None = None
+    vehicle_id: str | None = None
+    vehicle_unique_id: int | None = None
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
@@ -298,7 +301,7 @@ class TelemetryMovementProcessor:
                 combat_location_events = parse_combat_location_events(
                     events,
                     match_id=match_id,
-                    tracked_account_ids=tracked_account_ids,
+                    tracked_account_ids=movement_account_ids,
                 )
                 care_package_events = parse_care_package_events(events, match_id=match_id)
                 plane_route = parse_plane_route(
@@ -491,7 +494,7 @@ class TelemetryMovementProcessor:
                 ("player_position_samples", movement_account_ids),
                 ("player_landing_events", movement_account_ids),
                 ("player_movement_summaries", tracked_account_ids),
-                ("player_combat_location_events", tracked_account_ids),
+                ("player_combat_location_events", movement_account_ids),
             )
             for table_name, account_ids in table_scopes:
                 if account_ids:
@@ -527,6 +530,9 @@ class TelemetryMovementProcessor:
                 sample.y,
                 sample.z,
                 sample.is_in_vehicle,
+                sample.vehicle_type,
+                sample.vehicle_id,
+                sample.vehicle_unique_id,
                 sample.is_in_blue_zone,
                 sample.is_in_red_zone,
                 sample.in_special_zone,
@@ -553,6 +559,9 @@ class TelemetryMovementProcessor:
                         y,
                         z,
                         is_in_vehicle,
+                        vehicle_type,
+                        vehicle_id,
+                        vehicle_unique_id,
                         is_in_blue_zone,
                         is_in_red_zone,
                         in_special_zone,
@@ -560,7 +569,7 @@ class TelemetryMovementProcessor:
                         zone,
                         updated_at_kst
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     chunk,
                 )
@@ -920,6 +929,7 @@ def parse_position_samples(
             continue
 
         location = _mapping_value(character.get("location"))
+        vehicle = _mapping_value(event.get("vehicle"))
         samples.append(
             PositionSample(
                 match_id=match_id,
@@ -938,6 +948,9 @@ def parse_position_samples(
                 in_special_zone=_optional_text(character.get("inSpecialZone")),
                 is_dbno=_optional_bool(character.get("isDBNO")),
                 zone=character.get("zone") if character.get("zone") is not None else [],
+                vehicle_type=_optional_text(vehicle.get("vehicleType")),
+                vehicle_id=_optional_text(vehicle.get("vehicleId")),
+                vehicle_unique_id=_optional_int(vehicle.get("vehicleUniqueId")),
             )
         )
 
@@ -1072,7 +1085,101 @@ def parse_combat_location_events(
 
     for event_index, event in enumerate(events):
         event_type = event.get("_T")
-        if event_type == "LogPlayerMakeGroggy":
+        if event_type == "LogPlayerAttack":
+            attacker = _mapping_value(event.get("attacker"))
+            attacker_account_id = _optional_text(attacker.get("accountId"))
+            weapon = _mapping_value(event.get("weapon"))
+            weapon_id = _optional_text(weapon.get("itemId"))
+            if (
+                attacker_account_id in tracked_account_ids
+                and event.get("attackType") == "Weapon"
+                and weapon_id is not None
+            ):
+                weapon_category = _optional_text(weapon.get("category"))
+                weapon_sub_category = _optional_text(weapon.get("subCategory"))
+                normalized_weapon_id = weapon_id.casefold()
+                throwable_code = any(
+                    token in normalized_weapon_id
+                    for token in (
+                        "grenade",
+                        "smokebomb",
+                        "molotov",
+                        "flashbang",
+                        "stickybomb",
+                        "bluezonegrenade",
+                        "decoygrenade",
+                        "_c4_",
+                    )
+                )
+                melee_code = any(
+                    token in normalized_weapon_id
+                    for token in ("_pan_", "crowbar", "machete", "sickle")
+                )
+                if weapon_sub_category == "Throwable" or throwable_code:
+                    action = "throw"
+                    damage_type_category = "Damage_Throwable"
+                elif weapon_sub_category == "Melee" or melee_code:
+                    action = "melee"
+                    damage_type_category = "Damage_Melee"
+                elif weapon_category in {None, "Weapon"}:
+                    action = "shot"
+                    damage_type_category = "Damage_Gun"
+                else:
+                    action = "attack"
+                    damage_type_category = "Damage_Unknown"
+                location_events.append(
+                    _combat_location_record(
+                        event=event,
+                        match_id=match_id,
+                        event_index=event_index,
+                        event_type="LogPlayerAttack",
+                        action=action,
+                        account=attacker,
+                        related={},
+                        damage_info={
+                            "damageTypeCategory": damage_type_category,
+                            "damageCauserName": weapon_id,
+                        },
+                    )
+                )
+
+        elif event_type == "LogPlayerTakeDamage":
+            attacker = _mapping_value(event.get("attacker"))
+            victim = _mapping_value(event.get("victim"))
+            attacker_account_id = _optional_text(attacker.get("accountId"))
+            victim_account_id = _optional_text(victim.get("accountId"))
+            damage_info = {
+                **event,
+                "distance": _character_xy_distance_cm(attacker, victim),
+            }
+            if attacker_account_id in tracked_account_ids and attacker_account_id != victim_account_id:
+                location_events.append(
+                    _combat_location_record(
+                        event=event,
+                        match_id=match_id,
+                        event_index=event_index,
+                        event_type="LogPlayerTakeDamage",
+                        action="hit_caused",
+                        account=attacker,
+                        related=victim,
+                        damage_info=damage_info,
+                    )
+                )
+            if victim_account_id in tracked_account_ids:
+                location_events.append(
+                    _combat_location_record(
+                        event=event,
+                        match_id=match_id,
+                        event_index=event_index,
+                        event_type="LogPlayerTakeDamage",
+                        action="hit_taken",
+                        account=victim,
+                        related=attacker,
+                        damage_info=damage_info,
+                    )
+                )
+
+        elif event_type == "LogPlayerMakeGroggy":
             attacker = _mapping_value(event.get("attacker"))
             victim = _mapping_value(event.get("victim"))
             attacker_account_id = _optional_text(attacker.get("accountId"))
@@ -1482,6 +1589,7 @@ def _plane_route_sample(
         if not _looks_like_aircraft_sample(event, character):
             return None
         location = _mapping_value(character.get("location"))
+        vehicle = _mapping_value(event.get("vehicle"))
     elif event_type in {"LogVehicleRide", "LogVehicleLeave"}:
         common_is_game = _common_is_game(event)
         if common_is_game is None or common_is_game > 0.2:
@@ -1513,6 +1621,9 @@ def _plane_route_sample(
         in_special_zone=_optional_text(character.get("inSpecialZone")),
         is_dbno=_optional_bool(character.get("isDBNO")),
         zone=character.get("zone") if character.get("zone") is not None else [],
+        vehicle_type=_optional_text(vehicle.get("vehicleType")),
+        vehicle_id=_optional_text(vehicle.get("vehicleId")),
+        vehicle_unique_id=_optional_int(vehicle.get("vehicleUniqueId")),
     )
 
 

@@ -13,10 +13,39 @@ from pubg_ai.replay_timeline_builder import (
     _assign_position_segments,
     _build_timeline_anchors,
     _derive_drop_starts,
+    _derive_engagements,
 )
 
 
 class ReplayTimelineProcessorTests(unittest.TestCase):
+    def test_engagements_count_firearm_and_throwable_attacks_separately(self) -> None:
+        events = [
+            {
+                "actor_account_id": "account.tracked",
+                "actor_name": "Tracked",
+                "actor_is_self": True,
+                "action": "shot",
+                "time_seconds": 10.0,
+                "event_index": 1,
+                "map": {"x_pct": 0.1, "y_pct": 0.2},
+            },
+            {
+                "actor_account_id": "account.tracked",
+                "actor_name": "Tracked",
+                "actor_is_self": True,
+                "action": "throw",
+                "time_seconds": 12.0,
+                "event_index": 2,
+                "map": {"x_pct": 0.2, "y_pct": 0.3},
+            },
+        ]
+
+        engagements = _derive_engagements(events)
+
+        self.assertEqual(len(engagements), 1)
+        self.assertEqual(engagements[0]["shots"], 1)
+        self.assertEqual(engagements[0]["throws"], 1)
+
     def test_generates_player_timeline_json_artifact(self) -> None:
         connection = FakeConnection(
             [
@@ -43,8 +72,11 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
                         "num_alive_players": 98,
                         "x": 100000.0,
                         "y": 200000.0,
-                        "z": 3000.0,
+                        "z": 30000.0,
                         "is_in_vehicle": 0,
+                        "vehicle_type": None,
+                        "vehicle_id": None,
+                        "vehicle_unique_id": None,
                         "is_in_blue_zone": 0,
                         "is_in_red_zone": 0,
                         "in_special_zone": None,
@@ -60,6 +92,9 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
                         "y": 220000.0,
                         "z": 0.0,
                         "is_in_vehicle": 1,
+                        "vehicle_type": "WheeledVehicle",
+                        "vehicle_id": "Dacia_A_01_v2_C",
+                        "vehicle_unique_id": 77,
                         "is_in_blue_zone": 0,
                         "is_in_red_zone": 0,
                         "in_special_zone": None,
@@ -205,6 +240,9 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
                         "y": 201000.0,
                         "z": 2800.0,
                         "is_in_vehicle": 0,
+                        "vehicle_type": None,
+                        "vehicle_id": None,
+                        "vehicle_unique_id": None,
                         "is_in_blue_zone": 0,
                         "is_in_red_zone": 0,
                         "in_special_zone": None,
@@ -220,10 +258,71 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
                         "y": 221000.0,
                         "z": 0.0,
                         "is_in_vehicle": 0,
+                        "vehicle_type": None,
+                        "vehicle_id": None,
+                        "vehicle_unique_id": None,
                         "is_in_blue_zone": 0,
                         "is_in_red_zone": 0,
                         "in_special_zone": None,
                         "is_dbno": 0,
+                    },
+                ],
+                [],
+                [
+                    {
+                        "related_account_id": "account.enemy-two",
+                        "related_name": "EnemyTwo",
+                        "related_is_ai_or_bot": 0,
+                        "related_registered": 0,
+                        "related_registered_active": None,
+                        "related_registered_name": None,
+                        "event_index": 24,
+                        "event_type": "LogPlayerAttack",
+                        "action": "shot",
+                        "event_at_kst": datetime(2026, 6, 28, 9, 16, 0),
+                        "common_is_game": 1.0,
+                        "damage_type_category": "Damage_Gun",
+                        "damage_causer_name": "WeapBerylM762_C",
+                        "damage_reason": None,
+                        "is_headshot": 0,
+                        "distance_m": None,
+                        "x": 125000.0,
+                        "y": 225000.0,
+                        "z": 0.0,
+                        "related_x": None,
+                        "related_y": None,
+                        "related_z": None,
+                        "raw_event": {
+                            "attackId": 501,
+                            "attackType": "Weapon",
+                            "fireWeaponStackCount": 3,
+                            "weapon": {"itemId": "Item_Weapon_BerylM762_C"},
+                        },
+                    },
+                    {
+                        "related_account_id": "account.enemy-two",
+                        "related_name": "EnemyTwo",
+                        "related_is_ai_or_bot": 0,
+                        "related_registered": 0,
+                        "related_registered_active": None,
+                        "related_registered_name": None,
+                        "event_index": 25,
+                        "event_type": "LogPlayerMakeGroggy",
+                        "action": "dbno_caused",
+                        "event_at_kst": datetime(2026, 6, 28, 9, 16, 5),
+                        "common_is_game": 1.0,
+                        "damage_type_category": "Damage_Gun",
+                        "damage_causer_name": "WeapBerylM762_C",
+                        "damage_reason": "TorsoShot",
+                        "is_headshot": 0,
+                        "distance_m": 42.0,
+                        "x": 126000.0,
+                        "y": 226000.0,
+                        "z": 0.0,
+                        "related_x": 129000.0,
+                        "related_y": 229000.0,
+                        "related_z": 0.0,
+                        "raw_event": {"attackId": 501},
                     },
                 ],
             ]
@@ -243,7 +342,7 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
             path = Path(temp_dir) / artifact.relative_path
             payload = json.loads(path.read_text(encoding="utf-8"))
 
-        self.assertEqual(payload["schema_version"], "player-timeline-v6")
+        self.assertEqual(payload["schema_version"], "player-timeline-v9")
         self.assertEqual(payload["time_basis"], "telemetry_elapsed_time_with_piecewise_timestamp_interpolation")
         self.assertEqual(payload["clock"]["anchor_count"], 4)
         self.assertEqual(payload["clock"]["interpolation"], "piecewise-linear")
@@ -259,14 +358,20 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
         self.assertEqual(payload["team"]["members"][0]["position_sample_count"], 2)
         self.assertEqual(payload["team"]["members"][1]["name"], "TrackedMate")
         self.assertEqual(payload["team"]["members"][1]["position_sample_count"], 2)
+        self.assertEqual(payload["team"]["members"][1]["combat_event_count"], 2)
         self.assertEqual(payload["counts"]["positions"], 2)
         self.assertEqual(payload["counts"]["team_tracks"], 1)
         self.assertEqual(payload["counts"]["team_position_samples"], 2)
+        self.assertEqual(payload["counts"]["team_combat_events"], 2)
         self.assertEqual(payload["counts"]["combat_events"], 1)
+        self.assertEqual(payload["counts"]["engagements"], 2)
         self.assertEqual(payload["counts"]["phase_events"], 1)
         self.assertEqual(payload["positions"][0]["map"]["x_pct"], 100000.0 / 816000.0)
         self.assertEqual(payload["positions"][0]["time_seconds"], 43.0)
         self.assertEqual(payload["positions"][1]["time_seconds"], 103.0)
+        self.assertEqual(payload["positions"][0]["movement_mode"], "airborne")
+        self.assertEqual(payload["positions"][1]["movement_mode"], "vehicle")
+        self.assertEqual(payload["positions"][1]["vehicle_label"], "Dacia A 01 v2")
         self.assertEqual(payload["landings"][0]["time_seconds"], 88.0)
         position_query = next(
             query
@@ -277,6 +382,18 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
         self.assertNotIn("COALESCE(is_in_vehicle, 0)", position_query)
         self.assertEqual(payload["team_tracks"][0]["name"], "TrackedMate")
         self.assertEqual(payload["team_tracks"][0]["positions"][0]["map"]["x_pct"], 101000.0 / 816000.0)
+        self.assertEqual(payload["team_tracks"][0]["positions"][1]["movement_mode"], "on_foot")
+        self.assertEqual(payload["team_tracks"][0]["combat_events"][0]["action"], "shot")
+        self.assertEqual(payload["team_tracks"][0]["combat_events"][0]["attack_id"], 501)
+        self.assertEqual(payload["team_tracks"][0]["combat_events"][0]["weapon_label"], "베릴 M762")
+        self.assertFalse(payload["team_tracks"][0]["combat_events"][0]["has_verified_direction"])
+        self.assertTrue(payload["team_tracks"][0]["combat_events"][1]["has_verified_direction"])
+        teammate_engagement = next(
+            item for item in payload["engagements"] if item["actor_account_id"] == "account.teammate"
+        )
+        self.assertEqual(teammate_engagement["outcome"], "won")
+        self.assertEqual(teammate_engagement["shots"], 1)
+        self.assertEqual(teammate_engagement["dbnos_caused"], 1)
         self.assertEqual(payload["combat_events"][0]["damage_causer_label"], "M416")
         self.assertEqual(payload["combat_events"][0]["time_seconds"], 283.0)
         self.assertEqual(payload["combat_events"][0]["related_name"], "EnemyRegistered")
@@ -313,6 +430,51 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
         _apply_timeline_clock(events, anchors)
 
         self.assertAlmostEqual(events[0]["time_seconds"], 66.5)
+
+    def test_team_combat_track_is_kept_without_position_samples(self) -> None:
+        connection = FakeConnection(
+            [
+                [],
+                [],
+                [
+                    {
+                        "event_index": 9,
+                        "event_type": "LogPlayerAttack",
+                        "action": "shot",
+                        "event_at_kst": datetime(2026, 6, 28, 9, 14, 0),
+                        "common_is_game": 1.0,
+                        "damage_causer_name": "WeapHK416_C",
+                        "is_headshot": 0,
+                        "x": 1000.0,
+                        "y": 2000.0,
+                        "z": 0.0,
+                        "raw_event": {"attackId": 77, "attackType": "Weapon"},
+                    }
+                ],
+            ]
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            processor = ReplayTimelineProcessor(connection, ReplayArtifactStore(Path(temp_dir)))
+            tracks = processor._load_team_position_tracks(
+                match_id="match-1",
+                tracked_account_id="account.self",
+                team_members=[
+                    {
+                        "account_id": "account.mate",
+                        "name": "Mate",
+                        "registered": False,
+                        "is_ai_or_bot": False,
+                    }
+                ],
+                shard="steam",
+                world_size_cm=816000.0,
+                plane_route=None,
+            )
+
+        self.assertEqual(len(tracks), 1)
+        self.assertEqual(tracks[0]["sample_count"], 0)
+        self.assertEqual(tracks[0]["combat_events"][0]["attack_id"], 77)
+        self.assertFalse(tracks[0]["combat_events"][0]["actor_is_self"])
 
     def test_position_segments_break_on_gap_and_implausible_jump(self) -> None:
         positions = [
