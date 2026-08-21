@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -12,6 +12,7 @@ import urllib.request
 from PIL import Image, ImageDraw, ImageFont
 
 from pubg_ai.file_io import atomic_write_bytes
+from pubg_ai.replay_path_policy import ReplayPathSampleState, select_replay_path_samples
 from pubg_ai.replay_storage import (
     ReplayArtifactStore,
     StoredReplayArtifact,
@@ -20,7 +21,7 @@ from pubg_ai.replay_storage import (
 from pubg_ai.time_utils import now_kst, to_kst
 
 
-RENDERER_VERSION = "map-snapshot-v1"
+RENDERER_VERSION = "map-snapshot-v5"
 MAP_ASSET_BASE_URL = "https://raw.githubusercontent.com/pubg/api-assets/master/Assets/Maps"
 
 MAP_ASSET_FILENAMES = {
@@ -41,7 +42,7 @@ MAP_ASSET_FILENAMES = {
 MAP_WORLD_SIZE_CM = {
     "Baltic_Main": 816000.0,
     "Desert_Main": 816000.0,
-    "DihorOtok_Main": 612000.0,
+    "DihorOtok_Main": 816000.0,
     "Erangel_Main": 816000.0,
     "Heaven_Main": 102000.0,
     "Kiki_Main": 816000.0,
@@ -54,6 +55,10 @@ MAP_WORLD_SIZE_CM = {
 }
 
 DEFAULT_WORLD_SIZE_CM = 816000.0
+MAX_PATH_SAMPLE_GAP_SECONDS = 45.0
+MAX_PATH_HORIZONTAL_SPEED_MPS = 120.0
+TRANSPORT_AIRCRAFT_ALTITUDE_CM = 100000.0
+DROP_START_ALTITUDE_CM = 20000.0
 
 
 class MapSnapshotError(RuntimeError):
@@ -72,6 +77,12 @@ class PositionSample:
     x: float | None
     y: float | None
     common_is_game: float | None = None
+    event_at_kst: datetime | None = None
+    elapsed_time_seconds: float | None = None
+    z: float | None = None
+    is_in_vehicle: bool | None = None
+    segment_id: int = 0
+    force_segment_start: bool = False
 
 
 @dataclass(frozen=True)
@@ -100,6 +111,8 @@ class PlaneRoute:
     start_y: float | None
     end_x: float | None
     end_y: float | None
+    start_event_index: int | None = None
+    end_event_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -238,16 +251,29 @@ class MapSnapshotProcessor:
         )
 
     def _list_snapshot_jobs(self, *, limit: int, force: bool) -> list[dict[str, Any]]:
-        where = ""
+        where = """
+            WHERE EXISTS (
+                SELECT 1
+                FROM player_position_samples candidate_positions
+                WHERE candidate_positions.match_id = summaries.match_id
+                  AND candidate_positions.account_id = summaries.account_id
+                  AND candidate_positions.common_is_game > 0
+                  AND NOT (
+                      COALESCE(candidate_positions.is_in_vehicle, 0) = 1
+                      AND COALESCE(candidate_positions.z, 0) >= 100000
+                  )
+            )
+        """
         if not force:
-            where = """
-                WHERE NOT EXISTS (
+            where += """
+                AND NOT EXISTS (
                     SELECT 1
                     FROM replay_artifacts artifacts
                     WHERE artifacts.match_id = summaries.match_id
                       AND artifacts.account_id = summaries.account_id
                       AND artifacts.artifact_type = 'map_snapshot'
                       AND artifacts.artifact_name = 'player-route'
+                      AND artifacts.renderer_version = %s
                 )
             """
 
@@ -273,7 +299,7 @@ class MapSnapshotProcessor:
                 ORDER BY matches.created_at_kst DESC, summaries.match_id ASC, summaries.account_id ASC
                 LIMIT %s
                 """,
-                (limit,),
+                ((RENDERER_VERSION, limit) if not force else (limit,)),
             )
             return list(cursor.fetchall())
 
@@ -287,9 +313,10 @@ class MapSnapshotProcessor:
                   AND account_id = %s
                   AND artifact_type = 'map_snapshot'
                   AND artifact_name = 'player-route'
+                  AND renderer_version = %s
                 LIMIT 1
                 """,
-                (match_id, account_id),
+                (match_id, account_id, RENDERER_VERSION),
             )
             return cursor.fetchone() is not None
 
@@ -302,6 +329,7 @@ class MapSnapshotProcessor:
         combat_locations = self._load_combat_locations(match_id=match_id, account_id=account_id)
         care_packages = self._load_care_packages(match_id=match_id)
         plane_route = self._load_plane_route(match_id=match_id)
+        positions = _filter_snapshot_positions(positions, plane_route=plane_route)
 
         return MapSnapshotContext(
             match_id=match_id,
@@ -323,22 +351,36 @@ class MapSnapshotProcessor:
         with self.connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT event_index, x, y, common_is_game
+                SELECT
+                    event_index,
+                    event_at_kst,
+                    elapsed_time_seconds,
+                    x,
+                    y,
+                    z,
+                    common_is_game,
+                    is_in_vehicle
                 FROM player_position_samples
                 WHERE match_id = %s AND account_id = %s
+                  AND common_is_game > 0
                 ORDER BY event_index ASC
                 """,
                 (match_id, account_id),
             )
-            return [
+            samples = [
                 PositionSample(
                     event_index=int(row["event_index"]),
                     x=_optional_float(row.get("x")),
                     y=_optional_float(row.get("y")),
                     common_is_game=_optional_float(row.get("common_is_game")),
+                    event_at_kst=_optional_datetime(row.get("event_at_kst")),
+                    elapsed_time_seconds=_optional_float(row.get("elapsed_time_seconds")),
+                    z=_optional_float(row.get("z")),
+                    is_in_vehicle=_optional_bool(row.get("is_in_vehicle")),
                 )
                 for row in cursor.fetchall()
             ]
+        return _assign_snapshot_segments(samples)
 
     def _load_landings(self, *, match_id: str, account_id: str) -> list[PositionSample]:
         with self.connection.cursor() as cursor:
@@ -411,7 +453,7 @@ class MapSnapshotProcessor:
         with self.connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT start_x, start_y, end_x, end_y
+                SELECT start_event_index, end_event_index, start_x, start_y, end_x, end_y
                 FROM match_plane_routes
                 WHERE match_id = %s
                 LIMIT 1
@@ -426,6 +468,8 @@ class MapSnapshotProcessor:
                 start_y=_optional_float(row.get("start_y")),
                 end_x=_optional_float(row.get("end_x")),
                 end_y=_optional_float(row.get("end_y")),
+                start_event_index=_optional_int(row.get("start_event_index")),
+                end_event_index=_optional_int(row.get("end_event_index")),
             )
 
     def _upsert_artifact(self, *, context: MapSnapshotContext, stored: StoredReplayArtifact) -> None:
@@ -562,14 +606,59 @@ def _draw_plane_route(
 ) -> None:
     if route is None:
         return
-    start = _point_to_pixel(route.start_x, route.start_y, world_size_cm, origin, size)
-    end = _point_to_pixel(route.end_x, route.end_y, world_size_cm, origin, size)
+    extended = extend_line_to_world_bounds(
+        route.start_x,
+        route.start_y,
+        route.end_x,
+        route.end_y,
+        world_size_cm,
+    )
+    if extended is None:
+        return
+    start = _point_to_pixel(extended[0], extended[1], world_size_cm, origin, size)
+    end = _point_to_pixel(extended[2], extended[3], world_size_cm, origin, size)
     if start is None or end is None:
         return
     draw.line((*start, *end), fill=(255, 255, 255, 230), width=5)
     draw.line((*start, *end), fill=(53, 162, 235, 220), width=2)
     _draw_circle(draw, start, 8, (255, 255, 255, 255), (25, 115, 206, 255))
     _draw_circle(draw, end, 8, (255, 255, 255, 255), (25, 115, 206, 255))
+
+
+def extend_line_to_world_bounds(
+    start_x: float | None,
+    start_y: float | None,
+    end_x: float | None,
+    end_y: float | None,
+    world_size_cm: float,
+) -> tuple[float, float, float, float] | None:
+    if None in {start_x, start_y, end_x, end_y} or world_size_cm <= 0:
+        return None
+
+    sx, sy, ex, ey = float(start_x), float(start_y), float(end_x), float(end_y)
+    dx, dy = ex - sx, ey - sy
+    if abs(dx) < 1e-9 and abs(dy) < 1e-9:
+        return None
+
+    intersections: list[tuple[float, float, float]] = []
+    if abs(dx) >= 1e-9:
+        for x in (0.0, world_size_cm):
+            t = (x - sx) / dx
+            y = sy + t * dy
+            if 0.0 <= y <= world_size_cm:
+                intersections.append((t, x, y))
+    if abs(dy) >= 1e-9:
+        for y in (0.0, world_size_cm):
+            t = (y - sy) / dy
+            x = sx + t * dx
+            if 0.0 <= x <= world_size_cm:
+                intersections.append((t, x, y))
+
+    if len(intersections) < 2:
+        return None
+    intersections.sort(key=lambda item: item[0])
+    first, last = intersections[0], intersections[-1]
+    return first[1], first[2], last[1], last[2]
 
 
 def _draw_care_packages(
@@ -595,19 +684,33 @@ def _draw_player_route(
     origin: tuple[int, int],
     size: int,
 ) -> None:
-    landing_index = context.landing_points[0].event_index if context.landing_points else None
-    drop_points = [
-        sample
-        for sample in context.positions
-        if landing_index is not None and sample.event_index <= landing_index
-    ]
-    movement_points = [
-        sample
-        for sample in context.positions
-        if landing_index is None or sample.event_index >= landing_index
-    ]
-    _draw_polyline(draw, drop_points, world_size_cm, origin, size, fill=(0, 188, 212, 230), width=3)
-    _draw_polyline(draw, movement_points, world_size_cm, origin, size, fill=(57, 255, 20, 235), width=4)
+    landing_indices = sorted(point.event_index for point in context.landing_points)
+    for segment in _position_segments(context.positions):
+        if not segment:
+            continue
+        first_index = segment[0].event_index
+        last_index = segment[-1].event_index
+        landing_index = next(
+            (
+                event_index
+                for event_index in landing_indices
+                if first_index <= event_index <= last_index
+            ),
+            None,
+        )
+        airborne = (segment[0].z or 0.0) >= DROP_START_ALTITUDE_CM
+        drop_points = [
+            sample
+            for sample in segment
+            if airborne and (landing_index is None or sample.event_index <= landing_index)
+        ]
+        movement_points = [
+            sample
+            for sample in segment
+            if not airborne or (landing_index is not None and sample.event_index >= landing_index)
+        ]
+        _draw_polyline(draw, drop_points, world_size_cm, origin, size, fill=(0, 188, 212, 230), width=3)
+        _draw_polyline(draw, movement_points, world_size_cm, origin, size, fill=(57, 255, 20, 235), width=4)
 
     if context.positions:
         start = _point_to_pixel(context.positions[0].x, context.positions[0].y, world_size_cm, origin, size)
@@ -694,6 +797,80 @@ def _draw_polyline(
         draw.line(points, fill=fill, width=width, joint="curve")
 
 
+def _assign_snapshot_segments(samples: list[PositionSample]) -> list[PositionSample]:
+    result: list[PositionSample] = []
+    previous: PositionSample | None = None
+    segment_id = 0
+    for sample in samples:
+        if previous is not None and (sample.force_segment_start or _snapshot_path_break(previous, sample)):
+            segment_id += 1
+        result.append(replace(sample, segment_id=segment_id))
+        previous = sample
+    return result
+
+
+def _filter_snapshot_positions(
+    positions: list[PositionSample],
+    *,
+    plane_route: PlaneRoute | None,
+) -> list[PositionSample]:
+    selections = select_replay_path_samples(
+        [
+            ReplayPathSampleState(
+                event_index=position.event_index,
+                z_cm=position.z,
+                is_in_vehicle=position.is_in_vehicle is True,
+            )
+            for position in positions
+        ],
+        plane_start_event_index=plane_route.start_event_index if plane_route else None,
+        plane_end_event_index=plane_route.end_event_index if plane_route else None,
+        transport_aircraft_altitude_cm=TRANSPORT_AIRCRAFT_ALTITUDE_CM,
+        drop_start_altitude_cm=DROP_START_ALTITUDE_CM,
+    )
+    selected = [
+        replace(
+            positions[selection.source_index],
+            force_segment_start=selection.force_segment_break,
+        )
+        for selection in selections
+    ]
+    return _assign_snapshot_segments(selected)
+
+
+def _position_segments(samples: Iterable[PositionSample]) -> list[list[PositionSample]]:
+    grouped: list[list[PositionSample]] = []
+    for sample in samples:
+        if not grouped or grouped[-1][0].segment_id != sample.segment_id:
+            grouped.append([])
+        grouped[-1].append(sample)
+    return grouped
+
+
+def _snapshot_path_break(left: PositionSample, right: PositionSample) -> bool:
+    elapsed: float | None = None
+    if left.elapsed_time_seconds is not None and right.elapsed_time_seconds is not None:
+        elapsed = right.elapsed_time_seconds - left.elapsed_time_seconds
+    elif left.event_at_kst is not None and right.event_at_kst is not None:
+        elapsed = (right.event_at_kst - left.event_at_kst).total_seconds()
+    if elapsed is None or elapsed <= 0 or elapsed > MAX_PATH_SAMPLE_GAP_SECONDS:
+        return True
+    if None in {left.x, left.y, right.x, right.y}:
+        return True
+    distance_m = (
+        ((float(right.x) - float(left.x)) ** 2 + (float(right.y) - float(left.y)) ** 2) ** 0.5
+        / 100.0
+    )
+    if distance_m / elapsed > MAX_PATH_HORIZONTAL_SPEED_MPS:
+        return True
+    return (
+        left.z is not None
+        and right.z is not None
+        and right.z >= TRANSPORT_AIRCRAFT_ALTITUDE_CM
+        and right.z - left.z >= 30000.0
+    )
+
+
 def _grid_map(size: int) -> Image.Image:
     image = Image.new("RGB", (size, size), (46, 61, 69))
     draw = ImageDraw.Draw(image, "RGBA")
@@ -764,10 +941,25 @@ def _optional_float(value: Any) -> float | None:
         return None
 
 
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _optional_datetime(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         return to_kst(value)
     return None
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    return bool(value)
 
 
 def _mysql_kst_now() -> datetime:

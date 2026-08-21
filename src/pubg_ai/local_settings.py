@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from threading import Lock, RLock
 from typing import Any, Callable, Iterator, TypeVar
@@ -12,6 +12,7 @@ import tempfile
 import time
 
 from pubg_ai.file_io import atomic_write_bytes
+from pubg_ai.discord_command_catalog import default_command_groups
 from pubg_ai.storage_alerts import DEFAULT_MINIMUM_FREE_BYTES
 from pubg_ai.storage_contract import storage_root_contract_conflicts
 from pubg_ai.time_utils import isoformat_kst
@@ -80,6 +81,7 @@ class DiscordPermissionSettings:
     guild_user_grants: dict[str, dict[str, list[str]]]
     global_admin_user_ids: list[str]
     updated_at: str | None = None
+    command_aliases: dict[str, str] = field(default_factory=dict)
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -87,6 +89,7 @@ class DiscordPermissionSettings:
             "user_grants": self.user_grants,
             "guild_user_grants": self.guild_user_grants,
             "global_admin_user_ids": self.global_admin_user_ids,
+            "command_aliases": self.command_aliases,
             "updated_at": self.updated_at,
         }
 
@@ -135,57 +138,7 @@ class AlertSettings:
         }
 
 
-DEFAULT_COMMAND_GROUPS: dict[str, list[str]] = {
-    "register": ["유저등록", "pubg-register"],
-    "player_manage": ["유저삭제", "pubg-unregister"],
-    "profile_read": [
-        "유저조회",
-        "전적",
-        "교전",
-        "추세",
-        "무기",
-        "매치",
-        "pubg-profile",
-        "pubg-stats",
-        "pubg-fights",
-        "pubg-trend",
-        "pubg-trends",
-        "pubg-recent",
-        "pubg-match",
-        "pubg-weapon",
-    ],
-    "ranking_read": ["랭킹", "pubg-ranking"],
-    "replay_read": ["pubg-replay"],
-    "settings_write": ["pubg-settings"],
-    "admin": ["pubg-permission", "pubg-delete-data"],
-}
-DEFAULT_COMMAND_GROUPS["admin"] = sorted(
-    set(
-        DEFAULT_COMMAND_GROUPS["admin"]
-        + [
-            "pubg-alerts",
-            "pubg-alert-ack",
-            "pubg-alert-acknowledge",
-            "pubg-alert-snooze",
-            "pubg-alert-note",
-            "pubg-alert-notes",
-            "pubg-alert-note-list",
-            "pubg-alert-resolution",
-            "pubg-alert-resolve",
-            "pubg-alert-history",
-            "pubg-alert-log",
-            "pubg-worker-runs",
-            "pubg-worker-history",
-            "pubg-worker-log",
-            "pubg-worker-run",
-            "pubg-worker-run-detail",
-            "pubg-worker-detail",
-            "pubg-ranking-scope",
-            "pubg-guild-scope",
-            "pubg-delete-cancel",
-        ]
-    )
-)
+DEFAULT_COMMAND_GROUPS: dict[str, list[str]] = default_command_groups()
 
 _T = TypeVar("_T")
 _PROCESS_LOCKS: dict[str, RLock] = {}
@@ -384,6 +337,7 @@ class LocalSettingsStore:
         user_grants: dict[str, list[str]],
         guild_user_grants: dict[str, dict[str, list[str]]] | None = None,
         global_admin_user_ids: list[str] | None = None,
+        command_aliases: dict[str, str] | None = None,
     ) -> DiscordPermissionSettings:
         settings = DiscordPermissionSettings(
             command_groups=_normalize_groups(command_groups),
@@ -391,6 +345,7 @@ class LocalSettingsStore:
             guild_user_grants=_normalize_guild_grants(guild_user_grants or {}),
             global_admin_user_ids=_normalize_id_list(global_admin_user_ids or []),
             updated_at=isoformat_kst(),
+            command_aliases=_normalize_command_aliases(command_aliases or {}),
         )
         _validate_discord_permission_settings(settings)
         self._update_settings_section("discord_permissions", settings.to_record())
@@ -421,6 +376,7 @@ class LocalSettingsStore:
                 guild_user_grants=_normalize_guild_grants(candidate.guild_user_grants),
                 global_admin_user_ids=_normalize_id_list(candidate.global_admin_user_ids),
                 updated_at=isoformat_kst(),
+                command_aliases=_normalize_command_aliases(candidate.command_aliases),
             )
             _validate_discord_permission_settings(settings)
             payload["discord_permissions"] = settings.to_record()
@@ -722,6 +678,9 @@ def _discord_permissions_from_record(record: dict[str, Any]) -> DiscordPermissio
             record.get("global_admin_user_ids") if isinstance(record.get("global_admin_user_ids"), list) else []
         ),
         updated_at=_optional_str(record.get("updated_at")),
+        command_aliases=_normalize_command_aliases(
+            record.get("command_aliases") if isinstance(record.get("command_aliases"), dict) else {}
+        ),
     )
     _validate_discord_permission_settings(settings)
     return settings
@@ -768,6 +727,17 @@ def _normalize_groups(value: dict[str, Any]) -> dict[str, list[str]]:
 
         normalized[key] = sorted(set(normalized_values))
     return normalized
+
+
+def _normalize_command_aliases(value: dict[str, Any]) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for raw_alias, raw_target in value.items():
+        if not isinstance(raw_alias, str) or not raw_alias.strip():
+            raise LocalSettingsError("Discord command aliases must have non-empty names.")
+        if not isinstance(raw_target, str) or not raw_target.strip():
+            raise LocalSettingsError(f"Discord command alias {raw_alias!r} has an invalid target.")
+        normalized[raw_alias.strip()] = raw_target.strip()
+    return dict(sorted(normalized.items()))
 
 
 def _merge_default_command_groups(groups: dict[str, list[str]]) -> dict[str, list[str]]:

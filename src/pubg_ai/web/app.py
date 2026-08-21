@@ -92,6 +92,12 @@ from pubg_ai.data_deletion_preview import (
 )
 from pubg_ai.data_deletion_requests import DataDeletionRequestError, DataDeletionRequestService
 from pubg_ai.database import connect_mysql, count_tables
+from pubg_ai.discord_acceptance import DiscordAcceptanceClient, DiscordAcceptanceError
+from pubg_ai.discord_command_catalog import (
+    RESERVED_COMMAND_GROUPS,
+    command_catalog_records,
+)
+from pubg_ai.discord_guild_catalog import list_discord_guild_catalog, sync_discord_guild_catalog
 from pubg_ai.fight_outcome_processor import FightOutcomeProcessor
 from pubg_ai.fight_outcome_stats import FightOutcomeStatsService
 from pubg_ai.discord_permission_manager import DiscordPermissionManager
@@ -214,6 +220,14 @@ class DiscordPermissionGrantRequest(BaseModel):
 
 class DiscordGlobalAdminRequest(BaseModel):
     user_id: str = Field(min_length=1)
+
+
+class DiscordCommandGroupRequest(BaseModel):
+    commands: list[str] = Field(min_length=1)
+
+
+class DiscordCommandAliasRequest(BaseModel):
+    target_command: str = Field(min_length=1, max_length=32)
 
 
 class DiscordScopeSettingsRequest(BaseModel):
@@ -417,6 +431,7 @@ class OperationalDrillRunRequest(BaseModel):
 def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
     base_dir = (base_dir or Path.cwd()).resolve()
     config = RuntimeConfig.from_sources(base_dir=base_dir, env_file=env_file)
+    _ensure_configured_storage_directories(config)
     settings_store = _local_settings_store(base_dir, env_file=env_file)
     permission_manager = DiscordPermissionManager(settings_store)
 
@@ -1168,9 +1183,81 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
     @app.get("/discord/permissions")
     def discord_permissions() -> dict[str, Any]:
         try:
-            return {"discord_permissions": permission_manager.load().to_record()}
+            return {
+                "discord_permissions": permission_manager.load().to_record(),
+                "command_catalog": command_catalog_records(),
+                "reserved_groups": sorted(RESERVED_COMMAND_GROUPS),
+            }
         except LocalSettingsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/discord/guilds")
+    def discord_guilds() -> dict[str, Any]:
+        try:
+            permissions = permission_manager.load()
+            scopes = settings_store.load_discord_scope_settings()
+        except LocalSettingsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        configured_ids = set(permissions.guild_user_grants) | set(scopes.guild_ranking_scopes)
+        connection = connect_mysql(current_config().database)
+        try:
+            guilds = list_discord_guild_catalog(
+                connection,
+                configured_guild_ids=configured_ids,
+                ranking_scope_overrides=scopes.guild_ranking_scopes,
+            )
+        finally:
+            connection.close()
+        return {"guilds": [guild.to_record() for guild in guilds]}
+
+    @app.post("/discord/guilds/sync")
+    def sync_discord_guilds() -> dict[str, Any]:
+        runtime_config = current_config()
+        token = runtime_config.secrets.discord_bot_token
+        if not token:
+            raise HTTPException(status_code=400, detail="DISCORD_BOT_TOKEN is not configured.")
+        try:
+            remote_guilds = DiscordAcceptanceClient(token).list_guilds()
+        except DiscordAcceptanceError as exc:
+            status_code = exc.status_code if exc.status_code and 400 <= exc.status_code < 500 else 502
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+        connection = connect_mysql(runtime_config.database)
+        try:
+            synced_count = sync_discord_guild_catalog(
+                connection,
+                [guild.to_record() for guild in remote_guilds],
+            )
+        finally:
+            connection.close()
+        return {"synced_count": synced_count}
+
+    @app.get("/discord/channels")
+    def discord_channels(
+        guild_id: str,
+        limit: int = Query(default=50, ge=1, le=50),
+    ) -> dict[str, Any]:
+        runtime_config = current_config()
+        token = runtime_config.secrets.discord_bot_token
+        if not token:
+            raise HTTPException(status_code=400, detail="DISCORD_BOT_TOKEN is not configured.")
+        try:
+            report = DiscordAcceptanceClient(token).probe(
+                guild_id=guild_id,
+                channel_limit=limit,
+            )
+        except DiscordAcceptanceError as exc:
+            status_code = exc.status_code if exc.status_code and 400 <= exc.status_code < 500 else 502
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        guild = report.guilds[0]
+        return {
+            "guild": {
+                "guild_id": guild.guild_id,
+                "guild_name": guild.guild_name,
+                "eligible_channel_count": guild.eligible_channel_count,
+            },
+            "channels": [channel.to_record() for channel in guild.channels],
+        }
 
     @app.post("/discord/permissions/grant")
     def grant_discord_permission(request: DiscordPermissionGrantRequest) -> dict[str, Any]:
@@ -1191,6 +1278,46 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
                 group=request.group,
                 guild_id=request.guild_id,
             ).to_record()
+        except LocalSettingsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.put("/discord/permissions/groups/{group}")
+    def upsert_discord_permission_group(
+        group: str,
+        request: DiscordCommandGroupRequest,
+    ) -> dict[str, Any]:
+        try:
+            return permission_manager.upsert_command_group(
+                group=group,
+                commands=request.commands,
+            ).to_record()
+        except LocalSettingsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/discord/permissions/groups/{group}")
+    def delete_discord_permission_group(group: str) -> dict[str, Any]:
+        try:
+            return permission_manager.delete_command_group(group).to_record()
+        except LocalSettingsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.put("/discord/permissions/aliases/{alias}")
+    def set_discord_command_alias(
+        alias: str,
+        request: DiscordCommandAliasRequest,
+    ) -> dict[str, Any]:
+        try:
+            return permission_manager.set_command_alias(
+                alias=alias,
+                target_command=request.target_command,
+            ).to_record()
+        except LocalSettingsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/discord/permissions/aliases/{alias}")
+    def remove_discord_command_alias(alias: str) -> dict[str, Any]:
+        try:
+            return permission_manager.remove_command_alias(alias).to_record()
         except LocalSettingsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2166,11 +2293,37 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT DATABASE() AS database_name, VERSION() AS version")
                 row = cursor.fetchone()
+                cursor.execute(
+                    """
+                    SELECT
+                        (SELECT COUNT(*) FROM registered_players) AS registered_players,
+                        (SELECT COUNT(*) FROM registered_players WHERE active = 1) AS active_players,
+                        (SELECT COUNT(*) FROM matches) AS matches,
+                        (SELECT COUNT(*) FROM raw_match_payloads) AS raw_matches,
+                        (SELECT COUNT(*) FROM raw_telemetry_payloads) AS raw_telemetry,
+                        (SELECT COUNT(*) FROM replay_artifacts WHERE artifact_type = 'map_snapshot') AS map_snapshots,
+                        (SELECT COUNT(*) FROM replay_artifacts WHERE artifact_type = 'timeline') AS timelines,
+                        (
+                            SELECT COUNT(*) FROM api_fetch_jobs
+                            WHERE job_type = 'match' AND status IN ('queued', 'running')
+                        ) AS pending_match_jobs,
+                        (
+                            SELECT COUNT(*) FROM api_fetch_jobs
+                            WHERE job_type = 'telemetry' AND status IN ('queued', 'running')
+                        ) AS pending_telemetry_jobs,
+                        (SELECT COUNT(*) FROM api_fetch_jobs WHERE status = 'failed') AS failed_jobs
+                    """
+                )
+                operation_row = cursor.fetchone()
             return {
                 "mysql_connection": "ok",
                 "database": row["database_name"],
                 "version": row["version"],
                 "table_count": count_tables(connection),
+                "operations": {
+                    key: int(value or 0)
+                    for key, value in operation_row.items()
+                },
             }
         finally:
             connection.close()
@@ -2207,30 +2360,89 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
         finally:
             connection.close()
 
-    @app.get("/players/weapon")
-    def player_weapon(
-        weapon: str,
+    @app.get("/players/catalog")
+    def player_catalog(
         shard: str = "steam",
         name: str | None = None,
         account_id: str | None = None,
+        match_limit: int = Query(default=1000, ge=1, le=5000),
     ) -> dict[str, Any]:
         if not name and not account_id:
             raise HTTPException(status_code=400, detail="name or account_id is required.")
 
         connection = connect_mysql(config.database)
         try:
-            detail = PlayerStatsService(connection).get_weapon_detail(
+            catalog = PlayerStatsService(connection).get_lookup_catalog(
                 shard=shard,
                 account_id=account_id,
                 name=name,
-                weapon=weapon,
                 global_scope=True,
+                match_limit=match_limit,
             )
-            if detail is None:
-                raise HTTPException(status_code=404, detail="registered player weapon stats not found.")
-            return {"weapon": detail.to_record()}
+            if catalog is None:
+                raise HTTPException(status_code=404, detail="registered player catalog not found.")
+            return {"catalog": catalog.to_record()}
         finally:
             connection.close()
+
+    @app.get("/players/weapon")
+    def player_weapon(
+        weapon: str,
+        shard: str = "steam",
+        name: str | None = None,
+        account_id: str | None = None,
+        game_mode: str | None = None,
+        team_mode: str | None = None,
+        perspective: str | None = None,
+        match_type: str | None = None,
+        map_name: str | None = None,
+        season_state: str | None = None,
+        is_custom_match: str | None = None,
+        year: int | None = Query(default=None, ge=2000, le=2100),
+        quarter: int | None = Query(default=None, ge=1, le=4),
+        month: int | None = Query(default=None, ge=1, le=12),
+        exact_date_kst: str | None = None,
+        hour: int | None = Query(default=None, ge=0, le=23),
+        from_date_kst: str | None = None,
+        to_date_kst: str | None = None,
+    ) -> dict[str, Any]:
+        if not name and not account_id:
+            raise HTTPException(status_code=400, detail="name or account_id is required.")
+
+        try:
+            filters = PlayerTrendFilters(
+                game_mode=game_mode,
+                team_mode=team_mode,
+                perspective=perspective,
+                match_type=match_type,
+                map_name=map_name,
+                season_state=season_state,
+                is_custom_match=parse_optional_bool(is_custom_match, "is_custom_match"),
+                year=year,
+                quarter=quarter,
+                month=month,
+                exact_date_kst=parse_trend_date(exact_date_kst, "exact_date_kst"),
+                hour=hour,
+                from_date_kst=parse_trend_date(from_date_kst, "from_date_kst"),
+                to_date_kst=parse_trend_date(to_date_kst, "to_date_kst"),
+            ).normalized()
+            connection = connect_mysql(config.database)
+            try:
+                detail = PlayerStatsService(connection).get_weapon_detail(
+                    shard=shard,
+                    account_id=account_id,
+                    name=name,
+                    weapon=weapon,
+                    global_scope=True,
+                    filters=filters,
+                )
+            finally:
+                connection.close()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if detail is None:
+            raise HTTPException(status_code=404, detail="registered player weapon stats not found.")
+        return {"weapon": detail.to_record()}
 
     @app.get("/players/fight-outcomes")
     def player_fight_outcomes(
@@ -2276,7 +2488,13 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
         perspective: str | None = None,
         match_type: str | None = None,
         map_name: str | None = None,
+        season_state: str | None = None,
         is_custom_match: str | None = None,
+        year: int | None = Query(default=None, ge=2000, le=2100),
+        quarter: int | None = Query(default=None, ge=1, le=4),
+        month: int | None = Query(default=None, ge=1, le=12),
+        exact_date_kst: str | None = None,
+        hour: int | None = Query(default=None, ge=0, le=23),
         from_date_kst: str | None = None,
         to_date_kst: str | None = None,
         bucket_limit: int = Query(default=120, ge=1, le=500),
@@ -2290,7 +2508,13 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
                 perspective=perspective,
                 match_type=match_type,
                 map_name=map_name,
+                season_state=season_state,
                 is_custom_match=parse_optional_bool(is_custom_match, "is_custom_match"),
+                year=year,
+                quarter=quarter,
+                month=month,
+                exact_date_kst=parse_trend_date(exact_date_kst, "exact_date_kst"),
+                hour=hour,
                 from_date_kst=parse_trend_date(from_date_kst, "from_date_kst"),
                 to_date_kst=parse_trend_date(to_date_kst, "to_date_kst"),
             ).normalized()
@@ -2327,7 +2551,7 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
         name: str | None = None,
         account_id: str | None = None,
         limit: int = 5,
-        min_matches: int = 1,
+        min_matches: int = Query(default=1, ge=1, le=2_147_483_647),
     ) -> dict[str, Any]:
         if not name and not account_id:
             raise HTTPException(status_code=400, detail="name or account_id is required.")
@@ -2345,6 +2569,32 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
             if recommendations is None:
                 raise HTTPException(status_code=404, detail="registered player recommendations not found.")
             return {"recommendations": recommendations.to_record()}
+        finally:
+            connection.close()
+
+    @app.get("/players/drop-zones")
+    def player_drop_zones(
+        shard: str = "steam",
+        name: str | None = None,
+        account_id: str | None = None,
+        limit: int = Query(default=100, ge=1, le=500),
+        min_matches: int = Query(default=1, ge=1, le=2_147_483_647),
+    ) -> dict[str, Any]:
+        if not name and not account_id:
+            raise HTTPException(status_code=400, detail="name or account_id is required.")
+        connection = connect_mysql(config.database)
+        try:
+            report = PlayerRecommendationService(connection).get_drop_zone_analysis(
+                shard=shard,
+                name=name,
+                account_id=account_id,
+                global_scope=True,
+                limit=limit,
+                min_matches=min_matches,
+            )
+            if report is None:
+                raise HTTPException(status_code=404, detail="registered player drop-zone analysis not found.")
+            return {"drop_zones": report.to_record()}
         finally:
             connection.close()
 
@@ -2511,7 +2761,10 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
         connection = connect_mysql(config.database)
         try:
             jobs = RegisteredPlayerMatchCollector(connection).list_match_jobs(limit=limit)
-            return {"jobs": [_json_ready(job) for job in jobs]}
+            return {
+                "jobs": [_json_ready(job) for job in jobs],
+                "summary": _job_queue_summary(connection, "match"),
+            }
         finally:
             connection.close()
 
@@ -2547,7 +2800,10 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
                     compression=runtime_config.app.raw_compression,  # type: ignore[arg-type]
                 ),
             ).list_telemetry_jobs(limit=limit)
-            return {"jobs": [_json_ready(job) for job in jobs]}
+            return {
+                "jobs": [_json_ready(job) for job in jobs],
+                "summary": _job_queue_summary(connection, "telemetry"),
+            }
         finally:
             connection.close()
 
@@ -2738,6 +2994,20 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
     return app
 
 
+def _ensure_configured_storage_directories(config: RuntimeConfig) -> None:
+    for path in (
+        config.app.raw_data_dir,
+        config.app.replay_data_dir,
+        config.app.backup_data_dir,
+        config.app.quarantine_data_dir,
+    ):
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # The storage alert system reports the exact inaccessible path.
+            continue
+
+
 def _json_ready(value: Any) -> Any:
     if hasattr(value, "isoformat"):
         return value.isoformat()
@@ -2746,6 +3016,57 @@ def _json_ready(value: Any) -> Any:
     if isinstance(value, list):
         return [_json_ready(item) for item in value]
     return value
+
+
+def _job_queue_summary(connection: Any, job_type: str) -> dict[str, Any]:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                COALESCE(SUM(status = 'queued'), 0) AS queued,
+                COALESCE(SUM(status = 'running'), 0) AS running,
+                COALESCE(SUM(status = 'succeeded'), 0) AS succeeded,
+                COALESCE(SUM(status = 'failed'), 0) AS failed,
+                COALESCE(SUM(
+                    status = 'queued'
+                    AND (next_run_at_kst IS NULL OR next_run_at_kst <= NOW(6))
+                ), 0) AS eligible_queued,
+                COALESCE(SUM(
+                    status = 'queued'
+                    AND next_run_at_kst > NOW(6)
+                ), 0) AS scheduled_queued,
+                COALESCE(SUM(
+                    status = 'succeeded'
+                    AND updated_at_kst >= DATE_SUB(NOW(6), INTERVAL 10 MINUTE)
+                ), 0) AS recent_succeeded,
+                MIN(CASE WHEN status = 'queued' THEN created_at_kst END)
+                    AS oldest_queued_at_kst,
+                MAX(CASE WHEN status = 'succeeded' THEN updated_at_kst END)
+                    AS last_succeeded_at_kst,
+                MAX(updated_at_kst) AS last_activity_at_kst
+            FROM api_fetch_jobs
+            WHERE job_type = %s
+            """,
+            (job_type,),
+        )
+        row = cursor.fetchone() or {}
+    by_status = {
+        "queued": int(row.get("queued") or 0),
+        "running": int(row.get("running") or 0),
+        "succeeded": int(row.get("succeeded") or 0),
+        "failed": int(row.get("failed") or 0),
+    }
+    return {
+        "total": int(row.get("total") or 0),
+        "by_status": by_status,
+        "eligible_queued": int(row.get("eligible_queued") or 0),
+        "scheduled_queued": int(row.get("scheduled_queued") or 0),
+        "recent_succeeded": int(row.get("recent_succeeded") or 0),
+        "oldest_queued_at_kst": _json_ready(row.get("oldest_queued_at_kst")),
+        "last_succeeded_at_kst": _json_ready(row.get("last_succeeded_at_kst")),
+        "last_activity_at_kst": _json_ready(row.get("last_activity_at_kst")),
+    }
 
 
 def _settings_status_record(config: RuntimeConfig) -> dict[str, Any]:
@@ -3009,7 +3330,7 @@ _INDEX_HTML = """<!doctype html>
       margin-bottom: 10px;
     }
     .trend-filter { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-    .trend-table { min-width: 980px; table-layout: auto; }
+    .trend-table { min-width: 840px; table-layout: auto; }
     label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
     input, select, textarea {
       width: 100%;
@@ -3047,6 +3368,342 @@ _INDEX_HTML = """<!doctype html>
       min-height: 32px;
     }
     .recommendation-line button { min-height: 30px; padding: 5px 9px; font-size: 12px; flex: 0 0 auto; }
+    .query-form { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+    .analysis-form {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
+    }
+    .query-primary,
+    .filter-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      align-items: end;
+    }
+    .advanced-filters {
+      min-width: 0;
+      border-top: 1px solid var(--line);
+      padding-top: 9px;
+    }
+    .advanced-filters summary {
+      width: max-content;
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .advanced-filters[open] summary { margin-bottom: 10px; color: var(--text); }
+    .result-shell {
+      display: grid;
+      gap: 14px;
+      min-width: 0;
+      color: var(--text);
+    }
+    .result-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .result-heading strong {
+      display: block;
+      color: var(--text);
+      font-size: 15px;
+      overflow-wrap: anywhere;
+    }
+    .result-heading span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .result-badge {
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      min-height: 24px;
+      border: 1px solid var(--line-strong);
+      border-radius: 5px;
+      padding: 3px 8px;
+      color: var(--text);
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .result-heading .result-badge { display: inline-flex; margin-top: 0; }
+    .result-badge.success { border-color: #2e725b; background: #143126; color: #75e6bd; }
+    .result-metric-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+      gap: 7px;
+    }
+    .result-metric {
+      min-width: 0;
+      min-height: 62px;
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--accent);
+      border-radius: 4px;
+      padding: 9px 10px;
+      background: var(--panel-soft);
+    }
+    .result-metric span,
+    .result-row span,
+    .loadout-role,
+    .result-caption {
+      color: var(--muted);
+      font-size: 10px;
+    }
+    .result-metric strong {
+      display: block;
+      margin-top: 4px;
+      color: var(--text);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .result-columns {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+    .result-section {
+      min-width: 0;
+      border-top: 1px solid var(--line);
+      padding-top: 12px;
+    }
+    .result-section h3,
+    .result-disclosure summary {
+      margin: 0 0 8px;
+      color: #dce1e5;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .result-list { display: grid; gap: 0; min-width: 0; }
+    .result-row {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: minmax(105px, 0.35fr) minmax(0, 1fr) auto;
+      gap: 5px 12px;
+      align-items: center;
+      min-height: 42px;
+      border-bottom: 1px solid var(--line);
+      padding: 7px 0;
+    }
+    .result-row:last-child { border-bottom: 0; }
+    .result-row strong { color: var(--text); font-size: 11px; overflow-wrap: anywhere; }
+    .result-row p { margin: 0; color: #cbd2d8; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+    .result-row > button { min-height: 30px; padding: 5px 9px; }
+    .result-row-tail { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
+    .result-row-tail p { text-align: right; }
+    .result-row-tail button { flex: 0 0 auto; min-height: 30px; padding: 5px 9px; }
+    .result-chip-list { display: flex; flex-wrap: wrap; gap: 5px; }
+    .result-chip {
+      display: inline-flex;
+      min-height: 24px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 3px 7px;
+      background: var(--panel-soft);
+      color: #cbd2d8;
+      font-size: 10px;
+      overflow-wrap: anywhere;
+    }
+    .alert-settings-form { grid-template-columns: 160px 1fr 1fr auto; }
+    .alert-channel-picker {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: minmax(180px, 0.8fr) minmax(240px, 1.2fr) auto;
+      gap: 10px;
+      min-width: 0;
+      margin: 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+    }
+    .alert-channel-picker legend {
+      padding: 0 5px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .alert-channel-actions { display: flex; gap: 6px; align-items: end; }
+    .alert-channel-selection,
+    .alert-channel-picker .status { grid-column: 1 / -1; }
+    .selected-channel-chip { gap: 6px; padding-right: 3px; }
+    .selected-channel-chip button {
+      width: 20px;
+      min-height: 20px;
+      padding: 0;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1;
+    }
+    .discord-command-group-form {
+      grid-template-columns: minmax(180px, 0.7fr) minmax(220px, 1fr) auto auto;
+    }
+    .command-catalog-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 6px;
+      margin-top: 10px;
+    }
+    .command-choice {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      align-items: start;
+      gap: 8px;
+      min-height: 58px;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: var(--panel-soft);
+      cursor: pointer;
+    }
+    .command-choice input { width: auto; min-height: 18px; margin: 1px 0 0; }
+    .command-choice strong,
+    .command-choice small { display: block; overflow-wrap: anywhere; }
+    .command-choice strong { color: var(--text); font-size: 11px; }
+    .command-choice small { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.4; }
+    .discord-group-table { min-width: 760px; table-layout: auto; }
+    .discord-group-table th:nth-child(1) { width: 150px; }
+    .discord-group-table th:nth-child(3) { width: 80px; }
+    .discord-group-table th:nth-child(4) { width: 160px; }
+    .discord-alias-block { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+    .discord-alias-form { grid-template-columns: minmax(180px, 0.7fr) minmax(220px, 1fr) auto auto; }
+    .loadout-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(265px, 1fr));
+      gap: 8px;
+    }
+    .loadout-card {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 11px;
+      background: var(--panel-soft);
+    }
+    .loadout-weapons {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+      gap: 8px;
+      align-items: center;
+    }
+    .loadout-weapons strong { display: block; margin-top: 3px; font-size: 13px; overflow-wrap: anywhere; }
+    .loadout-plus { color: var(--accent); font-weight: 800; }
+    .loadout-parts { display: grid; gap: 7px; margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); }
+    .loadout-score { margin-top: 9px; color: var(--warning); font-size: 10px; font-weight: 700; }
+    .result-disclosure { min-width: 0; border-top: 1px solid var(--line); padding-top: 10px; }
+    .result-disclosure summary { width: max-content; cursor: pointer; }
+    .recommendation-view-switch {
+      display: inline-flex;
+      width: max-content;
+      max-width: 100%;
+      gap: 3px;
+      border: 1px solid var(--line-strong);
+      border-radius: 6px;
+      padding: 3px;
+      background: #0b0f11;
+    }
+    .recommendation-view-switch button {
+      min-width: 76px;
+      min-height: 30px;
+      border-color: transparent;
+      padding: 5px 12px;
+      background: transparent;
+      color: var(--muted);
+    }
+    .recommendation-view-switch button.active {
+      border-color: #2d725c;
+      background: #14231e;
+      color: var(--accent);
+    }
+    .recommendation-panel {
+      display: grid;
+      min-width: 0;
+      gap: 14px;
+    }
+    .recommendation-panel[hidden] { display: none; }
+    .recommendation-chart-toolbar {
+      display: flex;
+      align-items: end;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .recommendation-chart-toolbar label { width: min(280px, 100%); }
+    .metric-chart-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px 20px;
+      min-width: 0;
+    }
+    .metric-chart {
+      min-width: 0;
+      border-top: 1px solid var(--line);
+      padding-top: 11px;
+    }
+    .metric-chart h3 {
+      margin: 0 0 9px;
+      color: #dce1e5;
+      font-size: 12px;
+    }
+    .metric-chart-list { display: grid; gap: 9px; min-width: 0; }
+    .metric-chart-row {
+      display: grid;
+      grid-template-columns: minmax(105px, 0.55fr) minmax(120px, 1fr) auto;
+      align-items: center;
+      gap: 7px 10px;
+      min-width: 0;
+    }
+    .metric-chart-label {
+      min-width: 0;
+      color: var(--text);
+      font-size: 11px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+    .metric-chart-label small {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 500;
+    }
+    .metric-chart-track {
+      position: relative;
+      width: 100%;
+      height: 10px;
+      overflow: hidden;
+      border: 1px solid #253037;
+      border-radius: 3px;
+      background: #0a0d0f;
+    }
+    .metric-chart-fill {
+      display: block;
+      height: 100%;
+      background: var(--accent);
+    }
+    .metric-chart-fill.warning { background: var(--warning); }
+    .metric-chart-fill.info { background: #67b7dc; }
+    .metric-chart-value {
+      color: #dce1e5;
+      font-size: 10px;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .trend-card-list { display: none; gap: 8px; margin-top: 10px; }
+    .trend-card {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 10px;
+      background: var(--panel-soft);
+    }
+    .trend-card > strong { display: block; margin-bottom: 8px; font-size: 12px; }
+    .trend-card dl { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 12px; margin: 0; }
+    .trend-card dt { color: var(--muted); font-size: 10px; }
+    .trend-card dd { margin: 2px 0 0; color: var(--text); font-size: 11px; }
     .detail-panel {
       margin-top: 12px;
       padding: 10px 12px;
@@ -3215,6 +3872,8 @@ _INDEX_HTML = """<!doctype html>
       .alert-history-filter { grid-template-columns: 1fr; }
       .worker-run-filter { grid-template-columns: 1fr; }
       .trend-filter { grid-template-columns: 1fr; }
+      .query-primary, .filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .result-columns { grid-template-columns: 1fr; }
       .player-controls { grid-template-columns: 1fr; }
       .confirmation-input-row { grid-template-columns: 1fr; }
       .backup-evidence-form { grid-template-columns: 1fr; }
@@ -3222,6 +3881,10 @@ _INDEX_HTML = """<!doctype html>
       .review-packet-comparer-form { grid-template-columns: 1fr; }
       .timeline-range { grid-template-columns: 1fr; }
       .replay-detail-layout { grid-template-columns: 1fr; }
+      .alert-settings-form,
+      .alert-channel-picker,
+      .discord-command-group-form,
+      .discord-alias-form { grid-template-columns: 1fr; }
       header { align-items: flex-start; flex-direction: column; }
     }
 
@@ -3462,6 +4125,30 @@ _INDEX_HTML = """<!doctype html>
       color: var(--muted);
       font-size: 12px;
     }
+    .workspace-section-tabs {
+      display: none;
+      min-width: 0;
+      margin: -4px 0 14px;
+      padding: 0 0 8px;
+      gap: 6px;
+      overflow-x: auto;
+      scrollbar-width: thin;
+    }
+    .workspace-section-tabs.visible { display: flex; }
+    .workspace-section-tabs button {
+      min-height: 34px;
+      flex: 0 0 auto;
+      padding: 6px 11px;
+      border-color: var(--line-strong);
+      background: #101417;
+      color: #aeb7be;
+      white-space: nowrap;
+    }
+    .workspace-section-tabs button.active {
+      border-color: #2d725c;
+      background: #14231e;
+      color: var(--accent);
+    }
     main > section[data-view] {
       display: none;
       min-width: 0;
@@ -3472,6 +4159,7 @@ _INDEX_HTML = """<!doctype html>
       border-radius: 6px;
       background: var(--panel);
     }
+    main > section[data-view][hidden] { display: none !important; }
     body[data-active-view="overview"] main > section[data-view="overview"],
     body[data-active-view="players"] main > section[data-view="players"],
     body[data-active-view="replay"] main > section[data-view="replay"],
@@ -3511,6 +4199,10 @@ _INDEX_HTML = """<!doctype html>
     form.review-packet-comparer-form {
       grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     }
+    form.worker-run-filter {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+    form.worker-run-filter > * { min-width: 0; }
     label { color: #99a3ac; font-size: 11px; }
     input, select, textarea {
       min-height: 38px;
@@ -3560,6 +4252,58 @@ _INDEX_HTML = """<!doctype html>
     }
     tbody tr:hover td { background: #14191c; }
     .status { color: var(--muted); font-size: 11px; }
+    .status-badge,
+    .historical-severity {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 2px 7px;
+      border: 1px solid var(--line-strong);
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .status-badge.success { border-color: #2e725b; background: #143126; color: #75e6bd; }
+    .status-badge.warning { border-color: #756226; background: #382f15; color: #f0d479; }
+    .status-badge.error { border-color: #7a3039; background: #3a181d; color: #f29aa2; }
+    .status-badge.info { border-color: #285a73; background: #142b39; color: #8bd3f5; }
+    .historical-severity { color: #89949d; background: #15191c; }
+    .dense-card-list {
+      display: none;
+      gap: 8px;
+    }
+    .dense-card {
+      min-width: 0;
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: #0d1114;
+    }
+    .dense-card-head,
+    .dense-card-row {
+      min-width: 0;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .dense-card-head { margin-bottom: 9px; }
+    .dense-card-head strong,
+    .dense-card-row strong,
+    .identifier { overflow-wrap: anywhere; word-break: break-word; }
+    .dense-card-row {
+      padding: 4px 0;
+      color: #cbd2d8;
+      font-size: 11px;
+    }
+    .dense-card-row span { color: var(--muted); }
+    .dense-card-actions { margin-top: 9px; display: flex; flex-wrap: wrap; gap: 6px; }
+    .identifier { font-family: Consolas, "Courier New", monospace; font-size: 11px; }
+    .player-controls,
+    .timeline-range,
+    .timeline-range input { min-width: 0; }
+    .timeline-range input { width: 100%; }
     .detail-panel,
     .timeline-event-detail {
       border-left-color: var(--info);
@@ -3679,8 +4423,20 @@ _INDEX_HTML = """<!doctype html>
       .side-nav button span { display: none; }
       main { padding: 0 12px 18px; overflow: visible; }
       .workspace-heading { margin: 0 -12px 12px; padding: 14px 12px; }
+      .workspace-section-tabs { margin-top: 0; }
       main > section[data-view] { padding: 13px; }
       .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .trend-table-wrap { display: none; }
+      .trend-card-list { display: grid; }
+      .dense-table-wrap { display: none; }
+      .dense-card-list {
+        display: grid;
+        max-height: min(60vh, 560px);
+        padding-right: 4px;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-width: thin;
+      }
     }
     @media (max-width: 520px) {
       .app-header { padding: 8px 10px; }
@@ -3690,8 +4446,23 @@ _INDEX_HTML = """<!doctype html>
       .command-message { white-space: normal; }
       .side-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .workspace-heading { align-items: flex-start; flex-direction: column; }
+      .workspace-section-tabs { margin-right: -12px; padding-right: 12px; }
       .grid { grid-template-columns: 1fr; }
+      #statusGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .query-primary, .filter-grid { grid-template-columns: 1fr; }
+      .result-heading { display: grid; }
+      .result-row { grid-template-columns: 1fr; }
+      .result-row-tail { justify-content: space-between; }
+      .result-row-tail p { text-align: left; }
+      .loadout-weapons { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
+      .metric-chart-grid { grid-template-columns: 1fr; }
+      .metric-chart-row { grid-template-columns: minmax(0, 1fr) auto; }
+      .metric-chart-track { grid-column: 1 / -1; grid-row: 2; }
+      .recommendation-chart-toolbar { justify-content: stretch; }
+      .recommendation-chart-toolbar label { width: 100%; }
       form,
+      form.query-form,
+      form.analysis-form,
       form.alert-history-filter,
       form.worker-run-filter,
       form.trend-filter,
@@ -3700,6 +4471,10 @@ _INDEX_HTML = """<!doctype html>
       form.review-packet-comparer-form {
         grid-template-columns: 1fr;
       }
+      .player-controls > *,
+      .player-controls label,
+      .player-controls select,
+      .player-controls button { min-width: 0; max-width: 100%; }
     }
   </style>
 </head>
@@ -3750,222 +4525,245 @@ _INDEX_HTML = """<!doctype html>
         </div>
         <button class="secondary compact-button" type="button" id="refreshWorkspace">새로고침</button>
       </div>
+      <nav class="workspace-section-tabs" id="workspaceSections" aria-label="현재 화면 세부 메뉴" role="tablist"></nav>
     <section id="overview-status" data-view="overview">
       <h2>상태</h2>
       <div class="grid" id="statusGrid"></div>
     </section>
     <section id="storage-settings" data-view="settings">
-      <h2>Storage Settings</h2>
+      <h2>저장 경로 설정</h2>
       <form id="storageSettingsForm">
-        <label>Raw directory
+        <label>원본 매치 저장 경로
           <span class="path-input-row">
             <input name="raw_data_dir" autocomplete="off" required>
             <button class="secondary desktop-only path-picker" type="button" data-path-purpose="raw" data-path-input="raw_data_dir" title="Raw 저장 폴더 선택">찾기</button>
           </span>
         </label>
-        <label>Replay directory
+        <label>2D 리플레이 저장 경로
           <span class="path-input-row">
             <input name="replay_data_dir" autocomplete="off" required>
             <button class="secondary desktop-only path-picker" type="button" data-path-purpose="replay" data-path-input="replay_data_dir" title="Replay 저장 폴더 선택">찾기</button>
           </span>
         </label>
-        <label>Deletion backup directory
+        <label>삭제 백업 저장 경로
           <span class="path-input-row">
             <input name="backup_data_dir" autocomplete="off" required>
             <button class="secondary desktop-only path-picker" type="button" data-path-purpose="backup" data-path-input="backup_data_dir" title="백업 저장 폴더 선택">찾기</button>
           </span>
         </label>
-        <label>Deletion quarantine directory
+        <label>삭제 격리 저장 경로
           <span class="path-input-row">
             <input name="quarantine_data_dir" autocomplete="off" required>
             <button class="secondary desktop-only path-picker" type="button" data-path-purpose="quarantine" data-path-input="quarantine_data_dir" title="격리 저장 폴더 선택">찾기</button>
           </span>
         </label>
-        <label>Compression
+        <label>원본 압축 방식
           <select name="raw_compression">
             <option value="gzip">gzip</option>
-            <option value="none">none</option>
+            <option value="none">압축 안 함</option>
           </select>
         </label>
-        <button type="submit">Save</button>
+        <button type="submit">저장</button>
       </form>
-      <div class="status" id="storageSettingsStatus" style="margin-top: 12px;">Waiting</div>
+      <div class="status" id="storageSettingsStatus" style="margin-top: 12px;">저장 경로 확인 중</div>
     </section>
     <section id="alerts" data-view="operations">
-      <h2>Alert Settings</h2>
-      <form id="alertSettingsForm">
-        <label>Minimum free GB
+      <h2>알림 설정</h2>
+      <form id="alertSettingsForm" class="alert-settings-form">
+        <label>최소 여유 공간 (GB)
           <input name="minimum_free_gb" type="number" min="0" step="0.1" value="50" required>
         </label>
-        <label>Discord channel IDs
-          <input name="discord_channel_ids" autocomplete="off" placeholder="123456789012345678, 987654321098765432">
-        </label>
-        <label>Storage alerts
+        <label>저장소 알림
           <select name="storage_alerts_enabled">
-            <option value="true">enabled</option>
-            <option value="false">disabled</option>
+            <option value="true">사용</option>
+            <option value="false">사용 안 함</option>
           </select>
         </label>
-        <label>Worker alerts
+        <label>자동 작업 오류 알림
           <select name="worker_error_alerts_enabled">
-            <option value="true">enabled</option>
-            <option value="false">disabled</option>
+            <option value="true">사용</option>
+            <option value="false">사용 안 함</option>
           </select>
         </label>
-        <button type="submit">Save</button>
+        <button type="submit">저장</button>
+        <fieldset class="alert-channel-picker">
+          <legend>Discord 알림 채널</legend>
+          <label>서버
+            <select
+              id="alertDiscordGuildSelect"
+              class="discord-guild-select"
+              data-empty-label="서버 선택"
+            ><option value="">서버 선택</option></select>
+          </label>
+          <label>메시지 전송 가능 채널
+            <select id="alertDiscordChannelSelect" disabled>
+              <option value="">서버 선택 필요</option>
+            </select>
+          </label>
+          <div class="alert-channel-actions">
+            <button id="alertDiscordChannelAdd" type="button" disabled>추가</button>
+            <button id="alertDiscordChannelsRefresh" class="secondary" type="button">새로고침</button>
+          </div>
+          <input id="alertDiscordChannelIds" name="discord_channel_ids" type="hidden">
+          <div id="alertDiscordChannelSelection" class="alert-channel-selection result-chip-list"></div>
+          <div id="alertDiscordChannelsStatus" class="status">선택된 알림 채널 없음</div>
+        </fieldset>
       </form>
-      <div class="status" id="alertSettingsStatus" style="margin-top: 12px;">Waiting</div>
-      <table style="margin-top: 12px;">
+      <div class="status" id="alertSettingsStatus" style="margin-top: 12px;">알림 상태 확인 중</div>
+      <div class="table-scroll" style="margin-top: 12px;"><table>
         <thead>
           <tr>
-            <th>Source</th>
-            <th>Severity</th>
-            <th>Title</th>
-            <th>Message</th>
-            <th>Action</th>
+            <th>발생 위치</th>
+            <th>심각도</th>
+            <th>제목</th>
+            <th>내용</th>
+            <th>처리</th>
           </tr>
         </thead>
         <tbody id="alertsBody"></tbody>
-      </table>
-      <h3>Alert History</h3>
+      </table></div>
+      <h3>알림 이력</h3>
       <form id="alertHistoryFilterForm" class="alert-history-filter">
-        <label>Source
+        <label>발생 위치
           <select name="source">
-            <option value="all">all</option>
-            <option value="storage">storage</option>
-            <option value="worker">worker</option>
+            <option value="all">전체</option>
+            <option value="storage">저장소</option>
+            <option value="worker">자동 작업</option>
           </select>
         </label>
-        <label>Status
+        <label>상태
           <select name="state">
-            <option value="all">all</option>
-            <option value="current">current</option>
-            <option value="active">active</option>
-            <option value="acknowledged">acknowledged</option>
-            <option value="snoozed">snoozed</option>
-            <option value="resolved">resolved</option>
+            <option value="all">전체</option>
+            <option value="current">현재 항목</option>
+            <option value="active">활성</option>
+            <option value="acknowledged">확인함</option>
+            <option value="snoozed">숨김</option>
+            <option value="resolved">해결됨</option>
           </select>
         </label>
-        <label>Severity
+        <label>심각도
           <select name="severity">
-            <option value="all">all</option>
-            <option value="error">error</option>
-            <option value="warning">warning</option>
-            <option value="info">info</option>
-            <option value="ok">ok</option>
+            <option value="all">전체</option>
+            <option value="error">오류</option>
+            <option value="warning">주의</option>
+            <option value="info">정보</option>
+            <option value="ok">정상</option>
           </select>
         </label>
-        <label>Rows
+        <label>표시 개수
           <select name="limit">
-            <option value="25">25</option>
-            <option value="50" selected>50</option>
-            <option value="100">100</option>
-            <option value="200">200</option>
+            <option value="20" selected>20개</option>
+            <option value="50">50개</option>
+            <option value="100">100개</option>
+            <option value="200">200개</option>
           </select>
         </label>
-        <label>Sort
+        <label>정렬
           <select name="sort">
-            <option value="newest" selected>newest</option>
-            <option value="oldest">oldest</option>
-            <option value="severity">severity-first</option>
+            <option value="newest" selected>최신순</option>
+            <option value="oldest">오래된순</option>
+            <option value="severity">심각도 우선</option>
           </select>
         </label>
-        <label>Search
-          <input name="search" placeholder="title or message">
+        <label>검색
+          <input name="search" placeholder="제목 또는 내용">
         </label>
-        <button type="submit">Apply</button>
+        <button type="submit">조회</button>
       </form>
       <div class="actions" style="margin-top: 10px;">
-        <button class="secondary" type="button" data-alert-history-preset="current-errors">Current errors</button>
-        <button class="secondary" type="button" data-alert-history-preset="worker-failures">Worker failures</button>
-        <button class="secondary" type="button" data-alert-history-preset="storage-pressure">Storage pressure</button>
-        <button class="secondary" type="button" data-alert-history-preset="all-history">All history</button>
-        <button class="secondary" type="button" id="alertHistoryExport">Export CSV</button>
-        <button class="secondary" type="button" id="alertHistoryCopyFilterLink">Copy filter link</button>
-        <button class="secondary" type="button" id="alertHistoryPrev">Previous</button>
-        <button class="secondary" type="button" id="alertHistoryNext">Next</button>
+        <button class="secondary" type="button" data-alert-history-preset="current-errors">현재 오류</button>
+        <button class="secondary" type="button" data-alert-history-preset="worker-failures">자동 작업 실패</button>
+        <button class="secondary" type="button" data-alert-history-preset="storage-pressure">저장 공간 부족</button>
+        <button class="secondary" type="button" data-alert-history-preset="all-history">전체 이력</button>
+        <button class="secondary" type="button" id="alertHistoryExport">CSV 내보내기</button>
+        <button class="secondary" type="button" id="alertHistoryCopyFilterLink">조회 링크 복사</button>
+        <button class="secondary" type="button" id="alertHistoryPrev">이전</button>
+        <button class="secondary" type="button" id="alertHistoryNext">다음</button>
       </div>
-      <div class="status" id="alertHistoryStatus" style="margin-top: 8px;">Waiting</div>
-      <table>
+      <div class="status" id="alertHistoryStatus" style="margin-top: 8px;">알림 이력 확인 중</div>
+      <div class="table-scroll dense-table-wrap"><table>
         <thead>
           <tr>
-            <th>Last seen</th>
-            <th>Source</th>
-            <th>Title</th>
-            <th>Status</th>
-            <th>Notes</th>
-            <th>Message</th>
-            <th>Action</th>
+            <th>최근 발생 (KST)</th>
+            <th>발생 위치</th>
+            <th>제목</th>
+            <th>상태</th>
+            <th>메모</th>
+            <th>내용</th>
+            <th>처리</th>
           </tr>
         </thead>
         <tbody id="alertHistoryBody"></tbody>
-      </table>
+      </table></div>
+      <div class="dense-card-list" id="alertHistoryCards"></div>
       <div class="detail-panel" id="alertHistoryDetail">
-        Select an alert history row.
+        알림 이력을 선택하세요.
       </div>
     </section>
     <section id="collector-settings" data-view="collection">
-      <h2>Collector Settings</h2>
+      <h2>자동 수집 설정</h2>
       <form id="collectorSettingsForm">
-        <label>Poll seconds
+        <label>조회 주기 (초)
           <input name="poll_interval_seconds" type="number" min="60" max="300" value="180" required>
         </label>
-        <label>Cycle players
+        <label>주기당 조회 유저
           <input name="cycle_player_limit" type="number" min="1" max="100" value="100" required>
         </label>
-        <label>Lookup chunk
+        <label>API 조회 묶음 인원
           <input name="player_lookup_chunk_size" type="number" min="1" max="10" value="10" required>
         </label>
-        <button type="submit">Save</button>
+        <button type="submit">저장</button>
       </form>
-      <div class="status" id="collectorSettingsStatus" style="margin-top: 12px;">Waiting</div>
+      <div class="status" id="collectorSettingsStatus" style="margin-top: 12px;">수집 설정 확인 중</div>
       <form id="collectorWorkerForm" style="margin-top: 10px;">
-        <label>Shard
+        <label>플랫폼 범위
           <select name="shard">
-            <option value="">all</option>
+            <option value="">전체</option>
             <option value="steam">steam</option>
             <option value="kakao">kakao</option>
             <option value="psn">psn</option>
             <option value="xbox">xbox</option>
           </select>
         </label>
-        <label>Match jobs
+        <label>주기당 매치 작업
           <input name="match_job_limit" type="number" min="1" max="500" value="10" required>
         </label>
-        <label>Telemetry jobs
+        <label>주기당 텔레메트리 작업
           <input name="telemetry_job_limit" type="number" min="1" max="200" value="5" required>
         </label>
-        <button type="submit">Start auto</button>
-        <button class="secondary" type="button" id="collectorWorkerStop">Stop</button>
+        <button type="submit">자동 수집 시작</button>
+        <button class="secondary" type="button" id="collectorWorkerStop">중지</button>
       </form>
-      <div class="status" id="collectorWorkerStatus" style="margin-top: 12px;">Auto collector stopped</div>
+      <div class="status" id="collectorWorkerStatus" style="margin-top: 12px;">자동 수집 중지</div>
     </section>
     <section id="web-link-settings" data-view="settings">
-      <h2>Local Web Link</h2>
+      <h2>로컬 상세 링크</h2>
       <form id="webSettingsForm">
-        <label>Base URL
+        <label>기본 주소
           <input name="local_web_base_url" autocomplete="off" placeholder="http://127.0.0.1:8000">
         </label>
-        <button type="submit">Save</button>
+        <button type="submit">저장</button>
       </form>
-      <div class="status" id="webSettingsStatus" style="margin-top: 12px;">Waiting</div>
+      <div class="status" id="webSettingsStatus" style="margin-top: 12px;">로컬 링크 확인 중</div>
     </section>
     <section id="discord-permissions" data-view="discord">
       <h2>Discord 권한</h2>
       <form id="discordGrantForm">
-        <label>User ID
+        <label>Discord 사용자 ID
           <input name="user_id" autocomplete="off" required>
         </label>
         <label>권한 그룹
           <select name="group" id="discordPermissionGroup" required></select>
         </label>
-        <label>Guild ID
-          <input name="guild_id" autocomplete="off" placeholder="비우면 전체 권한">
+        <label>서버 범위
+          <select name="guild_id" class="discord-guild-select" data-empty-label="전체 서버 권한">
+            <option value="">전체 서버 권한</option>
+          </select>
         </label>
         <button type="submit">권한 추가</button>
       </form>
       <form id="discordAdminForm" style="margin-top: 10px;">
-        <label>Global Admin User ID
+        <label>전역 관리자 사용자 ID
           <input name="user_id" autocomplete="off" required>
         </label>
         <button type="submit">전역 관리자 추가</button>
@@ -3982,34 +4780,91 @@ _INDEX_HTML = """<!doctype html>
         <tbody id="discordPermissionsBody"></tbody>
       </table>
     </section>
-    <section id="discord-scopes" data-view="discord">
-      <h2>Discord Scope Settings</h2>
-      <form id="discordScopeForm">
-        <label>Guild ID
-          <input name="guild_id" autocomplete="off" required>
+    <section id="discord-command-groups" data-view="discord">
+      <h2>Discord 명령 권한 그룹</h2>
+      <form id="discordCommandGroupForm" class="discord-command-group-form">
+        <label>사용자 그룹 키
+          <input
+            name="group"
+            autocomplete="off"
+            minlength="2"
+            maxlength="32"
+            pattern="[a-z][a-z0-9_-]{1,31}"
+            required
+          >
         </label>
-        <label>Ranking scope
-          <select name="scope">
-            <option value="guild">guild</option>
-            <option value="global">global</option>
+        <label>명령 찾기
+          <input id="discordCommandSearch" type="search" autocomplete="off" placeholder="전적, 무기, alert">
+        </label>
+        <button type="submit">그룹 저장</button>
+        <button id="discordCommandGroupReset" class="secondary" type="button">초기화</button>
+      </form>
+      <div id="discordCommandCatalog" class="command-catalog-grid"></div>
+      <div id="discordCommandGroupStatus" class="status" style="margin-top: 10px;">명령 카탈로그 확인 중</div>
+      <div class="table-scroll" style="margin-top: 10px;">
+        <table class="discord-group-table">
+          <thead>
+            <tr><th>그룹</th><th>사용 가능한 명령</th><th>할당</th><th></th></tr>
+          </thead>
+          <tbody id="discordCommandGroupsBody"></tbody>
+        </table>
+      </div>
+      <div class="discord-alias-block">
+        <h3>접두사 명령 별칭</h3>
+        <form id="discordCommandAliasForm" class="discord-alias-form">
+          <label>새 별칭
+            <input
+              name="alias"
+              autocomplete="off"
+              maxlength="32"
+              pattern="[A-Za-z0-9_가-힣-]{1,32}"
+              required
+            >
+          </label>
+          <label>실행할 명령
+            <select name="target_command" id="discordCommandAliasTarget" required></select>
+          </label>
+          <button type="submit">별칭 저장</button>
+          <button id="discordCommandAliasReset" class="secondary" type="button">초기화</button>
+        </form>
+        <div class="table-scroll" style="margin-top: 10px;">
+          <table>
+            <thead><tr><th>별칭</th><th>실행 명령</th><th></th></tr></thead>
+            <tbody id="discordCommandAliasesBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section id="discord-scopes" data-view="discord">
+      <h2>Discord 랭킹 범위</h2>
+      <form id="discordScopeForm">
+        <label>서버
+          <select name="guild_id" class="discord-guild-select" data-empty-label="서버 선택" required>
+            <option value="">서버 선택</option>
           </select>
         </label>
-        <button type="submit">Save</button>
+        <label>랭킹 범위
+          <select name="scope">
+            <option value="guild">선택한 서버</option>
+            <option value="global">전체 서버</option>
+          </select>
+        </label>
+        <button type="submit">저장</button>
       </form>
       <form id="publicProfileDefaultForm" style="margin-top: 10px;">
-        <label>Public profile default
+        <label>기본 전적 공개 범위
           <select name="public_profile_default">
-            <option value="true">public</option>
-            <option value="false">private</option>
+            <option value="true">공개</option>
+            <option value="false">비공개</option>
           </select>
         </label>
-        <button type="submit">Save</button>
+        <button type="submit">저장</button>
       </form>
       <table style="margin-top: 12px;">
         <thead>
           <tr>
-            <th>Guild ID</th>
-            <th>Ranking scope</th>
+            <th>서버</th>
+            <th>랭킹 범위</th>
             <th></th>
           </tr>
         </thead>
@@ -4138,100 +4993,207 @@ _INDEX_HTML = """<!doctype html>
         Select a request to inspect its audit history and read-only impact preview.
       </div>
     </section>
+    <datalist id="registeredPlayerOptions"></datalist>
     <section id="profile-lookup" data-view="players">
       <h2>전적 조회</h2>
-      <form id="profileForm">
+      <form id="profileForm" class="query-form">
         <label>플랫폼
           <select name="shard">
             <option value="steam">steam</option>
             <option value="kakao">kakao</option>
           </select>
         </label>
-        <label>닉네임 또는 Account ID
-          <input name="target" autocomplete="off" required>
+        <label>등록 유저
+          <input class="registered-player-input" name="target" list="registeredPlayerOptions" autocomplete="off" placeholder="닉네임 일부 입력" required>
         </label>
         <button type="submit">조회</button>
+        <button class="secondary" type="button" data-reset-analysis-form="profileForm">초기화</button>
       </form>
       <div class="status" id="profileBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
     <section id="trend-lookup" data-view="players">
       <h2>KST 추세 조회</h2>
-      <form id="trendForm" class="trend-filter">
-        <label>플랫폼
-          <select name="shard"><option value="steam">steam</option><option value="kakao">kakao</option></select>
-        </label>
-        <label>닉네임 또는 Account ID<input name="target" autocomplete="off" required></label>
-        <label>집계 단위
-          <select name="granularity">
-            <option value="hour">시간대</option><option value="date">일자</option>
-            <option value="week">ISO 주차</option><option value="month" selected>월</option>
-          </select>
-        </label>
-        <label>팀 모드
-          <select name="team_mode">
-            <option value="">전체</option><option value="solo">solo</option>
-            <option value="duo">duo</option><option value="squad">squad</option><option value="unknown">unknown</option>
-          </select>
-        </label>
-        <label>시점
-          <select name="perspective"><option value="">전체</option><option value="fpp">fpp</option><option value="tpp">tpp</option><option value="unknown">unknown</option></select>
-        </label>
-        <label>Game mode<input name="game_mode" autocomplete="off" placeholder="squad-fpp"></label>
-        <label>Match type<input name="match_type" autocomplete="off" placeholder="official"></label>
-        <label>Map<input name="map_name" autocomplete="off" placeholder="Baltic_Main"></label>
-        <label>커스텀
-          <select name="is_custom_match"><option value="">전체</option><option value="false">일반</option><option value="true">커스텀</option></select>
-        </label>
-        <label>시작일 (KST)<input name="from_date_kst" type="date"></label>
-        <label>종료일 (KST)<input name="to_date_kst" type="date"></label>
-        <label>최대 구간<input name="bucket_limit" type="number" min="1" max="500" value="120" required></label>
-        <button type="submit">조회</button>
+      <form id="trendForm" class="analysis-form">
+        <div class="query-primary">
+          <label>플랫폼
+            <select name="shard"><option value="steam">steam</option><option value="kakao">kakao</option></select>
+          </label>
+          <label>등록 유저<input class="registered-player-input" name="target" list="registeredPlayerOptions" autocomplete="off" placeholder="닉네임 일부 입력" required></label>
+          <label>집계 기준
+            <select name="granularity">
+              <option value="hour">시간대</option><option value="date">일자</option>
+              <option value="week">ISO 주차</option><option value="month" selected>월</option>
+              <option value="quarter">분기</option><option value="year">연도</option>
+              <option value="map">맵</option><option value="game_mode">게임 모드</option>
+              <option value="team_mode">팀 모드</option><option value="perspective">시점</option>
+              <option value="match_type">매치 유형</option><option value="season_state">시즌 상태</option>
+            </select>
+          </label>
+          <button type="submit">조회</button>
+          <button class="secondary" type="button" data-reset-analysis-form="trendForm">초기화</button>
+        </div>
+        <details class="advanced-filters">
+          <summary>상세 필터</summary>
+          <div class="filter-grid">
+            <label>팀 모드
+              <select name="team_mode"><option value="">전체</option><option value="solo">솔로</option><option value="duo">듀오</option><option value="squad">스쿼드</option><option value="unknown">알 수 없음</option></select>
+            </label>
+            <label>시점<select name="perspective"><option value="">전체</option><option value="fpp">1인칭</option><option value="tpp">3인칭</option><option value="unknown">알 수 없음</option></select></label>
+            <label>게임 모드<select name="game_mode" data-catalog-facet="game_modes"><option value="">전체</option></select></label>
+            <label>매치 유형<select name="match_type" data-catalog-facet="match_types"><option value="">전체</option></select></label>
+            <label>맵<select name="map_name" data-catalog-facet="maps"><option value="">전체</option></select></label>
+            <label>시즌 상태<select name="season_state" data-catalog-facet="season_states"><option value="">전체</option></select></label>
+            <label>커스텀<select name="is_custom_match"><option value="">전체</option><option value="false">일반</option><option value="true">커스텀</option></select></label>
+            <label>연도<select name="year" data-catalog-facet="years"><option value="">전체</option></select></label>
+            <label>분기<select name="quarter"><option value="">전체</option><option value="1">1분기</option><option value="2">2분기</option><option value="3">3분기</option><option value="4">4분기</option></select></label>
+            <label>월<select name="month"><option value="">전체</option><option value="1">1월</option><option value="2">2월</option><option value="3">3월</option><option value="4">4월</option><option value="5">5월</option><option value="6">6월</option><option value="7">7월</option><option value="8">8월</option><option value="9">9월</option><option value="10">10월</option><option value="11">11월</option><option value="12">12월</option></select></label>
+            <label>특정 일자 (KST)<input name="exact_date_kst" type="date"></label>
+            <label>시간대 (KST)<select name="hour"><option value="">전체</option></select></label>
+            <label>시작일 (KST)<input name="from_date_kst" type="date"></label>
+            <label>종료일 (KST)<input name="to_date_kst" type="date"></label>
+            <label>최대 구간<input name="bucket_limit" type="number" min="1" max="500" value="120" required></label>
+          </div>
+        </details>
       </form>
       <div class="status" id="trendSummary" style="margin-top: 12px;">조회 대기 중</div>
-      <div class="table-scroll" style="margin-top: 10px;">
+      <div id="trendViewControls" class="recommendation-chart-toolbar" hidden>
+        <div class="recommendation-view-switch" role="group" aria-label="추세 보기 방식">
+          <button class="secondary active" type="button" data-trend-view="table">표</button>
+          <button class="secondary" type="button" data-trend-view="chart">그래프</button>
+        </div>
+        <label>그래프 지표
+          <select id="trendChartMetric">
+            <optgroup label="성과">
+              <option value="win_rate">치킨 승률</option>
+              <option value="fight_win_rate">교전 승리 확률</option>
+              <option value="kda">KDA</option>
+              <option value="avg_kills">경기당 평균 킬</option>
+              <option value="avg_assists">경기당 평균 어시스트</option>
+              <option value="avg_dbnos_caused">경기당 평균 기절</option>
+              <option value="avg_deaths">경기당 평균 사망</option>
+              <option value="avg_fights_per_match">경기당 평균 교전</option>
+              <option value="avg_damage_dealt">평균 준 피해</option>
+              <option value="avg_damage_taken">평균 받은 피해</option>
+            </optgroup>
+            <optgroup label="사격">
+              <option value="accuracy">명중 확률</option>
+              <option value="headshot_hit_rate">헤드샷 명중 확률</option>
+              <option value="headshot_kill_rate">헤드샷 킬 비율</option>
+              <option value="hit_head">머리 명중 비율</option>
+              <option value="hit_neck">목 명중 비율</option>
+              <option value="hit_torso">몸통 명중 비율</option>
+              <option value="hit_pelvis">골반 명중 비율</option>
+              <option value="hit_arm">팔 명중 비율</option>
+              <option value="hit_leg">다리 명중 비율</option>
+            </optgroup>
+            <optgroup label="피격·생존">
+              <option value="taken_head">머리 피격 비율</option>
+              <option value="taken_neck">목 피격 비율</option>
+              <option value="taken_torso">몸통 피격 비율</option>
+              <option value="taken_pelvis">골반 피격 비율</option>
+              <option value="taken_arm">팔 피격 비율</option>
+              <option value="taken_leg">다리 피격 비율</option>
+              <option value="avg_dbnos_taken">경기당 당한 기절</option>
+              <option value="avg_survival_seconds">평균 생존시간</option>
+              <option value="avg_movement_distance_m">평균 이동거리</option>
+            </optgroup>
+          </select>
+        </label>
+      </div>
+      <div id="trendChartPanel" class="metric-chart" hidden></div>
+      <div class="trend-card-list" id="trendCards"></div>
+      <div class="table-scroll trend-table-wrap" id="trendTableWrap" style="margin-top: 10px;">
         <table class="trend-table">
-          <thead><tr><th>구간</th><th>경기</th><th>치킨</th><th>승률</th><th>K/D/A</th><th>KDA</th><th>평균 딜/받은 딜</th><th>명중 지표</th><th>기절 +/-</th><th>평균 생존</th></tr></thead>
-          <tbody id="trendBody"><tr><td colspan="10">조회 대기 중</td></tr></tbody>
+          <thead><tr><th>구간</th><th>경기 / 치킨</th><th>승률</th><th>K/D/A · KDA</th><th>경기당 킬 / 기절</th><th>평균 딜 / 받은 딜</th><th>명중 지표</th><th>헤드샷 명중</th><th>교전</th><th>기절 +/-</th><th>평균 생존</th></tr></thead>
+          <tbody id="trendBody"><tr><td colspan="11">조회 대기 중</td></tr></tbody>
         </table>
       </div>
     </section>
     <section id="weapon-lookup" data-view="players">
       <h2>무기 조회</h2>
-      <form id="weaponForm">
-        <label>플랫폼
-          <select name="shard">
-            <option value="steam">steam</option>
-            <option value="kakao">kakao</option>
-          </select>
-        </label>
-        <label>닉네임 또는 Account ID
-          <input name="target" autocomplete="off" required>
-        </label>
-        <label>무기
-          <input name="weapon" autocomplete="off" placeholder="M416" required>
-        </label>
-        <button type="submit">조회</button>
+      <form id="weaponForm" class="analysis-form">
+        <div class="query-primary">
+          <label>플랫폼<select name="shard"><option value="steam">steam</option><option value="kakao">kakao</option></select></label>
+          <label>등록 유저<input class="registered-player-input" name="target" list="registeredPlayerOptions" autocomplete="off" placeholder="닉네임 일부 입력" required></label>
+          <label>무기<select name="weapon" required><option value="">유저를 먼저 선택하세요</option></select></label>
+          <button type="submit">조회</button>
+          <button class="secondary" type="button" data-reset-analysis-form="weaponForm">초기화</button>
+        </div>
+        <details class="advanced-filters">
+          <summary>상세 필터</summary>
+          <div class="filter-grid">
+            <label>맵<select name="map_name" data-catalog-facet="maps"><option value="">전체</option></select></label>
+            <label>게임 모드<select name="game_mode" data-catalog-facet="game_modes"><option value="">전체</option></select></label>
+            <label>팀 모드<select name="team_mode" data-catalog-facet="team_modes"><option value="">전체</option></select></label>
+            <label>시점<select name="perspective" data-catalog-facet="perspectives"><option value="">전체</option></select></label>
+            <label>매치 유형<select name="match_type" data-catalog-facet="match_types"><option value="">전체</option></select></label>
+            <label>시즌 상태<select name="season_state" data-catalog-facet="season_states"><option value="">전체</option></select></label>
+            <label>연도<select name="year" data-catalog-facet="years"><option value="">전체</option></select></label>
+            <label>분기<select name="quarter"><option value="">전체</option><option value="1">1분기</option><option value="2">2분기</option><option value="3">3분기</option><option value="4">4분기</option></select></label>
+            <label>월<select name="month"><option value="">전체</option><option value="1">1월</option><option value="2">2월</option><option value="3">3월</option><option value="4">4월</option><option value="5">5월</option><option value="6">6월</option><option value="7">7월</option><option value="8">8월</option><option value="9">9월</option><option value="10">10월</option><option value="11">11월</option><option value="12">12월</option></select></label>
+            <label>특정 일자 (KST)<input name="exact_date_kst" type="date"></label>
+            <label>시간대 (KST)<select name="hour"><option value="">전체</option></select></label>
+            <label>커스텀<select name="is_custom_match"><option value="">전체</option><option value="false">일반</option><option value="true">커스텀</option></select></label>
+            <label>시작일 (KST)<input name="from_date_kst" type="date"></label>
+            <label>종료일 (KST)<input name="to_date_kst" type="date"></label>
+          </div>
+        </details>
       </form>
       <div class="status" id="weaponBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
     <section id="recommendation-lookup" data-view="players">
-      <h2>Recommendation 조회</h2>
-      <form id="recommendationForm">
+      <h2>추천 조회</h2>
+      <form id="recommendationForm" class="query-form">
         <label>플랫폼
           <select name="shard">
             <option value="steam">steam</option>
             <option value="kakao">kakao</option>
           </select>
         </label>
-        <label>닉네임 또는 Account ID
-          <input name="target" autocomplete="off" required>
+        <label>등록 유저
+          <input class="registered-player-input" name="target" list="registeredPlayerOptions" autocomplete="off" placeholder="닉네임 일부 입력" required>
         </label>
-        <label>Min matches
-          <input name="min_matches" type="number" min="1" max="50" value="1">
+        <label>추천 최소 표본 경기
+          <input name="min_matches" type="number" min="1" step="1" value="1" inputmode="numeric" title="무기·파츠 추천에 포함할 최소 경기 수">
         </label>
         <button type="submit">조회</button>
+        <button class="secondary" type="button" data-reset-analysis-form="recommendationForm">초기화</button>
       </form>
       <div class="status" id="recommendationBody" style="margin-top: 12px;">조회 대기 중</div>
+    </section>
+    <section id="landing-analysis" data-view="players">
+      <h2>낙하 지역 분석</h2>
+      <form id="dropZoneForm" class="query-form">
+        <label>플랫폼
+          <select name="shard"><option value="steam">steam</option><option value="kakao">kakao</option></select>
+        </label>
+        <label>등록 유저
+          <input class="registered-player-input" name="target" list="registeredPlayerOptions" autocomplete="off" placeholder="닉네임 일부 입력" required>
+        </label>
+        <label>최소 착지 경기
+          <input name="min_matches" type="number" min="1" step="1" value="1" inputmode="numeric">
+        </label>
+        <label>지역 정렬
+          <select name="sort_metric">
+            <option value="landings" selected>착지 횟수</option>
+            <option value="win_rate">승률</option>
+            <option value="avg_kills">평균 킬</option>
+            <option value="avg_damage">평균 피해</option>
+          </select>
+        </label>
+        <label>그래프 지역 수
+          <select name="chart_limit">
+            <option value="10">10개</option>
+            <option value="20" selected>20개</option>
+            <option value="50">50개</option>
+            <option value="100">100개</option>
+            <option value="500">전체</option>
+          </select>
+        </label>
+        <button type="submit">조회</button>
+        <button class="secondary" type="button" data-reset-analysis-form="dropZoneForm">초기화</button>
+      </form>
+      <div class="status" id="dropZoneBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
     <section id="map-region-lookup" data-view="replay">
       <h2>맵 좌표 지역 확인</h2>
@@ -4260,26 +5222,30 @@ _INDEX_HTML = """<!doctype html>
     </section>
     <section id="match-lookup" data-view="players">
       <h2>매치 조회</h2>
-      <form id="matchForm">
+      <form id="matchForm" class="query-form">
         <label>플랫폼
           <select name="shard">
             <option value="steam">steam</option>
             <option value="kakao">kakao</option>
           </select>
         </label>
-        <label>Match ID
-          <input name="match_id" autocomplete="off" required>
+        <label>등록 유저
+          <input class="registered-player-input" name="target" list="registeredPlayerOptions" autocomplete="off" placeholder="닉네임 일부 입력" required>
         </label>
-        <label>닉네임 또는 Account ID
-          <input name="target" autocomplete="off" placeholder="비우면 등록 참가자 자동 선택">
+        <label>매치 조건검색
+          <input name="match_search" autocomplete="off" placeholder="날짜, 맵, 모드, 등수, 킬">
+        </label>
+        <label>매치
+          <select name="match_id" required><option value="">유저를 먼저 선택하세요</option></select>
         </label>
         <button type="submit">조회</button>
+        <button class="secondary" type="button" data-reset-analysis-form="matchForm">초기화</button>
       </form>
       <div class="status" id="matchBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
     <section id="ranking-lookup" data-view="players">
       <h2>랭킹 조회</h2>
-      <form id="rankingForm">
+      <form id="rankingForm" class="query-form ranking-form">
         <label>플랫폼
           <select name="shard">
             <option value="steam">steam</option>
@@ -4295,92 +5261,104 @@ _INDEX_HTML = """<!doctype html>
             <option value="kills">킬</option>
             <option value="dbnos">기절</option>
             <option value="accuracy">추정 명중률(일반 탄환)</option>
+            <option value="headshot_hit_rate">헤드샷 명중 확률</option>
             <option value="headshot_rate">헤드샷 킬 비율</option>
             <option value="matches">경기 수</option>
           </select>
         </label>
-        <label>Guild ID
-          <input name="guild_id" autocomplete="off" placeholder="비우면 전체">
+        <label>서버 범위
+          <select name="guild_id" id="rankingGuildSelect">
+            <option value="">전체 서버</option>
+          </select>
         </label>
-        <label>Limit
+        <label>표시 인원
           <input name="limit" type="number" min="1" max="100" value="10">
         </label>
         <button type="submit">조회</button>
+        <button class="secondary" type="button" id="rankingGuildRefresh" title="Discord 서버 목록 새로고침">서버 새로고침</button>
       </form>
       <div class="status" id="rankingBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
     <section id="match-job-queue" data-view="collection">
-      <h2>Match 수집 큐</h2>
+      <h2>매치 수집 큐</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="processMatchJobs()">상세 저장</button>
         <button class="secondary" type="button" onclick="loadJobs()">새로고침</button>
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>플랫폼</th>
-            <th>Match ID</th>
-            <th>상태</th>
-            <th>시도</th>
-            <th>생성</th>
-          </tr>
-        </thead>
-        <tbody id="jobsBody"></tbody>
-      </table>
+      <div class="status" id="jobsSummary" style="margin-bottom: 8px;">수집 큐 확인 중</div>
+      <div class="table-scroll dense-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>플랫폼</th>
+              <th>매치 ID</th>
+              <th>상태</th>
+              <th>시도</th>
+              <th>마지막 변경 (KST)</th>
+            </tr>
+          </thead>
+          <tbody id="jobsBody"></tbody>
+        </table>
+      </div>
+      <div class="dense-card-list" id="jobsCards"></div>
     </section>
     <section id="telemetry-job-queue" data-view="collection">
-      <h2>Telemetry 수집 큐</h2>
+      <h2>텔레메트리 수집 큐</h2>
       <div class="actions" style="margin-bottom: 10px;">
-        <button type="button" onclick="processTelemetryJobs()">Telemetry 저장</button>
+        <button type="button" onclick="processTelemetryJobs()">텔레메트리 저장</button>
         <button class="secondary" type="button" onclick="loadTelemetryJobs()">새로고침</button>
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>플랫폼</th>
-            <th>Match ID</th>
-            <th>상태</th>
-            <th>시도</th>
-            <th>생성</th>
-          </tr>
-        </thead>
-        <tbody id="telemetryJobsBody"></tbody>
-      </table>
+      <div class="status" id="telemetryJobsSummary" style="margin-bottom: 8px;">수집 큐 확인 중</div>
+      <div class="table-scroll dense-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>플랫폼</th>
+              <th>매치 ID</th>
+              <th>상태</th>
+              <th>시도</th>
+              <th>마지막 변경 (KST)</th>
+            </tr>
+          </thead>
+          <tbody id="telemetryJobsBody"></tbody>
+        </table>
+      </div>
+      <div class="dense-card-list" id="telemetryJobsCards"></div>
     </section>
     <section id="post-processing-worker" data-view="collection">
-      <h2>Post-processing Worker</h2>
+      <h2>자동 후처리 설정</h2>
       <form id="postProcessingWorkerForm">
-        <label>Combat
+        <label>전투 파싱
           <input name="combat_limit" type="number" min="1" max="200" value="10" required>
         </label>
-        <label>Items
+        <label>아이템 파싱
           <input name="item_limit" type="number" min="1" max="200" value="10" required>
         </label>
-        <label>Movement
+        <label>이동 파싱
           <input name="movement_limit" type="number" min="1" max="200" value="10" required>
         </label>
-        <label>Loadout
+        <label>장비 조합
           <input name="loadout_limit" type="number" min="1" max="500" value="50" required>
         </label>
-        <label>Fight outcomes
+        <label>교전 승패
           <input name="fight_outcome_limit" type="number" min="1" max="200" value="10" required>
         </label>
-        <label>Map JPEG
+        <label>2D 스냅샷 JPEG
           <input name="map_snapshot_limit" type="number" min="1" max="200" value="10" required>
         </label>
-        <label>Timeline
+        <label>재생 타임라인
           <input name="timeline_limit" type="number" min="1" max="200" value="10" required>
         </label>
-        <label>Mode
+        <label>처리 방식
           <select name="force">
-            <option value="false">skip existing</option>
-            <option value="true">force</option>
+            <option value="false">기존 결과 제외</option>
+            <option value="true">강제 재처리</option>
           </select>
         </label>
-        <button type="submit">Start auto</button>
-        <button class="secondary" type="button" id="postProcessingWorkerStop">Stop</button>
+        <button type="submit">자동 후처리 시작</button>
+        <button class="secondary" type="button" id="postProcessingWorkerStop">중지</button>
       </form>
-      <div class="status" id="postProcessingWorkerStatus" style="margin-top: 12px;">Post-processing stopped</div>
+      <div class="status" id="postProcessingWorkerStatus" style="margin-top: 12px;">자동 후처리 중지</div>
     </section>
     <section id="operational-drills" data-view="operations">
       <h2>운영 훈련</h2>
@@ -4417,70 +5395,74 @@ _INDEX_HTML = """<!doctype html>
       <div class="detail-panel" id="operationalDrillDetail">훈련 이력 대기 중</div>
     </section>
     <section id="worker-runs" data-view="operations">
-      <h2>Worker Run History</h2>
+      <h2>자동 작업 이력</h2>
       <form id="workerRunFilterForm" class="worker-run-filter">
-        <label>Worker
+        <label>작업 종류
           <select name="worker_name">
-            <option value="all">all</option>
-            <option value="collector">collector</option>
-            <option value="post_processing">post_processing</option>
+            <option value="all">전체</option>
+            <option value="collector">수집기</option>
+            <option value="post_processing">후처리</option>
           </select>
         </label>
-        <label>Status
+        <label>상태
           <select name="status">
-            <option value="all">all</option>
-            <option value="succeeded">succeeded</option>
-            <option value="failed">failed</option>
+            <option value="all">전체</option>
+            <option value="succeeded">완료</option>
+            <option value="failed">실패</option>
           </select>
         </label>
-        <label>Quick range
+        <label>기간
           <select name="quick_range">
-            <option value="custom">custom</option>
-            <option value="last_1h">last 1h</option>
-            <option value="last_24h">last 24h</option>
-            <option value="today">today</option>
-            <option value="yesterday">yesterday</option>
-            <option value="last_7d">last 7d</option>
+            <option value="custom">직접 지정</option>
+            <option value="last_1h">최근 1시간</option>
+            <option value="last_24h">최근 24시간</option>
+            <option value="today">오늘</option>
+            <option value="yesterday">어제</option>
+            <option value="last_7d">최근 7일</option>
           </select>
         </label>
-        <label>Created from
+        <label>시작 시각 (KST)
           <input name="created_from_kst" type="datetime-local">
         </label>
-        <label>Created to
+        <label>종료 시각 (KST)
           <input name="created_to_kst" type="datetime-local">
         </label>
-        <label>Limit
-          <input name="limit" type="number" min="1" max="200" value="50">
+        <label>표시 개수
+          <input name="limit" type="number" min="1" max="200" value="20">
         </label>
-        <button type="submit">Apply</button>
+        <button type="submit">조회</button>
+        <button class="secondary" type="button" data-reset-analysis-form="workerRunFilterForm">초기화</button>
       </form>
       <div class="actions" style="margin-bottom: 10px;">
         <button class="secondary" type="button" onclick="loadWorkerRuns()">새로고침</button>
-        <button class="secondary" type="button" id="workerRunsExport">Export CSV</button>
-        <button class="secondary" type="button" id="workerRunsCopyFilterLink">Copy filter link</button>
-        <button class="secondary" type="button" id="workerRunsPrev">Previous</button>
-        <button class="secondary" type="button" id="workerRunsNext">Next</button>
+        <button class="secondary" type="button" id="workerRunsExport">CSV 내보내기</button>
+        <button class="secondary" type="button" id="workerRunsCopyFilterLink">조회 링크 복사</button>
+        <button class="secondary" type="button" id="workerRunsPrev">이전</button>
+        <button class="secondary" type="button" id="workerRunsNext">다음</button>
       </div>
-      <div class="status" id="workerRunsStatus" style="margin-bottom: 8px;">Waiting</div>
-      <table>
-        <thead>
-          <tr>
-            <th>Worker</th>
-            <th>Status</th>
-            <th>Finished</th>
-            <th>Duration</th>
-            <th>Summary</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="workerRunsBody"></tbody>
-      </table>
+      <div class="status" id="workerRunsStatus" style="margin-bottom: 8px;">작업 이력 확인 중</div>
+      <div class="table-scroll dense-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>작업 종류</th>
+              <th>상태</th>
+              <th>완료 시각 (KST)</th>
+              <th>소요 시간</th>
+              <th>요약</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="workerRunsBody"></tbody>
+        </table>
+      </div>
+      <div class="dense-card-list" id="workerRunsCards"></div>
       <div class="detail-panel" id="workerRunDetail">
-        Select a worker run row.
+        작업 이력을 선택하세요.
       </div>
     </section>
     <section id="combat-parser" data-view="collection">
-      <h2>Combat 파싱</h2>
+      <h2>전투 데이터 파싱</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="parseTelemetryCombat(false)">전투 파싱</button>
         <button class="secondary" type="button" onclick="parseTelemetryCombat(true)">재파싱</button>
@@ -4488,7 +5470,7 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="combatStatus">대기 중</div>
     </section>
     <section id="item-parser" data-view="collection">
-      <h2>Item 파싱</h2>
+      <h2>아이템 데이터 파싱</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="parseTelemetryItems(false)">아이템 파싱</button>
         <button class="secondary" type="button" onclick="parseTelemetryItems(true)">재파싱</button>
@@ -4496,7 +5478,7 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="itemStatus">대기 중</div>
     </section>
     <section id="movement-parser" data-view="collection">
-      <h2>Movement 파싱</h2>
+      <h2>이동 데이터 파싱</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="parseTelemetryMovement(false)">위치 파싱</button>
         <button class="secondary" type="button" onclick="parseTelemetryMovement(true)">재파싱</button>
@@ -4504,7 +5486,7 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="movementStatus">대기 중</div>
     </section>
     <section id="loadout-generator" data-view="collection">
-      <h2>Loadout Snapshot 생성</h2>
+      <h2>장비 조합 스냅샷 생성</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="generateLoadoutSnapshots(false)">파츠 스냅샷 생성</button>
         <button class="secondary" type="button" onclick="generateLoadoutSnapshots(true)">재생성</button>
@@ -4512,7 +5494,7 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="loadoutSnapshotStatus">대기 중</div>
     </section>
     <section id="fight-outcome-generator" data-view="collection">
-      <h2>Fight Outcome 생성</h2>
+      <h2>교전 승패 생성</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="generateFightOutcomes(false)">승패 생성</button>
         <button class="secondary" type="button" onclick="generateFightOutcomes(true)">재생성</button>
@@ -4520,7 +5502,7 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="fightOutcomeStatus">대기 중</div>
     </section>
     <section id="map-snapshot-generator" data-view="collection">
-      <h2>Map Snapshot 생성</h2>
+      <h2>2D 지도 스냅샷 생성</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="generateMapSnapshots(false)">JPEG 생성</button>
         <button class="secondary" type="button" onclick="generateMapSnapshots(true)">재생성</button>
@@ -4528,7 +5510,7 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="mapSnapshotStatus">대기 중</div>
     </section>
     <section id="timeline-generator" data-view="collection">
-      <h2>Replay Timeline 생성</h2>
+      <h2>2D 재생 타임라인 생성</h2>
       <div class="actions" style="margin-bottom: 10px;">
         <button type="button" onclick="generateReplayTimelines(false)">JSON 생성</button>
         <button class="secondary" type="button" onclick="generateReplayTimelines(true)">재생성</button>
@@ -4536,10 +5518,23 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="timelineStatus">대기 중</div>
     </section>
     <section id="replay-player" data-view="replay">
-      <h2>2D Replay Player</h2>
+      <h2>2D 리플레이 재생</h2>
+      <form id="timelinePlayerForm" class="query-form">
+        <label>플랫폼
+          <select name="shard">
+            <option value="steam">steam</option>
+            <option value="kakao">kakao</option>
+          </select>
+        </label>
+        <label>등록 유저
+          <input class="registered-player-input" name="target" id="timelinePlayerInput" list="registeredPlayerOptions" autocomplete="off" placeholder="닉네임 일부 입력" required>
+        </label>
+        <button type="submit">경기 불러오기</button>
+        <button class="secondary" type="button" id="timelinePlayerClear">초기화</button>
+      </form>
       <div class="player-controls">
-        <label>Timeline
-          <select id="timelineSelect"></select>
+        <label>타임라인
+          <select id="timelineSelect" disabled><option value="">유저를 선택하세요</option></select>
         </label>
         <label>속도
           <select id="timelineSpeed">
@@ -4588,24 +5583,49 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="replayPlayerStatus" style="margin-top: 12px;">대기 중</div>
     </section>
     <section id="replay-artifacts" data-view="replay">
-      <h2>Replay Artifact 목록</h2>
-      <div class="actions" style="margin-bottom: 10px;">
-        <button class="secondary" type="button" onclick="loadReplayArtifacts()">새로고침</button>
+      <h2>2D 리플레이 저장 목록</h2>
+      <form id="replayArtifactListForm" class="query-form">
+        <label>등록 유저
+          <select name="account_id" id="replayArtifactPlayerSelect">
+            <option value="">전체 등록 유저</option>
+          </select>
+        </label>
+        <label>파일 종류
+          <select name="artifact_type">
+            <option value="">전체</option>
+            <option value="timeline">재생 타임라인</option>
+            <option value="map_snapshot">2D 스냅샷</option>
+          </select>
+        </label>
+        <label>표시 개수
+          <select name="limit">
+            <option value="20" selected>20개</option>
+            <option value="50">50개</option>
+            <option value="100">100개</option>
+          </select>
+        </label>
+        <button type="submit">조회</button>
+        <button class="secondary" type="button" id="replayArtifactListReset">초기화</button>
+      </form>
+      <div class="status" id="replayArtifactsStatus" style="margin: 10px 0 8px;">저장 목록 확인 중</div>
+      <div class="table-scroll dense-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>플레이어</th>
+              <th>경기 시각 (KST)</th>
+              <th>종류</th>
+              <th>맵 / 모드</th>
+              <th>매치 ID</th>
+              <th>생성 시각 (KST)</th>
+              <th>크기</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="replayArtifactsBody"></tbody>
+        </table>
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>생성</th>
-            <th>타입</th>
-            <th>맵</th>
-            <th>모드</th>
-            <th>Match ID</th>
-            <th>크기</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="replayArtifactsBody"></tbody>
-      </table>
+      <div class="dense-card-list" id="replayArtifactsCards"></div>
     </section>
     </main>
     <aside class="system-rail" aria-label="실시간 시스템 상태">
@@ -4644,6 +5664,16 @@ _INDEX_HTML = """<!doctype html>
   <script>
     const statusGrid = document.querySelector("#statusGrid");
     const playersBody = document.querySelector("#playersBody");
+    const registeredPlayerOptions = document.querySelector("#registeredPlayerOptions");
+    const profileForm = document.querySelector("#profileForm");
+    const trendForm = document.querySelector("#trendForm");
+    const weaponForm = document.querySelector("#weaponForm");
+    const recommendationForm = document.querySelector("#recommendationForm");
+    const dropZoneForm = document.querySelector("#dropZoneForm");
+    const matchForm = document.querySelector("#matchForm");
+    const rankingForm = document.querySelector("#rankingForm");
+    const rankingGuildSelect = document.querySelector("#rankingGuildSelect");
+    const rankingGuildRefresh = document.querySelector("#rankingGuildRefresh");
     const dataDeletionFilterForm = document.querySelector("#dataDeletionFilterForm");
     const dataDeletionBody = document.querySelector("#dataDeletionBody");
     const dataDeletionStatus = document.querySelector("#dataDeletionStatus");
@@ -4657,13 +5687,23 @@ _INDEX_HTML = """<!doctype html>
     const profileBody = document.querySelector("#profileBody");
     const trendSummary = document.querySelector("#trendSummary");
     const trendBody = document.querySelector("#trendBody");
+    const trendCards = document.querySelector("#trendCards");
+    const trendViewControls = document.querySelector("#trendViewControls");
+    const trendChartMetric = document.querySelector("#trendChartMetric");
+    const trendChartPanel = document.querySelector("#trendChartPanel");
+    const trendTableWrap = document.querySelector("#trendTableWrap");
     const weaponBody = document.querySelector("#weaponBody");
     const recommendationBody = document.querySelector("#recommendationBody");
+    const dropZoneBody = document.querySelector("#dropZoneBody");
     const mapRegionBody = document.querySelector("#mapRegionBody");
     const matchBody = document.querySelector("#matchBody");
     const rankingBody = document.querySelector("#rankingBody");
     const jobsBody = document.querySelector("#jobsBody");
+    const jobsCards = document.querySelector("#jobsCards");
+    const jobsSummary = document.querySelector("#jobsSummary");
     const telemetryJobsBody = document.querySelector("#telemetryJobsBody");
+    const telemetryJobsCards = document.querySelector("#telemetryJobsCards");
+    const telemetryJobsSummary = document.querySelector("#telemetryJobsSummary");
     const operationalDrillForm = document.querySelector("#operationalDrillForm");
     const operationalDrillsReload = document.querySelector("#operationalDrillsReload");
     const operationalDrillsStatus = document.querySelector("#operationalDrillsStatus");
@@ -4671,6 +5711,7 @@ _INDEX_HTML = """<!doctype html>
     const operationalDrillDetail = document.querySelector("#operationalDrillDetail");
     const workerRunFilterForm = document.querySelector("#workerRunFilterForm");
     const workerRunsBody = document.querySelector("#workerRunsBody");
+    const workerRunsCards = document.querySelector("#workerRunsCards");
     const workerRunsStatus = document.querySelector("#workerRunsStatus");
     const workerRunsExport = document.querySelector("#workerRunsExport");
     const workerRunsCopyFilterLink = document.querySelector("#workerRunsCopyFilterLink");
@@ -4685,10 +5726,25 @@ _INDEX_HTML = """<!doctype html>
     const fightOutcomeStatus = document.querySelector("#fightOutcomeStatus");
     const mapSnapshotStatus = document.querySelector("#mapSnapshotStatus");
     const timelineStatus = document.querySelector("#timelineStatus");
+    const replayArtifactListForm = document.querySelector("#replayArtifactListForm");
+    const replayArtifactListReset = document.querySelector("#replayArtifactListReset");
+    const replayArtifactPlayerSelect = document.querySelector("#replayArtifactPlayerSelect");
     const replayArtifactsBody = document.querySelector("#replayArtifactsBody");
+    const replayArtifactsCards = document.querySelector("#replayArtifactsCards");
+    const replayArtifactsStatus = document.querySelector("#replayArtifactsStatus");
     const discordGrantForm = document.querySelector("#discordGrantForm");
     const discordPermissionsBody = document.querySelector("#discordPermissionsBody");
     const discordPermissionGroup = document.querySelector("#discordPermissionGroup");
+    const discordCommandGroupForm = document.querySelector("#discordCommandGroupForm");
+    const discordCommandSearch = document.querySelector("#discordCommandSearch");
+    const discordCommandGroupReset = document.querySelector("#discordCommandGroupReset");
+    const discordCommandCatalog = document.querySelector("#discordCommandCatalog");
+    const discordCommandGroupStatus = document.querySelector("#discordCommandGroupStatus");
+    const discordCommandGroupsBody = document.querySelector("#discordCommandGroupsBody");
+    const discordCommandAliasForm = document.querySelector("#discordCommandAliasForm");
+    const discordCommandAliasTarget = document.querySelector("#discordCommandAliasTarget");
+    const discordCommandAliasReset = document.querySelector("#discordCommandAliasReset");
+    const discordCommandAliasesBody = document.querySelector("#discordCommandAliasesBody");
     const discordScopeForm = document.querySelector("#discordScopeForm");
     const publicProfileDefaultForm = document.querySelector("#publicProfileDefaultForm");
     const discordScopesBody = document.querySelector("#discordScopesBody");
@@ -4697,9 +5753,17 @@ _INDEX_HTML = """<!doctype html>
     const storageSettingsStatus = document.querySelector("#storageSettingsStatus");
     const alertSettingsForm = document.querySelector("#alertSettingsForm");
     const alertSettingsStatus = document.querySelector("#alertSettingsStatus");
+    const alertDiscordGuildSelect = document.querySelector("#alertDiscordGuildSelect");
+    const alertDiscordChannelSelect = document.querySelector("#alertDiscordChannelSelect");
+    const alertDiscordChannelAdd = document.querySelector("#alertDiscordChannelAdd");
+    const alertDiscordChannelsRefresh = document.querySelector("#alertDiscordChannelsRefresh");
+    const alertDiscordChannelIds = document.querySelector("#alertDiscordChannelIds");
+    const alertDiscordChannelSelection = document.querySelector("#alertDiscordChannelSelection");
+    const alertDiscordChannelsStatus = document.querySelector("#alertDiscordChannelsStatus");
     const alertsBody = document.querySelector("#alertsBody");
     const alertHistoryFilterForm = document.querySelector("#alertHistoryFilterForm");
     const alertHistoryBody = document.querySelector("#alertHistoryBody");
+    const alertHistoryCards = document.querySelector("#alertHistoryCards");
     const alertHistoryStatus = document.querySelector("#alertHistoryStatus");
     const alertHistoryExport = document.querySelector("#alertHistoryExport");
     const alertHistoryCopyFilterLink = document.querySelector("#alertHistoryCopyFilterLink");
@@ -4719,6 +5783,7 @@ _INDEX_HTML = """<!doctype html>
     const webSettingsStatus = document.querySelector("#webSettingsStatus");
     const banner = document.querySelector("#banner");
     const workspaceNav = document.querySelector("#workspaceNav");
+    const workspaceSections = document.querySelector("#workspaceSections");
     const workspaceTitle = document.querySelector("#workspaceTitle");
     const workspaceEyebrow = document.querySelector("#workspaceEyebrow");
     const workspaceDescription = document.querySelector("#workspaceDescription");
@@ -4734,6 +5799,9 @@ _INDEX_HTML = """<!doctype html>
     const railReplayStorage = document.querySelector("#railReplayStorage");
     const railActivity = document.querySelector("#railActivity");
     const pathPickerButtons = document.querySelectorAll("[data-path-purpose][data-path-input]");
+    const timelinePlayerForm = document.querySelector("#timelinePlayerForm");
+    const timelinePlayerInput = document.querySelector("#timelinePlayerInput");
+    const timelinePlayerClear = document.querySelector("#timelinePlayerClear");
     const timelineSelect = document.querySelector("#timelineSelect");
     const timelineSpeed = document.querySelector("#timelineSpeed");
     const timelinePlayButton = document.querySelector("#timelinePlayButton");
@@ -4767,12 +5835,41 @@ _INDEX_HTML = """<!doctype html>
     let replayAnimationId = null;
     let replayLastFrameMs = 0;
     let replayPlaying = false;
+    let activeReplayPlayer = null;
+    let activeProfilePlayer = null;
+    let activeTrendReport = null;
+    let activeTrendView = "table";
     let activeRecommendationTarget = "";
     let activeRecommendationShard = "steam";
+    let activeRecommendationReport = null;
+    let activeRecommendationView = "summary";
+    let activeRecommendationChartMetric = "score";
+    let registeredPlayers = [];
+    let activeDiscordGuilds = [];
+    let activeDiscordPermissions = {
+      command_groups: {},
+      user_grants: {},
+      guild_user_grants: {},
+      global_admin_user_ids: [],
+      command_aliases: {},
+    };
+    let activeDiscordCommandCatalog = [];
+    let reservedDiscordCommandGroups = new Set();
+    let selectedDiscordGroupCommands = new Set();
+    let activeAlertChannelIds = new Set();
+    const alertChannelCatalog = new Map();
+    let rankingGuildPrefill = "";
+    const playerCatalogCache = new Map();
+    const catalogByForm = new WeakMap();
     let replayArtifactFilter = { match_id: "", account_id: "", artifact_id: "" };
     let registeredPlayerHighlight = { shard: "", account_id: "", name: "" };
     let deletionRequestHighlightId = "";
-    let discordSettingsPrefill = { permission_group: "", public_profile_default: "" };
+    let discordSettingsPrefill = {
+      permission_group: "",
+      permission_guild_id: "",
+      scope_guild_id: "",
+      public_profile_default: "",
+    };
     let localSettingsPrefill = {
       collector_poll_interval_seconds: "",
       collector_cycle_player_limit: "",
@@ -4782,7 +5879,7 @@ _INDEX_HTML = """<!doctype html>
       source: "all",
       state: "all",
       severity: "all",
-      limit: 50,
+      limit: 20,
       offset: 0,
       total: 0,
       sort: "newest",
@@ -4792,7 +5889,7 @@ _INDEX_HTML = """<!doctype html>
     };
     let workerRunPage = {
       total: 0,
-      limit: 50,
+      limit: 20,
       offset: 0,
       worker_name: null,
       status: "all",
@@ -4850,6 +5947,61 @@ _INDEX_HTML = """<!doctype html>
       },
     };
 
+    const workspaceSectionsByView = {
+      players: [
+        { key: "profile", label: "전적", ids: ["profile-lookup"] },
+        { key: "trends", label: "추세", ids: ["trend-lookup"] },
+        { key: "weapons", label: "무기", ids: ["weapon-lookup"] },
+        { key: "recommendations", label: "추천", ids: ["recommendation-lookup"] },
+        { key: "landing", label: "낙하", ids: ["landing-analysis"] },
+        { key: "matches", label: "매치", ids: ["match-lookup"] },
+        { key: "ranking", label: "랭킹", ids: ["ranking-lookup"] },
+        { key: "registry", label: "유저 관리", ids: ["player-registration", "registered-players"] },
+      ],
+      replay: [
+        { key: "player", label: "2D 재생", ids: ["replay-player"] },
+        { key: "artifacts", label: "저장 목록", ids: ["replay-artifacts"] },
+        { key: "regions", label: "지역 확인", ids: ["map-region-lookup"] },
+      ],
+      collection: [
+        { key: "collector", label: "자동 수집", ids: ["collector-settings"] },
+        { key: "queues", label: "수집 큐", ids: ["match-job-queue", "telemetry-job-queue"] },
+        { key: "post", label: "자동 후처리", ids: ["post-processing-worker"] },
+        {
+          key: "manual",
+          label: "수동 도구",
+          ids: [
+            "combat-parser",
+            "item-parser",
+            "movement-parser",
+            "loadout-generator",
+            "fight-outcome-generator",
+            "map-snapshot-generator",
+            "timeline-generator",
+          ],
+        },
+      ],
+      discord: [
+        {
+          key: "permissions",
+          label: "명령 권한",
+          ids: ["discord-permissions", "discord-command-groups"],
+        },
+        { key: "scopes", label: "서버 범위", ids: ["discord-scopes"] },
+      ],
+      operations: [
+        { key: "alerts", label: "알림", ids: ["alerts"] },
+        { key: "deletions", label: "삭제 검토", ids: ["data-deletions"] },
+        { key: "drills", label: "운영 훈련", ids: ["operational-drills"] },
+        { key: "runs", label: "작업 이력", ids: ["worker-runs"] },
+      ],
+      settings: [
+        { key: "storage", label: "저장 경로", ids: ["storage-settings"] },
+        { key: "web", label: "로컬 링크", ids: ["web-link-settings"] },
+      ],
+    };
+    const activeWorkspaceSections = {};
+
     function setRailStatus(element, value, state = "") {
       element.textContent = value;
       element.classList.remove("ok", "warning", "error");
@@ -4874,6 +6026,40 @@ _INDEX_HTML = """<!doctype html>
         : "overview";
     }
 
+    function workspaceSectionForFocus(view, focusId) {
+      if (!focusId) return null;
+      const sectionId = document.getElementById(focusId)?.closest("section[data-view]")?.id || focusId;
+      return (workspaceSectionsByView[view] || []).find((group) => group.ids.includes(sectionId)) || null;
+    }
+
+    function renderWorkspaceSections(view, focusId = "") {
+      const groups = workspaceSectionsByView[view] || [];
+      const viewSections = document.querySelectorAll(`main > section[data-view="${view}"]`);
+      if (!groups.length) {
+        workspaceSections.classList.remove("visible");
+        workspaceSections.innerHTML = "";
+        viewSections.forEach((section) => { section.hidden = false; });
+        return;
+      }
+
+      const focused = workspaceSectionForFocus(view, focusId);
+      const active = focused
+        || groups.find((group) => group.key === activeWorkspaceSections[view])
+        || groups[0];
+      activeWorkspaceSections[view] = active.key;
+      workspaceSections.classList.add("visible");
+      workspaceSections.innerHTML = groups.map((group) => `
+        <button type="button" role="tab" data-workspace-section="${attr(group.key)}"
+          class="${group.key === active.key ? "active" : ""}"
+          aria-selected="${group.key === active.key ? "true" : "false"}">
+          ${escapeHtml(group.label)}
+        </button>
+      `).join("");
+      viewSections.forEach((section) => {
+        section.hidden = !active.ids.includes(section.id);
+      });
+    }
+
     function activateWorkspace(view, options = {}) {
       const nextView = workspaceViews[view] ? view : "overview";
       const details = workspaceViews[nextView];
@@ -4881,6 +6067,7 @@ _INDEX_HTML = """<!doctype html>
       workspaceEyebrow.textContent = details.eyebrow;
       workspaceTitle.textContent = details.title;
       workspaceDescription.textContent = details.description;
+      renderWorkspaceSections(nextView, options.focusId || "");
       for (const button of workspaceNav.querySelectorAll("[data-view-target]")) {
         const active = button.dataset.viewTarget === nextView;
         button.classList.toggle("active", active);
@@ -4955,7 +6142,7 @@ _INDEX_HTML = """<!doctype html>
       const activeView = document.body.dataset.activeView || "overview";
       const refreshers = {
         overview: () => Promise.all([loadStatus(), loadAlerts({ renderHistory: false })]),
-        players: () => loadPlayers(),
+        players: () => Promise.all([loadPlayers(), loadDiscordGuilds()]),
         replay: () => loadReplayArtifacts(),
         collection: () => Promise.all([
           loadCollectorWorkerStatus(),
@@ -4963,7 +6150,7 @@ _INDEX_HTML = """<!doctype html>
           loadJobs(),
           loadTelemetryJobs(),
         ]),
-        discord: () => Promise.all([loadDiscordPermissions(), loadDiscordScopes()]),
+        discord: () => Promise.all([loadDiscordPermissions(), loadDiscordScopes(), loadDiscordGuilds()]),
         operations: () => Promise.all([
           loadAlerts(),
           loadOperationalDrills(),
@@ -4984,6 +6171,129 @@ _INDEX_HTML = """<!doctype html>
 
     function cell(label, value) {
       return `<div class="kv"><span>${label}</span><strong>${value}</strong></div>`;
+    }
+
+    function resultHeading(title, subtitle = "", badge = "", badgeClass = "") {
+      return `
+        <div class="result-heading">
+          <div>
+            <strong>${escapeHtml(title)}</strong>
+            ${subtitle ? `<span>${escapeHtml(subtitle)}</span>` : ""}
+          </div>
+          ${badge ? `<span class="result-badge ${attr(badgeClass)}">${escapeHtml(badge)}</span>` : ""}
+        </div>`;
+    }
+
+    function resultMetricGrid(items) {
+      return `<div class="result-metric-grid">${items.map((item) => `
+        <div class="result-metric">
+          <span>${escapeHtml(item[0])}</span>
+          <strong>${escapeHtml(item[1])}</strong>
+        </div>`).join("")}</div>`;
+    }
+
+    function resultSection(title, body) {
+      return `<div class="result-section"><h3>${escapeHtml(title)}</h3>${body}</div>`;
+    }
+
+    function resultTextRows(items) {
+      return `<div class="result-list">${items.map((item) => `
+        <div class="result-row">
+          <span>${escapeHtml(item[0])}</span>
+          <strong>${escapeHtml(item[1])}</strong>
+        </div>`).join("")}</div>`;
+    }
+
+    function resultChips(items, emptyText = "기록 없음") {
+      const values = (items || []).filter((item) => String(item || "").trim());
+      if (!values.length) return `<span class="result-caption">${escapeHtml(emptyText)}</span>`;
+      return `<div class="result-chip-list">${values.map((item) => (
+        `<span class="result-chip">${escapeHtml(item)}</span>`
+      )).join("")}</div>`;
+    }
+
+    function compactIdentifier(value, head = 8, tail = 4) {
+      const text = String(value || "");
+      if (!text) return "-";
+      if (text.length <= head + tail + 1) return text;
+      return `${text.slice(0, head)}...${text.slice(-tail)}`;
+    }
+
+    function formatKstShort(value) {
+      if (!value) return "-";
+      const date = new Date(String(value).replace(" ", "T"));
+      if (Number.isNaN(date.getTime())) return String(value).replace("T", " ").slice(0, 16);
+      return new Intl.DateTimeFormat("ko-KR", {
+        timeZone: "Asia/Seoul",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).format(date);
+    }
+
+    function jobStatusMeta(status) {
+      const key = String(status || "unknown").toLowerCase();
+      const values = {
+        queued: ["대기", "warning"],
+        pending: ["대기", "warning"],
+        running: ["처리 중", "info"],
+        processing: ["처리 중", "info"],
+        retry: ["재시도", "warning"],
+        retrying: ["재시도", "warning"],
+        succeeded: ["완료", "success"],
+        completed: ["완료", "success"],
+        failed: ["실패", "error"],
+      };
+      return values[key] || [status || "알 수 없음", "info"];
+    }
+
+    function jobStatusBadge(status) {
+      const [label, style] = jobStatusMeta(status);
+      return `<span class="status-badge ${style}">${escapeHtml(label)}</span>`;
+    }
+
+    function queueSummaryText(summary, jobs) {
+      const fallback = (jobs || []).reduce((counts, job) => {
+        const key = String(job.status || "unknown").toLowerCase();
+        counts[key] = Number(counts[key] || 0) + 1;
+        return counts;
+      }, {});
+      const byStatus = summary?.by_status || fallback;
+      const total = Number(summary?.total ?? Object.values(byStatus).reduce((sum, value) => sum + Number(value || 0), 0));
+      const count = (...keys) => keys.reduce((sum, key) => sum + Number(byStatus[key] || 0), 0);
+      const parts = [
+        `전체 ${total}건`,
+        `처리 가능 ${Number(summary?.eligible_queued ?? count("queued", "pending"))}건`,
+        `재시도 예약 ${Number(summary?.scheduled_queued || 0)}건`,
+        `처리 중 ${count("running", "processing")}건`,
+        `실패 ${count("failed")}건`,
+        `최근 10분 완료 ${Number(summary?.recent_succeeded || 0)}건`,
+        `누적 완료 ${count("succeeded", "completed")}건`,
+      ];
+      if (summary?.oldest_queued_at_kst) {
+        parts.push(`최장 대기 ${formatKstShort(summary.oldest_queued_at_kst)}부터`);
+      }
+      if (summary?.last_activity_at_kst) {
+        parts.push(`최근 활동 ${formatKstShort(summary.last_activity_at_kst)}`);
+      }
+      return parts.join(" · ");
+    }
+
+    function workerNameLabel(value) {
+      return {
+        collector: "수집기",
+        post_processing: "후처리",
+      }[String(value || "")] || String(value || "-");
+    }
+
+    function artifactTypeLabel(value) {
+      return {
+        timeline: "재생 타임라인",
+        map_snapshot: "2D 스냅샷",
+      }[String(value || "")] || String(value || "-");
     }
 
     function escapeHtml(value) {
@@ -5016,6 +6326,7 @@ _INDEX_HTML = """<!doctype html>
       setRailStatus(railDiscord, discordReady ? "토큰 설정됨" : "토큰 없음", discordReady ? "ok" : "error");
       const rawStorage = settings.storage_status?.raw_data_dir;
       const replayStorage = settings.storage_status?.replay_data_dir;
+      const operations = database.operations || {};
       setRailStatus(
         railRawStorage,
         storageRailText(rawStorage),
@@ -5028,12 +6339,18 @@ _INDEX_HTML = """<!doctype html>
       );
       statusGrid.innerHTML = [
         cell("MySQL", escapeHtml(`${database.mysql_connection || "unknown"} / ${database.database || "-"}`)),
+        cell("추적 유저", `${Number(operations.active_players || 0)} / ${Number(operations.registered_players || 0)}명 활성`),
+        cell("저장 매치", `${Number(operations.matches || 0)}경기`),
+        cell("수집 대기", `매치 ${Number(operations.pending_match_jobs || 0)} · 텔레메트리 ${Number(operations.pending_telemetry_jobs || 0)}`),
+        cell("원본 데이터", `매치 ${Number(operations.raw_matches || 0)} · 텔레메트리 ${Number(operations.raw_telemetry || 0)}`),
+        cell("2D 결과", `스냅샷 ${Number(operations.map_snapshots || 0)} · 타임라인 ${Number(operations.timelines || 0)}`),
+        cell("실패 작업", `${Number(operations.failed_jobs || 0)}건`),
         cell("PUBG API Key", settings.secrets.PUBG_API_KEY.configured ? "설정됨" : "없음"),
         cell("Discord Token", settings.secrets.DISCORD_BOT_TOKEN.configured ? "설정됨" : "없음"),
-        cell("Raw 저장소", escapeHtml(settings.raw_data_dir)),
-        cell("Replay 저장소", escapeHtml(settings.replay_data_dir)),
-        cell("Backup 저장소", escapeHtml(settings.backup_data_dir)),
-        cell("Quarantine 저장소", escapeHtml(settings.quarantine_data_dir)),
+        cell("원본 저장소", escapeHtml(storageRailText(settings.storage_status?.raw_data_dir))),
+        cell("2D 저장소", escapeHtml(storageRailText(settings.storage_status?.replay_data_dir))),
+        cell("백업 저장소", escapeHtml(storageRailText(settings.storage_status?.backup_data_dir))),
+        cell("격리 저장소", escapeHtml(storageRailText(settings.storage_status?.quarantine_data_dir))),
         cell("수집 주기", escapeHtml(`${settings.collector.poll_interval_seconds}초`)),
         cell("주기당 대상", escapeHtml(`${settings.collector.cycle_player_limit}명`)),
         cell("조회 chunk", escapeHtml(`${settings.collector.player_lookup_chunk_size}명`)),
@@ -5120,7 +6437,7 @@ _INDEX_HTML = """<!doctype html>
       const severity = options.severity || String(form.get("severity") || alertHistoryPage.severity || "all");
       const sort = options.sort || String(form.get("sort") || alertHistoryPage.sort || "newest");
       const search = options.search ?? String(form.get("search") ?? alertHistoryPage.search ?? "");
-      const limit = Number(options.limit || form.get("limit") || alertHistoryPage.limit || 50);
+      const limit = Number(options.limit || form.get("limit") || alertHistoryPage.limit || 20);
       const offset = Math.max(0, Number(options.offset ?? alertHistoryPage.offset ?? 0));
       const params = new URLSearchParams({
         source,
@@ -5203,39 +6520,97 @@ _INDEX_HTML = """<!doctype html>
     function renderAlertStatus(payload, renderHistory = true) {
       const settings = payload.alert_settings || {};
       alertSettingsForm.elements.minimum_free_gb.value = bytesToGiB(settings.minimum_free_bytes ?? 0).toFixed(1);
-      alertSettingsForm.elements.discord_channel_ids.value = (settings.discord_channel_ids || []).join(", ");
+      activeAlertChannelIds = new Set((settings.discord_channel_ids || []).map(String));
+      renderSelectedAlertChannels();
       alertSettingsForm.elements.storage_alerts_enabled.value = settings.storage_alerts_enabled === false ? "false" : "true";
       alertSettingsForm.elements.worker_error_alerts_enabled.value = settings.worker_error_alerts_enabled === false ? "false" : "true";
       alertSettingsStatus.textContent = [
-        `minimum ${formatBytes(Number(settings.minimum_free_bytes || 0))}`,
-        `channels ${(settings.discord_channel_ids || []).length}`,
-        `active alerts ${(payload.alerts || []).length}`,
-        `history ${payload.alert_history_page?.total ?? (payload.alert_history || []).length}`,
-      ].join(" / ");
+        `최소 여유 ${formatBytes(Number(settings.minimum_free_bytes || 0))}`,
+        `알림 채널 ${(settings.discord_channel_ids || []).length}개`,
+        `활성 경고 ${(payload.alerts || []).length}건`,
+        `전체 이력 ${payload.alert_history_page?.total ?? (payload.alert_history || []).length}건`,
+      ].join(" · ");
       renderAlerts(payload.alerts || []);
       if (renderHistory) {
         renderAlertHistory(payload.alert_history || [], payload.alert_history_page || {}, true);
       }
     }
 
+    function alertChannelLabel(channelId) {
+      const channel = alertChannelCatalog.get(String(channelId));
+      if (channel) return `${channel.guild_name} / #${channel.channel_name}`;
+      return `채널 ID ${compactIdentifier(channelId, 6, 6)}`;
+    }
+
+    function renderSelectedAlertChannels() {
+      const ids = Array.from(activeAlertChannelIds);
+      alertDiscordChannelIds.value = ids.join(",");
+      alertDiscordChannelSelection.innerHTML = ids.length
+        ? ids.map((channelId) => `
+          <span class="result-chip selected-channel-chip">
+            <span title="${attr(channelId)}">${escapeHtml(alertChannelLabel(channelId))}</span>
+            <button
+              type="button"
+              data-alert-channel-remove="${attr(channelId)}"
+              title="알림 채널 제거"
+              aria-label="${attr(alertChannelLabel(channelId))} 제거"
+            >×</button>
+          </span>
+        `).join("")
+        : '<span class="result-caption">선택된 알림 채널 없음</span>';
+      alertDiscordChannelsStatus.textContent = ids.length
+        ? `저장 대상 ${ids.length}개 채널`
+        : "선택된 알림 채널 없음";
+    }
+
+    async function loadDiscordAlertChannels() {
+      const guildId = alertDiscordGuildSelect.value;
+      alertDiscordChannelSelect.disabled = true;
+      alertDiscordChannelAdd.disabled = true;
+      if (!guildId) {
+        alertDiscordChannelSelect.innerHTML = '<option value="">서버 선택 필요</option>';
+        alertDiscordChannelsStatus.textContent = activeAlertChannelIds.size
+          ? `저장 대상 ${activeAlertChannelIds.size}개 채널`
+          : "선택된 알림 채널 없음";
+        return;
+      }
+      alertDiscordChannelsStatus.textContent = "전송 가능 채널 확인 중";
+      const response = await fetch(`/discord/channels?guild_id=${encodeURIComponent(guildId)}&limit=50`);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || response.statusText);
+      const channels = payload.channels || [];
+      for (const channel of channels) {
+        alertChannelCatalog.set(String(channel.channel_id), channel);
+      }
+      alertDiscordChannelSelect.innerHTML = channels.length
+        ? '<option value="">채널 선택</option>' + channels.map((channel) => (
+          `<option value="${attr(channel.channel_id)}">#${escapeHtml(channel.channel_name)}${channel.can_read_history ? "" : " · 기록 읽기 불가"}</option>`
+        )).join("")
+        : '<option value="">전송 가능한 채널 없음</option>';
+      alertDiscordChannelSelect.disabled = !channels.length;
+      alertDiscordChannelAdd.disabled = true;
+      alertDiscordChannelsStatus.textContent = `${payload.guild?.guild_name || discordGuildName(guildId)} · 전송 가능 ${channels.length}개`;
+      renderSelectedAlertChannels();
+    }
+
     function renderAlerts(alerts) {
       alertsBody.innerHTML = alerts.length
         ? alerts.map((alert) => `
           <tr>
-            <td>${escapeHtml(alert.source || "")}</td>
+            <td>${escapeHtml(alertSourceLabel(alert.source))}</td>
             <td>${alertSeverityBadge(alert.severity)}</td>
             <td>${escapeHtml(alert.title || "")}</td>
             <td>${escapeHtml(alert.message || "")}</td>
             <td>
               <div class="actions">
                 ${alertWorkerRunButton(alert)}
-                <button type="button" data-alert-action="acknowledge" data-alert-id="${attr(alert.id)}">Acknowledge</button>
-                <button class="secondary" type="button" data-alert-action="snooze" data-alert-id="${attr(alert.id)}">Snooze 1h</button>
+                <button type="button" data-alert-action="acknowledge" data-alert-id="${attr(alert.id)}">확인</button>
+                <button class="secondary" type="button" data-alert-action="snooze" data-alert-id="${attr(alert.id)}">1시간 숨김</button>
               </div>
             </td>
           </tr>
         `).join("")
-        : `<tr><td colspan="5">No active alerts</td></tr>`;
+        : `<tr><td colspan="5">현재 활성 경고가 없습니다.</td></tr>`;
     }
 
     function renderAlertHistory(history, page = {}, syncControls = false) {
@@ -5243,7 +6618,7 @@ _INDEX_HTML = """<!doctype html>
       alertHistoryPage = {
         ...alertHistoryPage,
         ...page,
-        limit: Number(page.limit || alertHistoryPage.limit || 50),
+        limit: Number(page.limit || alertHistoryPage.limit || 20),
         offset: Number(page.offset ?? alertHistoryPage.offset ?? 0),
         total: Number(page.total ?? alertHistoryPage.total ?? history.length),
         search: String(page.search ?? ""),
@@ -5254,28 +6629,30 @@ _INDEX_HTML = """<!doctype html>
         alertHistoryFilterForm.elements.severity.value = alertHistoryPage.severity || "all";
         alertHistoryFilterForm.elements.sort.value = alertHistoryPage.sort || "newest";
         alertHistoryFilterForm.elements.search.value = alertHistoryPage.search || "";
-        alertHistoryFilterForm.elements.limit.value = String(alertHistoryPage.limit || 50);
+        alertHistoryFilterForm.elements.limit.value = String(alertHistoryPage.limit || 20);
       }
       const start = history.length ? alertHistoryPage.offset + 1 : 0;
       const end = history.length ? alertHistoryPage.offset + history.length : 0;
       alertHistoryStatus.textContent = [
-        `${start}-${end} of ${alertHistoryPage.total}`,
-        `source ${alertHistoryPage.source || "all"}`,
-        `status ${alertHistoryPage.state || "all"}`,
-        `severity ${alertHistoryPage.severity || "all"}`,
-        `sort ${alertHistoryPage.sort || "newest"}`,
-        `search ${alertHistoryPage.search ? `"${alertHistoryPage.search}"` : "-"}`,
-      ].join(" / ");
+        `전체 ${alertHistoryPage.total}건 중 ${start}-${end}`,
+        `위치 ${alertHistoryPage.source === "all" ? "전체" : alertSourceLabel(alertHistoryPage.source)}`,
+        `상태 ${alertHistoryPage.state === "all" ? "전체" : alertStateFilterLabel(alertHistoryPage.state)}`,
+        `심각도 ${alertHistoryPage.severity === "all" ? "전체" : alertSeverityLabel(alertHistoryPage.severity)}`,
+        `정렬 ${alertHistoryPage.sort === "oldest" ? "오래된순" : (alertHistoryPage.sort === "severity" ? "심각도 우선" : "최신순")}`,
+        `검색 ${alertHistoryPage.search ? `"${alertHistoryPage.search}"` : "없음"}`,
+      ].join(" · ");
       alertHistoryPrev.disabled = !alertHistoryPage.has_previous;
       alertHistoryNext.disabled = !alertHistoryPage.has_next;
       alertHistoryBody.innerHTML = history.length
         ? history.map((alert) => `
           <tr>
-            <td>${escapeHtml(alert.last_seen_at_kst || "")}</td>
+            <td>${escapeHtml(formatKstShort(alert.last_seen_at_kst))}</td>
             <td>
               <div class="table-badge-stack">
-                <span>${escapeHtml(alert.source || "")}</span>
-                ${alertSeverityBadge(alert.severity)}
+                <span>${escapeHtml(alertSourceLabel(alert.source))}</span>
+                ${alert.resolved_at_kst
+                  ? `<span class="historical-severity">과거 ${escapeHtml(alertSeverityLabel(alert.severity))}</span>`
+                  : alertSeverityBadge(alert.severity)}
               </div>
             </td>
             <td>${escapeHtml(alert.title || "")}</td>
@@ -5290,14 +6667,33 @@ _INDEX_HTML = """<!doctype html>
             <td>
               <div class="actions">
                 ${alertWorkerRunButton(alert)}
-                <button class="secondary" type="button" data-alert-detail-id="${attr(alert.id)}">Details</button>
-                <button type="button" data-alert-note-type="note" data-alert-id="${attr(alert.id)}">Note</button>
-                <button class="secondary" type="button" data-alert-note-type="resolution" data-alert-id="${attr(alert.id)}">Resolution</button>
+                <button class="secondary" type="button" data-alert-detail-id="${attr(alert.id)}">상세</button>
+                <button type="button" data-alert-note-type="note" data-alert-id="${attr(alert.id)}">메모</button>
+                <button class="secondary" type="button" data-alert-note-type="resolution" data-alert-id="${attr(alert.id)}">해결 기록</button>
               </div>
             </td>
           </tr>
         `).join("")
-        : `<tr><td colspan="7">No alert history</td></tr>`;
+        : `<tr><td colspan="7">저장된 알림 이력이 없습니다.</td></tr>`;
+      alertHistoryCards.innerHTML = history.length
+        ? history.map((alert) => `
+          <article class="dense-card">
+            <div class="dense-card-head">
+              <strong>${escapeHtml(alert.title || "제목 없음")}</strong>
+              ${alertStateBadge(alert)}
+            </div>
+            <div class="dense-card-row"><span>최근 발생</span><strong>${escapeHtml(formatKstShort(alert.last_seen_at_kst))}</strong></div>
+            <div class="dense-card-row"><span>위치 / 심각도</span><strong>${escapeHtml(alertSourceLabel(alert.source))} · ${escapeHtml(alertSeverityLabel(alert.severity))}</strong></div>
+            <div class="dense-card-row"><span>내용</span><strong>${escapeHtml(alert.message || "-")}</strong></div>
+            <div class="dense-card-actions">
+              ${alertWorkerRunButton(alert)}
+              <button class="secondary" type="button" data-alert-detail-id="${attr(alert.id)}">상세</button>
+              <button type="button" data-alert-note-type="note" data-alert-id="${attr(alert.id)}">메모</button>
+              <button class="secondary" type="button" data-alert-note-type="resolution" data-alert-id="${attr(alert.id)}">해결 기록</button>
+            </div>
+          </article>
+        `).join("")
+        : `<div class="dense-card"><span class="status">저장된 알림 이력이 없습니다.</span></div>`;
       if (activeAlertHistoryDetailId) {
         const selected = history.find((alert) => String(alert.id) === String(activeAlertHistoryDetailId));
         if (selected) activeAlertHistoryDetailAlert = selected;
@@ -5308,36 +6704,36 @@ _INDEX_HTML = """<!doctype html>
       if (alert.resolved_at_kst) {
         return {
           state: "resolved",
-          label: "Resolved",
-          timeLabel: "Resolved at",
+          label: "해결됨",
+          timeLabel: "해결 시각",
           timeValue: alert.resolved_at_kst || "",
-          helper: "The alert is no longer present in the current storage or worker checks.",
+          helper: "현재 저장소 또는 자동 작업 점검에서는 더 이상 발생하지 않는 경고입니다.",
         };
       }
       if (alert.is_acknowledged) {
         return {
           state: "acknowledged",
-          label: "Acknowledged",
-          timeLabel: "Acknowledged at",
+          label: "확인함",
+          timeLabel: "확인 시각",
           timeValue: alert.acknowledged_at_kst || "",
-          helper: "Repeated notifications are suppressed until this alert is seen as resolved and reappears.",
+          helper: "이 경고가 해결된 뒤 다시 나타날 때까지 반복 알림을 보내지 않습니다.",
         };
       }
       if (alert.is_snoozed) {
         return {
           state: "snoozed",
-          label: "Snoozed",
-          timeLabel: "Snoozed until",
+          label: "숨김",
+          timeLabel: "숨김 종료",
           timeValue: alert.snoozed_until_kst || "",
-          helper: "Notifications are temporarily hidden until the snooze time expires.",
+          helper: "설정한 숨김 시각까지 알림을 잠시 표시하지 않습니다.",
         };
       }
       return {
         state: "active",
-        label: "Active",
-        timeLabel: "Last seen",
+        label: "활성",
+        timeLabel: "최근 발생",
         timeValue: alert.last_seen_at_kst || "",
-        helper: "This alert is currently visible and can still notify admins.",
+        helper: "현재 발생 중이며 관리자에게 알림을 보낼 수 있습니다.",
       };
     }
 
@@ -5348,7 +6744,31 @@ _INDEX_HTML = """<!doctype html>
 
     function alertSeverityBadge(severity) {
       const level = alertSeverityLevel(severity);
-      return `<span class="alert-severity-badge alert-severity-${attr(level)}">${escapeHtml(level.toUpperCase())}</span>`;
+      return `<span class="alert-severity-badge alert-severity-${attr(level)}">${escapeHtml(alertSeverityLabel(level))}</span>`;
+    }
+
+    function alertSeverityLabel(severity) {
+      return {
+        error: "오류",
+        warning: "주의",
+        info: "정보",
+        ok: "정상",
+        unknown: "알 수 없음",
+      }[alertSeverityLevel(severity)] || "알 수 없음";
+    }
+
+    function alertSourceLabel(source) {
+      return { storage: "저장소", worker: "자동 작업" }[String(source || "")] || String(source || "-");
+    }
+
+    function alertStateFilterLabel(state) {
+      return {
+        current: "현재 항목",
+        active: "활성",
+        acknowledged: "확인함",
+        snoozed: "숨김",
+        resolved: "해결됨",
+      }[String(state || "")] || String(state || "-");
     }
 
     function alertSeverityLevel(severity) {
@@ -5358,21 +6778,21 @@ _INDEX_HTML = """<!doctype html>
 
     function formatAlertHistoryStatus(alert) {
       const state = alertHistoryState(alert);
-      return state.timeValue ? `${state.label.toLowerCase()} ${state.timeValue}` : state.label.toLowerCase();
+      return state.timeValue ? `${state.label} · ${formatKstShort(state.timeValue)}` : state.label;
     }
 
     function alertHistoryNoteSummary(alert) {
       const count = Number(alert.note_count || 0);
       if (!count) return "-";
       const note = alert.latest_note ? `: ${alert.latest_note}` : "";
-      const type = alert.latest_note_type || "note";
-      return `${count} ${type}${note}`;
+      const type = alert.latest_note_type === "resolution" ? "해결 기록" : "메모";
+      return `${count}개 ${type}${note}`;
     }
 
     function alertWorkerRunButton(alert) {
       const runId = alertWorkerRunId(alert);
       return runId
-        ? `<button class="secondary" type="button" data-worker-run-from-alert="${attr(runId)}">Worker run</button>`
+        ? `<button class="secondary" type="button" data-worker-run-from-alert="${attr(runId)}">작업 이력</button>`
         : "";
     }
 
@@ -5454,7 +6874,7 @@ _INDEX_HTML = """<!doctype html>
       const severity = alertHistoryUrlChoice(params.get("alert_history_severity") || params.get("alert_severity"), ["all", "error", "warning", "info", "ok"], "all");
       const sort = alertHistoryUrlChoice(params.get("alert_history_sort") || params.get("alert_sort"), ["newest", "oldest", "severity"], "newest");
       const search = String(params.get("alert_history_search") || params.get("alert_search") || "");
-      const limit = alertHistoryUrlBoundedNumber(params.get("alert_history_limit"), 50, 1, 200);
+      const limit = alertHistoryUrlBoundedNumber(params.get("alert_history_limit"), 20, 1, 200);
       const offset = alertHistoryUrlBoundedNumber(params.get("alert_history_offset"), 0, 0, 1000000);
 
       alertHistoryFilterForm.elements.source.value = source;
@@ -5495,7 +6915,7 @@ _INDEX_HTML = """<!doctype html>
       const severity = String(form.get("severity") || alertHistoryPage.severity || "all");
       const sort = String(form.get("sort") || alertHistoryPage.sort || "newest");
       const search = String(form.get("search") ?? alertHistoryPage.search ?? "");
-      const limit = Number(form.get("limit") || alertHistoryPage.limit || 50);
+      const limit = Number(form.get("limit") || alertHistoryPage.limit || 20);
       url.searchParams.delete("alert_id");
       url.searchParams.delete("alert");
       url.searchParams.set("alert_history_source", source);
@@ -5503,7 +6923,7 @@ _INDEX_HTML = """<!doctype html>
       url.searchParams.set("alert_history_severity", severity);
       url.searchParams.set("alert_history_sort", sort);
       url.searchParams.set("alert_history_search", search);
-      url.searchParams.set("alert_history_limit", String(limit || 50));
+      url.searchParams.set("alert_history_limit", String(limit || 20));
       url.searchParams.set("alert_history_offset", String(alertHistoryPage.offset || 0));
       url.hash = "alerts";
       return url.toString();
@@ -5602,7 +7022,7 @@ _INDEX_HTML = """<!doctype html>
       const form = new FormData(event.currentTarget);
       const payload = await postJson("/settings/alerts", {
         minimum_free_bytes: Math.round(Number(form.get("minimum_free_gb") || 0) * 1024 * 1024 * 1024),
-        discord_channel_ids: parseIdList(String(form.get("discord_channel_ids") || "")),
+        discord_channel_ids: Array.from(activeAlertChannelIds),
         storage_alerts_enabled: form.get("storage_alerts_enabled") !== "false",
         worker_error_alerts_enabled: form.get("worker_error_alerts_enabled") !== "false",
       });
@@ -5662,11 +7082,16 @@ _INDEX_HTML = """<!doctype html>
     }
 
     async function loadDiscordPermissions() {
-      const payload = await fetch("/discord/permissions").then((r) => r.json());
-      const settings = payload.discord_permissions;
+      const response = await fetch("/discord/permissions");
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || response.statusText);
+      const settings = payload.discord_permissions || {};
+      activeDiscordPermissions = settings;
+      activeDiscordCommandCatalog = payload.command_catalog || [];
+      reservedDiscordCommandGroups = new Set(payload.reserved_groups || []);
       const groupNames = Object.keys(settings.command_groups || {}).sort();
       discordPermissionGroup.innerHTML = groupNames.map((group) => (
-        `<option value="${attr(group)}">${escapeHtml(group)}</option>`
+        `<option value="${attr(group)}">${escapeHtml(group)} · ${canonicalCommandsForGroup(group).length}개 명령</option>`
       )).join("");
       if (discordSettingsPrefill.permission_group) {
         setFormElementValue(discordGrantForm, "group", discordSettingsPrefill.permission_group);
@@ -5708,11 +7133,18 @@ _INDEX_HTML = """<!doctype html>
         }
       }
 
-      discordPermissionsBody.innerHTML = rows.map((row) => `
+      discordPermissionsBody.innerHTML = rows.map((row) => {
+        const commandCount = row.group === "all" ? activeDiscordCommandCatalog.length : canonicalCommandsForGroup(row.group).length;
+        const scopeLabel = row.scope === "global_admin"
+          ? "전역 관리자"
+          : row.scope === "global"
+            ? "전체 서버"
+            : discordGuildName(row.guildId);
+        return `
         <tr>
-          <td>${escapeHtml(row.scope)}</td>
+          <td>${escapeHtml(scopeLabel)}${row.guildId ? `<br><span class="result-caption">${escapeHtml(row.guildId)}</span>` : ""}</td>
           <td>${escapeHtml(row.userId)}</td>
-          <td>${escapeHtml(row.group)}</td>
+          <td><strong>${escapeHtml(row.group)}</strong><br><span class="result-caption">${commandCount}개 명령</span></td>
           <td>
             <div class="actions">
               <button
@@ -5726,7 +7158,126 @@ _INDEX_HTML = """<!doctype html>
             </div>
           </td>
         </tr>
-      `).join("") || `<tr><td colspan="4">등록된 권한이 없습니다.</td></tr>`;
+      `;
+      }).join("") || `<tr><td colspan="4">등록된 권한이 없습니다.</td></tr>`;
+      discordCommandAliasTarget.innerHTML = activeDiscordCommandCatalog.map((command) => (
+        `<option value="${attr(command.name)}">${escapeHtml(command.label)} · /${escapeHtml(command.name)}</option>`
+      )).join("");
+      renderDiscordCommandCatalog();
+      renderDiscordCommandGroups();
+      renderDiscordCommandAliases();
+    }
+
+    function canonicalCommandsForGroup(group) {
+      const names = new Set(activeDiscordPermissions.command_groups?.[group] || []);
+      return activeDiscordCommandCatalog.filter((command) => (
+        names.has(command.name) || (command.aliases || []).some((alias) => names.has(alias))
+      ));
+    }
+
+    function commandSearchText(command) {
+      return [
+        command.name,
+        command.label,
+        command.description,
+        command.permission_group,
+        ...(command.aliases || []),
+      ].join(" ").toLocaleLowerCase("ko-KR");
+    }
+
+    function renderDiscordCommandCatalog() {
+      const query = String(discordCommandSearch.value || "").trim().toLocaleLowerCase("ko-KR");
+      const commands = activeDiscordCommandCatalog.filter((command) => (
+        !query || commandSearchText(command).includes(query)
+      ));
+      discordCommandCatalog.innerHTML = commands.map((command) => `
+        <label class="command-choice">
+          <input
+            type="checkbox"
+            value="${attr(command.name)}"
+            ${selectedDiscordGroupCommands.has(command.name) ? "checked" : ""}
+          >
+          <span>
+            <strong>${escapeHtml(command.label)} · /${escapeHtml(command.name)}</strong>
+            <small>${escapeHtml(command.description)}${(command.aliases || []).length ? ` · 접두사 별칭 ${escapeHtml(command.aliases.join(", "))}` : ""}</small>
+          </span>
+        </label>
+      `).join("") || '<span class="result-caption">조건에 맞는 명령이 없습니다.</span>';
+      discordCommandGroupStatus.textContent = `전체 ${activeDiscordCommandCatalog.length}개 · 선택 ${selectedDiscordGroupCommands.size}개 · 표시 ${commands.length}개`;
+    }
+
+    function discordGroupGrantCount(group) {
+      let count = Object.values(activeDiscordPermissions.user_grants || {})
+        .filter((groups) => groups.includes(group)).length;
+      for (const grants of Object.values(activeDiscordPermissions.guild_user_grants || {})) {
+        count += Object.values(grants).filter((groups) => groups.includes(group)).length;
+      }
+      return count;
+    }
+
+    function renderDiscordCommandGroups() {
+      const entries = Object.keys(activeDiscordPermissions.command_groups || {}).sort((left, right) => (
+        Number(reservedDiscordCommandGroups.has(right)) - Number(reservedDiscordCommandGroups.has(left))
+        || left.localeCompare(right)
+      ));
+      discordCommandGroupsBody.innerHTML = entries.map((group) => {
+        const commands = canonicalCommandsForGroup(group);
+        const reserved = reservedDiscordCommandGroups.has(group);
+        const commandChips = commands.map((command) => (
+          `<span class="result-chip" title="${attr(command.description)}">${escapeHtml(command.label)}</span>`
+        )).join("");
+        return `
+          <tr>
+            <td><strong>${escapeHtml(group)}</strong><br><span class="result-caption">${reserved ? "기본 · 읽기 전용" : "사용자 정의"}</span></td>
+            <td><div class="result-chip-list">${commandChips || '<span class="result-caption">명령 없음</span>'}</div></td>
+            <td>${discordGroupGrantCount(group)}명</td>
+            <td><div class="actions">
+              <button class="secondary" type="button" data-discord-group-action="${reserved ? "clone" : "edit"}" data-group="${attr(group)}">${reserved ? "복제" : "수정"}</button>
+              ${reserved ? "" : `<button class="danger" type="button" data-discord-group-action="delete" data-group="${attr(group)}">삭제</button>`}
+            </div></td>
+          </tr>
+        `;
+      }).join("") || '<tr><td colspan="4">권한 그룹이 없습니다.</td></tr>';
+    }
+
+    function renderDiscordCommandAliases() {
+      const aliases = Object.entries(activeDiscordPermissions.command_aliases || {})
+        .sort(([left], [right]) => left.localeCompare(right));
+      discordCommandAliasesBody.innerHTML = aliases.map(([alias, target]) => {
+        const command = activeDiscordCommandCatalog.find((item) => item.name === target);
+        return `
+          <tr>
+            <td><strong>${escapeHtml(alias)}</strong></td>
+            <td>${escapeHtml(command?.label || target)} · <span class="result-caption">${escapeHtml(target)}</span></td>
+            <td><div class="actions">
+              <button class="secondary" type="button" data-discord-alias-action="edit" data-alias="${attr(alias)}" data-target="${attr(target)}">수정</button>
+              <button class="danger" type="button" data-discord-alias-action="delete" data-alias="${attr(alias)}">삭제</button>
+            </div></td>
+          </tr>
+        `;
+      }).join("") || '<tr><td colspan="3">사용자 정의 접두사 별칭이 없습니다.</td></tr>';
+    }
+
+    function resetDiscordCommandGroupEditor() {
+      discordCommandGroupForm.reset();
+      discordCommandGroupForm.elements.group.readOnly = false;
+      selectedDiscordGroupCommands = new Set();
+      renderDiscordCommandCatalog();
+    }
+
+    function editDiscordCommandGroup(group, { clone = false } = {}) {
+      const commands = canonicalCommandsForGroup(group).map((command) => command.name);
+      selectedDiscordGroupCommands = new Set(commands);
+      discordCommandGroupForm.elements.group.value = clone ? "" : group;
+      discordCommandGroupForm.elements.group.readOnly = !clone;
+      discordCommandSearch.value = "";
+      renderDiscordCommandCatalog();
+      discordCommandGroupForm.elements.group.focus();
+    }
+
+    function resetDiscordCommandAliasEditor() {
+      discordCommandAliasForm.reset();
+      discordCommandAliasForm.elements.alias.readOnly = false;
     }
 
     async function loadDiscordScopes() {
@@ -5751,13 +7302,58 @@ _INDEX_HTML = """<!doctype html>
       }
     }
 
+    function discordGuildName(guildId) {
+      if (!guildId) return "전체 서버";
+      const guild = activeDiscordGuilds.find((item) => item.guild_id === guildId);
+      if (guild?.name) return guild.name;
+      return `이름 미확인 서버 · ${String(guildId).slice(-6)}`;
+    }
+
+    function discordGuildOptionLabel(guild) {
+      const name = guild.name || `이름 미확인 서버 · ${String(guild.guild_id).slice(-6)}`;
+      const playerCount = Number(guild.registered_player_count || 0);
+      const scope = guild.ranking_scope === "global" ? "전체 범위" : "서버 범위";
+      return `${name} · 등록 ${playerCount}명 · ${scope}`;
+    }
+
+    async function loadDiscordGuilds({ sync = false } = {}) {
+      if (sync) await postJson("/discord/guilds/sync", {});
+      const response = await fetch("/discord/guilds");
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      activeDiscordGuilds = (await response.json()).guilds || [];
+      for (const select of document.querySelectorAll("select.discord-guild-select, #rankingGuildSelect")) {
+        let requested = select.value;
+        if (select === rankingGuildSelect) requested ||= rankingGuildPrefill;
+        if (select === discordGrantForm.elements.guild_id) requested ||= discordSettingsPrefill.permission_guild_id;
+        if (select === discordScopeForm.elements.guild_id) requested ||= discordSettingsPrefill.scope_guild_id;
+        const visibleGuilds = select === rankingGuildSelect
+          ? activeDiscordGuilds.filter((guild) => Number(guild.registered_player_count || 0) > 0 || guild.guild_id === requested)
+          : activeDiscordGuilds;
+        const guildOptions = visibleGuilds.map((guild) => (
+          `<option value="${attr(guild.guild_id)}">${escapeHtml(discordGuildOptionLabel(guild))}</option>`
+        )).join("");
+        const emptyLabel = select.dataset.emptyLabel || "전체 서버";
+        select.innerHTML = `<option value="">${escapeHtml(emptyLabel)}</option>${guildOptions}`;
+        if (visibleGuilds.some((guild) => guild.guild_id === requested)) {
+          select.value = requested;
+        }
+      }
+      rankingGuildPrefill = "";
+      discordSettingsPrefill.permission_guild_id = "";
+      discordSettingsPrefill.scope_guild_id = "";
+      renderDiscordScopes();
+    }
+
     function renderDiscordScopes() {
       const entries = Object.entries(activeDiscordScopes.guild_ranking_scopes || {})
         .sort(([left], [right]) => left.localeCompare(right));
       discordScopesBody.innerHTML = entries.map(([guildId, scope]) => `
         <tr>
-          <td>${escapeHtml(guildId)}</td>
-          <td>${escapeHtml(scope)}</td>
+          <td>${escapeHtml(discordGuildName(guildId))}<br><span class="result-caption">${escapeHtml(guildId)}</span></td>
+          <td>${scope === "global" ? "전체 서버" : "선택한 서버"}</td>
           <td>
             <div class="actions">
               <button
@@ -5765,11 +7361,11 @@ _INDEX_HTML = """<!doctype html>
                 type="button"
                 data-discord-scope-action="remove"
                 data-guild-id="${attr(guildId)}"
-              >Remove</button>
+              >삭제</button>
             </div>
           </td>
         </tr>
-      `).join("") || `<tr><td colspan="3">No guild scope overrides.</td></tr>`;
+      `).join("") || `<tr><td colspan="3">별도 랭킹 범위 설정이 없습니다.</td></tr>`;
     }
 
     function applyPublicProfileDefault() {
@@ -5788,8 +7384,221 @@ _INDEX_HTML = """<!doctype html>
       applyPublicProfileDefault();
     }
 
+    function resolveRegisteredPlayer(value, preferredShard = "") {
+      const normalized = String(value || "").trim().toLocaleLowerCase();
+      if (!normalized) return null;
+      const exact = registeredPlayers.filter((player) => (
+        String(player.current_name || "").toLocaleLowerCase() === normalized
+        || String(player.account_id || "").toLocaleLowerCase() === normalized
+      ));
+      return exact.find((player) => !preferredShard || player.shard === preferredShard) || exact[0] || null;
+    }
+
+    function selectedRegisteredPlayer(formElement) {
+      const input = formElement.elements.target;
+      const player = resolveRegisteredPlayer(input?.value, formElement.elements.shard?.value || "");
+      if (!player) throw new Error("등록 유저 목록에서 닉네임을 선택하세요.");
+      return player;
+    }
+
+    function renderRegisteredPlayerOptions() {
+      registeredPlayerOptions.innerHTML = registeredPlayers
+        .slice()
+        .sort((left, right) => String(left.current_name).localeCompare(String(right.current_name)))
+        .map((player) => {
+          const label = player.shard + " · " + (player.active ? "수집중" : "수집중지") + " · " + String(player.account_id).slice(-8);
+          return '<option value="' + attr(player.current_name) + '" label="' + attr(label) + '"></option>';
+        })
+        .join("");
+      const selectedAccountId = replayArtifactPlayerSelect.value;
+      replayArtifactPlayerSelect.innerHTML = [
+        '<option value="">전체 등록 유저</option>',
+        ...registeredPlayers
+          .slice()
+          .sort((left, right) => String(left.current_name).localeCompare(String(right.current_name)))
+          .map((player) => {
+            const state = player.active ? "수집 중" : "수집 중지";
+            return `<option value="${attr(player.account_id)}">${escapeHtml(player.current_name)} · ${escapeHtml(player.shard)} · ${state}</option>`;
+          }),
+      ].join("");
+      if ([...replayArtifactPlayerSelect.options].some((option) => option.value === selectedAccountId)) {
+        replayArtifactPlayerSelect.value = selectedAccountId;
+      }
+    }
+
+    function catalogOptionLabel(facet, value, catalog) {
+      const field = {
+        maps: "map_name",
+        game_modes: "game_mode",
+        team_modes: "team_mode",
+        perspectives: "perspective",
+        match_types: "match_type",
+        season_states: "season_state",
+      }[facet];
+      const match = (catalog.matches || []).find((item) => item[field] === value);
+      if (facet === "maps") return match?.map_name_ko || value;
+      if (facet === "game_modes") return match?.game_mode_ko || value;
+      if (facet === "team_modes") return { solo: "솔로", duo: "듀오", squad: "스쿼드", unknown: "알 수 없음" }[value] || value;
+      if (facet === "perspectives") return { fpp: "1인칭", tpp: "3인칭", unknown: "알 수 없음" }[value] || value;
+      if (facet === "match_types") return { official: "일반", competitive: "경쟁전", custom: "커스텀" }[value] || value;
+      return String(value);
+    }
+
+    function populateCatalogSelect(select, values, facet, catalog) {
+      const current = select.value;
+      const options = (values || []).map((value) => (
+        '<option value="' + attr(value) + '">' + escapeHtml(catalogOptionLabel(facet, value, catalog)) + '</option>'
+      )).join("");
+      select.innerHTML = '<option value="">전체</option>' + options;
+      if ([...select.options].some((option) => option.value === current)) select.value = current;
+    }
+
+    function matchOptionLabel(match) {
+      const playedAt = String(match.created_at_kst || "-").replace("T", " ").slice(0, 16);
+      const result = Number(match.win_place) === 1 ? "치킨" : "#" + (match.win_place || "-");
+      return [
+        playedAt,
+        match.map_name_ko || match.map_name || "-",
+        match.game_mode_ko || match.game_mode || "-",
+        result,
+        String(match.kills || 0) + "킬",
+      ].join(" · ");
+    }
+
+    function renderMatchOptions(formElement, search = "") {
+      const catalog = catalogByForm.get(formElement);
+      const select = formElement.elements.match_id;
+      if (!catalog || !select) return;
+      const normalized = String(search || "").trim().toLocaleLowerCase();
+      const matches = (catalog.matches || []).filter((match) => (
+        !normalized
+        || (matchOptionLabel(match) + " " + match.match_id).toLocaleLowerCase().includes(normalized)
+      ));
+      const current = select.value;
+      select.innerHTML = matches.map((match) => (
+        '<option value="' + attr(match.match_id) + '">' + escapeHtml(matchOptionLabel(match)) + '</option>'
+      )).join("") || '<option value="">조건에 맞는 매치가 없습니다</option>';
+      if (matches.some((match) => match.match_id === current)) select.value = current;
+    }
+
+    function applyPlayerCatalog(formElement, catalog) {
+      catalogByForm.set(formElement, catalog);
+      formElement.querySelectorAll("select[data-catalog-facet]").forEach((select) => {
+        const facet = select.dataset.catalogFacet;
+        populateCatalogSelect(select, catalog.facets?.[facet] || [], facet, catalog);
+      });
+      if (formElement === weaponForm) {
+        const select = formElement.elements.weapon;
+        const current = select.value;
+        select.innerHTML = (catalog.weapons || []).map((weapon) => (
+          '<option value="' + attr(weapon.weapon_code) + '">' + escapeHtml(
+            weapon.weapon_name + " · " + weapon.weapon_family + " · " + weapon.match_count + "경기"
+          ) + '</option>'
+        )).join("") || '<option value="">사용 기록이 있는 무기가 없습니다</option>';
+        if ((catalog.weapons || []).some((weapon) => weapon.weapon_code === current)) select.value = current;
+      }
+      if (formElement === matchForm) {
+        renderMatchOptions(formElement, formElement.elements.match_search?.value || "");
+      }
+    }
+
+    async function loadPlayerCatalog(player) {
+      const key = player.shard + ":" + player.account_id;
+      if (!playerCatalogCache.has(key)) {
+        const params = new URLSearchParams({
+          shard: player.shard,
+          account_id: player.account_id,
+          match_limit: "5000",
+        });
+        const request = fetch("/players/catalog?" + params.toString()).then(async (response) => {
+          if (!response.ok) {
+            const error = await response.json().catch(() => ({ detail: response.statusText }));
+            throw new Error(error.detail || response.statusText);
+          }
+          return (await response.json()).catalog;
+        }).catch((error) => {
+          playerCatalogCache.delete(key);
+          throw error;
+        });
+        playerCatalogCache.set(key, request);
+      }
+      return playerCatalogCache.get(key);
+    }
+
+    async function syncRegisteredPlayerForm(formElement) {
+      const input = formElement.elements.target;
+      if (!input) return;
+      const player = resolveRegisteredPlayer(input.value, formElement.elements.shard?.value || "");
+      if (!player) return;
+      input.value = player.current_name;
+      input.dataset.accountId = player.account_id;
+      if (formElement.elements.shard) formElement.elements.shard.value = player.shard;
+      if ([trendForm, weaponForm, matchForm].includes(formElement)) {
+        applyPlayerCatalog(formElement, await loadPlayerCatalog(player));
+      }
+    }
+
+    async function initializeRegisteredPlayerForms() {
+      const forms = [profileForm, trendForm, weaponForm, recommendationForm, dropZoneForm, matchForm];
+      const prefilled = forms.filter((formElement) => (
+        String(formElement.elements.target?.value || "").trim()
+      ));
+      await Promise.allSettled(prefilled.map((formElement) => syncRegisteredPlayerForm(formElement)));
+    }
+
+    function clearRegisteredPlayerSearch(formElement) {
+      const input = formElement.elements.target;
+      if (!input) return;
+      input.value = "";
+      delete input.dataset.accountId;
+    }
+
+    function resetAnalysisForm(formElement) {
+      formElement.reset();
+      clearRegisteredPlayerSearch(formElement);
+      for (const details of formElement.querySelectorAll("details")) details.open = false;
+      catalogByForm.delete(formElement);
+
+      if (formElement === profileForm) {
+        activeProfilePlayer = null;
+        profileBody.textContent = "조회 대기 중";
+      } else if (formElement === trendForm) {
+        activeTrendReport = null;
+        activeTrendView = "table";
+        trendViewControls.hidden = true;
+        trendChartPanel.hidden = true;
+        trendTableWrap.hidden = false;
+        trendCards.hidden = false;
+        trendSummary.textContent = "조회 대기 중";
+        trendBody.innerHTML = '<tr><td colspan="9">조회 대기 중</td></tr>';
+        trendCards.innerHTML = "";
+      } else if (formElement === weaponForm) {
+        formElement.elements.weapon.innerHTML = '<option value="">유저를 먼저 선택하세요</option>';
+        weaponBody.textContent = "조회 대기 중";
+      } else if (formElement === recommendationForm) {
+        activeRecommendationReport = null;
+        recommendationBody.textContent = "조회 대기 중";
+      } else if (formElement === dropZoneForm) {
+        dropZoneBody.textContent = "조회 대기 중";
+      } else if (formElement === matchForm) {
+        formElement.elements.match_id.innerHTML = '<option value="">유저를 먼저 선택하세요</option>';
+        formElement.elements.match_search.value = "";
+        matchBody.textContent = "조회 대기 중";
+      }
+    }
+
+    document.querySelectorAll('select[name="hour"]').forEach((select) => {
+      const options = Array.from({ length: 24 }, (_, hour) => (
+        '<option value="' + hour + '">' + String(hour).padStart(2, "0") + '시</option>'
+      )).join("");
+      select.insertAdjacentHTML("beforeend", options);
+    });
+
     async function loadPlayers() {
       const payload = await fetch("/players?active_only=false").then((r) => r.json());
+      registeredPlayers = payload.players || [];
+      playerCatalogCache.clear();
+      renderRegisteredPlayerOptions();
       playersBody.innerHTML = payload.players.map((player) => {
         const highlighted = Boolean(
           (registeredPlayerHighlight.account_id && player.account_id === registeredPlayerHighlight.account_id)
@@ -5814,6 +7623,7 @@ _INDEX_HTML = """<!doctype html>
           </td>
         </tr>`;
       }).join("");
+      await initializeRegisteredPlayerForms();
     }
 
     function dataDeletionActionButtons(request) {
@@ -7345,7 +9155,12 @@ _INDEX_HTML = """<!doctype html>
       const target = firstUrlParam(params, ["lookup_target", "target", "name", "account_id"]);
       const weapon = firstUrlParam(params, ["lookup_weapon", "weapon", "weapon_code"]);
       const matchId = firstUrlParam(params, ["lookup_match_id", "match_id"]);
-      const minMatches = lookupUrlBoundedNumber(firstUrlParam(params, ["lookup_min_matches", "min_matches"]), 1, 1, 50);
+      const minMatches = lookupUrlBoundedNumber(
+        firstUrlParam(params, ["lookup_min_matches", "min_matches"]),
+        1,
+        1,
+        2147483647,
+      );
       const replayAccountId = firstUrlParam(params, ["replay_account_id", "account_id"])
         || (target.startsWith("account.") ? target : "");
       const replayArtifactId = firstUrlParam(params, ["replay_artifact_id", "artifact_id"]);
@@ -7374,7 +9189,11 @@ _INDEX_HTML = """<!doctype html>
         "",
       );
       const deletionRequestId = firstUrlParam(params, ["deletion_request_id"]);
-      const trendGranularity = lookupUrlChoice(firstUrlParam(params, ["granularity"]), ["hour", "date", "week", "month"], "month");
+      const trendGranularity = lookupUrlChoice(
+        firstUrlParam(params, ["granularity"]),
+        ["hour", "date", "week", "month", "quarter", "year", "map", "game_mode", "team_mode", "perspective", "match_type", "season_state"],
+        "month",
+      );
       const trendGameMode = firstUrlParam(params, ["game_mode"]);
       const trendTeamMode = lookupUrlChoice(firstUrlParam(params, ["team_mode"]), ["", "solo", "duo", "squad", "unknown"], "");
       const trendPerspective = lookupUrlChoice(firstUrlParam(params, ["perspective"]), ["", "fpp", "tpp", "unknown"], "");
@@ -7406,11 +9225,11 @@ _INDEX_HTML = """<!doctype html>
 
       if (shouldPrefillSection(hash, "discord-permissions")) {
         setFormElementValue(discordGrantForm, "user_id", discordPermissionUserId);
-        setFormElementValue(discordGrantForm, "guild_id", discordPermissionGuildId);
         discordSettingsPrefill.permission_group = discordPermissionGroupValue;
+        discordSettingsPrefill.permission_guild_id = discordPermissionGuildId;
       }
       if (shouldPrefillSection(hash, "discord-scopes")) {
-        setFormElementValue(discordScopeForm, "guild_id", discordScopeGuildId);
+        discordSettingsPrefill.scope_guild_id = discordScopeGuildId;
         setFormElementValue(discordScopeForm, "scope", discordScopeValue);
         discordSettingsPrefill.public_profile_default = discordPublicProfileDefault;
       }
@@ -7423,10 +9242,10 @@ _INDEX_HTML = """<!doctype html>
         };
       }
       if (shouldPrefillSection(hash, "ranking-lookup")) {
-        setFormElementValue(document.querySelector("#rankingForm"), "shard", rankingShard);
-        setFormElementValue(document.querySelector("#rankingForm"), "metric", rankingMetric);
-        setFormElementValue(document.querySelector("#rankingForm"), "guild_id", rankingGuildId);
-        setFormElementValue(document.querySelector("#rankingForm"), "limit", String(rankingLimit));
+        rankingGuildPrefill = rankingGuildId;
+        setFormElementValue(rankingForm, "shard", rankingShard);
+        setFormElementValue(rankingForm, "metric", rankingMetric);
+        setFormElementValue(rankingForm, "limit", String(rankingLimit));
       }
 
       if (shouldPrefillSection(hash, "profile-lookup")) {
@@ -7488,52 +9307,118 @@ _INDEX_HTML = """<!doctype html>
         const error = await profileResponse.json().catch(() => ({ detail: profileResponse.statusText }));
         throw new Error(error.detail || profileResponse.statusText);
       }
-      if (!fightResponse.ok) {
-        const error = await fightResponse.json().catch(() => ({ detail: fightResponse.statusText }));
-        throw new Error(error.detail || fightResponse.statusText);
-      }
       const profile = (await profileResponse.json()).profile;
-      const fights = (await fightResponse.json()).fight_outcomes;
+      activeProfilePlayer = profile.player;
+      const fights = fightResponse.ok ? (await fightResponse.json()).fight_outcomes : null;
       const totals = profile.totals;
-      const fightTotals = fights.totals;
-      const weapons = (profile.top_weapons || []).slice(0, 3).map((weapon) => (
-        `${escapeHtml(weapon.weapon_name)} ${weapon.kills}킬 ${Number(weapon.damage_dealt).toFixed(0)}딜`
-      )).join(", ") || "-";
-      const fightWeapons = (fights.weapons || []).map((weapon) => (
-        `${escapeHtml(weapon.weapon_name)} ${weapon.wins}승/${weapon.losses}패 ${percent(weapon.fight_win_rate)}`
-      )).join(", ") || "-";
-      const fightLoadouts = (fights.loadouts || []).map((loadout) => {
-        const parts = (loadout.attachment_names || []).map(escapeHtml).join(" + ") || "파츠 없음";
-        return `${escapeHtml(loadout.weapon_name)} + ${parts} ${loadout.wins}승/${loadout.losses}패 ${percent(loadout.fight_win_rate)}`;
-      }).join("<br>") || "-";
-      profileBody.innerHTML = [
-        `<strong>${escapeHtml(profile.player.current_name)} (${escapeHtml(profile.player.shard)})</strong>`,
-        `경기/치킨: ${totals.match_count}전 ${totals.wins}치킨 (${percent(totals.win_rate)})`,
-        `K/D/A: ${totals.kills}/${totals.deaths}/${totals.assists} · KDA ${Number(totals.kda).toFixed(2)}`,
-        `평균 딜/받은 딜: ${Number(totals.avg_damage_dealt).toFixed(1)} / ${Number(totals.avg_damage_taken).toFixed(1)}`,
-        `명중 지표: ${accuracyBreakdownText(totals.accuracy, totals.accuracy_breakdown)}`,
-        `주무기: ${weapons}`,
-        `교전 승/패: ${fightTotals.wins}승 ${fightTotals.losses}패 (${percent(fightTotals.fight_win_rate)})`,
-        `교전 상세: 킬승 ${fightTotals.kill_wins} · 기절승 ${fightTotals.dbno_wins} · 사망패 ${fightTotals.death_losses} · 기절패 ${fightTotals.dbno_losses}`,
-        fightTotals.excluded_non_firearm_contexts
-          ? `총기 순위 제외: 비총기 장비 ${fightTotals.excluded_non_firearm_contexts}건`
-          : null,
-        `교전 무기: ${fightWeapons}`,
-        `교전 파츠:<br>${fightLoadouts}`,
-      ].filter(Boolean).join("<br>");
+      const fightTotals = fights?.totals || {
+        fight_count: 0,
+        wins: 0,
+        losses: 0,
+        fight_win_rate: 0,
+        kill_wins: 0,
+        dbno_wins: 0,
+        death_losses: 0,
+        dbno_losses: 0,
+        excluded_non_firearm_contexts: 0,
+      };
+      const metricCells = [
+        ["경기", String(totals.match_count) + "전"],
+        ["치킨", String(totals.wins) + "회 · " + percent(totals.win_rate)],
+        ["KDA", Number(totals.kda).toFixed(2)],
+        ["킬 / 사망 / 어시", totals.kills + " / " + totals.deaths + " / " + totals.assists],
+        ["기절시킴 / 당함", totals.dbnos_caused + " / " + totals.dbnos_taken],
+        ["평균 딜 / 받은 딜", Number(totals.avg_damage_dealt).toFixed(1) + " / " + Number(totals.avg_damage_taken).toFixed(1)],
+        ["평균 생존", minutes(totals.avg_survival_seconds)],
+        ["평균 이동", distanceKm(totals.avg_movement_distance_m)],
+        ["명중 확률", accuracyBreakdownText(totals.accuracy, totals.accuracy_breakdown)],
+        ["헤드샷 명중 확률", `${percent(totals.headshot_hit_rate)} · ${totals.headshot_hits || 0}/${totals.shots_hit || 0}명중`],
+        ["헤드샷 킬 비율", `${percent(totals.headshot_kill_rate)} · ${totals.headshot_kills || 0}/${totals.kills || 0}킬`],
+        ["교전 승리 확률", `${percent(fightTotals.fight_win_rate)} · ${fightTotals.wins}/${fightTotals.fight_count || 0}교전`],
+        ["경기당 평균 교전", `${Number((fightTotals.fight_count || 0) / Math.max(1, totals.match_count || 0)).toFixed(2)}회`],
+      ];
+      const topWeaponRows = (profile.top_weapons || []).slice(0, 5).map((weapon, index) => `
+        <div class="result-row">
+          <span>${index + 1}위</span>
+          <strong>${escapeHtml(weapon.weapon_name)}</strong>
+          <p>${weapon.kills}킬 · ${Number(weapon.damage_dealt).toFixed(0)}딜 · 명중 ${percent(weapon.accuracy)} · 헤드샷 명중 ${percent(weapon.headshot_hit_rate)}</p>
+        </div>`).join("") || '<span class="result-caption">무기 기록 없음</span>';
+      const fightWeaponRows = (fights?.weapons || []).map((weapon) => `
+        <div class="result-row">
+          <span>교전 ${weapon.fight_count}회</span>
+          <strong>${escapeHtml(weapon.weapon_name)}</strong>
+          <p>${weapon.wins}승 ${weapon.losses}패 · ${percent(weapon.fight_win_rate)}</p>
+        </div>`).join("") || '<span class="result-caption">총기 교전 기록 없음</span>';
+      const fightLoadoutRows = (fights?.loadouts || []).map((loadout) => `
+        <div class="result-row">
+          <span>${escapeHtml(loadout.weapon_name)}</span>
+          <strong>${escapeHtml((loadout.attachment_names || []).join(" · ") || "파츠 없음")}</strong>
+          <p>${loadout.wins}승 ${loadout.losses}패 · ${percent(loadout.fight_win_rate)}</p>
+        </div>`).join("") || '<span class="result-caption">교전 조합 기록 없음</span>';
+      const recentRows = (profile.recent_matches || []).map((match) => (
+        '<tr><td>' + escapeHtml(String(match.created_at_kst || "-").replace("T", " ").slice(0, 16)) + '</td>'
+        + '<td>' + escapeHtml(match.map_name_ko || match.map_name || "-") + '</td>'
+        + '<td>' + escapeHtml(match.game_mode_ko || match.game_mode || "-") + '</td>'
+        + '<td>' + (Number(match.win_place) === 1 ? "치킨" : "#" + (match.win_place || "-")) + '</td>'
+        + '<td>' + match.kills + ' / ' + match.assists + ' / ' + match.dbnos_caused + '</td>'
+        + '<td>' + Number(match.damage_dealt).toFixed(0) + '</td>'
+        + '<td><button class="secondary" type="button" data-profile-match-id="' + attr(match.match_id) + '">상세</button></td></tr>'
+      )).join("");
+      profileBody.innerHTML = `<div class="result-shell">
+        ${resultHeading(
+          profile.player.current_name,
+          `${profile.player.shard} · 완료된 매치 기준`,
+          profile.player.active ? "수집 중" : "수집 중지",
+          profile.player.active ? "success" : "",
+        )}
+        ${resultMetricGrid(metricCells)}
+        <div class="result-columns">
+          ${resultSection("주요 무기", `<div class="result-list">${topWeaponRows}</div>`)}
+          ${resultSection("교전 요약", resultTextRows([
+            ["교전 승/패", `${fightTotals.wins} / ${fightTotals.losses} · ${percent(fightTotals.fight_win_rate)}`],
+            ["승리 원인", `킬 ${fightTotals.kill_wins} · 기절 ${fightTotals.dbno_wins}`],
+            ["패배 원인", `사망 ${fightTotals.death_losses} · 기절 ${fightTotals.dbno_losses}`],
+            ["명중 지표", accuracyBreakdownText(totals.accuracy, totals.accuracy_breakdown)],
+          ]))}
+        </div>
+        <div class="result-columns">
+          ${resultSection("부위별 명중 확률", resultChips(hitPartEntries(totals.hit_parts, totals.hit_part_rates)))}
+          ${resultSection("부위별 피격 확률", resultChips(hitPartEntries(totals.taken_hit_parts, totals.taken_hit_part_rates)))}
+        </div>
+        ${resultSection("교전 무기", `<div class="result-list">${fightWeaponRows}</div>`)}
+        ${resultSection("교전 조합", `<div class="result-list">${fightLoadoutRows}</div>`)}
+        ${fightTotals.excluded_non_firearm_contexts
+          ? `<span class="result-caption">총기 순위 제외: 비총기 장비 ${fightTotals.excluded_non_firearm_contexts}건</span>`
+          : ""}
+        ${resultSection("최근 경기", `<div class="table-scroll"><table><thead><tr><th>KST</th><th>맵</th><th>모드</th><th>결과</th><th>킬/어시/기절</th><th>딜</th><th></th></tr></thead><tbody>${recentRows || '<tr><td colspan="7">완료 경기 데이터가 없습니다.</td></tr>'}</tbody></table></div>`)}
+      </div>`;
     }
 
     async function loadPlayerTrends(formElement) {
       const form = new FormData(formElement);
-      const target = String(form.get("target") || "");
+      const player = selectedRegisteredPlayer(formElement);
       const params = new URLSearchParams({
-        shard: String(form.get("shard") || "steam"),
+        shard: player.shard,
+        account_id: player.account_id,
         granularity: String(form.get("granularity") || "month"),
         bucket_limit: String(form.get("bucket_limit") || 120),
       });
-      if (target.startsWith("account.")) params.set("account_id", target);
-      else params.set("name", target);
-      for (const name of ["game_mode", "team_mode", "perspective", "match_type", "map_name", "is_custom_match", "from_date_kst", "to_date_kst"]) {
+      for (const name of [
+        "game_mode",
+        "team_mode",
+        "perspective",
+        "match_type",
+        "map_name",
+        "season_state",
+        "is_custom_match",
+        "year",
+        "quarter",
+        "month",
+        "exact_date_kst",
+        "hour",
+        "from_date_kst",
+        "to_date_kst",
+      ]) {
         const value = String(form.get(name) || "");
         if (value) params.set(name, value);
       }
@@ -7543,12 +9428,22 @@ _INDEX_HTML = """<!doctype html>
         throw new Error(error.detail || response.statusText);
       }
       const report = (await response.json()).trends;
+      activeTrendReport = report;
+      trendViewControls.hidden = false;
       const totals = report.totals;
       const granularityLabel = {
         hour: "시간대별",
         date: "일자별",
         week: "주별",
         month: "월별",
+        quarter: "분기별",
+        year: "연도별",
+        map: "맵별",
+        game_mode: "게임 모드별",
+        team_mode: "팀 모드별",
+        perspective: "시점별",
+        match_type: "매치 유형별",
+        season_state: "시즌 상태별",
       }[report.granularity] || report.granularity;
       const filterLabels = {
         game_mode: "게임 모드",
@@ -7556,43 +9451,167 @@ _INDEX_HTML = """<!doctype html>
         perspective: "시점",
         match_type: "매치 유형",
         map_name: "맵",
+        season_state: "시즌 상태",
         is_custom_match: "커스텀",
+        year: "연도",
+        quarter: "분기",
+        month: "월",
+        exact_date_kst: "특정 일자",
+        hour: "시간대",
         from_date_kst: "시작일",
         to_date_kst: "종료일",
       };
-      const filterText = Object.entries(report.filters || {})
+      const activeFilters = Object.entries(report.filters || {})
         .filter(([, value]) => value !== null && value !== "")
-        .map(([key, value]) => `${escapeHtml(filterLabels[key] || key)}=${escapeHtml(value)}`)
-        .join(", ") || "전체";
-      trendSummary.innerHTML = [
-        `<strong>${escapeHtml(report.player.current_name)} · KST ${escapeHtml(granularityLabel)}</strong>`,
-        `${totals.match_count}전 ${totals.wins}치킨/${totals.non_wins}비치킨 (${percent(totals.win_rate)}) · KDA ${Number(totals.kda).toFixed(2)} · 평딜 ${Number(totals.avg_damage_dealt).toFixed(1)}`,
-        `명중 지표: ${accuracyBreakdownText(totals.accuracy, totals.accuracy_breakdown)}`,
-        `필터: ${filterText}`,
-        report.truncated ? `최근 ${report.returned_bucket_count}/${report.available_bucket_count}개 구간 표시` : `${report.returned_bucket_count}개 구간`,
-      ].join("<br>");
+        .map(([key, value]) => `${filterLabels[key] || key}: ${value}`);
+      const bucketStatus = report.truncated
+        ? `최근 ${report.returned_bucket_count}/${report.available_bucket_count}개 구간`
+        : `${report.returned_bucket_count}개 구간`;
+      trendSummary.innerHTML = `<div class="result-shell">
+        ${resultHeading(report.player.current_name, `KST ${granularityLabel}`, bucketStatus)}
+        ${resultMetricGrid([
+          ["경기", `${totals.match_count}전`],
+          ["치킨", `${totals.wins}회 · ${percent(totals.win_rate)}`],
+          ["비치킨", `${totals.non_wins}회`],
+          ["KDA", Number(totals.kda).toFixed(2)],
+          ["평균 딜", Number(totals.avg_damage_dealt).toFixed(1)],
+          ["명중 지표", accuracyBreakdownText(totals.accuracy, totals.accuracy_breakdown)],
+          ["헤드샷 명중 확률", `${percent(totals.headshot_hit_rate)} · ${totals.headshot_hits}/${totals.shots_hit}명중`],
+          ["헤드샷 킬 비율", `${percent(totals.headshot_kill_rate)} · ${totals.headshot_kills}/${totals.kills}킬`],
+          ["교전 승리 확률", `${percent(totals.fight_win_rate)} · ${totals.fight_wins}/${totals.fight_count}교전`],
+          ["경기당 평균 교전", `${Number(totals.avg_fights_per_match).toFixed(2)}회`],
+          ["경기당 킬 / 기절", `${Number(totals.avg_kills).toFixed(2)} / ${Number(totals.avg_dbnos_caused).toFixed(2)}`],
+        ])}
+        ${resultSection("적용 조건", resultChips(activeFilters, "전체 경기"))}
+      </div>`;
       trendBody.innerHTML = (report.buckets || []).map((bucket) => `
         <tr>
           <td>${escapeHtml(bucket.period_label)}</td>
-          <td>${bucket.match_count}</td>
-          <td>${bucket.wins}</td>
+          <td>${bucket.match_count}전 · ${bucket.wins}치킨</td>
           <td>${percent(bucket.win_rate)}</td>
-          <td>${bucket.kills}/${bucket.deaths}/${bucket.assists}</td>
-          <td>${Number(bucket.kda).toFixed(2)}</td>
+          <td>${bucket.kills}/${bucket.deaths}/${bucket.assists}<br>KDA ${Number(bucket.kda).toFixed(2)}</td>
+          <td>${Number(bucket.avg_kills).toFixed(2)} / ${Number(bucket.avg_dbnos_caused).toFixed(2)}</td>
           <td>${Number(bucket.avg_damage_dealt).toFixed(1)} / ${Number(bucket.avg_damage_taken).toFixed(1)}</td>
           <td>${accuracyBreakdownText(bucket.accuracy, bucket.accuracy_breakdown)}</td>
+          <td>${percent(bucket.headshot_hit_rate)}<br><span class="status">${bucket.headshot_hits}/${bucket.shots_hit}명중</span></td>
+          <td>${percent(bucket.fight_win_rate)}<br><span class="status">${bucket.fight_wins}/${bucket.fight_count} · 경기당 ${Number(bucket.avg_fights_per_match).toFixed(2)}회</span></td>
           <td>${bucket.dbnos_caused} / ${bucket.dbnos_taken}</td>
           <td>${minutes(bucket.avg_survival_seconds)}</td>
         </tr>
-      `).join("") || `<tr><td colspan="10">조건에 맞는 완료 경기 데이터가 없습니다.</td></tr>`;
+      `).join("") || `<tr><td colspan="11">조건에 맞는 완료 경기 데이터가 없습니다.</td></tr>`;
+      trendCards.innerHTML = (report.buckets || []).map((bucket) => `
+        <article class="trend-card">
+          <strong>${escapeHtml(bucket.period_label)}</strong>
+          <dl>
+            <div><dt>경기 / 치킨</dt><dd>${bucket.match_count}전 / ${bucket.wins}회</dd></div>
+            <div><dt>승률</dt><dd>${percent(bucket.win_rate)}</dd></div>
+            <div><dt>K/D/A · KDA</dt><dd>${bucket.kills}/${bucket.deaths}/${bucket.assists} · ${Number(bucket.kda).toFixed(2)}</dd></div>
+            <div><dt>경기당 킬 / 기절</dt><dd>${Number(bucket.avg_kills).toFixed(2)} / ${Number(bucket.avg_dbnos_caused).toFixed(2)}</dd></div>
+            <div><dt>평균 딜 / 받은 딜</dt><dd>${Number(bucket.avg_damage_dealt).toFixed(1)} / ${Number(bucket.avg_damage_taken).toFixed(1)}</dd></div>
+            <div><dt>헤드샷 명중 확률</dt><dd>${percent(bucket.headshot_hit_rate)} · ${bucket.headshot_hits}/${bucket.shots_hit}</dd></div>
+            <div><dt>교전 승리 확률</dt><dd>${percent(bucket.fight_win_rate)} · ${bucket.fight_wins}/${bucket.fight_count}</dd></div>
+            <div><dt>경기당 교전</dt><dd>${Number(bucket.avg_fights_per_match).toFixed(2)}회</dd></div>
+            <div><dt>기절 +/-</dt><dd>${bucket.dbnos_caused} / ${bucket.dbnos_taken}</dd></div>
+            <div><dt>평균 생존</dt><dd>${minutes(bucket.avg_survival_seconds)}</dd></div>
+          </dl>
+          <div class="result-caption" style="margin-top:8px">${escapeHtml(accuracyBreakdownText(bucket.accuracy, bucket.accuracy_breakdown))}</div>
+        </article>
+      `).join("") || '<span class="result-caption">조건에 맞는 완료 경기 데이터가 없습니다.</span>';
+      renderTrendView();
     }
 
-    async function loadPlayerWeapon(target, weapon, shard) {
-      const params = new URLSearchParams({ shard, weapon });
-      if (target.startsWith("account.")) {
-        params.set("account_id", target);
-      } else {
-        params.set("name", target);
+    function trendMetricDefinition(metric) {
+      const definitions = {
+        win_rate: { label: "승률", value: (bucket) => bucket.win_rate, format: percent, percentage: true },
+        fight_win_rate: { label: "교전 승리 확률", value: (bucket) => bucket.fight_win_rate, format: percent, percentage: true },
+        accuracy: { label: "명중 확률", value: (bucket) => bucket.accuracy, format: percent, percentage: true },
+        headshot_hit_rate: { label: "헤드샷 명중 확률", value: (bucket) => bucket.headshot_hit_rate, format: percent, percentage: true },
+        headshot_kill_rate: { label: "헤드샷 킬 비율", value: (bucket) => bucket.headshot_kill_rate, format: percent, percentage: true },
+        kda: { label: "KDA", value: (bucket) => bucket.kda, format: (value) => Number(value).toFixed(2) },
+        avg_kills: { label: "경기당 평균 킬", value: (bucket) => bucket.avg_kills, format: (value) => Number(value).toFixed(2) },
+        avg_assists: { label: "경기당 평균 어시스트", value: (bucket) => bucket.avg_assists, format: (value) => Number(value).toFixed(2) },
+        avg_deaths: { label: "경기당 평균 사망", value: (bucket) => bucket.avg_deaths, format: (value) => Number(value).toFixed(2) },
+        avg_dbnos_caused: { label: "경기당 평균 기절", value: (bucket) => bucket.avg_dbnos_caused, format: (value) => Number(value).toFixed(2) },
+        avg_dbnos_taken: { label: "경기당 당한 기절", value: (bucket) => bucket.avg_dbnos_taken, format: (value) => Number(value).toFixed(2) },
+        avg_fights_per_match: { label: "경기당 평균 교전", value: (bucket) => bucket.avg_fights_per_match, format: (value) => `${Number(value).toFixed(2)}회` },
+        avg_damage_dealt: { label: "평균 준 피해", value: (bucket) => bucket.avg_damage_dealt, format: (value) => Number(value).toFixed(1) },
+        avg_damage_taken: { label: "평균 받은 피해", value: (bucket) => bucket.avg_damage_taken, format: (value) => Number(value).toFixed(1) },
+        avg_survival_seconds: { label: "평균 생존시간", value: (bucket) => bucket.avg_survival_seconds, format: minutes },
+        avg_movement_distance_m: { label: "평균 이동거리", value: (bucket) => bucket.avg_movement_distance_m, format: distanceKm },
+        hit_head: { label: "머리 명중 비율", value: (bucket) => bucket.hit_part_rates?.head || 0, format: percent, percentage: true },
+        hit_neck: { label: "목 명중 비율", value: (bucket) => bucket.hit_part_rates?.neck || 0, format: percent, percentage: true },
+        hit_torso: { label: "몸통 명중 비율", value: (bucket) => bucket.hit_part_rates?.torso || 0, format: percent, percentage: true },
+        hit_pelvis: { label: "골반 명중 비율", value: (bucket) => bucket.hit_part_rates?.pelvis || 0, format: percent, percentage: true },
+        hit_arm: { label: "팔 명중 비율", value: (bucket) => bucket.hit_part_rates?.arm || 0, format: percent, percentage: true },
+        hit_leg: { label: "다리 명중 비율", value: (bucket) => bucket.hit_part_rates?.leg || 0, format: percent, percentage: true },
+        taken_head: { label: "머리 피격 비율", value: (bucket) => bucket.taken_hit_part_rates?.head || 0, format: percent, percentage: true },
+        taken_neck: { label: "목 피격 비율", value: (bucket) => bucket.taken_hit_part_rates?.neck || 0, format: percent, percentage: true },
+        taken_torso: { label: "몸통 피격 비율", value: (bucket) => bucket.taken_hit_part_rates?.torso || 0, format: percent, percentage: true },
+        taken_pelvis: { label: "골반 피격 비율", value: (bucket) => bucket.taken_hit_part_rates?.pelvis || 0, format: percent, percentage: true },
+        taken_arm: { label: "팔 피격 비율", value: (bucket) => bucket.taken_hit_part_rates?.arm || 0, format: percent, percentage: true },
+        taken_leg: { label: "다리 피격 비율", value: (bucket) => bucket.taken_hit_part_rates?.leg || 0, format: percent, percentage: true },
+      };
+      return definitions[metric] || definitions.win_rate;
+    }
+
+    function renderTrendChart() {
+      if (!activeTrendReport) {
+        trendChartPanel.innerHTML = '<span class="result-caption">조회된 추세가 없습니다.</span>';
+        return;
+      }
+      const definition = trendMetricDefinition(trendChartMetric.value);
+      const buckets = activeTrendReport.buckets || [];
+      const values = buckets.map((bucket) => Math.max(0, Number(definition.value(bucket) || 0)));
+      const maximum = definition.percentage ? 1 : Math.max(1, ...values);
+      const rows = buckets.map((bucket, index) => {
+        const value = values[index];
+        const width = Math.max(0, Math.min(100, value / maximum * 100));
+        return `<div class="metric-chart-row">
+          <strong class="metric-chart-label">${escapeHtml(bucket.period_label)}<small>${bucket.match_count}경기</small></strong>
+          <span class="metric-chart-track"><span class="metric-chart-fill" style="width:${width.toFixed(2)}%"></span></span>
+          <span class="metric-chart-value">${escapeHtml(definition.format(value))}</span>
+        </div>`;
+      }).join("");
+      trendChartPanel.innerHTML = `<h3>${escapeHtml(definition.label)} 변동</h3><div class="metric-chart-list">${rows || '<span class="result-caption">표시할 구간이 없습니다.</span>'}</div>`;
+    }
+
+    function renderTrendView() {
+      const chart = activeTrendView === "chart";
+      trendTableWrap.hidden = chart;
+      trendCards.hidden = chart;
+      trendChartPanel.hidden = !chart;
+      for (const button of trendViewControls.querySelectorAll("[data-trend-view]")) {
+        button.classList.toggle("active", button.dataset.trendView === activeTrendView);
+      }
+      if (chart) renderTrendChart();
+    }
+
+    async function loadPlayerWeapon(formElement) {
+      const form = new FormData(formElement);
+      const player = selectedRegisteredPlayer(formElement);
+      const params = new URLSearchParams({
+        shard: player.shard,
+        account_id: player.account_id,
+        weapon: String(form.get("weapon") || ""),
+      });
+      for (const name of [
+        "game_mode",
+        "team_mode",
+        "perspective",
+        "match_type",
+        "map_name",
+        "season_state",
+        "is_custom_match",
+        "year",
+        "quarter",
+        "month",
+        "exact_date_kst",
+        "hour",
+        "from_date_kst",
+        "to_date_kst",
+      ]) {
+        const value = String(form.get(name) || "");
+        if (value) params.set(name, value);
       }
       const response = await fetch(`/players/weapon?${params.toString()}`);
       if (!response.ok) {
@@ -7602,23 +9621,130 @@ _INDEX_HTML = """<!doctype html>
       const payload = await response.json();
       const detail = payload.weapon;
       const totals = detail.totals;
-      const recent = (detail.recent_matches || []).slice(0, 3).map((match) => (
-        `${escapeHtml(match.match_id.slice(0, 8))} ${match.kills}킬 ${match.dbnos}기절 ${Number(match.damage_dealt).toFixed(0)}딜`
-      )).join("<br>") || "-";
-      weaponBody.innerHTML = [
-        `<strong>${escapeHtml(detail.player.current_name)} ${escapeHtml(detail.weapon_name)}</strong>`,
-        `사용 경기/치킨: ${totals.match_count}전 ${totals.wins}치킨 (${percent(totals.win_rate)})`,
-        `킬/어시/기절: ${totals.kills}/${totals.assists}/${totals.dbnos}`,
-        `딜/평균 딜: ${Number(totals.damage_dealt).toFixed(0)} / ${Number(totals.avg_damage_dealt).toFixed(1)}`,
-        `명중 지표: ${accuracyMetricText(totals.accuracy, totals.accuracy_metric)} (${totals.shots_hit}/${totals.shots_fired})`,
-        `최근 사용 경기:<br>${recent}`,
-      ].join("<br>");
+      const effectiveRanges = (detail.effective_ranges || []).map((item, index) => `
+        <div class="result-row">
+          <span>${index === 0 ? "최우선" : `#${index + 1}`} · ${item.reliable_sample ? "표본 확보" : "표본 부족"}</span>
+          <strong>${escapeHtml(item.bucket_label)} · 교전 승리 ${percent(item.observed_win_rate)}</strong>
+          <p>${item.wins}승 / ${item.losses}패 · ${item.fight_count}교전 · 평균 ${Number(item.avg_distance_m).toFixed(0)}m · 신뢰 보정 ${percent(item.confidence_adjusted_win_rate)} · 효율 ${Number(item.efficiency_score).toFixed(1)}</p>
+        </div>`).join("") || '<span class="result-caption">거리 정보가 있는 교전 기록이 없습니다.</span>';
+      const recentRows = (detail.recent_matches || []).slice(0, 5).map((match) => `
+        <div class="result-row">
+          <span>${escapeHtml(String(match.created_at_kst || "-").replace("T", " ").slice(0, 16))}</span>
+          <strong>${escapeHtml(match.map_name_ko || match.map_name || "-")} · ${escapeHtml(match.game_mode_ko || match.game_mode || "-")}</strong>
+          <p>${match.kills}킬 · ${match.dbnos}기절 · ${Number(match.damage_dealt).toFixed(0)}딜</p>
+        </div>`).join("") || '<span class="result-caption">최근 사용 경기 없음</span>';
+      weaponBody.innerHTML = `<div class="result-shell">
+        ${resultHeading(detail.weapon_name, `${detail.player.current_name} · 조건에 맞는 완료 경기`, `${totals.match_count}경기`)}
+        ${resultMetricGrid([
+          ["사용 경기 / 치킨", `${totals.match_count}전 / ${totals.wins}회 · ${percent(totals.win_rate)}`],
+          ["킬 / 어시 / 기절", `${totals.kills} / ${totals.assists} / ${totals.dbnos}`],
+          ["사망 / 당한 기절", `${totals.deaths_taken} / ${totals.dbnos_taken}`],
+          ["피니시 / 당한 피니시", `${totals.finishes} / ${totals.finishes_taken}`],
+          ["준 딜 / 받은 딜", `${Number(totals.damage_dealt).toFixed(0)} / ${Number(totals.damage_taken).toFixed(0)}`],
+          ["경기당 평균 딜", Number(totals.avg_damage_dealt).toFixed(1)],
+          ["명중 지표", `${accuracyMetricText(totals.accuracy, totals.accuracy_metric)} · ${totals.shots_hit}/${totals.shots_fired}`],
+          ["헤드샷 명중 확률", `${percent(totals.headshot_hit_rate)} · ${totals.headshot_hits}/${totals.shots_hit}명중`],
+          ["헤드샷 킬 비율", `${percent(totals.headshot_kill_rate)} · ${totals.headshot_kills}/${totals.kills}킬`],
+          ["받은 헤드샷 비율", `${percent(totals.headshot_hit_taken_rate)} · ${totals.taken_hit_parts?.head || 0}/${totals.hits_taken}피격`],
+          ["교전 승리 확률", `${percent(totals.fight_win_rate)} · ${totals.fight_wins}/${totals.fight_count}교전`],
+          ["경기당 평균 교전", `${Number(totals.avg_fights_per_match).toFixed(2)}회`],
+        ])}
+        <div class="result-columns">
+          ${resultSection("부위별 명중 확률", resultChips(hitPartEntries(totals.hit_parts, totals.hit_part_rates)))}
+          ${resultSection("부위별 피격 확률", resultChips(hitPartEntries(totals.taken_hit_parts, totals.taken_hit_part_rates)))}
+        </div>
+        ${resultSection("효율 교전 거리", `<div class="result-list">${effectiveRanges}</div>`)}
+        ${resultSection("최근 사용 경기", `<div class="result-list">${recentRows}</div>`)}
+      </div>`;
     }
 
     function dropZoneLocation(item) {
       if (item.region_display_name_ko) return item.region_display_name_ko;
       if (item.region_status === "dynamic_map") return `동적 맵 grid ${item.grid_x},${item.grid_y}`;
       return `grid ${item.grid_x},${item.grid_y}`;
+    }
+
+    async function loadDropZoneAnalysis(formElement) {
+      const form = new FormData(formElement);
+      const player = selectedRegisteredPlayer(formElement);
+      const params = new URLSearchParams({
+        shard: player.shard,
+        account_id: player.account_id,
+        min_matches: String(form.get("min_matches") || 1),
+        limit: "500",
+      });
+      const response = await fetch(`/players/drop-zones?${params.toString()}`);
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(error.detail || response.statusText);
+      }
+      const report = (await response.json()).drop_zones;
+      const regions = report.regions || [];
+      const zones = report.zones || [];
+      const sortMetric = String(form.get("sort_metric") || "landings");
+      const chartLimit = Math.max(1, Math.min(500, Number(form.get("chart_limit") || 20)));
+      const sortValues = {
+        landings: (item) => Number(item.match_count || 0),
+        win_rate: (item) => Number(item.win_rate || 0),
+        avg_kills: (item) => Number(item.avg_kills || 0),
+        avg_damage: (item) => Number(item.avg_damage_dealt || 0),
+      };
+      const sortValue = sortValues[sortMetric] || sortValues.landings;
+      const sortedRegions = [...regions].sort((left, right) => (
+        sortValue(right) - sortValue(left)
+        || Number(right.match_count || 0) - Number(left.match_count || 0)
+        || String(left.region_name_ko || "").localeCompare(String(right.region_name_ko || ""), "ko")
+      ));
+      const sortedZones = [...zones].sort((left, right) => (
+        Number(right.match_count || 0) - Number(left.match_count || 0)
+        || Number(right.win_rate || 0) - Number(left.win_rate || 0)
+      ));
+      const chartRegions = sortedRegions.slice(0, chartLimit);
+      const sortLabels = {
+        landings: "착지 횟수",
+        win_rate: "승률",
+        avg_kills: "평균 킬",
+        avg_damage: "평균 피해",
+      };
+      const totalLandings = regions.reduce((sum, item) => sum + Number(item.match_count || 0), 0);
+      const totalWins = regions.reduce((sum, item) => sum + Number(item.wins || 0), 0);
+      const regionRows = sortedRegions.map((item) => `
+        <tr>
+          <td>${escapeHtml(item.map_name_ko || item.map_name)}</td>
+          <td><strong>${escapeHtml(item.region_name_ko)}</strong></td>
+          <td>${item.match_count}</td>
+          <td>${item.wins} · ${percent(item.win_rate)}</td>
+          <td>${Number(item.avg_kills).toFixed(2)} / ${Number(item.avg_assists).toFixed(2)} / ${Number(item.avg_dbnos).toFixed(2)} / ${Number(item.avg_deaths).toFixed(2)}</td>
+          <td>${Number(item.avg_damage_dealt).toFixed(1)}</td>
+          <td>${minutes(item.avg_survival_seconds)}</td>
+        </tr>
+      `).join("");
+      const regionChart = recommendationChartRows(chartRegions, {
+        label: (item) => `${item.map_name_ko || item.map_name} · ${item.region_name_ko}`,
+        note: (item) => `${item.match_count}회 착지 · ${item.wins}치킨`,
+        value: (item) => Number(item.win_rate) * 100,
+        display: (item) => percent(item.win_rate),
+        maximum: 100,
+      });
+      const zoneRows = sortedZones.map((item) => `
+        <div class="result-row">
+          <span>${escapeHtml(item.map_name_ko)} · 격자 ${item.grid_x},${item.grid_y}</span>
+          <strong>${escapeHtml(dropZoneLocation(item))}</strong>
+          <p>${item.match_count}회 · 승률 ${percent(item.win_rate)} · 평균 킬 ${Number(item.avg_kills).toFixed(2)} · 기절 ${Number(item.avg_dbnos).toFixed(2)} · 피해 ${Number(item.avg_damage_dealt).toFixed(1)}</p>
+        </div>
+      `).join("") || '<span class="result-caption">조건을 충족한 세부 격자가 없습니다.</span>';
+      dropZoneBody.innerHTML = `<div class="result-shell">
+        ${resultHeading(report.player.current_name, `지역명 우선 · 최소 ${report.min_matches}회 착지`, `${regions.length}개 지역`)}
+        ${resultMetricGrid([
+          ["기록된 착지", `${totalLandings}회`],
+          ["착지 경기 치킨", `${totalWins}회 · ${percent(totalWins / Math.max(1, totalLandings))}`],
+          ["지역명 집계", `${regions.length}개`],
+          ["세부 격자", `${zones.length}개`],
+        ])}
+        <div class="metric-chart"><h3>지역별 승률 · ${escapeHtml(sortLabels[sortMetric] || sortLabels.landings)}순 상위 ${chartRegions.length}개</h3>${regionChart}</div>
+        ${resultSection("지역별 상세", `<div class="table-scroll"><table><thead><tr><th>맵</th><th>지역</th><th>착지</th><th>치킨·승률</th><th>평균 킬/어시/기절/사망</th><th>평균 피해</th><th>평균 생존</th></tr></thead><tbody>${regionRows || '<tr><td colspan="7">조건을 충족한 지역이 없습니다.</td></tr>'}</tbody></table></div>`)}
+        <details class="result-disclosure"><summary>세부 10×10 격자 · ${zones.length}개</summary><div class="result-list">${zoneRows}</div></details>
+      </div>`;
     }
 
     async function loadMapRegion(formElement) {
@@ -7674,44 +9800,310 @@ _INDEX_HTML = """<!doctype html>
       }
       const payload = await response.json();
       const report = payload.recommendations;
-      const weapons = recommendationLines(report.weapons, (item) => (
-        `${escapeHtml(item.weapon_name)} score ${Number(item.score).toFixed(1)} / ${item.match_count} matches / ${Number(item.avg_damage_dealt).toFixed(1)} avg dmg / ${percent(item.win_rate)} win / ${accuracyMetricText(item.accuracy, item.accuracy_metric)}`
-      ));
-      const weaponParts = recommendationLines(report.weapon_attachments, (item) => (
-        `<span>${escapeHtml(item.weapon_name)} + ${escapeHtml(item.attachment_name)} score ${Number(item.score).toFixed(1)} / ${item.match_count} matches / ${item.event_count || item.attached_events} events / ${distanceM(item.avg_distance_m)} avg</span>
-        <button class="secondary" type="button" data-evidence="weapon-attachment" data-weapon-code="${attr(item.weapon_code)}" data-attachment-code="${attr(item.attachment_code)}">근거</button>`
-      ));
-      const weaponRanges = recommendationLines(report.weapon_ranges, (item) => (
-        `${escapeHtml(item.weapon_name)} ${escapeHtml(item.bucket_label)} / ${item.event_count} events / ${item.kills} kills / ${item.dbnos} DBNOs`
-      ));
-      const attachments = recommendationLines(report.attachments, (item) => (
-        `${escapeHtml(item.item_name)} score ${Number(item.score).toFixed(1)} / ${item.attached_events} attaches / ${Number(item.avg_damage_dealt).toFixed(1)} avg dmg`
-      ));
-      const maps = recommendationLines(report.maps, (item) => (
-        `${escapeHtml(item.map_name_ko)} score ${Number(item.score).toFixed(1)} / ${item.match_count} matches / ${percent(item.win_rate)} win`
-      ));
-      const teammates = recommendationLines(report.teammates, (item) => (
-        `${escapeHtml(item.name)}${item.registered ? " (registered)" : ""} score ${Number(item.score).toFixed(1)} / ${item.match_count} matches / ${percent(item.win_rate)} win`
-      ));
-      const drops = recommendationLines(report.drop_zones, (item) => (
-        `${escapeHtml(item.map_name_ko)} ${escapeHtml(dropZoneLocation(item))} / cluster ${escapeHtml(item.cluster_id || "-")} / 중심 ${Number(item.centroid_x_cm || 0).toFixed(0)},${Number(item.centroid_y_cm || 0).toFixed(0)} cm / ${item.match_count} matches / ${percent(item.win_rate)} win`
-      ));
-      recommendationBody.innerHTML = [
-        `<strong>${escapeHtml(report.player.current_name)} recommendations</strong>`,
-        `<br><strong>Weapons</strong><br>${weapons}`,
-        `<br><strong>Weapon parts</strong><br>${weaponParts}`,
-        `<br><strong>Weapon ranges</strong><br>${weaponRanges}`,
-        `<br><strong>Attachments</strong><br>${attachments}`,
-        `<br><strong>Maps</strong><br>${maps}`,
-        `<br><strong>Teammates</strong><br>${teammates}`,
-        `<br><strong>Drop zones</strong><br>${drops}`,
-        `<div class="detail-panel status" id="recommendationEvidence">추천 근거 대기 중</div>`,
-      ].join("");
+      activeRecommendationReport = report;
+      const loadouts = (report.loadouts || []).slice(0, 5).map((item) => {
+        const primaryCombo = item.primary_attachment_combination;
+        const secondaryCombo = item.secondary_attachment_combination;
+        const primaryParts = primaryCombo?.attachment_names || (item.primary_attachments || []).map((part) => part.attachment_name);
+        const secondaryParts = secondaryCombo?.attachment_names || (item.secondary_attachments || []).map((part) => part.attachment_name);
+        const burden = item.inventory_burden || {};
+        const score = item.score_components || {};
+        const ammoProfiles = (burden.weapon_profiles || []).map((profile) => (
+          `${profile.weapon_name} · ${profile.ammo_type} ${profile.recommended_reserve_rounds}발 · ` +
+          `인벤토리 ${Number(profile.reserve_inventory_weight || 0).toFixed(1)}단위 · 경기당 발사 ${Number(profile.observed_shots_per_match || 0).toFixed(1)}발`
+        ));
+        const carriedAmmo = Object.entries(burden.carried_rounds_by_ammo || {}).map(([ammo, rounds]) => (
+          `${ammo} ${Number(rounds).toLocaleString("ko-KR")}발 · 인벤토리 ${Number(burden.inventory_weight_by_ammo?.[ammo] || 0).toFixed(1)}단위`
+        ));
+        return `<article class="loadout-card">
+          <div class="loadout-weapons">
+            <div><span class="loadout-role">근·중거리</span><strong>${escapeHtml(item.primary.weapon_name)}</strong></div>
+            <span class="loadout-plus">+</span>
+            <div><span class="loadout-role">중·장거리</span><strong>${escapeHtml(item.secondary.weapon_name)}</strong></div>
+          </div>
+          <div class="loadout-parts">
+            <div><span class="loadout-role">${escapeHtml(item.primary.weapon_name)} ${primaryCombo ? "실전 관측 파츠 조합" : "슬롯별 추천 파츠"}</span>${resultChips(primaryParts, "추천 표본 부족")}${primaryCombo ? `<span class="result-caption">${primaryCombo.match_count}경기 · ${primaryCombo.event_count}교전 · 승률 ${percent(primaryCombo.win_rate)} · 평균 딜 ${Number(primaryCombo.avg_damage_dealt).toFixed(1)}</span>` : ""}</div>
+            <div><span class="loadout-role">${escapeHtml(item.secondary.weapon_name)} ${secondaryCombo ? "실전 관측 파츠 조합" : "슬롯별 추천 파츠"}</span>${resultChips(secondaryParts, "추천 표본 부족")}${secondaryCombo ? `<span class="result-caption">${secondaryCombo.match_count}경기 · ${secondaryCombo.event_count}교전 · 승률 ${percent(secondaryCombo.win_rate)} · 평균 딜 ${Number(secondaryCombo.avg_damage_dealt).toFixed(1)}</span>` : ""}</div>
+            <div><span class="loadout-role">무기별 예비탄 기준</span>${resultChips(ammoProfiles, "탄종 확인 불가")}</div>
+            <div><span class="loadout-role">실제 휴대 계산</span>${resultChips(carriedAmmo, "탄종 확인 불가")}</div>
+            <div><span class="loadout-role">인벤토리 고려사항</span>${resultChips(burden.tradeoffs || [], "추가 고려사항 없음")}</div>
+          </div>
+          <div class="loadout-score">조합 점수 ${Number(item.score).toFixed(1)} · 예상 탄약 인벤토리 ${Number(burden.estimated_inventory_weight || 0).toFixed(1)}단위 · 부담 ${escapeHtml(burden.pressure_level || "-")} · 조정 ${Number(score.inventory_adjustment || 0).toFixed(1)}</div>
+          <details class="result-disclosure">
+            <summary>점수 계산</summary>
+            ${resultTextRows([
+              ["근·중거리 성과 55%", Number(score.primary_performance_55pct || 0).toFixed(1)],
+              ["중·장거리 성과 45%", Number(score.secondary_performance_45pct || 0).toFixed(1)],
+              ["혼합 탄종 확보 부담", `-${Number(burden.mixed_ammo_penalty || 0).toFixed(1)}`],
+              ["동일 탄종 공유 이점", `+${Number(burden.shared_ammo_bonus || 0).toFixed(1)}`],
+              ["탄약 인벤토리 부담", `-${Number(burden.reserve_pressure_penalty || 0).toFixed(1)}`],
+              ["LMG 초과 예비탄 인벤토리", `${Number(burden.lmg_extra_reserve_inventory_weight || 0).toFixed(1)}단위`],
+              ["전체 부담 중 LMG 영향", `-${Number(burden.lmg_reserve_penalty || 0).toFixed(1)}`],
+              ["탄약·인벤토리 조정", Number(score.inventory_adjustment || 0).toFixed(1)],
+              ["예상 총 탄약 인벤토리", `${Number(burden.estimated_inventory_weight || 0).toFixed(1)}단위`],
+              ["모델 기준", burden.basis || "-"],
+            ])}
+          </details>
+        </article>`;
+      }).join("") || '<span class="result-caption">조건을 충족한 2주무기 조합이 없습니다.</span>';
+      const weapons = recommendationRows(report.weapons, (item, index) => {
+        const score = item.score_components || {};
+        return `<div class="result-row">
+          <span>${index + 1}위 · ${item.match_count}경기</span>
+          <strong>${escapeHtml(item.weapon_name)}</strong>
+          <p>점수 ${Number(item.score).toFixed(1)} · 평균 딜 ${Number(item.avg_damage_dealt).toFixed(1)} · 승률 ${percent(item.win_rate)} · ${escapeHtml(accuracyMetricText(item.accuracy, item.accuracy_metric))}<br>
+          헤드샷 명중 ${percent(item.headshot_hit_rate)} (${item.headshot_hits || 0}/${item.shots_hit || 0}명중) · 교전 승률 ${percent(item.fight_win_rate)} (${item.fight_wins || 0}승/${item.fight_losses || 0}패)<br>${escapeHtml(item.reason || "")}</p>
+          <details class="result-disclosure">
+            <summary>무기 점수 계산</summary>
+            ${resultTextRows([
+              ["평균 피해", Number(score.average_damage || 0).toFixed(1)],
+              ["킬 기여", Number(score.kills || 0).toFixed(1)],
+              ["기절 기여", Number(score.dbnos || 0).toFixed(1)],
+              ["어시스트 기여", Number(score.assists || 0).toFixed(1)],
+              ["치킨 기여", Number(score.wins || 0).toFixed(1)],
+              ["명중 기여", Number(score.accuracy || 0).toFixed(1)],
+              ["사망 감점", Number(score.deaths_penalty || 0).toFixed(1)],
+              ["표본 신뢰도", percent(score.confidence_factor || 0)],
+              ["거리 표본 보너스", `${Number(score.range_bonus || 0).toFixed(1)} / 상한 ${Number(score.range_bonus_cap || 12).toFixed(0)}`],
+              ["거리 성과 이벤트 표본", `${Number(score.range_evidence_events || 0).toLocaleString("ko-KR")}건`],
+              ["교전 승률 조정", Number(score.fight_adjustment || 0).toFixed(1)],
+            ])}
+          </details>
+        </div>`;
+      });
+      const weaponParts = groupedWeaponRecommendationRows(report.weapon_attachments, (item) => `
+        <div class="result-row">
+          <span>${item.match_count}경기 · ${item.event_count || item.attached_events}교전</span>
+          <strong>${escapeHtml(item.attachment_name)}</strong>
+          <div class="result-row-tail">
+            <p>점수 ${Number(item.score).toFixed(1)} · ${item.event_count || item.attached_events}회 · ${distanceM(item.avg_distance_m)}</p>
+            <button class="secondary" type="button" data-evidence="weapon-attachment" data-weapon-code="${attr(item.weapon_code)}" data-attachment-code="${attr(item.attachment_code)}">근거</button>
+          </div>
+        </div>`);
+      const attachmentCombinations = groupedWeaponRecommendationRows(report.attachment_combinations, (item) => `
+        <div class="result-row">
+          <span>${item.match_count}경기 · ${item.event_count}교전</span>
+          <strong>${escapeHtml((item.attachment_names || []).join(" + "))}</strong>
+          <p>조합 점수 ${Number(item.score).toFixed(1)} · 승률 ${percent(item.win_rate)} · ${item.kills}킬 · ${item.dbnos}기절 · 평균 딜 ${Number(item.avg_damage_dealt).toFixed(1)} · 평균 ${distanceM(item.avg_distance_m)}</p>
+          <details class="result-disclosure">
+            <summary>조합 점수 계산</summary>
+            ${resultTextRows([
+              ["킬 기여", Number(item.score_components?.kills || 0).toFixed(1)],
+              ["기절 기여", Number(item.score_components?.dbnos || 0).toFixed(1)],
+              ["피니시 기여", Number(item.score_components?.finishes || 0).toFixed(1)],
+              ["헤드샷 기여", Number(item.score_components?.headshots || 0).toFixed(1)],
+              ["교전 표본 기여", Number(item.score_components?.events || 0).toFixed(1)],
+              ["치킨 기여", Number(item.score_components?.wins || 0).toFixed(1)],
+              ["평균 피해 기여", Number(item.score_components?.average_damage || 0).toFixed(1)],
+            ])}
+          </details>
+        </div>`);
+      const weaponRanges = groupedWeaponRecommendationRows(report.weapon_ranges, (item) => `
+        <div class="result-row"><span>${item.event_count}교전</span><strong>${escapeHtml(item.bucket_label)}</strong><p>${item.kills}킬 · ${item.dbnos}기절 · 평균 ${distanceM(item.avg_distance_m)}</p></div>`);
+      const attachments = recommendationRows(report.attachments, (item) => `
+        <div class="result-row"><span>${item.attached_events}회 장착</span><strong>${escapeHtml(item.item_name)}</strong><p>점수 ${Number(item.score).toFixed(1)} · 평균 딜 ${Number(item.avg_damage_dealt).toFixed(1)}</p></div>`);
+      const maps = recommendationRows(report.maps, (item) => `
+        <div class="result-row"><span>${item.match_count}경기 · ${item.wins}치킨</span><strong>${escapeHtml(item.map_name_ko)}</strong><p>점수 ${Number(item.score).toFixed(1)} · 승률 ${percent(item.win_rate)} · 경기당 킬 ${Number(item.kills / Math.max(1, item.match_count)).toFixed(2)} · 기절 ${Number(item.dbnos / Math.max(1, item.match_count)).toFixed(2)} · 어시 ${Number(item.assists / Math.max(1, item.match_count)).toFixed(2)} · 사망 ${Number(item.deaths / Math.max(1, item.match_count)).toFixed(2)} · 평균 딜 ${Number(item.avg_damage_dealt).toFixed(1)} · 생존 ${minutes(item.avg_survival_seconds)}</p></div>`);
+      const teammates = recommendationRows(report.teammates, (item) => `
+        <div class="result-row"><span>${item.registered ? "등록 유저" : `${item.match_count}경기`}</span><strong>${escapeHtml(item.name)}</strong><p>점수 ${Number(item.score).toFixed(1)} · 승률 ${percent(item.win_rate)}</p></div>`);
+      recommendationBody.innerHTML = `<div class="result-shell">
+        ${resultHeading(report.player.current_name, `추천 채택 기준 · 최소 ${(report.min_matches || minMatches || 1).toLocaleString("ko-KR")}경기`, "추천 분석")}
+        <div class="recommendation-view-switch" role="tablist" aria-label="추천 결과 보기">
+          <button type="button" role="tab" data-recommendation-view="summary">요약</button>
+          <button type="button" role="tab" data-recommendation-view="chart">그래프</button>
+        </div>
+        <div class="recommendation-panel" data-recommendation-panel="summary">
+          ${resultSection("추천 2주무기 조합", `<div class="loadout-grid">${loadouts}</div>`)}
+          <details class="result-disclosure"><summary>무기별 상세 · ${(report.weapons || []).length}개</summary><div class="result-list">${weapons}</div></details>
+          <details class="result-disclosure"><summary>실전 파츠 전체 조합 · ${(report.attachment_combinations || []).length}개</summary><div class="result-list">${attachmentCombinations}</div></details>
+          <details class="result-disclosure"><summary>파츠별 개별 성과 · ${(report.weapon_attachments || []).length}개</summary><div class="result-list">${weaponParts}</div></details>
+          <details class="result-disclosure"><summary>성과 발생 거리 · ${(report.weapon_ranges || []).length}개</summary><div class="result-list">${weaponRanges}</div></details>
+          <details class="result-disclosure"><summary>전체 파츠 성과 · ${(report.attachments || []).length}개</summary><div class="result-list">${attachments}</div></details>
+          <details class="result-disclosure"><summary>맵 · ${(report.maps || []).length}개</summary><div class="result-list">${maps}</div></details>
+          <details class="result-disclosure"><summary>팀원 · ${(report.teammates || []).length}명</summary><div class="result-list">${teammates}</div></details>
+          <div class="detail-panel status" id="recommendationEvidence">추천 근거 대기 중</div>
+        </div>
+        <div class="recommendation-panel" data-recommendation-panel="chart" hidden></div>
+      </div>`;
+      renderRecommendationCharts(report, activeRecommendationChartMetric);
+      setRecommendationView(activeRecommendationView);
     }
 
-    function recommendationLines(items, formatter) {
-      if (!items || !items.length) return "-";
-      return items.slice(0, 5).map((item) => `<div class="recommendation-line">- ${formatter(item)}</div>`).join("");
+    function recommendationRows(items, formatter) {
+      if (!items || !items.length) return '<span class="result-caption">조건을 충족한 기록이 없습니다.</span>';
+      return items.map(formatter).join("");
+    }
+
+    function groupedWeaponRecommendationRows(items, formatter) {
+      if (!items || !items.length) return '<span class="result-caption">조건을 충족한 기록이 없습니다.</span>';
+      const groups = new Map();
+      for (const item of items) {
+        const key = item.weapon_code || item.weapon_name;
+        if (!groups.has(key)) groups.set(key, { name: item.weapon_name || key, items: [] });
+        groups.get(key).items.push(item);
+      }
+      return Array.from(groups.values()).map((group) => `
+        <div class="result-section">
+          <h3>${escapeHtml(group.name)} · ${group.items.length}개</h3>
+          <div class="result-list">${group.items.map(formatter).join("")}</div>
+        </div>
+      `).join("");
+    }
+
+    function setRecommendationView(view) {
+      const selected = view === "chart" ? "chart" : "summary";
+      activeRecommendationView = selected;
+      recommendationBody.querySelectorAll("[data-recommendation-view]").forEach((button) => {
+        const active = button.dataset.recommendationView === selected;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", active ? "true" : "false");
+        button.tabIndex = active ? 0 : -1;
+      });
+      recommendationBody.querySelectorAll("[data-recommendation-panel]").forEach((panel) => {
+        panel.hidden = panel.dataset.recommendationPanel !== selected;
+      });
+    }
+
+    function recommendationChartRows(items, options) {
+      const rows = (items || []).map((item) => {
+        const value = Number(options.value(item));
+        return {
+          label: options.label(item),
+          note: options.note ? options.note(item) : "",
+          value: Number.isFinite(value) && value >= 0 ? value : 0,
+          display: options.display(item, value),
+        };
+      });
+      if (!rows.length) return '<span class="result-caption">조건을 충족한 그래프 데이터가 없습니다.</span>';
+      const maximum = options.maximum || Math.max(1, ...rows.map((row) => row.value));
+      return `<div class="metric-chart-list">${rows.map((row) => {
+        const width = Math.min(100, Math.max(row.value > 0 ? 2 : 0, (row.value / maximum) * 100));
+        const aria = `${row.label} ${row.display}`;
+        return `<div class="metric-chart-row">
+          <span class="metric-chart-label">${escapeHtml(row.label)}${row.note ? `<small>${escapeHtml(row.note)}</small>` : ""}</span>
+          <span class="metric-chart-track" role="img" aria-label="${attr(aria)}"><i class="metric-chart-fill ${options.tone || ""}" style="width:${width.toFixed(2)}%"></i></span>
+          <strong class="metric-chart-value">${escapeHtml(row.display)}</strong>
+        </div>`;
+      }).join("")}</div>`;
+    }
+
+    function recommendationWeaponMetric(metric) {
+      const definitions = {
+        score: {
+          label: "종합 점수",
+          value: (item) => item.score,
+          display: (item) => Number(item.score).toFixed(1),
+        },
+        matches: {
+          label: "사용 경기",
+          value: (item) => item.match_count,
+          display: (item) => `${Number(item.match_count).toLocaleString("ko-KR")}경기`,
+        },
+        damage: {
+          label: "경기당 평균 딜",
+          value: (item) => item.avg_damage_dealt,
+          display: (item) => Number(item.avg_damage_dealt).toFixed(1),
+        },
+        win_rate: {
+          label: "승률",
+          value: (item) => Number(item.win_rate) * 100,
+          display: (item) => percent(item.win_rate),
+          maximum: 100,
+        },
+        accuracy: {
+          label: "명중 지표",
+          value: (item) => Number(item.accuracy) * 100,
+          display: (item) => percent(item.accuracy),
+          maximum: 100,
+        },
+        headshot_hit_rate: {
+          label: "헤드샷 명중 확률",
+          value: (item) => Number(item.headshot_hit_rate) * 100,
+          display: (item) => percent(item.headshot_hit_rate),
+          maximum: 100,
+        },
+        fight_win_rate: {
+          label: "교전 승리 확률",
+          value: (item) => Number(item.fight_win_rate) * 100,
+          display: (item) => percent(item.fight_win_rate),
+          maximum: 100,
+        },
+        kills: {
+          label: "경기당 평균 킬",
+          value: (item) => item.kills_per_match,
+          display: (item) => Number(item.kills_per_match).toFixed(2),
+        },
+        dbnos: {
+          label: "경기당 평균 기절",
+          value: (item) => item.dbnos_per_match,
+          display: (item) => Number(item.dbnos_per_match).toFixed(2),
+        },
+      };
+      return definitions[metric] || definitions.score;
+    }
+
+    function renderRecommendationCharts(report, metric) {
+      const panel = recommendationBody.querySelector('[data-recommendation-panel="chart"]');
+      if (!panel) return;
+      const definition = recommendationWeaponMetric(metric);
+      const metricOptions = [
+        ["score", "종합 점수"],
+        ["matches", "사용 경기"],
+        ["damage", "경기당 평균 딜"],
+        ["win_rate", "승률"],
+        ["accuracy", "명중 지표"],
+        ["headshot_hit_rate", "헤드샷 명중 확률"],
+        ["fight_win_rate", "교전 승리 확률"],
+        ["kills", "경기당 평균 킬"],
+        ["dbnos", "경기당 평균 기절"],
+      ].map(([value, label]) => `<option value="${value}"${value === metric ? " selected" : ""}>${label}</option>`).join("");
+      const weaponChart = recommendationChartRows(report.weapons, {
+        label: (item) => item.weapon_name,
+        note: (item) => `${Number(item.match_count).toLocaleString("ko-KR")}경기 표본`,
+        value: definition.value,
+        display: definition.display,
+        maximum: definition.maximum,
+      });
+      const loadoutChart = recommendationChartRows(report.loadouts, {
+        label: (item) => `${item.primary.weapon_name} + ${item.secondary.weapon_name}`,
+        value: (item) => item.score,
+        display: (item) => Number(item.score).toFixed(1),
+        tone: "warning",
+      });
+      const attachmentChart = recommendationChartRows(report.weapon_attachments, {
+        label: (item) => `${item.weapon_name} · ${item.attachment_name}`,
+        note: (item) => `${Number(item.match_count || 0).toLocaleString("ko-KR")}경기 · ${Number(item.event_count || item.attached_events || 0).toLocaleString("ko-KR")}회`,
+        value: (item) => item.score,
+        display: (item) => Number(item.score).toFixed(1),
+        tone: "info",
+      });
+      const combinationChart = recommendationChartRows(report.attachment_combinations, {
+        label: (item) => `${item.weapon_name} · ${(item.attachment_names || []).join(" + ")}`,
+        note: (item) => `${Number(item.match_count || 0).toLocaleString("ko-KR")}경기 · ${Number(item.event_count || 0).toLocaleString("ko-KR")}교전`,
+        value: (item) => item.score,
+        display: (item) => Number(item.score).toFixed(1),
+        tone: "info",
+      });
+      const mapChart = recommendationChartRows(report.maps, {
+        label: (item) => item.map_name_ko,
+        note: (item) => `${Number(item.match_count).toLocaleString("ko-KR")}경기 표본`,
+        value: (item) => Number(item.win_rate) * 100,
+        display: (item) => percent(item.win_rate),
+        maximum: 100,
+      });
+      panel.innerHTML = `
+        <div class="recommendation-chart-toolbar">
+          <label>무기 비교 지표
+            <select data-recommendation-chart-metric>${metricOptions}</select>
+          </label>
+        </div>
+        <div class="metric-chart-grid">
+          <div class="metric-chart"><h3>무기 · ${escapeHtml(definition.label)}</h3>${weaponChart}</div>
+          <div class="metric-chart"><h3>추천 2주무기 조합 · 점수</h3>${loadoutChart}</div>
+          <div class="metric-chart"><h3>실전 파츠 전체 조합 · 점수</h3>${combinationChart}</div>
+          <div class="metric-chart"><h3>파츠별 개별 성과 · 점수</h3>${attachmentChart}</div>
+          <div class="metric-chart"><h3>맵 · 승률</h3>${mapChart}</div>
+        </div>`;
     }
 
     async function loadWeaponAttachmentEvidence(weaponCode, attachmentCode) {
@@ -7743,24 +10135,32 @@ _INDEX_HTML = """<!doctype html>
       const payload = await response.json();
       const report = payload.evidence;
       const totals = report.totals || {};
+      const actionLabels = { kill: "킬", dbno: "기절", finish: "피니시", damage: "피해" };
       const rows = (report.snapshots || []).map((snapshot) => `
         <tr>
           <td>${escapeHtml(snapshot.combat_event_at_kst || "-")}</td>
           <td>${escapeHtml(snapshot.map_name_ko || snapshot.map_name || "-")}<br>${escapeHtml(snapshot.game_mode || "-")}</td>
-          <td>${escapeHtml(snapshot.combat_action)}${snapshot.is_headshot ? " / HS" : ""}</td>
+          <td>${escapeHtml(actionLabels[snapshot.combat_action] || snapshot.combat_action)}${snapshot.is_headshot ? " · 헤드샷" : ""}</td>
           <td>${distanceM(snapshot.distance_m)}</td>
           <td>${escapeHtml((snapshot.equipped_attachment_names || []).join(", ") || "-")}</td>
-          <td>${escapeHtml(snapshot.match_id)}</td>
+          <td>${escapeHtml(String(snapshot.match_id || "").slice(0, 8))}</td>
         </tr>
       `).join("");
 
-      panel.innerHTML = [
-        `<strong>${escapeHtml(report.weapon_name)} + ${escapeHtml(report.attachment_name)} 근거</strong>`,
-        `<br>events ${totals.event_count || 0}, matches ${totals.match_count || 0}, kills ${totals.kills || 0}, DBNO ${totals.dbnos || 0}, finishes ${totals.finishes || 0}, HS ${totals.headshots || 0}, avg ${distanceM(totals.avg_distance_m)}`,
-        rows
-          ? `<table class="detail-table"><thead><tr><th>시간</th><th>맵/모드</th><th>결과</th><th>거리</th><th>장착 파츠</th><th>Match</th></tr></thead><tbody>${rows}</tbody></table>`
-          : `<br>해당 무기+파츠 스냅샷 근거가 없습니다.`,
-      ].join("");
+      panel.innerHTML = `<div class="result-shell">
+        ${resultHeading(`${report.weapon_name} + ${report.attachment_name}`, "추천 산정 근거", `${totals.match_count || 0}경기`)}
+        ${resultMetricGrid([
+          ["교전", `${totals.event_count || 0}회`],
+          ["킬", `${totals.kills || 0}회`],
+          ["기절", `${totals.dbnos || 0}회`],
+          ["피니시", `${totals.finishes || 0}회`],
+          ["헤드샷", `${totals.headshots || 0}회`],
+          ["평균 거리", distanceM(totals.avg_distance_m)],
+        ])}
+        ${rows
+          ? `<div class="table-scroll"><table class="detail-table"><thead><tr><th>시간</th><th>맵 / 모드</th><th>결과</th><th>거리</th><th>장착 파츠</th><th>매치</th></tr></thead><tbody>${rows}</tbody></table></div>`
+          : '<span class="result-caption">해당 무기와 파츠의 교전 근거가 없습니다.</span>'}
+      </div>`;
     }
 
     async function loadPlayerMatch(matchId, target, shard) {
@@ -7779,24 +10179,50 @@ _INDEX_HTML = """<!doctype html>
       }
       const payload = await response.json();
       const detail = payload.match;
-      const weapons = (detail.weapons || []).slice(0, 4).map((weapon) => (
-        `${escapeHtml(weapon.weapon_name)} ${weapon.kills}킬/${weapon.dbnos}기절/${Number(weapon.damage_dealt).toFixed(0)}딜/${accuracyMetricText(weapon.accuracy, weapon.accuracy_metric)}`
-      )).join(", ") || "-";
+      const weapons = (detail.weapons || []).slice(0, 6).map((weapon) => `
+        <div class="result-row">
+          <span>${weapon.shots_hit}/${weapon.shots_fired} 명중</span>
+          <strong>${escapeHtml(weapon.weapon_name)}</strong>
+          <p>${weapon.kills}킬 · ${weapon.dbnos}기절 · ${Number(weapon.damage_dealt).toFixed(0)}딜 · ${escapeHtml(accuracyMetricText(weapon.accuracy, weapon.accuracy_metric))}</p>
+        </div>`).join("") || '<span class="result-caption">무기별 기록 없음</span>';
       const snapshot = detail.replay_artifact
-        ? `<a href="${detail.replay_artifact.view_url}" target="_blank" rel="noreferrer">2D 스냅샷 열기</a>`
-        : "-";
-      matchBody.innerHTML = [
-        `<strong>${escapeHtml(detail.player.current_name)} ${escapeHtml(detail.match_id)}</strong>`,
-        `맵/모드: ${escapeHtml(detail.map_name || "-")} / ${escapeHtml(detail.game_mode || "-")} / ${escapeHtml(detail.match_type || "-")}`,
-        `결과/등수: ${detail.is_chicken ? "치킨" : "치킨 아님"} / ${detail.win_place ? `#${detail.win_place}` : "-"}`,
-        `인원: 총 ${detail.total_players ?? "-"}명, 사람 ${detail.human_players ?? "-"}명, 봇 ${detail.bot_players ?? "-"}명`,
-        `K/D/A/기절: ${detail.kills}/${detail.deaths}/${detail.assists}/${detail.dbnos_caused} (당한 기절 ${detail.dbnos_taken})`,
-        `딜/받은 딜: ${Number(detail.damage_dealt).toFixed(1)} / ${Number(detail.damage_taken).toFixed(1)}`,
-        `공격/피격/명중 지표: ${detail.shots_fired}/${detail.shots_hit}/${accuracyBreakdownText(detail.accuracy, detail.accuracy_breakdown)}`,
-        `생존/이동/낙하: ${minutes(detail.survival_seconds)} / ${distanceKm(detail.movement_distance_m)} / ${distanceM(detail.landing_distance_m)}`,
-        `사용 무기: ${weapons}`,
-        `2D 스냅샷: ${snapshot}`,
-      ].join("<br>");
+        ? `<a class="result-badge success" href="${attr(detail.replay_artifact.view_url)}" target="_blank" rel="noreferrer">2D 스냅샷 열기</a>`
+        : '<span class="result-caption">생성된 2D 스냅샷 없음</span>';
+      const playedAt = String(detail.created_at_kst || "-").replace("T", " ").slice(0, 16) + " KST";
+      const mapAndMode = `${detail.map_name_ko || detail.map_name || "-"} · ${detail.game_mode_ko || detail.game_mode || "-"} · ${detail.match_type || "-"}`;
+      matchBody.innerHTML = `<div class="result-shell">
+        ${resultHeading(
+          detail.player.current_name,
+          `${playedAt} · ${mapAndMode}`,
+          detail.is_chicken ? "치킨" : (detail.win_place ? `#${detail.win_place}` : "결과 없음"),
+          detail.is_chicken ? "success" : "",
+        )}
+        ${resultMetricGrid([
+          ["전체 / 사람 / 봇", `${detail.total_players ?? "-"} / ${detail.human_players ?? "-"} / ${detail.bot_players ?? "-"}`],
+          ["킬 / 사망 / 어시", `${detail.kills} / ${detail.deaths} / ${detail.assists}`],
+          ["기절시킴 / 당함", `${detail.dbnos_caused} / ${detail.dbnos_taken}`],
+          ["준 딜 / 받은 딜", `${Number(detail.damage_dealt).toFixed(1)} / ${Number(detail.damage_taken).toFixed(1)}`],
+          ["공격 / 명중", `${detail.shots_fired} / ${detail.shots_hit}`],
+          ["명중 지표", accuracyBreakdownText(detail.accuracy, detail.accuracy_breakdown)],
+          ["헤드샷 명중 확률", `${percent(detail.headshot_hit_rate)} · ${detail.headshot_hits}/${detail.shots_hit}명중`],
+          ["받은 헤드샷 비율", `${percent(detail.headshot_hit_taken_rate)} · ${detail.headshot_hits_taken}/${detail.hits_taken}피격`],
+          ["헤드샷 킬 비율", `${percent(detail.headshot_kill_rate)} · ${detail.headshot_kills}/${detail.kills}킬`],
+          ["생존 / 이동", `${minutes(detail.survival_seconds)} / ${distanceKm(detail.movement_distance_m)}`],
+          ["낙하 이동", distanceM(detail.landing_distance_m)],
+        ])}
+        <div class="result-columns">
+          ${resultSection("헤드샷", resultTextRows([
+            ["가한 기록", `명중 ${detail.headshot_hits} · 킬 ${detail.headshot_kills} · 기절 ${detail.headshot_dbnos_caused}`],
+            ["받은 기록", `명중 ${detail.headshot_hits_taken} · 사망 ${detail.headshot_deaths} · 기절 ${detail.headshot_dbnos_taken}`],
+          ]))}
+          ${resultSection("2D 리플레이", snapshot)}
+        </div>
+        <div class="result-columns">
+          ${resultSection("부위별 명중 확률", resultChips(hitPartEntries(detail.hit_parts, detail.hit_part_rates)))}
+          ${resultSection("부위별 피격 확률", resultChips(hitPartEntries(detail.taken_hit_parts, detail.taken_hit_part_rates)))}
+        </div>
+        ${resultSection("사용 무기", `<div class="result-list">${weapons}</div>`)}
+      </div>`;
     }
 
     async function loadPlayerRanking(metric, shard, guildId, limit) {
@@ -7816,9 +10242,9 @@ _INDEX_HTML = """<!doctype html>
       const payload = await response.json();
       const ranking = payload.ranking;
       const rows = (ranking.rows || []).map((row) => `
-        <tr>
-          <td>#${row.rank}</td>
-          <td>${escapeHtml(row.player.current_name)}</td>
+        <tr${row.rank <= 3 ? ' class="linked-row"' : ""}>
+          <td><strong>#${row.rank}</strong></td>
+          <td><strong>${escapeHtml(row.player.current_name)}</strong></td>
           <td>${rankingScore(ranking.metric, row.score)}</td>
           <td>${row.match_count}</td>
           <td>${row.wins}</td>
@@ -7826,9 +10252,12 @@ _INDEX_HTML = """<!doctype html>
           <td>${Number(row.avg_damage_dealt).toFixed(1)}</td>
         </tr>
       `).join("");
-      rankingBody.innerHTML = `
-        <strong>${escapeHtml(ranking.metric_label)} 랭킹 (${escapeHtml(ranking.shard)}, ${ranking.global_scope ? "전체" : escapeHtml(ranking.guild_id || "-")})</strong>
-        <table style="margin-top: 10px;">
+      const selectedScope = ranking.global_scope
+        ? (guildId ? `${discordGuildName(guildId)} · 전체 범위 설정` : "전체 서버")
+        : discordGuildName(ranking.guild_id || guildId);
+      rankingBody.innerHTML = `<div class="result-shell">
+        ${resultHeading(`${ranking.metric_label} 랭킹`, `${ranking.shard} · ${selectedScope}`, `${(ranking.rows || []).length}명`)}
+        <div class="table-scroll"><table>
           <thead>
             <tr>
               <th>순위</th>
@@ -7841,8 +10270,30 @@ _INDEX_HTML = """<!doctype html>
             </tr>
           </thead>
           <tbody>${rows || `<tr><td colspan="7">랭킹 데이터가 없습니다.</td></tr>`}</tbody>
-        </table>
-      `;
+        </table></div>
+      </div>`;
+    }
+
+    function hitPartEntries(parts, rates = null) {
+      const labels = {
+        head: "머리",
+        neck: "목",
+        torso: "몸통",
+        pelvis: "골반",
+        arm: "팔",
+        leg: "다리",
+        none: "기타",
+      };
+      const entries = Object.entries(parts || {}).filter((entry) => Number(entry[1]) > 0);
+      const total = entries.reduce((sum, entry) => sum + Number(entry[1] || 0), 0);
+      return entries.map((entry) => {
+        const rate = rates?.[entry[0]] ?? (total > 0 ? Number(entry[1]) / total : 0);
+        return (labels[entry[0]] || entry[0]) + " " + entry[1] + "회 · " + percent(rate);
+      });
+    }
+
+    function hitPartsText(parts) {
+      return hitPartEntries(parts).join(" · ") || "-";
     }
 
     function accuracyMetricText(value, metric) {
@@ -7881,7 +10332,7 @@ _INDEX_HTML = """<!doctype html>
     }
 
     function rankingScore(metric, value) {
-      if (["win_rate", "accuracy", "headshot_rate"].includes(metric)) {
+      if (["win_rate", "accuracy", "headshot_hit_rate", "headshot_rate"].includes(metric)) {
         return percent(value);
       }
       if (["kda", "avg_damage"].includes(metric)) {
@@ -7902,30 +10353,65 @@ _INDEX_HTML = """<!doctype html>
       return value === null || value === undefined ? "-" : `${Number(value).toFixed(0)}m`;
     }
 
+    function renderJobQueue(payload, tableBody, cardList, summaryElement) {
+      const jobs = payload.jobs || [];
+      summaryElement.textContent = `${queueSummaryText(payload.summary, jobs)} · 최근 ${jobs.length}건 표시`;
+      tableBody.innerHTML = jobs.length
+        ? jobs.map((job) => `
+          <tr>
+            <td>${escapeHtml(job.shard || "-")}</td>
+            <td class="identifier" title="${attr(job.target_id || "")}">${escapeHtml(compactIdentifier(job.target_id))}</td>
+            <td>${jobQueueStatusBadge(job)}</td>
+            <td>${escapeHtml(job.attempts || 0)}회</td>
+            <td>${escapeHtml(formatKstShort(job.updated_at_kst || job.created_at_kst))}</td>
+          </tr>
+        `).join("")
+        : `<tr><td colspan="5">표시할 작업이 없습니다.</td></tr>`;
+      cardList.innerHTML = jobs.length
+        ? jobs.map((job) => `
+          <article class="dense-card">
+            <div class="dense-card-head">
+              <strong class="identifier" title="${attr(job.target_id || "")}">${escapeHtml(compactIdentifier(job.target_id))}</strong>
+              ${jobQueueStatusBadge(job)}
+            </div>
+            <div class="dense-card-row"><span>플랫폼</span><strong>${escapeHtml(job.shard || "-")}</strong></div>
+            <div class="dense-card-row"><span>시도 횟수</span><strong>${escapeHtml(job.attempts || 0)}회</strong></div>
+            <div class="dense-card-row"><span>마지막 변경</span><strong>${escapeHtml(formatKstShort(job.updated_at_kst || job.created_at_kst))}</strong></div>
+            ${job.next_run_at_kst ? `<div class="dense-card-row"><span>다음 시도</span><strong>${escapeHtml(formatKstShort(job.next_run_at_kst))}</strong></div>` : ""}
+            ${job.last_error ? `<div class="dense-card-row"><span>최근 오류</span><strong title="${attr(job.last_error)}">${escapeHtml(String(job.last_error).slice(0, 80))}</strong></div>` : ""}
+          </article>
+        `).join("")
+        : `<div class="dense-card"><span class="status">표시할 작업이 없습니다.</span></div>`;
+    }
+
+    function jobQueueStatusBadge(job) {
+      if (String(job?.status || "").toLowerCase() !== "queued") {
+        return jobStatusBadge(job?.status);
+      }
+      const attempts = Number(job?.attempts || 0);
+      const nextRun = job?.next_run_at_kst
+        ? new Date(String(job.next_run_at_kst).replace(" ", "T"))
+        : null;
+      if (nextRun && !Number.isNaN(nextRun.getTime()) && nextRun.getTime() > Date.now()) {
+        return '<span class="status-badge warning">재시도 예약</span>';
+      }
+      return attempts > 0
+        ? '<span class="status-badge warning">재시도 가능</span>'
+        : '<span class="status-badge warning">처리 대기</span>';
+    }
+
     async function loadJobs() {
-      const payload = await fetch("/jobs/matches?limit=50").then((r) => r.json());
-      jobsBody.innerHTML = payload.jobs.map((job) => `
-        <tr>
-          <td>${escapeHtml(job.shard || "")}</td>
-          <td>${escapeHtml(job.target_id || "")}</td>
-          <td>${escapeHtml(job.status || "")}</td>
-          <td>${escapeHtml(job.attempts || 0)}</td>
-          <td>${escapeHtml(job.created_at_kst || "")}</td>
-        </tr>
-      `).join("");
+      const response = await fetch("/jobs/matches?limit=20");
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || response.statusText);
+      renderJobQueue(payload, jobsBody, jobsCards, jobsSummary);
     }
 
     async function loadTelemetryJobs() {
-      const payload = await fetch("/jobs/telemetry?limit=50").then((r) => r.json());
-      telemetryJobsBody.innerHTML = payload.jobs.map((job) => `
-        <tr>
-          <td>${escapeHtml(job.shard || "")}</td>
-          <td>${escapeHtml(job.target_id || "")}</td>
-          <td>${escapeHtml(job.status || "")}</td>
-          <td>${escapeHtml(job.attempts || 0)}</td>
-          <td>${escapeHtml(job.created_at_kst || "")}</td>
-        </tr>
-      `).join("");
+      const response = await fetch("/jobs/telemetry?limit=20");
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || response.statusText);
+      renderJobQueue(payload, telemetryJobsBody, telemetryJobsCards, telemetryJobsSummary);
     }
 
     function renderOperationalDrillDetail(record) {
@@ -7991,7 +10477,7 @@ _INDEX_HTML = """<!doctype html>
         const selectedStatus = options.status ?? String(form.get("status") || workerRunPage.status || "all");
         const createdFrom = options.created_from_kst ?? String(form.get("created_from_kst") || workerRunPage.created_from_kst || "");
         const createdTo = options.created_to_kst ?? String(form.get("created_to_kst") || workerRunPage.created_to_kst || "");
-        const limit = Number(options.limit || form.get("limit") || workerRunPage.limit || 50);
+        const limit = Number(options.limit || form.get("limit") || workerRunPage.limit || 20);
         const offset = Math.max(0, Number(options.offset ?? workerRunPage.offset ?? 0));
         const params = new URLSearchParams({
           worker_name: selectedWorker === "all" ? "" : selectedWorker,
@@ -8019,8 +10505,9 @@ _INDEX_HTML = """<!doctype html>
           updateWorkerRunFilterUrl();
         }
       } catch (error) {
-        workerRunsStatus.textContent = `Error: ${error.message}`;
-        workerRunsBody.innerHTML = `<tr><td colspan="6">Error: ${escapeHtml(error.message)}</td></tr>`;
+        workerRunsStatus.textContent = `오류: ${error.message}`;
+        workerRunsBody.innerHTML = `<tr><td colspan="6">오류: ${escapeHtml(error.message)}</td></tr>`;
+        workerRunsCards.innerHTML = `<div class="dense-card"><span class="status">오류: ${escapeHtml(error.message)}</span></div>`;
       }
     }
 
@@ -8047,7 +10534,7 @@ _INDEX_HTML = """<!doctype html>
       workerRunPage = {
         ...workerRunPage,
         ...page,
-        limit: Number(page.limit || workerRunPage.limit || 50),
+        limit: Number(page.limit || workerRunPage.limit || 20),
         offset: Number(page.offset ?? workerRunPage.offset ?? 0),
         total: Number(page.total ?? workerRunPage.total ?? runs.length),
         status: String(page.status || workerRunPage.status || "all"),
@@ -8063,31 +10550,56 @@ _INDEX_HTML = """<!doctype html>
         workerRunFilterForm.elements.quick_range.value = workerRunPage.quick_range || "custom";
         workerRunFilterForm.elements.created_from_kst.value = workerRunDateTimeInputValue(workerRunPage.created_from_kst);
         workerRunFilterForm.elements.created_to_kst.value = workerRunDateTimeInputValue(workerRunPage.created_to_kst);
-        workerRunFilterForm.elements.limit.value = String(workerRunPage.limit || 50);
+        workerRunFilterForm.elements.limit.value = String(workerRunPage.limit || 20);
       }
       const start = runs.length ? workerRunPage.offset + 1 : 0;
       const end = runs.length ? workerRunPage.offset + runs.length : 0;
+      const statusLabel = workerRunPage.status === "all"
+        ? "전체"
+        : jobStatusMeta(workerRunPage.status)[0];
+      const rangeLabels = {
+        custom: "직접 지정",
+        last_1h: "최근 1시간",
+        last_24h: "최근 24시간",
+        today: "오늘",
+        yesterday: "어제",
+        last_7d: "최근 7일",
+      };
       workerRunsStatus.textContent = [
-        `${start}-${end} of ${workerRunPage.total}`,
-        `worker ${workerRunPage.worker_name || "all"}`,
-        `status ${workerRunPage.status || "all"}`,
-        `range ${workerRunPage.quick_range || "custom"}`,
-        `created ${workerRunDateRangeLabel(workerRunPage.created_from_kst, workerRunPage.created_to_kst)}`,
-      ].join(" / ");
+        `전체 ${workerRunPage.total}건 중 ${start}-${end}`,
+        `작업 ${workerRunPage.worker_name ? workerNameLabel(workerRunPage.worker_name) : "전체"}`,
+        `상태 ${statusLabel}`,
+        `기간 ${rangeLabels[workerRunPage.quick_range] || "직접 지정"}`,
+        `시각 ${workerRunDateRangeLabel(workerRunPage.created_from_kst, workerRunPage.created_to_kst)}`,
+      ].join(" · ");
       workerRunsPrev.disabled = !workerRunPage.has_previous;
       workerRunsNext.disabled = !workerRunPage.has_next;
       workerRunsBody.innerHTML = runs.length
         ? runs.map((run) => `
             <tr>
-              <td>${escapeHtml(run.worker_name || "")}</td>
-              <td>${escapeHtml(run.status || "")}${run.error_count ? ` (${run.error_count})` : ""}</td>
-              <td>${escapeHtml(run.finished_at_kst || run.created_at_kst || "")}</td>
-              <td>${run.duration_seconds === null || run.duration_seconds === undefined ? "-" : `${Number(run.duration_seconds).toFixed(2)}s`}</td>
+              <td>${escapeHtml(workerNameLabel(run.worker_name))}</td>
+              <td>${jobStatusBadge(run.status)}${run.error_count ? ` <span class="status">오류 ${escapeHtml(run.error_count)}건</span>` : ""}</td>
+              <td>${escapeHtml(formatKstShort(run.finished_at_kst || run.created_at_kst))}</td>
+              <td>${run.duration_seconds === null || run.duration_seconds === undefined ? "-" : `${Number(run.duration_seconds).toFixed(2)}초`}</td>
               <td>${workerRunSummary(run)}</td>
-              <td><button class="secondary" type="button" data-worker-run-detail-id="${attr(run.id)}">Detail</button></td>
+              <td><button class="secondary" type="button" data-worker-run-detail-id="${attr(run.id)}">상세</button></td>
             </tr>
           `).join("")
-        : `<tr><td colspan="6">No worker runs yet</td></tr>`;
+        : `<tr><td colspan="6">표시할 작업 이력이 없습니다.</td></tr>`;
+      workerRunsCards.innerHTML = runs.length
+        ? runs.map((run) => `
+          <article class="dense-card">
+            <div class="dense-card-head">
+              <strong>${escapeHtml(workerNameLabel(run.worker_name))} #${escapeHtml(run.id)}</strong>
+              ${jobStatusBadge(run.status)}
+            </div>
+            <div class="dense-card-row"><span>완료 시각</span><strong>${escapeHtml(formatKstShort(run.finished_at_kst || run.created_at_kst))}</strong></div>
+            <div class="dense-card-row"><span>소요 시간</span><strong>${run.duration_seconds === null || run.duration_seconds === undefined ? "-" : `${Number(run.duration_seconds).toFixed(2)}초`}</strong></div>
+            <div class="dense-card-row"><span>요약</span><strong>${workerRunSummary(run)}</strong></div>
+            <div class="dense-card-actions"><button class="secondary" type="button" data-worker-run-detail-id="${attr(run.id)}">상세</button></div>
+          </article>
+        `).join("")
+        : `<div class="dense-card"><span class="status">표시할 작업 이력이 없습니다.</span></div>`;
     }
 
     function normalizeWorkerRunQuickRange(value) {
@@ -8151,6 +10663,7 @@ _INDEX_HTML = """<!doctype html>
     function workerRunDateRangeLabel(fromValue, toValue) {
       const fromText = workerRunDateTimeInputValue(fromValue) || "-";
       const toText = workerRunDateTimeInputValue(toValue) || "-";
+      if (fromText === "-" && toText === "-") return "전체";
       return `${fromText}..${toText}`;
     }
 
@@ -8161,25 +10674,25 @@ _INDEX_HTML = """<!doctype html>
       const summary = run.summary || {};
       if (run.worker_name === "collector") {
         return escapeHtml([
-          `matches ${summary.collection?.queued_match_jobs ?? "-"}`,
-          `stored ${summary.match_jobs?.stored_matches ?? "-"}`,
-          `telemetry ${summary.telemetry_jobs?.stored_telemetry ?? "-"}`,
-        ].join(" / "));
+          `매치 대기 ${summary.collection?.queued_match_jobs ?? "-"}`,
+          `매치 저장 ${summary.match_jobs?.stored_matches ?? "-"}`,
+          `텔레메트리 저장 ${summary.telemetry_jobs?.stored_telemetry ?? "-"}`,
+        ].join(" · "));
       }
       return escapeHtml([
-        `combat ${summary.combat?.parsed_payloads ?? "-"}`,
-        `items ${summary.items?.parsed_payloads ?? "-"}`,
-        `movement ${summary.movement?.parsed_payloads ?? "-"}`,
-        `maps ${summary.map_snapshots?.generated_snapshots ?? "-"}`,
-        `timelines ${summary.replay_timelines?.generated_timelines ?? "-"}`,
-      ].join(" / "));
+        `전투 ${summary.combat?.parsed_payloads ?? "-"}`,
+        `아이템 ${summary.items?.parsed_payloads ?? "-"}`,
+        `이동 ${summary.movement?.parsed_payloads ?? "-"}`,
+        `지도 ${summary.map_snapshots?.generated_snapshots ?? "-"}`,
+        `타임라인 ${summary.replay_timelines?.generated_timelines ?? "-"}`,
+      ].join(" · "));
     }
 
     async function loadWorkerRunDetail(runId, options = {}) {
-      workerRunDetail.innerHTML = `<div class="status">Loading worker run #${escapeHtml(runId)} detail...</div>`;
+      workerRunDetail.innerHTML = `<div class="status">작업 #${escapeHtml(runId)} 상세 정보를 불러오는 중...</div>`;
       const payload = await fetch(`/workers/runs/${encodeURIComponent(runId)}`).then((r) => r.json());
       if (payload.detail) throw new Error(payload.detail);
-      if (!payload.run) throw new Error("worker run was not returned");
+      if (!payload.run) throw new Error("작업 이력이 반환되지 않았습니다.");
       renderWorkerRunDetail(payload.run);
       if (options.updateUrl !== false) {
         updateWorkerRunDetailUrl(payload.run.id);
@@ -8206,7 +10719,7 @@ _INDEX_HTML = """<!doctype html>
             <td>${escapeHtml(metric.value)}</td>
           </tr>
         `).join("")
-        : `<tr><td colspan="2">No summary metrics</td></tr>`;
+        : `<tr><td colspan="2">저장된 요약 지표가 없습니다.</td></tr>`;
       const errorRows = errors.length
         ? errors.map((error, index) => `
           <tr>
@@ -8214,27 +10727,27 @@ _INDEX_HTML = """<!doctype html>
             <td><pre style="white-space: pre-wrap; margin: 0;">${escapeHtml(error)}</pre></td>
           </tr>
         `).join("")
-        : `<tr><td colspan="2">No stored errors</td></tr>`;
+        : `<tr><td colspan="2">저장된 오류가 없습니다.</td></tr>`;
       workerRunDetail.innerHTML = `
         <div class="recommendation-line">
-          <strong>Worker Run #${escapeHtml(run.id)} detail</strong>
+          <strong>자동 작업 #${escapeHtml(run.id)} 상세</strong>
           <div class="actions">
-            <button class="secondary" type="button" data-copy-worker-run-link="${attr(run.id)}">Copy link</button>
+            <button class="secondary" type="button" data-copy-worker-run-link="${attr(run.id)}">링크 복사</button>
           </div>
         </div>
         <div class="status" style="margin-top: 6px;">${escapeHtml(workerRunDetailUrl(run.id))}</div>
         <div class="grid" style="margin-top: 10px;">
-          ${cell("Worker", escapeHtml(run.worker_name || ""))}
-          ${cell("Status", escapeHtml(run.status || ""))}
-          ${cell("Finished", escapeHtml(run.finished_at_kst || run.created_at_kst || ""))}
-          ${cell("Duration", run.duration_seconds === null || run.duration_seconds === undefined ? "-" : `${Number(run.duration_seconds).toFixed(2)}s`)}
+          ${cell("작업 종류", escapeHtml(workerNameLabel(run.worker_name)))}
+          ${cell("상태", jobStatusBadge(run.status))}
+          ${cell("완료 시각 (KST)", escapeHtml(formatKstShort(run.finished_at_kst || run.created_at_kst)))}
+          ${cell("소요 시간", run.duration_seconds === null || run.duration_seconds === undefined ? "-" : `${Number(run.duration_seconds).toFixed(2)}초`)}
         </div>
         <table class="detail-table">
-          <thead><tr><th>Summary metric</th><th>Value</th></tr></thead>
+          <thead><tr><th>요약 지표</th><th>값</th></tr></thead>
           <tbody>${metricRows}</tbody>
         </table>
         <table class="detail-table">
-          <thead><tr><th>#</th><th>Stored error</th></tr></thead>
+          <thead><tr><th>#</th><th>저장된 오류</th></tr></thead>
           <tbody>${errorRows}</tbody>
         </table>
       `;
@@ -8264,7 +10777,7 @@ _INDEX_HTML = """<!doctype html>
       const quickRange = fromValue || toValue
         ? "custom"
         : normalizeWorkerRunQuickRange(params.get("worker_run_range") || "custom");
-      const limit = workerRunUrlBoundedNumber(params.get("worker_run_limit"), 50, 1, 200);
+      const limit = workerRunUrlBoundedNumber(params.get("worker_run_limit"), 20, 1, 200);
       const offset = workerRunUrlBoundedNumber(params.get("worker_run_offset"), 0, 0, 1000000);
 
       workerRunFilterForm.elements.worker_name.value = worker;
@@ -8306,7 +10819,7 @@ _INDEX_HTML = """<!doctype html>
       const status = String(form.get("status") || workerRunPage.status || "all");
       const createdFrom = String(form.get("created_from_kst") || workerRunPage.created_from_kst || "");
       const createdTo = String(form.get("created_to_kst") || workerRunPage.created_to_kst || "");
-      const limit = Number(form.get("limit") || workerRunPage.limit || 50);
+      const limit = Number(form.get("limit") || workerRunPage.limit || 20);
       url.searchParams.delete("worker_run_id");
       url.searchParams.delete("worker_run");
       url.searchParams.set("worker_run_worker", worker === "all" ? "all" : worker);
@@ -8314,7 +10827,7 @@ _INDEX_HTML = """<!doctype html>
       url.searchParams.set("worker_run_range", "custom");
       url.searchParams.set("worker_run_from", workerRunDateTimeInputValue(createdFrom));
       url.searchParams.set("worker_run_to", workerRunDateTimeInputValue(createdTo));
-      url.searchParams.set("worker_run_limit", String(limit || 50));
+      url.searchParams.set("worker_run_limit", String(limit || 20));
       url.searchParams.set("worker_run_offset", String(workerRunPage.offset || 0));
       url.hash = "worker-runs";
       return url.toString();
@@ -8408,58 +10921,151 @@ _INDEX_HTML = """<!doctype html>
     }
 
     async function loadReplayArtifacts(options = {}) {
-      const params = new URLSearchParams({ artifact_type: "", limit: "50" });
-      const matchId = options.match_id ?? replayArtifactFilter.match_id;
-      const accountId = options.account_id ?? replayArtifactFilter.account_id;
+      const form = new FormData(replayArtifactListForm);
+      const matchId = options.match_id !== undefined ? options.match_id : replayArtifactFilter.match_id;
+      const accountId = options.account_id !== undefined
+        ? options.account_id
+        : (replayArtifactFilter.account_id || String(form.get("account_id") || ""));
+      const artifactType = options.artifact_type !== undefined
+        ? options.artifact_type
+        : String(form.get("artifact_type") || "");
+      const limit = Number(options.limit || form.get("limit") || 20);
+      const params = new URLSearchParams({ artifact_type: artifactType, limit: String(limit) });
       if (matchId) params.set("match_id", matchId);
       if (accountId) params.set("account_id", accountId);
-      const payload = await fetch(`/replay/artifacts?${params.toString()}`).then((r) => r.json());
-      updateTimelineOptions(payload.artifacts || [], options.artifact_id ?? replayArtifactFilter.artifact_id);
-      replayArtifactsBody.innerHTML = payload.artifacts.map((artifact) => `
-        <tr>
-          <td>${escapeHtml(artifact.generated_at_kst || "")}</td>
-          <td>${escapeHtml(artifact.artifact_type || "")}</td>
-          <td>${escapeHtml(artifact.map_name || "")}</td>
-          <td>${escapeHtml(artifact.game_mode || "")}</td>
-          <td>${escapeHtml(artifact.match_id || "")}</td>
-          <td>${escapeHtml(formatBytes(artifact.size_bytes || 0))}</td>
-          <td>
-            <div class="actions">
-              ${artifact.artifact_type === "timeline" ? `<button type="button" data-load-timeline="${attr(artifact.id)}">재생</button>` : ""}
+      replayArtifactsStatus.textContent = "저장 목록을 불러오는 중";
+      const response = await fetch(`/replay/artifacts?${params.toString()}`);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || response.statusText);
+      const artifacts = payload.artifacts || [];
+      if (accountId && artifactType !== "map_snapshot") {
+        updateTimelineOptions(artifacts, options.artifact_id ?? replayArtifactFilter.artifact_id);
+      }
+      replayArtifactsStatus.textContent = [
+        `${artifacts.length}개 표시`,
+        accountId ? `유저 ${registeredPlayers.find((player) => player.account_id === accountId)?.current_name || compactIdentifier(accountId)}` : "전체 등록 유저",
+        artifactType ? artifactTypeLabel(artifactType) : "전체 파일",
+      ].join(" · ");
+      replayArtifactsBody.innerHTML = artifacts.length
+        ? artifacts.map((artifact) => `
+          <tr>
+            <td><strong>${escapeHtml(artifact.player_name || compactIdentifier(artifact.account_id))}</strong></td>
+            <td>${escapeHtml(formatKstShort(artifact.match_created_at_kst))}</td>
+            <td>${escapeHtml(artifactTypeLabel(artifact.artifact_type))}</td>
+            <td>${escapeHtml(artifact.map_name || "-")}<br><span class="status">${escapeHtml(artifact.game_mode || "-")}</span></td>
+            <td class="identifier" title="${attr(artifact.match_id || "")}">${escapeHtml(compactIdentifier(artifact.match_id))}</td>
+            <td>${escapeHtml(formatKstShort(artifact.generated_at_kst))}</td>
+            <td>${escapeHtml(formatBytes(artifact.size_bytes || 0))}</td>
+            <td>
+              <div class="actions">
+                ${canPlayTimelineArtifact(artifact) ? `<button type="button" data-load-timeline="${attr(artifact.id)}" data-load-account-id="${attr(artifact.account_id)}">재생</button>` : ""}
+                ${artifact.artifact_type === "timeline" && !canPlayTimelineArtifact(artifact) ? `<span class="status-badge warning" title="${attr(artifact.renderer_version || "버전 정보 없음")}">재생성 필요</span>` : ""}
+                <a href="${attr(artifact.view_url)}" target="_blank" rel="noreferrer">열기</a>
+              </div>
+            </td>
+          </tr>
+        `).join("")
+        : `<tr><td colspan="8">조건에 맞는 저장 파일이 없습니다.</td></tr>`;
+      replayArtifactsCards.innerHTML = artifacts.length
+        ? artifacts.map((artifact) => `
+          <article class="dense-card">
+            <div class="dense-card-head">
+              <strong>${escapeHtml(artifact.player_name || compactIdentifier(artifact.account_id))}</strong>
+              <span class="status-badge info">${escapeHtml(artifactTypeLabel(artifact.artifact_type))}</span>
+            </div>
+            <div class="dense-card-row"><span>경기</span><strong>${escapeHtml(formatKstShort(artifact.match_created_at_kst))}</strong></div>
+            <div class="dense-card-row"><span>맵 / 모드</span><strong>${escapeHtml(artifact.map_name || "-")} · ${escapeHtml(artifact.game_mode || "-")}</strong></div>
+            <div class="dense-card-row"><span>매치 ID</span><strong class="identifier" title="${attr(artifact.match_id || "")}">${escapeHtml(compactIdentifier(artifact.match_id))}</strong></div>
+            <div class="dense-card-row"><span>생성 / 크기</span><strong>${escapeHtml(formatKstShort(artifact.generated_at_kst))} · ${escapeHtml(formatBytes(artifact.size_bytes || 0))}</strong></div>
+            <div class="dense-card-actions">
+              ${canPlayTimelineArtifact(artifact) ? `<button type="button" data-load-timeline="${attr(artifact.id)}" data-load-account-id="${attr(artifact.account_id)}">재생</button>` : ""}
+              ${artifact.artifact_type === "timeline" && !canPlayTimelineArtifact(artifact) ? `<span class="status-badge warning" title="${attr(artifact.renderer_version || "버전 정보 없음")}">재생성 필요</span>` : ""}
               <a href="${attr(artifact.view_url)}" target="_blank" rel="noreferrer">열기</a>
             </div>
-          </td>
-        </tr>
-      `).join("");
-      if (replayTimelineArtifacts.length && (!activeTimelineArtifact || String(activeTimelineArtifact.id) !== timelineSelect.value)) {
+          </article>
+        `).join("")
+        : `<div class="dense-card"><span class="status">조건에 맞는 저장 파일이 없습니다.</span></div>`;
+      if (accountId && replayTimelineArtifacts.length && (!activeTimelineArtifact || String(activeTimelineArtifact.id) !== timelineSelect.value)) {
         await loadSelectedTimeline();
       }
     }
 
+    function clearReplayTimeline(message = "등록 유저를 선택한 뒤 경기를 불러오세요.") {
+      pauseReplay();
+      activeReplayPlayer = null;
+      replayTimelineArtifacts = [];
+      activeTimeline = null;
+      activeTimelineArtifact = null;
+      activeTimelineEvents = [];
+      activeTimelineSelectedEventId = null;
+      activeTimelineDetailKey = "";
+      activeTimelineDuration = 0;
+      activeTimelineTime = 0;
+      timelineSelect.disabled = true;
+      timelineSelect.innerHTML = '<option value="">유저를 선택하세요</option>';
+      timelineScrubber.max = "0";
+      timelineScrubber.value = "0";
+      timelineClock.textContent = "0.0초";
+      replayPlayerStatus.textContent = message;
+      renderTimelineTeamList();
+      renderTimelineEventList();
+      renderTimelineEventDetail(null);
+      drawEmptyReplayCanvas();
+    }
+
+    async function loadReplayTimelinesForPlayer(player, preferredArtifactId = "") {
+      activeReplayPlayer = player;
+      timelinePlayerInput.value = player.current_name;
+      timelinePlayerInput.dataset.accountId = player.account_id;
+      timelinePlayerForm.elements.shard.value = player.shard;
+      replayPlayerStatus.textContent = `${player.current_name}의 종료된 경기를 불러오는 중`;
+
+      const params = new URLSearchParams({
+        artifact_type: "timeline",
+        account_id: player.account_id,
+        limit: "200",
+      });
+      const response = await fetch(`/replay/artifacts?${params.toString()}`);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || response.statusText);
+      updateTimelineOptions(payload.artifacts || [], preferredArtifactId);
+      if (replayTimelineArtifacts.length) {
+        await loadSelectedTimeline();
+      }
+    }
+
+    function canPlayTimelineArtifact(artifact) {
+      return artifact?.artifact_type === "timeline" && artifact?.playback_ready === true;
+    }
+
     function updateTimelineOptions(artifacts, preferredArtifactId = "") {
       const previous = timelineSelect.value;
-      replayTimelineArtifacts = artifacts.filter((artifact) => artifact.artifact_type === "timeline");
+      const timelineArtifacts = artifacts.filter((artifact) => artifact.artifact_type === "timeline");
+      replayTimelineArtifacts = timelineArtifacts.filter(canPlayTimelineArtifact);
       if (!replayTimelineArtifacts.length) {
-        pauseReplay();
-        activeTimeline = null;
-        activeTimelineArtifact = null;
-        activeTimelineEvents = [];
-        activeTimelineSelectedEventId = null;
-        renderTimelineTeamList();
-        renderTimelineEventList();
-        renderTimelineEventDetail(null);
-        replayPlayerStatus.textContent = "timeline artifact가 없습니다.";
-        drawEmptyReplayCanvas();
+        const player = activeReplayPlayer;
+        clearReplayTimeline(
+          player
+            ? (
+              timelineArtifacts.length
+                ? `${player.current_name}의 리플레이는 구버전입니다. 수집·처리에서 타임라인 저장을 실행해 재생성하세요.`
+                : `${player.current_name}의 저장된 2D 리플레이가 없습니다.`
+            )
+            : "등록 유저를 선택한 뒤 경기를 불러오세요."
+        );
+        activeReplayPlayer = player;
+        return;
       }
+      timelineSelect.disabled = false;
       timelineSelect.innerHTML = replayTimelineArtifacts.map((artifact) => {
         const label = [
-          artifact.player_name || "unknown",
+          artifact.player_name || "알 수 없음",
+          formatKstShort(artifact.match_created_at_kst),
           artifact.map_name || "-",
           artifact.game_mode || "-",
-          artifact.match_id ? artifact.match_id.slice(0, 8) : "-",
         ].join(" / ");
         return `<option value="${attr(artifact.id)}">${escapeHtml(label)}</option>`;
-      }).join("") || `<option value="">timeline 없음</option>`;
+      }).join("") || `<option value="">재생 타임라인 없음</option>`;
 
       if (preferredArtifactId && replayTimelineArtifacts.some((artifact) => String(artifact.id) === String(preferredArtifactId))) {
         timelineSelect.value = String(preferredArtifactId);
@@ -8490,7 +11096,7 @@ _INDEX_HTML = """<!doctype html>
         renderTimelineTeamList();
         renderTimelineEventList();
         renderTimelineEventDetail(null);
-        replayPlayerStatus.textContent = "timeline artifact가 없습니다.";
+        replayPlayerStatus.textContent = "재생할 타임라인 파일이 없습니다.";
         drawEmptyReplayCanvas();
         return;
       }
@@ -8500,21 +11106,53 @@ _INDEX_HTML = """<!doctype html>
         if (!response.ok) throw new Error(response.statusText);
         return response.json();
       });
-      activeTimeline = payload;
+      validateTimelinePayload(payload);
+      activeTimeline = normalizeTimelineTiming(payload);
       activeTimelineArtifact = artifact;
-      activeTimelineEvents = timelineEvents(payload);
+      activeTimelineEvents = timelineEvents(activeTimeline);
       activeTimelineSelectedEventId = null;
       activeTimelineDetailKey = "";
-      activeTimelineDuration = Math.max(1, timelineDuration(payload));
+      activeTimelineDuration = Math.max(1, timelineDuration(activeTimeline));
       activeTimelineTime = 0;
       timelineScrubber.max = String(activeTimelineDuration);
       timelineScrubber.value = "0";
-      replayPlayerStatus.textContent = `${payload.player?.name || artifact.player_name || "unknown"} / ${payload.match?.map_name || "-"} / ${payload.match?.match_id || artifact.match_id}`;
-      await loadReplayMapImage(payload.match?.map_name);
+      replayPlayerStatus.textContent = `${activeTimeline.player?.name || artifact.player_name || "알 수 없음"} · ${formatKstShort(artifact.match_created_at_kst)} · ${activeTimeline.match?.map_name || "-"} · ${compactIdentifier(activeTimeline.match?.match_id || artifact.match_id)}`;
+      await loadReplayMapImage(activeTimeline.match?.map_name);
       renderTimelineTeamList();
       renderTimelineEventList();
       renderTimelineEventDetail(null);
       renderReplayFrame();
+    }
+
+    function timelineSchemaVersion(value) {
+      const match = /^player-timeline-v(\\d+)$/.exec(String(value || "").trim());
+      return match ? Number(match[1]) : null;
+    }
+
+    function validateTimelinePayload(timeline) {
+      const version = timelineSchemaVersion(timeline?.schema_version);
+      if (version === null || version < 6) {
+        throw new Error("이 타임라인은 현재 재생기와 호환되지 않습니다. 타임라인 저장을 실행해 재생성하세요.");
+      }
+      if (!Number.isFinite(Date.parse(timeline?.time_origin_at_kst || ""))) {
+        throw new Error("타임라인 기준 시간이 없어 재생할 수 없습니다. 파일을 재생성하세요.");
+      }
+      const tracks = [
+        Array.isArray(timeline?.positions) ? timeline.positions : [],
+        ...(timeline?.team_tracks || []).map((track) => Array.isArray(track?.positions) ? track.positions : []),
+      ];
+      if (!tracks[0].length) {
+        throw new Error("플레이어 이동 기록이 없는 타임라인입니다.");
+      }
+      for (const track of tracks) {
+        for (const sample of track) {
+          const seconds = replayNumber(sample?.time_seconds);
+          const segmentId = Number(sample?.segment_id);
+          if (seconds === null || seconds < 0 || !Number.isInteger(segmentId) || segmentId < 0) {
+            throw new Error("타임라인 시간축 또는 이동 구간이 손상되었습니다. 파일을 재생성하세요.");
+          }
+        }
+      }
     }
 
     async function loadReplayMapImage(mapName) {
@@ -8537,20 +11175,156 @@ _INDEX_HTML = """<!doctype html>
     function timelineDuration(timeline) {
       const times = [];
       for (const sample of timeline.positions || []) times.push(eventTime(sample));
+      for (const event of timeline.drop_starts || []) times.push(eventTime(event));
       for (const event of timeline.landings || []) times.push(eventTime(event));
       for (const event of timeline.combat_events || []) times.push(eventTime(event));
       for (const event of timeline.care_packages || []) times.push(eventTime(event));
       for (const event of timeline.phase_events || []) times.push(eventTime(event));
+      for (const track of timeline.team_tracks || []) {
+        for (const sample of track.positions || []) times.push(eventTime(sample));
+      }
+      const planeEnd = replayNumber(timeline.plane_route?.end_time_seconds);
+      if (planeEnd !== null) times.push(planeEnd);
       const matchDuration = Number(timeline.match?.duration_seconds || 0);
       if (Number.isFinite(matchDuration) && matchDuration > 0) times.push(matchDuration);
       return Math.max(0, ...times.filter((value) => Number.isFinite(value)));
     }
 
+    function replayNumber(value) {
+      if (value === null || value === undefined || value === "") return null;
+      const number = Number(value);
+      return Number.isFinite(number) ? number : null;
+    }
+
+    function replayEventCollections(timeline) {
+      const collections = [
+        timeline.positions,
+        timeline.drop_starts,
+        timeline.landings,
+        timeline.combat_events,
+        timeline.care_packages,
+        timeline.phase_events,
+      ].filter(Array.isArray);
+      for (const track of timeline.team_tracks || []) {
+        if (Array.isArray(track.positions)) collections.push(track.positions);
+      }
+      return collections;
+    }
+
+    function normalizeTimelineTiming(timeline) {
+      const collections = replayEventCollections(timeline);
+      const origins = [];
+      for (const collection of collections) {
+        for (const event of collection) {
+          const elapsed = replayNumber(event?.elapsed_time_seconds);
+          const at = Date.parse(event?.event_at_kst || "");
+          if (elapsed !== null && elapsed >= 0 && Number.isFinite(at)) {
+            origins.push(at - elapsed * 1000);
+          }
+        }
+      }
+      origins.sort((left, right) => left - right);
+      let origin = Date.parse(timeline.time_origin_at_kst || "");
+      if (!Number.isFinite(origin) && origins.length) {
+        const middle = Math.floor(origins.length / 2);
+        origin = origins.length % 2
+          ? origins[middle]
+          : (origins[middle - 1] + origins[middle]) / 2;
+      }
+      if (!Number.isFinite(origin)) {
+        const timestamps = collections.flatMap((collection) => (
+          collection.map((event) => Date.parse(event?.event_at_kst || "")).filter(Number.isFinite)
+        ));
+        if (timestamps.length) origin = Math.min(...timestamps);
+      }
+
+      for (const collection of collections) {
+        for (const event of collection) {
+          let seconds = replayNumber(event?.time_seconds);
+          if (seconds === null) seconds = replayNumber(event?.elapsed_time_seconds);
+          if (seconds === null && Number.isFinite(origin)) {
+            const at = Date.parse(event?.event_at_kst || "");
+            if (Number.isFinite(at)) seconds = Math.max(0, (at - origin) / 1000);
+          }
+          event.time_seconds = seconds;
+        }
+        collection.sort((left, right) => {
+          const leftTime = eventTime(left);
+          const rightTime = eventTime(right);
+          return (Number.isFinite(leftTime) ? leftTime : Number.POSITIVE_INFINITY)
+            - (Number.isFinite(rightTime) ? rightTime : Number.POSITIVE_INFINITY)
+            || Number(left?.event_index || 0) - Number(right?.event_index || 0);
+        });
+      }
+      const route = timeline.plane_route;
+      if (route) {
+        for (const prefix of ["start", "end"]) {
+          let seconds = replayNumber(route[`${prefix}_time_seconds`]);
+          if (seconds === null && Number.isFinite(origin)) {
+            const at = Date.parse(route[`${prefix}_event_at_kst`] || "");
+            if (Number.isFinite(at)) seconds = Math.max(0, (at - origin) / 1000);
+          }
+          route[`${prefix}_time_seconds`] = seconds;
+        }
+      }
+      ensureReplayPathSegments(timeline.positions || []);
+      for (const track of timeline.team_tracks || []) {
+        ensureReplayPathSegments(track.positions || []);
+      }
+      if (!Array.isArray(timeline.drop_starts) || !timeline.drop_starts.length) {
+        timeline.drop_starts = deriveReplayDropStarts(timeline.positions || []);
+      }
+      if (Number.isFinite(origin)) {
+        timeline.time_origin_at_kst = new Date(origin).toISOString();
+      }
+      return timeline;
+    }
+
+    function ensureReplayPathSegments(samples) {
+      if (!samples.length || samples.every((sample) => Number.isInteger(Number(sample.segment_id)))) return;
+      let segmentId = 0;
+      let previous = null;
+      for (const sample of samples) {
+        if (previous && replayPathBreak(previous, sample)) segmentId += 1;
+        sample.segment_id = segmentId;
+        previous = sample;
+      }
+    }
+
+    function replayPathBreak(left, right) {
+      const leftTime = eventTime(left);
+      const rightTime = eventTime(right);
+      const elapsed = rightTime - leftTime;
+      if (!Number.isFinite(elapsed) || elapsed <= 0 || elapsed > 45) return true;
+      const leftX = replayNumber(left?.x);
+      const leftY = replayNumber(left?.y);
+      const rightX = replayNumber(right?.x);
+      const rightY = replayNumber(right?.y);
+      if ([leftX, leftY, rightX, rightY].some((value) => value === null)) return true;
+      const distanceM = Math.hypot(rightX - leftX, rightY - leftY) / 100;
+      const leftZ = replayNumber(left?.z);
+      const rightZ = replayNumber(right?.z);
+      return distanceM / elapsed > 120
+        || (leftZ !== null && rightZ !== null && rightZ >= 100000 && rightZ - leftZ >= 30000);
+    }
+
+    function deriveReplayDropStarts(samples) {
+      const starts = [];
+      const seen = new Set();
+      for (const sample of samples) {
+        const segmentId = Number(sample.segment_id || 0);
+        if (seen.has(segmentId)) continue;
+        seen.add(segmentId);
+        if (Number(sample.z || 0) >= 20000 && sample.is_in_vehicle !== true) starts.push({ ...sample });
+      }
+      return starts;
+    }
+
     function eventTime(event) {
-      const elapsed = Number(event?.elapsed_time_seconds);
-      if (Number.isFinite(elapsed)) return elapsed;
-      const t = Number(event?.t);
-      return Number.isFinite(t) ? t : 0;
+      const seconds = replayNumber(event?.time_seconds);
+      if (seconds !== null) return seconds;
+      const elapsed = replayNumber(event?.elapsed_time_seconds);
+      return elapsed === null ? Number.NaN : elapsed;
     }
 
     function timelineEvents(timeline) {
@@ -8572,23 +11346,43 @@ _INDEX_HTML = """<!doctype html>
         sequence += 1;
       };
 
+      const route = timeline.plane_route;
+      if (route?.start?.map) {
+        add("plane", {
+          event_index: route.start_event_index,
+          event_at_kst: route.start_event_at_kst,
+          time_seconds: route.start_time_seconds,
+          map: route.start.map,
+        }, "비행 시작", "전체 비행 경로");
+      }
+      if (route?.end?.map) {
+        add("plane", {
+          event_index: route.end_event_index,
+          event_at_kst: route.end_event_at_kst,
+          time_seconds: route.end_time_seconds,
+          map: route.end.map,
+        }, "비행 종료", "전체 비행 경로");
+      }
+      for (const event of timeline.drop_starts || []) {
+        add("drop", event, "첫 자유낙하 위치", `고도 ${Math.round(Number(event.z || 0) / 100).toLocaleString("ko-KR")}m`);
+      }
       for (const event of timeline.landings || []) {
-        add("landing", event, "Landing", `${distanceM(event.distance_m)} from plane`);
+        add("landing", event, "낙하산 착지", `비행 거리 ${distanceM(event.distance_m)}`);
       }
       for (const event of timeline.combat_events || []) {
         const action = combatActionLabel(event.action);
         const weapon = event.damage_causer_label || event.damage_causer_name || "-";
-        const suffix = event.is_headshot ? " / HS" : "";
+        const suffix = event.is_headshot ? " · 헤드샷" : "";
         const related = event.related_name || event.related_account_id;
         const baseMeta = isReviveAction(event.action)
-          ? [event.damage_reason || "Revive", distanceM(event.distance_m)]
+          ? [event.damage_reason || "부활", distanceM(event.distance_m)]
           : [weapon, distanceM(event.distance_m)];
         const meta = baseMeta.concat(related ? [related] : []).join(" / ");
         add("combat", event, `${action}${suffix}`, meta);
       }
       for (const event of timeline.care_packages || []) {
-        const label = event.event_type === "LogCarePackageLand" ? "Care package landed" : "Care package spawned";
-        add("care", event, label, `${event.item_count || 0} items`);
+        const label = event.event_type === "LogCarePackageLand" ? "보급 상자 착지" : "보급 상자 생성";
+        add("care", event, label, `${event.item_count || 0}개 아이템`);
       }
 
       return events.sort((left, right) => (
@@ -8600,16 +11394,16 @@ _INDEX_HTML = """<!doctype html>
 
     function combatActionLabel(action) {
       const labels = {
-        dbno_caused: "DBNO caused",
-        dbno_taken: "DBNO taken",
-        kill: "Kill",
-        death: "Death",
-        finish: "Finish",
-        finished_taken: "Finished taken",
-        revive_given: "Revive given",
-        revive_received: "Revived",
+        dbno_caused: "기절시킴",
+        dbno_taken: "기절당함",
+        kill: "킬",
+        death: "사망",
+        finish: "확정 처치",
+        finished_taken: "확정 처치당함",
+        revive_given: "팀원 부활",
+        revive_received: "부활받음",
       };
-      return labels[action] || action || "Combat";
+      return labels[action] || action || "교전";
     }
 
     function isReviveAction(action) {
@@ -8620,26 +11414,26 @@ _INDEX_HTML = """<!doctype html>
       if (!timelineTeamList) return;
       const members = activeTimeline?.team?.members || [];
       if (!members.length) {
-        timelineTeamList.innerHTML = `<div class="status">Team data unavailable</div>`;
+        timelineTeamList.innerHTML = `<div class="status">팀 정보가 없습니다.</div>`;
         return;
       }
       timelineTeamList.innerHTML = members.map((member) => {
         const badges = [];
-        if (member.is_self) badges.push("self");
-        if (member.registered && !member.is_self) badges.push("registered");
-        if (member.is_ai_or_bot) badges.push("bot");
-        if (member.position_sample_count > 0 && !member.is_self) badges.push("route");
+        if (member.is_self) badges.push("선택 유저");
+        if (member.registered && !member.is_self) badges.push("등록 유저");
+        if (member.is_ai_or_bot) badges.push("봇");
+        if (member.position_sample_count > 0 && !member.is_self) badges.push("이동 경로");
         const stats = [
-          `K ${Number(member.kills || 0)}`,
-          `A ${Number(member.assists || 0)}`,
-          `DMG ${Number(member.damage_dealt || 0).toFixed(0)}`,
-          member.position_sample_count > 0 ? `Route ${Number(member.position_sample_count || 0)}` : "",
-          member.win_place ? `#${member.win_place}` : "",
+          `킬 ${Number(member.kills || 0)}`,
+          `어시 ${Number(member.assists || 0)}`,
+          `피해 ${Number(member.damage_dealt || 0).toFixed(0)}`,
+          member.position_sample_count > 0 ? `위치 ${Number(member.position_sample_count || 0)}개` : "",
+          member.win_place ? `${member.win_place}위` : "",
         ].filter(Boolean).join(" / ");
         return `
           <div class="team-member ${member.is_self ? "self" : ""} ${member.registered && !member.is_self ? "registered" : ""}">
-            <strong>${escapeHtml(member.name || member.account_id || "unknown")}</strong>
-            <span>${escapeHtml(badges.join(" / ") || "team")}</span>
+            <strong>${escapeHtml(member.name || member.account_id || "알 수 없음")}</strong>
+            <span>${escapeHtml(badges.join(" / ") || "팀원")}</span>
             <span>${escapeHtml(stats || "-")}</span>
           </div>
         `;
@@ -8656,7 +11450,7 @@ _INDEX_HTML = """<!doctype html>
     function renderTimelineEventList() {
       if (!timelineEventList) return;
       if (!activeTimelineEvents.length) {
-        timelineEventList.innerHTML = `<div class="status">표시할 timeline 이벤트가 없습니다.</div>`;
+        timelineEventList.innerHTML = `<div class="status">표시할 리플레이 이벤트가 없습니다.</div>`;
         return;
       }
       timelineEventList.innerHTML = activeTimelineEvents.slice(0, 250).map((event) => `
@@ -8680,30 +11474,32 @@ _INDEX_HTML = """<!doctype html>
         timelineEventDetail.className = "timeline-event-detail status";
         timelineEventDetail.innerHTML = activeTimelineEvents.length
           ? `이벤트를 선택하거나 재생 시점이 이벤트에 가까워지면 상세가 표시됩니다.`
-          : `이 timeline에는 상세 이벤트가 없습니다.`;
+          : `이 리플레이에는 상세 이벤트가 없습니다.`;
         return;
       }
 
       const source = nearest.source || {};
       const detailLines = [
         `<strong>${escapeHtml(nearest.label)}</strong>`,
-        `time ${formatReplayTime(nearest.time)} / index ${nearest.event_index || "-"}`,
+        `시각 ${formatReplayTime(nearest.time)} / 이벤트 #${nearest.event_index || "-"}`,
       ];
       if (nearest.category === "combat") {
         if (isReviveAction(source.action)) {
-          detailLines.push(`method ${escapeHtml(source.damage_reason || "Revive")} / distance ${distanceM(source.distance_m)}`);
+          detailLines.push(`방식 ${escapeHtml(source.damage_reason || "부활")} / 거리 ${distanceM(source.distance_m)}`);
         } else {
-          detailLines.push(`weapon ${escapeHtml(source.damage_causer_label || source.damage_causer_name || "-")}`);
-          detailLines.push(`reason ${escapeHtml(source.damage_reason || "-")} / distance ${distanceM(source.distance_m)}`);
+          detailLines.push(`무기 ${escapeHtml(source.damage_causer_label || source.damage_causer_name || "-")}`);
+          detailLines.push(`피격 부위 ${escapeHtml(source.damage_reason || "-")} / 거리 ${distanceM(source.distance_m)}`);
         }
         const relatedLabel = combatRelatedLabel(source);
-        if (relatedLabel) detailLines.push(`related ${relatedLabel}`);
+        if (relatedLabel) detailLines.push(`상대 ${relatedLabel}`);
       } else if (nearest.category === "care") {
-        detailLines.push(`type ${escapeHtml(source.event_type || "-")} / items ${source.item_count || 0}`);
+        detailLines.push(`유형 ${escapeHtml(source.event_type || "-")} / 아이템 ${source.item_count || 0}개`);
         const itemCodes = (source.item_codes || []).slice(0, 8).join(", ");
-        if (itemCodes) detailLines.push(`items ${escapeHtml(itemCodes)}`);
+        if (itemCodes) detailLines.push(`아이템 코드 ${escapeHtml(itemCodes)}`);
       } else if (nearest.category === "landing") {
-        detailLines.push(`landing distance ${distanceM(source.distance_m)}`);
+        detailLines.push(`비행 거리 ${distanceM(source.distance_m)}`);
+      } else if (nearest.category === "drop") {
+        detailLines.push(`첫 기록 고도 ${Math.round(Number(source.z || 0) / 100).toLocaleString("ko-KR")}m`);
       }
       if (source.event_at_kst) detailLines.push(`KST ${escapeHtml(source.event_at_kst)}`);
       timelineEventDetail.className = "timeline-event-detail";
@@ -8714,8 +11510,8 @@ _INDEX_HTML = """<!doctype html>
       const name = source.related_name || source.related_account_id;
       if (!name) return "";
       const badges = [];
-      if (source.related_registered) badges.push("registered");
-      if (source.related_is_ai_or_bot) badges.push("bot");
+      if (source.related_registered) badges.push("등록 유저");
+      if (source.related_is_ai_or_bot) badges.push("봇");
       return `${escapeHtml(name)}${badges.length ? ` (${escapeHtml(badges.join(", "))})` : ""}`;
     }
 
@@ -8763,6 +11559,7 @@ _INDEX_HTML = """<!doctype html>
       if (timelineShowCare.checked) drawReplayCarePackages(activeTimeline.care_packages || []);
       if (timelineShowPath.checked) drawReplayPath(activeTimeline.positions || []);
       if (timelineShowTeam.checked) drawReplayTeamTracks(activeTimeline.team_tracks || []);
+      drawReplayDropStarts(activeTimeline.drop_starts || []);
       drawReplayLandings(activeTimeline.landings || []);
       if (timelineShowCombat.checked) drawReplayCombatEvents(activeTimeline.combat_events || []);
       drawReplaySelectedEvent();
@@ -8820,6 +11617,28 @@ _INDEX_HTML = """<!doctype html>
       replayCtx.stroke();
       drawCircle(start, 7, "#ffffff", "#1976d2");
       drawCircle(end, 7, "#ffffff", "#1976d2");
+      const startTime = replayNumber(route.start_time_seconds);
+      const endTime = replayNumber(route.end_time_seconds);
+      if (
+        startTime !== null
+        && endTime !== null
+        && endTime > startTime
+        && activeTimelineTime >= startTime
+        && activeTimelineTime <= endTime
+      ) {
+        const ratio = Math.max(0, Math.min(1, (activeTimelineTime - startTime) / (endTime - startTime)));
+        const aircraft = {
+          x: start.x + (end.x - start.x) * ratio,
+          y: start.y + (end.y - start.y) * ratio,
+        };
+        drawCircle(aircraft, 10, "#e3f2fd", "#1565c0");
+        replayCtx.strokeStyle = "#1565c0";
+        replayCtx.lineWidth = 3;
+        replayCtx.beginPath();
+        replayCtx.moveTo(aircraft.x - 13, aircraft.y);
+        replayCtx.lineTo(aircraft.x + 13, aircraft.y);
+        replayCtx.stroke();
+      }
     }
 
     function drawReplayPhaseRings(events) {
@@ -8871,25 +11690,27 @@ _INDEX_HTML = """<!doctype html>
     }
 
     function drawReplayPath(samples) {
-      const visible = visiblePositionSamples(samples);
-      if (visible.length < 2) return;
       replayCtx.strokeStyle = "rgba(57,255,20,0.9)";
       replayCtx.lineWidth = 4;
-      replayCtx.beginPath();
-      visible.forEach((sample, index) => {
-        const point = canvasPoint(sample.map);
-        if (index === 0) replayCtx.moveTo(point.x, point.y);
-        else replayCtx.lineTo(point.x, point.y);
-      });
-      replayCtx.stroke();
+      for (const visible of visiblePositionSegments(samples)) {
+        if (visible.length < 2) continue;
+        replayCtx.beginPath();
+        visible.forEach((sample, index) => {
+          const point = canvasPoint(sample.map);
+          if (index === 0) replayCtx.moveTo(point.x, point.y);
+          else replayCtx.lineTo(point.x, point.y);
+        });
+        replayCtx.stroke();
+      }
     }
 
     function drawReplayTeamTracks(tracks) {
       tracks.forEach((track, index) => {
         const samples = track.positions || [];
-        const visible = visiblePositionSamples(samples);
+        const visibleSegments = visiblePositionSegments(samples);
         const color = teamTrackColor(index, Boolean(track.registered));
-        if (visible.length >= 2) {
+        for (const visible of visibleSegments) {
+          if (visible.length < 2) continue;
           replayCtx.strokeStyle = color;
           replayCtx.lineWidth = track.registered ? 3 : 2;
           replayCtx.setLineDash([9, 7]);
@@ -8911,6 +11732,24 @@ _INDEX_HTML = """<!doctype html>
         drawReplayLabel(point, track.name || track.account_id || "team", color);
       });
       replayCtx.setLineDash([]);
+    }
+
+    function drawReplayDropStarts(events) {
+      for (const event of events) {
+        if (eventTime(event) > activeTimelineTime || !event.map) continue;
+        const point = canvasPoint(event.map);
+        replayCtx.fillStyle = "rgba(0,188,212,0.95)";
+        replayCtx.strokeStyle = "rgba(255,255,255,0.92)";
+        replayCtx.lineWidth = 2;
+        replayCtx.beginPath();
+        replayCtx.moveTo(point.x, point.y - 10);
+        replayCtx.lineTo(point.x + 10, point.y);
+        replayCtx.lineTo(point.x, point.y + 10);
+        replayCtx.lineTo(point.x - 10, point.y);
+        replayCtx.closePath();
+        replayCtx.fill();
+        replayCtx.stroke();
+      }
     }
 
     function drawReplayLandings(events) {
@@ -8983,10 +11822,12 @@ _INDEX_HTML = """<!doctype html>
       replayCtx.fillRect(12, 12, 360, 88);
       replayCtx.fillStyle = "#f5f7fa";
       replayCtx.font = "14px Arial";
-      replayCtx.fillText(activeTimelineArtifact?.match_id || activeTimeline?.match?.match_id || "-", 24, 36);
+      const playerName = activeTimeline?.player?.name || "알 수 없음";
+      const matchId = compactIdentifier(activeTimelineArtifact?.match_id || activeTimeline?.match?.match_id || "-");
+      replayCtx.fillText(`${playerName} · ${matchId}`, 24, 36);
       replayCtx.fillStyle = "#c3ccd6";
-      replayCtx.fillText(`${activeTimeline?.match?.map_name || "-"} / ${activeTimeline?.match?.game_mode || "-"} / ${activeTimelineTime.toFixed(1)}s`, 24, 60);
-      replayCtx.fillText(`view ${replayZoom().toFixed(1)}x / follow ${timelineFollowPlayer.checked ? "on" : "off"}`, 24, 84);
+      replayCtx.fillText(`${activeTimeline?.match?.map_name || "-"} · ${activeTimeline?.match?.game_mode || "-"} · ${formatReplayTime(activeTimelineTime)}`, 24, 60);
+      replayCtx.fillText(`확대 ${replayZoom().toFixed(1)}x · 추적 ${timelineFollowPlayer.checked ? "켜짐" : "꺼짐"}`, 24, 84);
     }
 
     function drawReplayLabel(point, label, color) {
@@ -9012,29 +11853,49 @@ _INDEX_HTML = """<!doctype html>
       return colors[index % colors.length];
     }
 
-    function visiblePositionSamples(samples) {
-      return samples
-        .filter((sample) => sample.map && eventTime(sample) <= activeTimelineTime)
-        .concat(interpolatedPosition(samples, activeTimelineTime) ? [{ map: interpolatedPosition(samples, activeTimelineTime), elapsed_time_seconds: activeTimelineTime }] : []);
+    function visiblePositionSegments(samples) {
+      const groups = new Map();
+      for (const sample of samples) {
+        const time = eventTime(sample);
+        if (!sample.map || !Number.isFinite(time) || time > activeTimelineTime) continue;
+        const segmentId = Number(sample.segment_id || 0);
+        if (!groups.has(segmentId)) groups.set(segmentId, []);
+        groups.get(segmentId).push(sample);
+      }
+      const current = interpolatedPosition(samples, activeTimelineTime);
+      if (current) {
+        const segmentId = Number(current.segment_id || 0);
+        if (!groups.has(segmentId)) groups.set(segmentId, []);
+        groups.get(segmentId).push({ map: current, time_seconds: activeTimelineTime, segment_id: segmentId });
+      }
+      return Array.from(groups.values());
     }
 
     function interpolatedPosition(samples, time) {
-      const valid = samples.filter((sample) => sample.map);
+      const valid = samples.filter((sample) => sample.map && Number.isFinite(eventTime(sample)));
       if (!valid.length) return null;
+      if (time < eventTime(valid[0])) return null;
       let previous = valid[0];
       for (const sample of valid) {
         const sampleTime = eventTime(sample);
         if (sampleTime >= time) {
           const prevTime = eventTime(previous);
+          const previousSegment = Number(previous.segment_id || 0);
+          const sampleSegment = Number(sample.segment_id || 0);
+          if (sampleSegment !== previousSegment) {
+            if (time >= sampleTime) return { ...sample.map, segment_id: sampleSegment };
+            return time - prevTime <= 15 ? { ...previous.map, segment_id: previousSegment } : null;
+          }
           const ratio = sampleTime === prevTime ? 0 : Math.max(0, Math.min(1, (time - prevTime) / (sampleTime - prevTime)));
           return {
             x_pct: previous.map.x_pct + (sample.map.x_pct - previous.map.x_pct) * ratio,
             y_pct: previous.map.y_pct + (sample.map.y_pct - previous.map.y_pct) * ratio,
+            segment_id: sampleSegment,
           };
         }
         previous = sample;
       }
-      return previous.map;
+      return { ...previous.map, segment_id: Number(previous.segment_id || 0) };
     }
 
     function canvasPoint(mapPoint) {
@@ -9335,17 +12196,22 @@ _INDEX_HTML = """<!doctype html>
       await loadPlayers();
     }
 
-    async function postJson(url, payload) {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+    async function requestJson(url, method, payload = null) {
+      const options = { method, headers: {} };
+      if (payload !== null) {
+        options.headers["Content-Type"] = "application/json";
+        options.body = JSON.stringify(payload);
+      }
+      const response = await fetch(url, options);
       if (!response.ok) {
         const error = await response.json().catch(() => ({ detail: response.statusText }));
         throw new Error(error.detail || response.statusText);
       }
       return response.json();
+    }
+
+    async function postJson(url, payload) {
+      return requestJson(url, "POST", payload);
     }
 
     async function saveStorageSettings(event) {
@@ -9510,8 +12376,8 @@ _INDEX_HTML = """<!doctype html>
         local_web_base_url: localWebBaseUrl || null,
       });
       webSettingsStatus.textContent = payload.web.local_web_base_url
-        ? `Saved: ${payload.web.local_web_base_url}`
-        : "Saved: disabled";
+        ? `저장 완료: ${payload.web.local_web_base_url}`
+        : "저장 완료: 사용 안 함";
       await loadStatus();
     }
 
@@ -9529,9 +12395,71 @@ _INDEX_HTML = """<!doctype html>
       await loadDiscordPermissions();
     }
 
+    for (const formElement of [profileForm, trendForm, weaponForm, recommendationForm, dropZoneForm, matchForm, timelinePlayerForm]) {
+      const input = formElement.elements.target;
+      input.addEventListener("input", () => {
+        if (resolveRegisteredPlayer(input.value, formElement.elements.shard?.value || "")) {
+          syncRegisteredPlayerForm(formElement).catch((error) => {
+            banner.textContent = "오류: " + error.message;
+          });
+        }
+      });
+      input.addEventListener("change", () => {
+        syncRegisteredPlayerForm(formElement).catch((error) => {
+          banner.textContent = "오류: " + error.message;
+        });
+      });
+      formElement.elements.shard?.addEventListener("change", () => {
+        syncRegisteredPlayerForm(formElement).catch((error) => {
+          banner.textContent = "오류: " + error.message;
+        });
+      });
+    }
+    for (const button of document.querySelectorAll("[data-reset-analysis-form]")) {
+      button.addEventListener("click", async () => {
+        const formElement = document.getElementById(button.dataset.resetAnalysisForm || "");
+        if (!formElement) return;
+        resetAnalysisForm(formElement);
+        if (formElement === workerRunFilterForm) {
+          workerRunPage = {
+            total: 0,
+            limit: 20,
+            offset: 0,
+            worker_name: null,
+            status: "all",
+            quick_range: "custom",
+            created_from_kst: "",
+            created_to_kst: "",
+            has_previous: false,
+            has_next: false,
+          };
+          try {
+            await loadWorkerRuns({
+              worker_name: "all",
+              status: "all",
+              quick_range: "custom",
+              created_from_kst: "",
+              created_to_kst: "",
+              limit: 20,
+              offset: 0,
+              updateUrl: true,
+            });
+          } catch (error) {
+            banner.textContent = `오류: ${error.message}`;
+            return;
+          }
+        }
+        banner.textContent = "조회 조건을 초기화했습니다.";
+      });
+    }
+    matchForm.elements.match_search.addEventListener("input", (event) => {
+      renderMatchOptions(matchForm, event.currentTarget.value);
+    });
+
     registerForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const form = new FormData(event.currentTarget);
+      const formElement = event.currentTarget;
+      const form = new FormData(formElement);
       await fetch("/players/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -9542,16 +12470,18 @@ _INDEX_HTML = """<!doctype html>
           public_profile: form.get("public_profile") === "true",
         }),
       });
-      event.currentTarget.reset();
+      formElement.reset();
       applyPublicProfileDefault();
       await loadPlayers();
     });
 
-    document.querySelector("#profileForm").addEventListener("submit", async (event) => {
+    profileForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const form = new FormData(event.currentTarget);
+      const formElement = event.currentTarget;
       try {
-        await loadPlayerProfile(String(form.get("target") || ""), String(form.get("shard") || "steam"));
+        const player = selectedRegisteredPlayer(formElement);
+        await loadPlayerProfile(player.account_id, player.shard);
+        clearRegisteredPlayerSearch(formElement);
         banner.textContent = "전적 조회 완료";
       } catch (error) {
         profileBody.textContent = `오류: ${error.message}`;
@@ -9559,27 +12489,45 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
-    document.querySelector("#trendForm").addEventListener("submit", async (event) => {
-      event.preventDefault();
+    profileBody.addEventListener("click", async (event) => {
+      const button = event.target.closest("button[data-profile-match-id]");
+      if (!button) return;
       try {
-        await loadPlayerTrends(event.currentTarget);
+        const player = activeProfilePlayer;
+        if (!player) throw new Error("먼저 전적을 조회하세요.");
+        matchForm.elements.target.value = player.current_name;
+        matchForm.elements.shard.value = player.shard;
+        await syncRegisteredPlayerForm(matchForm);
+        matchForm.elements.match_id.value = button.dataset.profileMatchId || "";
+        await loadPlayerMatch(button.dataset.profileMatchId || "", player.account_id, player.shard);
+        activateWorkspace("players", { focusId: "match-lookup", smooth: true });
+        banner.textContent = "매치 상세 조회 완료";
+      } catch (error) {
+        banner.textContent = "오류: " + error.message;
+      }
+    });
+
+    trendForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const formElement = event.currentTarget;
+      try {
+        await loadPlayerTrends(formElement);
+        clearRegisteredPlayerSearch(formElement);
         banner.textContent = "KST 추세 조회 완료";
       } catch (error) {
         trendSummary.textContent = `오류: ${error.message}`;
         trendBody.innerHTML = `<tr><td colspan="9">오류: ${escapeHtml(error.message)}</td></tr>`;
+        trendCards.innerHTML = `<span class="result-caption">오류: ${escapeHtml(error.message)}</span>`;
         banner.textContent = `오류: ${error.message}`;
       }
     });
 
-    document.querySelector("#weaponForm").addEventListener("submit", async (event) => {
+    weaponForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const form = new FormData(event.currentTarget);
+      const formElement = event.currentTarget;
       try {
-        await loadPlayerWeapon(
-          String(form.get("target") || ""),
-          String(form.get("weapon") || ""),
-          String(form.get("shard") || "steam"),
-        );
+        await loadPlayerWeapon(formElement);
+        clearRegisteredPlayerSearch(formElement);
         banner.textContent = "무기 조회 완료";
       } catch (error) {
         weaponBody.textContent = `오류: ${error.message}`;
@@ -9597,23 +12545,44 @@ _INDEX_HTML = """<!doctype html>
         banner.textContent = `오류: ${error.message}`;
       }
     });
-    document.querySelector("#recommendationForm").addEventListener("submit", async (event) => {
+    recommendationForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const form = new FormData(event.currentTarget);
+      const formElement = event.currentTarget;
+      const form = new FormData(formElement);
       try {
+        const player = selectedRegisteredPlayer(formElement);
         await loadPlayerRecommendations(
-          String(form.get("target") || ""),
-          String(form.get("shard") || "steam"),
+          player.account_id,
+          player.shard,
           Number(form.get("min_matches") || 1),
         );
-        banner.textContent = "Recommendation 조회 완료";
+        clearRegisteredPlayerSearch(formElement);
+        banner.textContent = "추천 조회 완료";
       } catch (error) {
         recommendationBody.textContent = `오류: ${error.message}`;
         banner.textContent = `오류: ${error.message}`;
       }
     });
 
+    dropZoneForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const formElement = event.currentTarget;
+      try {
+        await loadDropZoneAnalysis(formElement);
+        clearRegisteredPlayerSearch(formElement);
+        banner.textContent = "낙하 지역 분석 완료";
+      } catch (error) {
+        dropZoneBody.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
     recommendationBody.addEventListener("click", async (event) => {
+      const viewButton = event.target.closest("button[data-recommendation-view]");
+      if (viewButton) {
+        setRecommendationView(viewButton.dataset.recommendationView || "summary");
+        return;
+      }
       const button = event.target.closest("button[data-evidence='weapon-attachment']");
       if (!button) return;
       try {
@@ -9629,15 +12598,18 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
-    document.querySelector("#matchForm").addEventListener("submit", async (event) => {
+    matchForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const form = new FormData(event.currentTarget);
+      const formElement = event.currentTarget;
+      const form = new FormData(formElement);
       try {
+        const player = selectedRegisteredPlayer(formElement);
         await loadPlayerMatch(
           String(form.get("match_id") || ""),
-          String(form.get("target") || ""),
-          String(form.get("shard") || "steam"),
+          player.account_id,
+          player.shard,
         );
+        clearRegisteredPlayerSearch(formElement);
         banner.textContent = "매치 조회 완료";
       } catch (error) {
         matchBody.textContent = `오류: ${error.message}`;
@@ -9645,7 +12617,7 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
-    document.querySelector("#rankingForm").addEventListener("submit", async (event) => {
+    rankingForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
       try {
@@ -9691,7 +12663,7 @@ _INDEX_HTML = """<!doctype html>
       if (workerRunButton) {
         try {
           await loadWorkerRunDetail(workerRunButton.dataset.workerRunFromAlert || "", { scroll: true });
-          banner.textContent = "Worker run detail loaded from alert";
+          banner.textContent = "알림에서 작업 실행 상세를 불러왔습니다.";
         } catch (error) {
           workerRunsStatus.textContent = `Error: ${error.message}`;
           banner.textContent = `Error: ${error.message}`;
@@ -9721,7 +12693,7 @@ _INDEX_HTML = """<!doctype html>
       event.preventDefault();
       try {
         await loadAlertHistory({ offset: 0, updateUrl: true });
-        banner.textContent = "Alert history loaded";
+        banner.textContent = "알림 이력 조회 완료";
       } catch (error) {
         alertHistoryStatus.textContent = `Error: ${error.message}`;
         banner.textContent = `Error: ${error.message}`;
@@ -9735,7 +12707,7 @@ _INDEX_HTML = """<!doctype html>
     alertHistoryCopyFilterLink.addEventListener("click", async () => {
       try {
         const url = await copyAlertHistoryFilterLink();
-        banner.textContent = `Alert history filter link copied: ${url}`;
+        banner.textContent = `알림 이력 조회 링크 복사 완료: ${url}`;
       } catch (error) {
         banner.textContent = `Error: ${error.message}`;
       }
@@ -9745,7 +12717,7 @@ _INDEX_HTML = """<!doctype html>
       button.addEventListener("click", async () => {
         try {
           await applyAlertHistoryPreset(button.dataset.alertHistoryPreset || "");
-          banner.textContent = "Alert history preset loaded";
+          banner.textContent = "알림 이력 빠른 조건 조회 완료";
         } catch (error) {
           alertHistoryStatus.textContent = `Error: ${error.message}`;
           banner.textContent = `Error: ${error.message}`;
@@ -9753,14 +12725,14 @@ _INDEX_HTML = """<!doctype html>
       });
     }
 
-    alertHistoryBody.addEventListener("click", async (event) => {
+    document.querySelector("#alerts").addEventListener("click", async (event) => {
       const workerRunButton = event.target instanceof Element
         ? event.target.closest("button[data-worker-run-from-alert]")
         : null;
       if (workerRunButton) {
         try {
           await loadWorkerRunDetail(workerRunButton.dataset.workerRunFromAlert || "", { scroll: true });
-          banner.textContent = "Worker run detail loaded from alert history";
+          banner.textContent = "알림과 연결된 자동 작업 상세 조회 완료";
         } catch (error) {
           workerRunsStatus.textContent = `Error: ${error.message}`;
           alertHistoryStatus.textContent = `Error: ${error.message}`;
@@ -9883,7 +12855,7 @@ _INDEX_HTML = """<!doctype html>
       event.preventDefault();
       try {
         await loadWorkerRuns({ offset: 0, updateUrl: true });
-        banner.textContent = "Worker run history loaded";
+        banner.textContent = "작업 실행 이력을 불러왔습니다.";
       } catch (error) {
         workerRunsStatus.textContent = `Error: ${error.message}`;
         banner.textContent = `Error: ${error.message}`;
@@ -9897,7 +12869,7 @@ _INDEX_HTML = """<!doctype html>
     workerRunsCopyFilterLink.addEventListener("click", async () => {
       try {
         const url = await copyWorkerRunFilterLink();
-        banner.textContent = `Worker run filter link copied: ${url}`;
+        banner.textContent = `작업 실행 필터 링크를 복사했습니다: ${url}`;
       } catch (error) {
         banner.textContent = `Error: ${error.message}`;
       }
@@ -9941,14 +12913,14 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
-    workerRunsBody.addEventListener("click", async (event) => {
+    document.querySelector("#worker-runs").addEventListener("click", async (event) => {
       const detailButton = event.target instanceof Element
         ? event.target.closest("button[data-worker-run-detail-id]")
         : null;
       if (!detailButton) return;
       try {
         await loadWorkerRunDetail(detailButton.dataset.workerRunDetailId || "");
-        banner.textContent = "Worker run detail loaded";
+        banner.textContent = "자동 작업 상세 조회 완료";
       } catch (error) {
         workerRunsStatus.textContent = `Error: ${error.message}`;
         workerRunDetail.innerHTML = `<div class="status">Error: ${escapeHtml(error.message)}</div>`;
@@ -9963,7 +12935,7 @@ _INDEX_HTML = """<!doctype html>
       if (!copyButton) return;
       try {
         const url = await copyWorkerRunDetailLink(copyButton.dataset.copyWorkerRunLink || "");
-        banner.textContent = `Worker run detail link copied: ${url}`;
+        banner.textContent = `작업 실행 상세 링크를 복사했습니다: ${url}`;
       } catch (error) {
         banner.textContent = `Error: ${error.message}`;
       }
@@ -10067,14 +13039,15 @@ _INDEX_HTML = """<!doctype html>
 
     discordGrantForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const form = new FormData(event.currentTarget);
+      const formElement = event.currentTarget;
+      const form = new FormData(formElement);
       try {
         await postJson("/discord/permissions/grant", {
           user_id: form.get("user_id"),
           group: form.get("group"),
           guild_id: form.get("guild_id") || null,
         });
-        event.currentTarget.reset();
+        formElement.reset();
         await loadDiscordPermissions();
         banner.textContent = "Discord 권한이 추가되었습니다.";
       } catch (error) {
@@ -10082,12 +13055,112 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
+    discordCommandSearch.addEventListener("input", renderDiscordCommandCatalog);
+    discordCommandCatalog.addEventListener("change", (event) => {
+      const checkbox = event.target instanceof HTMLInputElement && event.target.type === "checkbox"
+        ? event.target
+        : null;
+      if (!checkbox) return;
+      if (checkbox.checked) {
+        selectedDiscordGroupCommands.add(checkbox.value);
+      } else {
+        selectedDiscordGroupCommands.delete(checkbox.value);
+      }
+      discordCommandGroupStatus.textContent = `전체 ${activeDiscordCommandCatalog.length}개 · 선택 ${selectedDiscordGroupCommands.size}개`;
+    });
+    discordCommandGroupReset.addEventListener("click", resetDiscordCommandGroupEditor);
+    discordCommandGroupForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const group = String(event.currentTarget.elements.group.value || "").trim();
+      try {
+        await requestJson(
+          `/discord/permissions/groups/${encodeURIComponent(group)}`,
+          "PUT",
+          { commands: Array.from(selectedDiscordGroupCommands) },
+        );
+        resetDiscordCommandGroupEditor();
+        await loadDiscordPermissions();
+        banner.textContent = "Discord 사용자 권한 그룹이 저장되었습니다.";
+      } catch (error) {
+        discordCommandGroupStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+    discordCommandGroupsBody.addEventListener("click", async (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("button[data-discord-group-action]")
+        : null;
+      if (!button) return;
+      const group = button.dataset.group || "";
+      const action = button.dataset.discordGroupAction;
+      if (action === "edit" || action === "clone") {
+        editDiscordCommandGroup(group, { clone: action === "clone" });
+        return;
+      }
+      if (action !== "delete") return;
+      try {
+        await requestJson(
+          `/discord/permissions/groups/${encodeURIComponent(group)}`,
+          "DELETE",
+        );
+        resetDiscordCommandGroupEditor();
+        await loadDiscordPermissions();
+        banner.textContent = "Discord 사용자 권한 그룹이 삭제되었습니다.";
+      } catch (error) {
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+    discordCommandAliasReset.addEventListener("click", resetDiscordCommandAliasEditor);
+    discordCommandAliasForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const alias = String(event.currentTarget.elements.alias.value || "").trim();
+      const target = String(event.currentTarget.elements.target_command.value || "").trim();
+      try {
+        await requestJson(
+          `/discord/permissions/aliases/${encodeURIComponent(alias)}`,
+          "PUT",
+          { target_command: target },
+        );
+        resetDiscordCommandAliasEditor();
+        await loadDiscordPermissions();
+        banner.textContent = "Discord 접두사 명령 별칭이 저장되었습니다.";
+      } catch (error) {
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+    discordCommandAliasesBody.addEventListener("click", async (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("button[data-discord-alias-action]")
+        : null;
+      if (!button) return;
+      const alias = button.dataset.alias || "";
+      if (button.dataset.discordAliasAction === "edit") {
+        discordCommandAliasForm.elements.alias.value = alias;
+        discordCommandAliasForm.elements.alias.readOnly = true;
+        discordCommandAliasForm.elements.target_command.value = button.dataset.target || "";
+        discordCommandAliasForm.elements.target_command.focus();
+        return;
+      }
+      try {
+        await requestJson(
+          `/discord/permissions/aliases/${encodeURIComponent(alias)}`,
+          "DELETE",
+        );
+        resetDiscordCommandAliasEditor();
+        await loadDiscordPermissions();
+        banner.textContent = "Discord 접두사 명령 별칭이 삭제되었습니다.";
+      } catch (error) {
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
     document.querySelector("#discordAdminForm").addEventListener("submit", async (event) => {
       event.preventDefault();
-      const form = new FormData(event.currentTarget);
+      const formElement = event.currentTarget;
+      const form = new FormData(formElement);
       try {
         await postJson("/discord/global-admins/add", { user_id: form.get("user_id") });
-        event.currentTarget.reset();
+        formElement.reset();
         await loadDiscordPermissions();
         banner.textContent = "Discord 전역 관리자가 추가되었습니다.";
       } catch (error) {
@@ -10097,11 +13170,12 @@ _INDEX_HTML = """<!doctype html>
 
     discordScopeForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const form = new FormData(event.currentTarget);
+      const formElement = event.currentTarget;
+      const form = new FormData(formElement);
       const guildId = String(form.get("guild_id") || "").trim();
       const scope = String(form.get("scope") || "guild");
       if (!guildId) {
-        banner.textContent = "Guild ID is required.";
+        banner.textContent = "서버를 선택하세요.";
         return;
       }
       try {
@@ -10112,8 +13186,8 @@ _INDEX_HTML = """<!doctype html>
           },
           public_profile_default: activeDiscordScopes.public_profile_default !== false,
         });
-        event.currentTarget.reset();
-        banner.textContent = "Discord scope settings saved.";
+        formElement.reset();
+        banner.textContent = "Discord 랭킹 범위를 저장했습니다.";
       } catch (error) {
         banner.textContent = `Error: ${error.message}`;
       }
@@ -10363,16 +13437,137 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
-    replayArtifactsBody.addEventListener("click", async (event) => {
+    replayArtifactListForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(replayArtifactListForm);
+      replayArtifactFilter = { match_id: "", account_id: "", artifact_id: "" };
+      try {
+        await loadReplayArtifacts({
+          account_id: String(form.get("account_id") || ""),
+          artifact_type: String(form.get("artifact_type") || ""),
+          limit: Number(form.get("limit") || 20),
+          artifact_id: "",
+        });
+        banner.textContent = "2D 리플레이 저장 목록 조회 완료";
+      } catch (error) {
+        replayArtifactsStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    replayArtifactListReset.addEventListener("click", async () => {
+      replayArtifactListForm.reset();
+      replayArtifactFilter = { match_id: "", account_id: "", artifact_id: "" };
+      try {
+        await loadReplayArtifacts({
+          match_id: "",
+          account_id: "",
+          artifact_type: "",
+          limit: 20,
+          artifact_id: "",
+        });
+        banner.textContent = "2D 리플레이 저장 목록 필터를 초기화했습니다.";
+      } catch (error) {
+        replayArtifactsStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    alertDiscordGuildSelect.addEventListener("change", async () => {
+      try {
+        await loadDiscordAlertChannels();
+      } catch (error) {
+        alertDiscordChannelsStatus.textContent = `오류: ${error.message}`;
+      }
+    });
+    alertDiscordChannelSelect.addEventListener("change", () => {
+      alertDiscordChannelAdd.disabled = !alertDiscordChannelSelect.value;
+    });
+    alertDiscordChannelAdd.addEventListener("click", () => {
+      const channelId = alertDiscordChannelSelect.value;
+      if (!channelId) return;
+      activeAlertChannelIds.add(channelId);
+      alertDiscordChannelSelect.value = "";
+      alertDiscordChannelAdd.disabled = true;
+      renderSelectedAlertChannels();
+    });
+    alertDiscordChannelSelection.addEventListener("click", (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("button[data-alert-channel-remove]")
+        : null;
+      if (!button) return;
+      activeAlertChannelIds.delete(button.dataset.alertChannelRemove || "");
+      renderSelectedAlertChannels();
+    });
+    alertDiscordChannelsRefresh.addEventListener("click", async () => {
+      alertDiscordChannelsRefresh.disabled = true;
+      try {
+        await loadDiscordGuilds({ sync: true });
+        await loadDiscordAlertChannels();
+        banner.textContent = "Discord 서버와 채널 목록 새로고침 완료";
+      } catch (error) {
+        alertDiscordChannelsStatus.textContent = `오류: ${error.message}`;
+      } finally {
+        alertDiscordChannelsRefresh.disabled = false;
+      }
+    });
+
+    timelinePlayerForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        const player = selectedRegisteredPlayer(timelinePlayerForm);
+        await loadReplayTimelinesForPlayer(player);
+        banner.textContent = "선택한 유저의 2D 리플레이 목록을 불러왔습니다.";
+      } catch (error) {
+        replayPlayerStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    timelinePlayerClear.addEventListener("click", () => {
+      timelinePlayerForm.reset();
+      timelinePlayerInput.value = "";
+      delete timelinePlayerInput.dataset.accountId;
+      clearReplayTimeline();
+      banner.textContent = "2D 리플레이 선택을 초기화했습니다.";
+    });
+
+    recommendationBody.addEventListener("change", (event) => {
+      const select = event.target.closest("select[data-recommendation-chart-metric]");
+      if (!select || !activeRecommendationReport) return;
+      activeRecommendationChartMetric = select.value;
+      renderRecommendationCharts(activeRecommendationReport, activeRecommendationChartMetric);
+    });
+
+    trendViewControls.addEventListener("click", (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("button[data-trend-view]")
+        : null;
+      if (!button) return;
+      activeTrendView = button.dataset.trendView || "table";
+      renderTrendView();
+    });
+
+    trendChartMetric.addEventListener("change", () => {
+      if (activeTrendView === "chart") renderTrendChart();
+    });
+
+    document.querySelector("#replay-artifacts").addEventListener("click", async (event) => {
       const button = event.target instanceof Element
         ? event.target.closest("button[data-load-timeline]")
         : null;
       if (!button) return;
 
-      timelineSelect.value = button.dataset.loadTimeline || "";
       try {
-        await loadSelectedTimeline();
-        banner.textContent = "Replay timeline 로드 완료";
+        const accountId = button.dataset.loadAccountId || "";
+        const player = registeredPlayers.find((item) => item.account_id === accountId);
+        if (!player) throw new Error("이 리플레이의 등록 유저 정보를 찾을 수 없습니다.");
+        await loadReplayTimelinesForPlayer(player, button.dataset.loadTimeline || "");
+        const url = new URL(window.location.href);
+        url.hash = "replay-player";
+        window.history.pushState({}, "", url);
+        activateWorkspace("replay", { focusId: "replay-player", smooth: true });
+        banner.textContent = "2D 리플레이 타임라인 로드 완료";
       } catch (error) {
         replayPlayerStatus.textContent = `오류: ${error.message}`;
         banner.textContent = `오류: ${error.message}`;
@@ -10417,11 +13612,39 @@ _INDEX_HTML = """<!doctype html>
         smooth: true,
       });
     });
+    workspaceSections.addEventListener("click", (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("button[data-workspace-section]")
+        : null;
+      if (!button) return;
+      const view = document.body.dataset.activeView || "overview";
+      const group = (workspaceSectionsByView[view] || []).find(
+        (item) => item.key === button.dataset.workspaceSection
+      );
+      if (!group) return;
+      const focusId = group.ids[0];
+      const url = new URL(window.location.href);
+      url.hash = focusId;
+      window.history.pushState({}, "", url);
+      activateWorkspace(view, { focusId, smooth: true });
+    });
     refreshWorkspace.addEventListener("click", async () => {
       try {
         await refreshActiveWorkspace();
       } catch (error) {
         banner.textContent = "새로고침 오류: " + error.message;
+      }
+    });
+
+    rankingGuildRefresh.addEventListener("click", async () => {
+      rankingGuildRefresh.disabled = true;
+      try {
+        await loadDiscordGuilds({ sync: true });
+        banner.textContent = "Discord 서버 목록 새로고침 완료";
+      } catch (error) {
+        banner.textContent = `오류: ${error.message}`;
+      } finally {
+        rankingGuildRefresh.disabled = false;
       }
     });
     for (const button of pathPickerButtons) {
@@ -10445,12 +13668,12 @@ _INDEX_HTML = """<!doctype html>
     updateKstClock();
     setInterval(updateKstClock, 1000);
     enableDesktopFeatures();
-    drawEmptyReplayCanvas();
+    clearReplayTimeline();
     loadInitialLookupPrefillFromUrl();
     const initialAlertHistoryFilterFromUrl = loadInitialAlertHistoryFiltersFromUrl();
     loadInitialWorkerRunFiltersFromUrl();
 
-    Promise.all([loadStatus(), loadAlerts(), loadDiscordPermissions(), loadDiscordScopes(), loadCollectorWorkerStatus(), loadPostProcessingWorkerStatus(), loadOperationalDrills(), loadWorkerRuns(), loadPlayers(), loadDataDeletionRequests(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
+    Promise.all([loadStatus(), loadAlerts(), loadDiscordPermissions(), loadDiscordScopes(), loadDiscordGuilds(), loadCollectorWorkerStatus(), loadPostProcessingWorkerStatus(), loadOperationalDrills(), loadWorkerRuns(), loadPlayers(), loadDataDeletionRequests(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
       .then(() => initialAlertHistoryFilterFromUrl ? loadAlertHistory(alertHistoryPage) : null)
       .then(() => loadInitialAlertDetailFromUrl())
       .then(() => loadInitialWorkerRunDetailFromUrl())

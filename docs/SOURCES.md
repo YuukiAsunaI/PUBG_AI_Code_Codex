@@ -1,6 +1,6 @@
 # Sources
 
-Research date: 2026-06-27
+Initial research date: 2026-06-27. Latest verification: 2026-08-21.
 
 ## Official PUBG Sources
 
@@ -21,6 +21,11 @@ Research date: 2026-06-27
 - Item ID dictionary: https://raw.githubusercontent.com/pubg/api-assets/master/dictionaries/telemetry/item/itemId.json
 - Damage causer dictionary: https://raw.githubusercontent.com/pubg/api-assets/master/dictionaries/telemetry/damageCauserName.json
 - Vehicle ID dictionary: https://raw.githubusercontent.com/pubg/api-assets/master/dictionaries/telemetry/vehicle/vehicleId.json
+- Update 41.1 Korean attachment names: https://pubg.com/ko/news/9926
+- Update 34.1 7.62 mm inventory weight: https://pubg.com/en/news/8170
+- Update 42.3 RPD and LMG sustained-fire context: https://pubg.com/en/news/10885
+- MG3 introduction and 75-round magazine: https://pubg.com/zh-cn/news/4744
+- discord.py hybrid command guide: https://discordpy.readthedocs.io/en/stable/ext/commands/commands.html#hybrid-commands
 
 ## Official MySQL Transaction Sources
 

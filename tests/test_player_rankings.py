@@ -33,7 +33,8 @@ class PlayerRankingServiceTests(unittest.TestCase):
                         deaths=1,
                         damage_dealt=900.0,
                     ),
-                ]
+                ],
+                [],
             ]
         )
 
@@ -70,7 +71,8 @@ class PlayerRankingServiceTests(unittest.TestCase):
                         deaths=3,
                         damage_dealt=1200.0,
                     )
-                ]
+                ],
+                [],
             ]
         )
 
@@ -147,6 +149,45 @@ class PlayerRankingServiceTests(unittest.TestCase):
         self.assertAlmostEqual(ranking.rows[1].score, 0.25)
         self.assertEqual(ranking.rows[0].accuracy_breakdown.pellet_shells, 10)
         self.assertEqual(connection.executed[1][1], ["steam", "account.one", "account.two"])
+
+    def test_headshot_hit_ranking_uses_head_hits_over_all_hits(self) -> None:
+        alpha = _ranking_row(
+            player_id=1,
+            account_id="account.one",
+            name="Alpha",
+            match_count=5,
+            wins=1,
+            kills=5,
+            assists=1,
+            deaths=2,
+            damage_dealt=1000.0,
+        )
+        bravo = _ranking_row(
+            player_id=2,
+            account_id="account.two",
+            name="Bravo",
+            match_count=5,
+            wins=1,
+            kills=5,
+            assists=1,
+            deaths=2,
+            damage_dealt=1000.0,
+        )
+        alpha["headshot_hits"] = 8
+        bravo["headshot_hits"] = 4
+        connection = FakeConnection([[alpha, bravo], []])
+
+        ranking = PlayerRankingService(connection).get_player_ranking(
+            shard="steam",
+            metric="헤드샷",
+            global_scope=True,
+        )
+
+        self.assertEqual(ranking.metric, "headshot_hit_rate")
+        self.assertEqual([row.player.current_name for row in ranking.rows], ["Alpha", "Bravo"])
+        self.assertAlmostEqual(ranking.rows[0].score, 8 / 25)
+        self.assertAlmostEqual(ranking.rows[1].score, 4 / 25)
+
     def test_resolve_metric_aliases(self) -> None:
         self.assertEqual(resolve_ranking_metric("승률").key, "win_rate")
         self.assertEqual(resolve_ranking_metric("킬").key, "kills")
@@ -186,6 +227,7 @@ def _ranking_row(
         "damage_taken": 800.0,
         "shots_fired": 100,
         "shots_hit": 25,
+        "headshot_hits": 5,
         "headshot_kills": 2,
         "avg_survival_seconds": 1200.0,
         "avg_movement_distance_m": 3000.0,

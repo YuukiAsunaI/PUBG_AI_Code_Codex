@@ -3,7 +3,11 @@ from __future__ import annotations
 import unittest
 from datetime import datetime
 
-from pubg_ai.player_recommendations import PlayerRecommendationService
+from pubg_ai.player_recommendations import (
+    PlayerRecommendationService,
+    WeaponRecommendation,
+    _inventory_burden,
+)
 
 
 class PlayerRecommendationServiceTests(unittest.TestCase):
@@ -37,6 +41,31 @@ class PlayerRecommendationServiceTests(unittest.TestCase):
                         "action": "finish",
                         "distance_m": 28.0,
                     },
+                    {
+                        "damage_causer_name": "WeapM24_C",
+                        "action": "dbno_caused",
+                        "distance_m": 320.0,
+                    },
+                ],
+                [
+                    {
+                        "weapon_code": "WeapHK416_C",
+                        "fight_count": 20,
+                        "fight_wins": 14,
+                        "fight_losses": 6,
+                    },
+                    {
+                        "weapon_code": "WeapBerylM762_C",
+                        "fight_count": 10,
+                        "fight_wins": 4,
+                        "fight_losses": 6,
+                    },
+                    {
+                        "weapon_code": "WeapM24_C",
+                        "fight_count": 5,
+                        "fight_wins": 3,
+                        "fight_losses": 2,
+                    },
                 ],
                 [
                     {
@@ -50,6 +79,7 @@ class PlayerRecommendationServiceTests(unittest.TestCase):
                         "damage_dealt": 1800.0,
                         "shots_fired": 600,
                         "shots_hit": 180,
+                        "headshot_hits": 36,
                     },
                     {
                         "weapon_code": "WeapBerylM762_C",
@@ -62,6 +92,20 @@ class PlayerRecommendationServiceTests(unittest.TestCase):
                         "damage_dealt": 900.0,
                         "shots_fired": 20,
                         "shots_hit": 113,
+                        "headshot_hits": 17,
+                    },
+                    {
+                        "weapon_code": "WeapM24_C",
+                        "match_count": 5,
+                        "wins": 1,
+                        "kills": 0,
+                        "assists": 1,
+                        "deaths": 2,
+                        "dbnos": 1,
+                        "damage_dealt": 300.0,
+                        "shots_fired": 10,
+                        "shots_hit": 2,
+                        "headshot_hits": 1,
                     },
                 ],
                 [
@@ -69,8 +113,8 @@ class PlayerRecommendationServiceTests(unittest.TestCase):
                         "match_id": "match-1",
                         "weapon_code": "WeapHK416_C",
                         "weapon_name_ko": "M416",
-                        "attachment_codes": '["Item_Attach_Weapon_Lower_Foregrip_C"]',
-                        "attachment_names_ko": '["Vertical Grip"]',
+                        "attachment_codes": '["Item_Attach_Weapon_Lower_Foregrip_C", "Item_Attach_Weapon_Upper_DotSight_01_C"]',
+                        "attachment_names_ko": '["Vertical Grip", "Red Dot Sight"]',
                         "combat_action": "kill",
                         "distance_m": 12.0,
                         "is_headshot": 1,
@@ -81,13 +125,28 @@ class PlayerRecommendationServiceTests(unittest.TestCase):
                         "match_id": "match-2",
                         "weapon_code": "WeapHK416_C",
                         "weapon_name_ko": "M416",
-                        "attachment_codes": ["Item_Attach_Weapon_Lower_Foregrip_C"],
-                        "attachment_names_ko": ["Vertical Grip"],
+                        "attachment_codes": [
+                            "Item_Attach_Weapon_Lower_Foregrip_C",
+                            "Item_Attach_Weapon_Upper_DotSight_01_C",
+                        ],
+                        "attachment_names_ko": ["Vertical Grip", "Red Dot Sight"],
                         "combat_action": "dbno_caused",
                         "distance_m": 82.0,
                         "is_headshot": 0,
                         "win": 0,
                         "damage_dealt": 220.0,
+                    },
+                    {
+                        "match_id": "match-3",
+                        "weapon_code": "WeapM24_C",
+                        "weapon_name_ko": "M24",
+                        "attachment_codes": ["Item_Attach_Weapon_Stock_SniperRifle_CheekPad_C"],
+                        "attachment_names_ko": ["Cheek Pad"],
+                        "combat_action": "dbno_caused",
+                        "distance_m": 320.0,
+                        "is_headshot": 0,
+                        "win": 0,
+                        "damage_dealt": 300.0,
                     },
                 ],
                 [
@@ -171,11 +230,18 @@ class PlayerRecommendationServiceTests(unittest.TestCase):
         self.assertEqual(report.weapons[0].weapon_code, "WeapHK416_C")
         self.assertEqual(report.weapons[0].weapon_name, "M416")
         self.assertAlmostEqual(report.weapons[0].accuracy, 0.3)
+        self.assertAlmostEqual(report.weapons[0].headshot_hit_rate, 0.2)
+        self.assertEqual(report.weapons[0].headshot_hits, 36)
+        self.assertEqual(report.weapons[0].fight_count, 20)
+        self.assertAlmostEqual(report.weapons[0].fight_win_rate, 0.7)
+        self.assertGreater(report.weapons[0].score_components["fight_adjustment"], 0)
         self.assertEqual(
             report.weapons[0].accuracy_metric.metric_kind,
             "estimated_hit_rate",
         )
         self.assertGreater(report.weapons[0].range_score, 0)
+        self.assertLessEqual(report.weapons[0].range_score, 12.0)
+        self.assertEqual(report.weapons[0].score_components["range_bonus_cap"], 12.0)
         self.assertEqual(report.weapons[0].top_distance_buckets[0].bucket_label, "10-15m")
         self.assertEqual(report.weapons[1].accuracy, 0.0)
         self.assertEqual(
@@ -188,14 +254,45 @@ class PlayerRecommendationServiceTests(unittest.TestCase):
         )
         self.assertEqual(report.weapon_ranges[0].weapon_code, "WeapHK416_C")
         self.assertEqual(report.weapon_ranges[0].bucket_label, "10-15m")
-        self.assertEqual(report.weapon_attachments[0].weapon_code, "WeapHK416_C")
-        self.assertEqual(report.weapon_attachments[0].attachment_name, "Vertical Grip")
-        self.assertEqual(report.weapon_attachments[0].match_count, 2)
-        self.assertEqual(report.weapon_attachments[0].event_count, 2)
-        self.assertEqual(report.weapon_attachments[0].kills, 1)
-        self.assertEqual(report.weapon_attachments[0].dbnos, 1)
-        self.assertEqual(report.weapon_attachments[0].source, "loadout_snapshots")
-        self.assertEqual(report.attachments[0].item_name, "Vertical Grip")
+        vertical_grip = next(
+            item for item in report.weapon_attachments
+            if item.attachment_name == "수직 손잡이"
+        )
+        self.assertEqual(vertical_grip.weapon_code, "WeapHK416_C")
+        self.assertEqual(vertical_grip.match_count, 2)
+        self.assertEqual(vertical_grip.event_count, 2)
+        self.assertEqual(vertical_grip.kills, 1)
+        self.assertEqual(vertical_grip.dbnos, 1)
+        self.assertEqual(vertical_grip.source, "loadout_snapshots")
+        self.assertEqual(report.attachment_combinations[0].weapon_code, "WeapHK416_C")
+        self.assertEqual(report.attachment_combinations[0].match_count, 2)
+        self.assertEqual(
+            report.attachment_combinations[0].attachment_names,
+            ("수직 손잡이", "레드 도트 사이트"),
+        )
+        self.assertEqual(report.attachments[0].item_name, "수직 손잡이")
+        self.assertGreaterEqual(len(report.loadouts), 1)
+        self.assertEqual(report.loadouts[0].primary.weapon_code, "WeapHK416_C")
+        self.assertEqual(report.loadouts[0].secondary.weapon_code, "WeapM24_C")
+        self.assertNotEqual(
+            report.loadouts[0].primary.weapon_code,
+            report.loadouts[0].secondary.weapon_code,
+        )
+        self.assertEqual(
+            report.loadouts[0].primary_attachments[0].attachment_name,
+            "수직 손잡이",
+        )
+        self.assertIsNotNone(report.loadouts[0].primary_attachment_combination)
+        self.assertEqual(
+            report.loadouts[0].primary_attachment_combination.attachment_names,
+            ("수직 손잡이", "레드 도트 사이트"),
+        )
+        burden = report.loadouts[0].inventory_burden
+        self.assertEqual(burden["model_version"], "inventory-weight-v3")
+        self.assertEqual(burden["carried_rounds_by_ammo"], {"5.56mm": 150, "7.62mm": 45})
+        self.assertAlmostEqual(burden["estimated_inventory_weight"], 102.0)
+        self.assertTrue(burden["mixed_ammo"])
+        self.assertIn("kg가 아닌 PUBG 인벤토리 단위", burden["basis"])
         self.assertEqual(report.maps[0].map_name, "Erangel_Main")
         self.assertTrue(report.teammates[0].registered)
         self.assertEqual(report.teammates[0].name, "Friend")
@@ -210,7 +307,61 @@ class PlayerRecommendationServiceTests(unittest.TestCase):
         self.assertEqual(report.drop_zones[0].region_id, "taego.yong_cheon")
         self.assertEqual(report.drop_zones[0].region_name_ko, "용천")
         self.assertIsNotNone(report.drop_zones[0].region_catalog_version)
-        self.assertEqual(len(connection.executed), 8)
+        self.assertEqual(len(connection.executed), 9)
+
+    def test_inventory_model_attributes_lmg_extra_reserve_to_weight_pressure(self) -> None:
+        def weapon(code: str, name: str) -> WeaponRecommendation:
+            return WeaponRecommendation(
+                weapon_code=code,
+                weapon_name=name,
+                score=100.0,
+                match_count=10,
+                wins=1,
+                kills=10,
+                assists=0,
+                deaths=5,
+                dbnos=5,
+                damage_dealt=1000.0,
+                shots_fired=500,
+                shots_hit=100,
+                win_rate=0.1,
+                kills_per_match=1.0,
+                dbnos_per_match=0.5,
+                avg_damage_dealt=100.0,
+                accuracy=0.2,
+                reason="test",
+            )
+
+        burden = _inventory_burden(
+            weapon("WeapRPD_C", "RPD"),
+            weapon("WeapM24_C", "M24"),
+        )
+
+        self.assertEqual(burden["model_version"], "inventory-weight-v3")
+        self.assertEqual(burden["ammo_types"], ["7.62mm"])
+        self.assertEqual(burden["carried_rounds_by_ammo"], {"7.62mm": 240})
+        self.assertAlmostEqual(burden["estimated_inventory_weight"], 144.0)
+        self.assertAlmostEqual(burden["lmg_extra_reserve_inventory_weight"], 42.0)
+        self.assertAlmostEqual(burden["lmg_reserve_penalty"], 5.04)
+        self.assertLessEqual(
+            burden["lmg_reserve_penalty"],
+            burden["reserve_pressure_penalty"],
+        )
+        self.assertIn("LMG", " ".join(burden["tradeoffs"]))
+        self.assertIn("kg가 아닌", burden["basis"])
+
+        mg3_burden = _inventory_burden(
+            weapon("WeapMG3_C", "MG3"),
+            weapon("WeapM24_C", "M24"),
+        )
+        self.assertEqual(
+            mg3_burden["weapon_profiles"][0]["recommended_reserve_rounds"],
+            220,
+        )
+        self.assertAlmostEqual(
+            mg3_burden["lmg_extra_reserve_inventory_weight"],
+            42.0,
+        )
 
     def test_non_global_scope_without_guild_returns_none_without_querying(self) -> None:
         connection = FakeConnection([])
@@ -304,6 +455,8 @@ class PlayerRecommendationServiceTests(unittest.TestCase):
         self.assertEqual(record["totals"]["headshots"], 1)
         self.assertEqual(record["totals"]["wins"], 1)
         self.assertEqual(record["totals"]["avg_distance_m"], 30.0)
+        self.assertEqual(record["attachment_name"], "수직 손잡이")
+        self.assertEqual(record["snapshots"][0]["equipped_attachment_names"][0], "레드 도트 사이트")
         self.assertEqual(record["snapshots"][0]["map_name_ko"], "태이고")
         self.assertEqual(record["snapshots"][0]["combat_event_at_kst"], "2026-01-01T11:12:00")
         self.assertEqual(len(connection.executed), 2)

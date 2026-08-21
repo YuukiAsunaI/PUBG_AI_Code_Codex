@@ -347,7 +347,7 @@ def _weapon_stats(weapon_code: str, rows: list[Mapping[str, Any]]) -> FightWeapo
     name = next((_optional_text(row.get("weapon_name_ko")) for row in rows if row.get("weapon_name_ko")), None)
     return FightWeaponStats(
         weapon_code=weapon_code,
-        weapon_name=name or translate_code(weapon_code, "damage_causer"),
+        weapon_name=_translated_display_name(name, weapon_code, "damage_causer"),
         fight_count=len(rows),
         wins=wins,
         losses=losses,
@@ -374,10 +374,10 @@ def _loadout_stats(
         names_by_code.update({code: names[index] for index, code in enumerate(codes) if index < len(names)})
     return FightLoadoutStats(
         weapon_code=weapon_code,
-        weapon_name=name or translate_code(weapon_code, "damage_causer"),
+        weapon_name=_translated_display_name(name, weapon_code, "damage_causer"),
         attachment_codes=attachment_codes,
         attachment_names=tuple(
-            names_by_code.get(code) or translate_code(code, "item")
+            _translated_display_name(names_by_code.get(code), code, "item")
             for code in attachment_codes
         ),
         fight_count=len(rows),
@@ -390,7 +390,16 @@ def _loadout_stats(
 def _recent_outcome(row: Mapping[str, Any]) -> RecentFightOutcome:
     weapon_code = _optional_text(row.get("weapon_code"))
     opponent_weapon_code = _optional_text(row.get("opponent_weapon_code"))
-    attachment_names = tuple(_json_string_list(row.get("attachment_names_ko")))
+    attachment_codes = _json_string_list(row.get("attachment_codes"))
+    stored_attachment_names = _json_string_list(row.get("attachment_names_ko"))
+    attachment_names = tuple(
+        _translated_display_name(
+            stored_attachment_names[index] if index < len(stored_attachment_names) else None,
+            code,
+            "item",
+        )
+        for index, code in enumerate(attachment_codes)
+    )
     return RecentFightOutcome(
         match_id=str(row.get("match_id") or ""),
         event_index=_int(row.get("event_index")),
@@ -402,13 +411,21 @@ def _recent_outcome(row: Mapping[str, Any]) -> RecentFightOutcome:
         opponent_account_id=_optional_text(row.get("opponent_account_id")),
         opponent_is_bot=_optional_bool(row.get("opponent_is_bot")),
         weapon_code=weapon_code,
-        weapon_name=_optional_text(row.get("weapon_name_ko")) or (
-            translate_code(weapon_code, "damage_causer") if weapon_code else None
+        weapon_name=(
+            _translated_display_name(row.get("weapon_name_ko"), weapon_code, "damage_causer")
+            if weapon_code
+            else None
         ),
         attachment_names=attachment_names,
         weapon_context_source=str(row.get("weapon_context_source") or "unknown"),
-        opponent_weapon_name=_optional_text(row.get("opponent_weapon_name_ko")) or (
-            translate_code(opponent_weapon_code, "damage_causer") if opponent_weapon_code else None
+        opponent_weapon_name=(
+            _translated_display_name(
+                row.get("opponent_weapon_name_ko"),
+                opponent_weapon_code,
+                "damage_causer",
+            )
+            if opponent_weapon_code
+            else None
         ),
         is_headshot=bool(row.get("is_headshot")),
         distance_m=_optional_float(row.get("distance_m")),
@@ -417,6 +434,13 @@ def _recent_outcome(row: Mapping[str, Any]) -> RecentFightOutcome:
 
 def _is_recommendable_firearm_context(weapon_code: str) -> bool:
     return weapon_code.startswith("Weap") and weapon_code not in _NON_FIREARM_CONTEXT_CODES
+
+
+def _translated_display_name(stored_name: Any, code: str, category: str) -> str:
+    stored = _optional_text(stored_name)
+    if not stored or stored == code or stored.startswith(("Item_", "Weap")):
+        return translate_code(code, category)
+    return stored
 
 
 def _reason_count(rows: Iterable[Mapping[str, Any]], reason: str) -> int:

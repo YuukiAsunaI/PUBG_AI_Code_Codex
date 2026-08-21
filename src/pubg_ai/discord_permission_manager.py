@@ -1,8 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import re
 
+from pubg_ai.discord_command_catalog import (
+    RESERVED_COMMAND_GROUPS,
+    canonical_command_name,
+    normalize_command_selection,
+    validate_custom_alias,
+)
 from pubg_ai.local_settings import DiscordPermissionSettings, LocalSettingsError, LocalSettingsStore
+
+
+CUSTOM_GROUP_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")
 
 
 @dataclass(frozen=True)
@@ -116,6 +126,117 @@ class DiscordPermissionManager:
         saved = self.store.update_discord_permission_settings(update)
         return DiscordPermissionChange(changed=changed, settings=saved)
 
+    def upsert_command_group(
+        self,
+        *,
+        group: str,
+        commands: list[str],
+    ) -> DiscordPermissionChange:
+        group = _custom_group_name(group)
+        if group in RESERVED_COMMAND_GROUPS:
+            raise LocalSettingsError(f"built-in Discord permission group '{group}' is read-only.")
+        try:
+            normalized_commands = normalize_command_selection(commands)
+        except ValueError as exc:
+            raise LocalSettingsError(str(exc)) from exc
+        if not normalized_commands:
+            raise LocalSettingsError("a Discord permission group must contain at least one command.")
+        changed = False
+
+        def update(settings: DiscordPermissionSettings) -> DiscordPermissionSettings:
+            nonlocal changed
+            command_groups = _copy_grants(settings.command_groups)
+            changed = command_groups.get(group) != normalized_commands
+            command_groups[group] = normalized_commands
+            return _updated_settings(settings, command_groups=command_groups)
+
+        saved = self.store.update_discord_permission_settings(update)
+        return DiscordPermissionChange(changed=changed, settings=saved)
+
+    def delete_command_group(self, group: str) -> DiscordPermissionChange:
+        group = _custom_group_name(group)
+        if group in RESERVED_COMMAND_GROUPS:
+            raise LocalSettingsError(f"built-in Discord permission group '{group}' cannot be deleted.")
+        changed = False
+
+        def update(settings: DiscordPermissionSettings) -> DiscordPermissionSettings:
+            nonlocal changed
+            if _group_is_granted(settings, group):
+                raise LocalSettingsError(
+                    f"Discord permission group '{group}' is still assigned. Revoke its user grants first."
+                )
+            command_groups = _copy_grants(settings.command_groups)
+            changed = command_groups.pop(group, None) is not None
+            return _updated_settings(settings, command_groups=command_groups)
+
+        saved = self.store.update_discord_permission_settings(update)
+        return DiscordPermissionChange(changed=changed, settings=saved)
+
+    def set_command_alias(
+        self,
+        *,
+        alias: str,
+        target_command: str,
+    ) -> DiscordPermissionChange:
+        try:
+            normalized_alias = validate_custom_alias(alias)
+        except ValueError as exc:
+            raise LocalSettingsError(str(exc)) from exc
+        canonical = canonical_command_name(target_command)
+        if canonical is None:
+            raise LocalSettingsError(f"unknown Discord command '{target_command}'.")
+        changed = False
+
+        def update(settings: DiscordPermissionSettings) -> DiscordPermissionSettings:
+            nonlocal changed
+            aliases = dict(settings.command_aliases)
+            if normalized_alias in aliases and aliases[normalized_alias] == canonical:
+                return settings
+            if normalized_alias in aliases:
+                aliases.pop(normalized_alias)
+            folded = normalized_alias.casefold()
+            conflict = next(
+                (
+                    existing
+                    for existing in aliases
+                    if existing.casefold() == folded
+                ),
+                None,
+            )
+            if conflict:
+                raise LocalSettingsError(
+                    f"Discord command alias '{normalized_alias}' conflicts with '{conflict}'."
+                )
+            aliases[normalized_alias] = canonical
+            changed = True
+            return _updated_settings(settings, command_aliases=aliases)
+
+        saved = self.store.update_discord_permission_settings(update)
+        return DiscordPermissionChange(changed=changed, settings=saved)
+
+    def remove_command_alias(self, alias: str) -> DiscordPermissionChange:
+        normalized_alias = _required_text(alias, "alias")
+        changed = False
+
+        def update(settings: DiscordPermissionSettings) -> DiscordPermissionSettings:
+            nonlocal changed
+            aliases = dict(settings.command_aliases)
+            match = next(
+                (
+                    existing
+                    for existing in aliases
+                    if existing.casefold() == normalized_alias.casefold()
+                ),
+                None,
+            )
+            if match is not None:
+                aliases.pop(match)
+                changed = True
+            return _updated_settings(settings, command_aliases=aliases)
+
+        saved = self.store.update_discord_permission_settings(update)
+        return DiscordPermissionChange(changed=changed, settings=saved)
+
 
 def _updated_settings(
     settings: DiscordPermissionSettings,
@@ -123,9 +244,11 @@ def _updated_settings(
     user_grants: dict[str, list[str]] | None = None,
     guild_user_grants: dict[str, dict[str, list[str]]] | None = None,
     global_admin_user_ids: list[str] | None = None,
+    command_groups: dict[str, list[str]] | None = None,
+    command_aliases: dict[str, str] | None = None,
 ) -> DiscordPermissionSettings:
     return DiscordPermissionSettings(
-        command_groups=settings.command_groups,
+        command_groups=command_groups if command_groups is not None else settings.command_groups,
         user_grants=_normalize_grants(user_grants if user_grants is not None else settings.user_grants),
         guild_user_grants=_normalize_nested_grants(
             guild_user_grants if guild_user_grants is not None else settings.guild_user_grants
@@ -134,6 +257,9 @@ def _updated_settings(
             set(global_admin_user_ids if global_admin_user_ids is not None else settings.global_admin_user_ids)
         ),
         updated_at=settings.updated_at,
+        command_aliases=dict(
+            command_aliases if command_aliases is not None else settings.command_aliases
+        ),
     )
 
 
@@ -186,3 +312,22 @@ def _optional_text(value: str | None) -> str | None:
         return None
     text = value.strip()
     return text or None
+
+
+def _custom_group_name(value: str) -> str:
+    normalized = _required_text(value, "group").lower()
+    if not CUSTOM_GROUP_PATTERN.fullmatch(normalized):
+        raise LocalSettingsError(
+            "group must be 2-32 lowercase letters, numbers, underscores, or hyphens and start with a letter."
+        )
+    return normalized
+
+
+def _group_is_granted(settings: DiscordPermissionSettings, group: str) -> bool:
+    if any(group in groups for groups in settings.user_grants.values()):
+        return True
+    return any(
+        group in groups
+        for guild_grants in settings.guild_user_grants.values()
+        for groups in guild_grants.values()
+    )

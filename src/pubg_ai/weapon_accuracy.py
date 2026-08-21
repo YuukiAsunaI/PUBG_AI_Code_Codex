@@ -202,9 +202,11 @@ def recommendation_accuracy_score(metric: WeaponAccuracyMetric) -> float:
     return metric.estimated_hit_rate or 0.0
 
 
-def distance_weapon_family(weapon_code: str) -> Literal["AR", "DMR", "SR", "OTHER"]:
+def distance_weapon_family(
+    weapon_code: str,
+) -> Literal["AR", "DMR", "SR", "SMG", "LMG", "SHOTGUN", "OTHER"]:
     family = weapon_family(weapon_code)
-    return family if family in {"AR", "DMR", "SR"} else "OTHER"
+    return family if family in {"AR", "DMR", "SR", "SMG", "LMG", "SHOTGUN"} else "OTHER"
 
 
 def _non_negative_int(value: Any) -> int:
@@ -273,7 +275,7 @@ SMG_WEAPONS = frozenset(
     }
 )
 
-LMG_WEAPONS = frozenset({"WeapDP28_C", "WeapM249_C", "WeapMG3_C"})
+LMG_WEAPONS = frozenset({"WeapDP28_C", "WeapM249_C", "WeapMG3_C", "WeapRPD_C"})
 
 SHOTGUN_WEAPONS = frozenset(
     {

@@ -180,8 +180,8 @@ The current local runtime can parse raw telemetry into registered-player item ev
   location, and raw event JSON.
 - `player_item_match_stats` stores item-level per-match totals such as picked-up quantity, dropped quantity, uses,
   equips, unequips, attachment count, and detach count.
-- Known item and weapon codes are translated to Korean labels. Unknown or newly added codes remain visible as their
-  original PUBG code.
+- Known item and weapon codes are translated to Korean labels. This includes the Patch 42.3 RPD identifiers
+  `Item_Weapon_RPD_C` and `WeapRPD_C`. Unknown or newly added codes remain visible as their original PUBG code.
 - `python -m pubg_ai.cli parse-telemetry-items --limit 10` runs one item parse pass.
 - `python -m pubg_ai.cli parse-telemetry-items --limit 200 --force` reparses already summarized item rows after
   parser or translation changes.
@@ -209,8 +209,9 @@ tables:
   flag where applicable.
 - `match_care_package_events` stores care-package spawn/land positions and package item-code lists for later 2D
   replay layers.
-- `match_plane_routes` stores a match-level plane-route approximation reconstructed from early aircraft
-  `LogPlayerPosition` samples.
+- `match_plane_routes` stores one match-level route reconstructed from all players' initial transport-aircraft
+  position and ride/leave events. It is independent of when the registered player jumps, accepts only the initial
+  `common.isGame <= 0.2` phase, and excludes later `RedeployAircraft` revival flights.
 - `match_phase_events` stores match-level `LogGameStatePeriodic` safe-zone, poison-gas warning, red-zone, and
   black-zone circles with elapsed time and alive counts for 2D replay phase overlays.
 - `python -m pubg_ai.cli parse-telemetry-movement --limit 10` runs one movement/location parse pass.
@@ -256,7 +257,9 @@ The current local runtime can generate post-match 2D route summary JPEG files fo
 - `replay_artifacts` stores artifact metadata only: match, shard, account, artifact name, relative path, content
   type, file size, checksum, renderer version, source tables, and generated KST timestamp.
 - Player route snapshots include plane route, parachute/drop route, movement route, landing markers, DBNO/kill/death
-  markers, care-package markers, match metadata, and a legend.
+  markers, care-package markers, match metadata, and a legend. Personal routes exclude lobby samples and aircraft
+  position samples, so they begin after leaving the initial transport. The observed plane direction is extended to
+  both map boundaries so the full flight line remains visible even when every tracked player jumps early.
 - `python -m pubg_ai.cli generate-map-snapshots --limit 10` generates only missing snapshots.
 - `python -m pubg_ai.cli generate-map-snapshots --limit 200 --force` regenerates existing JPEG artifacts.
 - `python -m pubg_ai.cli generate-replay-timelines --limit 10` generates compact JSON replay timelines from the same
@@ -298,6 +301,19 @@ Live test also regenerated one `timeline` artifact for match `751d1def-d222-4d3e
 included a four-member squad list, 13 combat-location events with related-player display names where available, and
 171 phase-circle events.
 
+The 2026-08-13 replay correction was verified against 244 completed matches for `Yuuki_Asuna---`. The movement parser
+completed with no failed payloads, and 243 readable v3 JPEG/timeline pairs were regenerated; one match had no usable
+position samples. Representative match `b2796203-a324-413b-b100-75611c482361` uses 520 initial-aircraft samples from
+05:07:57 to 05:08:59 KST, excludes later revival flights, starts the personal route after aircraft exit, and extends
+the plane line to both map edges.
+
+The 2026-08-21 full replay rebuild uses `player-timeline-v6` and `map-snapshot-v5`. Timeline v6 uses telemetry elapsed
+time directly when present and piecewise timestamp interpolation otherwise, sorts every event layer on one playback
+clock, records path segment boundaries, and rejects malformed or stale artifacts in the player. A full retained-store
+audit read 1,065,488,505 bytes across 3,566 latest-version files: 1,783 timelines and 1,783 JPEGs. Every file passed
+configured-root confinement, catalog size and SHA-256 checks, JSON/JPEG decoding, schema and identity checks, monotonic
+time/index checks, map bounds, count contracts, and discontinuous-path checks. The audit found zero issues.
+
 ## Implemented Automatic Post-processing Worker Slice
 
 The current local runtime can automate the analysis and replay-artifact side after raw telemetry has been stored:
@@ -327,7 +343,9 @@ The current local runtime can automate the analysis and replay-artifact side aft
 The current Discord bot slice is intentionally small and reuses the same local MySQL and file stores:
 
 - `python -m pubg_ai.cli run-discord-bot --prefix !` starts the bot with the token from `.env`.
-- The bot requires Discord message content intent because the first MVP uses text commands.
+- All 26 catalog commands are registered through `Bot.hybrid_command`, so prefix and slash invocation reuse the same
+  permission checks and handlers. Prefix invocation requires message content intent; the slash tree is synchronized
+  from the ready hook.
 - `!유저등록 steam 닉네임` resolves the PUBG nickname, stores the tracking target, and records the Discord
   user/guild/channel context.
 - `!유저조회 [닉네임] [shard]` lists registered targets or loads one registered target including inactive rows.
@@ -342,7 +360,11 @@ The current Discord bot slice is intentionally small and reuses the same local M
   default to that `guild_id` scope; global admins can request the full local ranking with `전체`.
 - `!추천 닉네임 [shard]` reads parsed summary tables and returns recommendations for weapons, distance-weighted
   weapon ranges, weapon+attachment pairs from combat loadout snapshots when available, attachments, maps, teammates,
-  and coordinate-clustered drop zones.
+  and coordinate-clustered drop zones. The local manager additionally presents role-aware two-weapon combinations:
+  one close/mid weapon plus one DMR/SR/Crossbow, with weapon-specific observed attachment combinations. Score details
+  expose performance weights and the heuristic inventory-unit effect of mixed ammo, shared ammo, reserve pressure,
+  and LMG excess reserve rounds. Drop-zone probability is a separate sortable analysis view rather than a weapon
+  recommendation.
 - When `PUBG_LOCAL_WEB_BASE_URL` is configured, `!추천` adds local web evidence links to weapon+attachment rows so the
   supporting kill, DBNO-caused, and finish snapshots can be opened from Discord. The local manager can save or clear
   this base URL in `config/local_settings.json`.
@@ -357,6 +379,8 @@ The current Discord bot slice is intentionally small and reuses the same local M
   alert notes/resolution comments and review recent entries with `!pubg-alert-notes alert_id [limit]`.
 - Command access is checked through local Discord permission settings. Global admins can manage every guild, while
   guild-specific grants stay scoped by `guild_id`.
+- The localhost manager can create and edit custom permission groups from the validated command catalog. Prefix alias
+  commands may delegate only to an existing catalog command; the feature does not execute arbitrary text or code.
 - `!pubg-permission user_id group allow|deny [guild_id|global]` grants or revokes command groups. The current guild is
   the default target; only global admins can target another guild or global grants.
 - `!pubg-ranking-scope guild|global [guild_id]` is global-admin-only and changes the ranking visibility override for

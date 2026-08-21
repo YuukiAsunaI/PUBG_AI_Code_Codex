@@ -77,6 +77,7 @@ class FightOutcomeStatsTests(unittest.TestCase):
 
         m416 = report.weapons[0]
         self.assertEqual(m416.weapon_code, "WeapHK416_C")
+        self.assertEqual(m416.weapon_name, "M416")
         self.assertEqual(m416.fight_count, 3)
         self.assertEqual(m416.wins, 2)
         self.assertEqual(m416.losses, 1)
@@ -85,6 +86,10 @@ class FightOutcomeStatsTests(unittest.TestCase):
         self.assertEqual(len(report.loadouts), 2)
         self.assertEqual(report.loadouts[0].fight_count, 2)
         self.assertEqual(report.loadouts[0].wins, 2)
+        self.assertIn("레드 도트 사이트", report.loadouts[0].attachment_names)
+        self.assertNotIn("Item_Attach_Weapon_Upper_DotSight_01_C", report.loadouts[0].attachment_names)
+        self.assertEqual(report.recent_outcomes[0].weapon_name, "M416")
+        self.assertTrue(all(not name.startswith("Item_") for name in report.recent_outcomes[0].attachment_names))
         self.assertEqual(report.recent_outcomes[0].event_index, 50)
 
     def test_keeps_non_firearm_events_but_excludes_them_from_weapon_rankings(self) -> None:

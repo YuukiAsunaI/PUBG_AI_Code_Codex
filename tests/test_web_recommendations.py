@@ -25,6 +25,7 @@ class WebRecommendationTests(unittest.TestCase):
                     "registered_channel_id": None,
                 },
                 [],
+                [],
                 [
                     {
                         "weapon_code": "WeapHK416_C",
@@ -37,6 +38,7 @@ class WebRecommendationTests(unittest.TestCase):
                         "damage_dealt": 700.0,
                         "shots_fired": 200,
                         "shots_hit": 60,
+                        "headshot_hits": 12,
                     }
                 ],
                 [],
@@ -50,15 +52,46 @@ class WebRecommendationTests(unittest.TestCase):
 
         with patch("pubg_ai.web.app.connect_mysql", return_value=connection):
             client = TestClient(create_app())
-            response = client.get("/players/recommendations?shard=steam&name=Yuuki_Asuna---")
+            response = client.get(
+                "/players/recommendations"
+                "?shard=steam&name=Yuuki_Asuna---&min_matches=10000"
+            )
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()["recommendations"]
         self.assertEqual(payload["player"]["current_name"], "Yuuki_Asuna---")
+        self.assertEqual(payload["min_matches"], 10000)
         self.assertEqual(payload["weapons"][0]["weapon_code"], "WeapHK416_C")
         self.assertEqual(payload["weapons"][0]["weapon_name"], "M416")
+        self.assertEqual(payload["weapons"][0]["headshot_hit_rate"], 0.2)
+        self.assertEqual(payload["weapons"][0]["fight_count"], 0)
         self.assertEqual(payload["attachments"], [])
         self.assertTrue(connection.closed)
+
+    def test_index_exposes_explainable_recommendation_metrics(self) -> None:
+        body = TestClient(create_app()).get("/").text
+
+        self.assertIn("예상 총 탄약 인벤토리", body)
+        self.assertIn("혼합 탄종 확보 부담", body)
+        self.assertIn("전체 부담 중 LMG 영향", body)
+        self.assertIn("무기 점수 계산", body)
+        self.assertIn("헤드샷 명중 확률", body)
+        self.assertIn("교전 승리 확률", body)
+        self.assertNotIn(
+            "clearRegisteredPlayerSearch(event.currentTarget)",
+            body,
+        )
+        self.assertNotIn("event.currentTarget.reset()", body)
+
+    def test_drop_zone_view_limits_default_chart_without_hiding_detail_rows(self) -> None:
+        body = TestClient(create_app()).get("/").text
+
+        self.assertIn('name="sort_metric"', body)
+        self.assertIn('name="chart_limit"', body)
+        self.assertIn('value="20" selected', body)
+        self.assertIn("const sortedRegions = [...regions].sort", body)
+        self.assertIn("const chartRegions = sortedRegions.slice(0, chartLimit)", body)
+        self.assertIn("const regionRows = sortedRegions.map", body)
 
     def test_player_recommendation_evidence_endpoint_returns_snapshots(self) -> None:
         connection = FakeConnection(

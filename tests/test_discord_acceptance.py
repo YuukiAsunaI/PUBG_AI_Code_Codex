@@ -105,6 +105,13 @@ class DiscordAcceptanceTests(unittest.TestCase):
         self.assertTrue(channel.can_read_history)
         self.assertNotIn("secret-token", str(report.to_record()))
 
+    def test_list_guilds_reads_names_without_probing_channels(self) -> None:
+        guilds = self.client.list_guilds()
+
+        self.assertEqual([guild.to_record() for guild in guilds], [{"guild_id": "100", "guild_name": "test guild"}])
+        paths = [str(call["url"]).removeprefix("https://discord.test/api/v10") for call in self.transport.calls]
+        self.assertEqual(paths, ["/users/@me/guilds"])
+
     def test_probe_rejects_channel_from_another_guild(self) -> None:
         with self.assertRaisesRegex(DiscordAcceptanceError, "does not belong"):
             self.client.probe(guild_id="100", channel_id="999999")

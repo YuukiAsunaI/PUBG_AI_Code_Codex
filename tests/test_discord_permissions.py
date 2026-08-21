@@ -90,6 +90,24 @@ class DiscordPermissionCheckerTests(unittest.TestCase):
             checker.is_allowed(DiscordCommandIdentity(user_id="user-1"), "profile_read")
         )
 
+    def test_custom_group_grant_allows_only_its_selected_command(self) -> None:
+        settings = DiscordPermissionSettings(
+            command_groups={
+                **DEFAULT_COMMAND_GROUPS,
+                "combat_reader": ["전적", "무기"],
+            },
+            user_grants={"user-1": ["combat_reader"]},
+            guild_user_grants={},
+            global_admin_user_ids=[],
+        )
+        checker = DiscordPermissionChecker(settings)
+        identity = DiscordCommandIdentity(user_id="user-1")
+
+        self.assertTrue(checker.is_command_allowed(identity, "전적"))
+        self.assertTrue(checker.is_command_allowed(identity, "무기"))
+        self.assertFalse(checker.is_command_allowed(identity, "유저등록"))
+        self.assertEqual(checker.command_groups_for("전적"), ["combat_reader", "profile_read"])
+
     def test_admin_grant_inherits_player_manage_without_exposing_admin_to_delegate(
         self,
     ) -> None:

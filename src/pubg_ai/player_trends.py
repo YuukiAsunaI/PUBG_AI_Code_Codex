@@ -5,11 +5,25 @@ from datetime import date, datetime, time, timedelta
 from typing import Any, Iterable, Literal, Mapping
 import json
 
+from pubg_ai.code_translator import translate_code
 from pubg_ai.player_registry import RegisteredPlayer
 from pubg_ai.weapon_accuracy import AccuracyBreakdown, summarize_accuracy_rows
 
 
-TrendGranularity = Literal["hour", "date", "week", "month"]
+TrendGranularity = Literal[
+    "hour",
+    "date",
+    "week",
+    "month",
+    "quarter",
+    "year",
+    "map",
+    "game_mode",
+    "team_mode",
+    "perspective",
+    "match_type",
+    "season_state",
+]
 
 
 @dataclass(frozen=True)
@@ -19,7 +33,13 @@ class PlayerTrendFilters:
     perspective: str | None = None
     match_type: str | None = None
     map_name: str | None = None
+    season_state: str | None = None
     is_custom_match: bool | None = None
+    year: int | None = None
+    quarter: int | None = None
+    month: int | None = None
+    exact_date_kst: date | None = None
+    hour: int | None = None
     from_date_kst: date | None = None
     to_date_kst: date | None = None
 
@@ -38,6 +58,10 @@ class PlayerTrendFilters:
 
         if self.from_date_kst and self.to_date_kst and self.from_date_kst > self.to_date_kst:
             raise ValueError("from_date_kst must be on or before to_date_kst.")
+        year = _bounded_int(self.year, "year", 2000, 2100)
+        quarter = _bounded_int(self.quarter, "quarter", 1, 4)
+        month = _bounded_int(self.month, "month", 1, 12)
+        hour = _bounded_int(self.hour, "hour", 0, 23)
 
         return PlayerTrendFilters(
             game_mode=_optional_text(self.game_mode),
@@ -45,7 +69,13 @@ class PlayerTrendFilters:
             perspective=perspective,
             match_type=_optional_text(self.match_type),
             map_name=_optional_text(self.map_name),
+            season_state=_optional_text(self.season_state),
             is_custom_match=self.is_custom_match,
+            year=year,
+            quarter=quarter,
+            month=month,
+            exact_date_kst=self.exact_date_kst,
+            hour=hour,
             from_date_kst=self.from_date_kst,
             to_date_kst=self.to_date_kst,
         )
@@ -57,7 +87,13 @@ class PlayerTrendFilters:
             "perspective": self.perspective,
             "match_type": self.match_type,
             "map_name": self.map_name,
+            "season_state": self.season_state,
             "is_custom_match": self.is_custom_match,
+            "year": self.year,
+            "quarter": self.quarter,
+            "month": self.month,
+            "exact_date_kst": self.exact_date_kst.isoformat() if self.exact_date_kst else None,
+            "hour": self.hour,
             "from_date_kst": self.from_date_kst.isoformat() if self.from_date_kst else None,
             "to_date_kst": self.to_date_kst.isoformat() if self.to_date_kst else None,
         }
@@ -87,6 +123,25 @@ class PlayerTrendMetrics:
     avg_survival_seconds: float
     avg_movement_distance_m: float
     accuracy_breakdown: AccuracyBreakdown | None = None
+    hits_taken: int = 0
+    headshot_hits: int = 0
+    headshot_hits_taken: int = 0
+    headshot_hit_rate: float = 0.0
+    headshot_hit_taken_rate: float = 0.0
+    hit_parts: dict[str, int] = field(default_factory=dict)
+    taken_hit_parts: dict[str, int] = field(default_factory=dict)
+    hit_part_rates: dict[str, float] = field(default_factory=dict)
+    taken_hit_part_rates: dict[str, float] = field(default_factory=dict)
+    avg_kills: float = 0.0
+    avg_assists: float = 0.0
+    avg_deaths: float = 0.0
+    avg_dbnos_caused: float = 0.0
+    avg_dbnos_taken: float = 0.0
+    fight_count: int = 0
+    fight_wins: int = 0
+    fight_losses: int = 0
+    fight_win_rate: float = 0.0
+    avg_fights_per_match: float = 0.0
 
     def to_record(self) -> dict[str, Any]:
         return asdict(self)
@@ -236,6 +291,7 @@ class PlayerTrendService:
             ("matches.perspective", filters.perspective),
             ("matches.match_type", filters.match_type),
             ("matches.map_name", filters.map_name),
+            ("matches.season_state", filters.season_state),
         ):
             if value is not None:
                 conditions.append(f"{column} = %s")
@@ -244,6 +300,20 @@ class PlayerTrendService:
         if filters.is_custom_match is not None:
             conditions.append("matches.is_custom_match = %s")
             params.append(1 if filters.is_custom_match else 0)
+        for expression, value in (
+            ("YEAR(matches.created_at_kst)", filters.year),
+            ("QUARTER(matches.created_at_kst)", filters.quarter),
+            ("MONTH(matches.created_at_kst)", filters.month),
+            ("HOUR(matches.created_at_kst)", filters.hour),
+        ):
+            if value is not None:
+                conditions.append(f"{expression} = %s")
+                params.append(value)
+        if filters.exact_date_kst is not None:
+            conditions.append("matches.created_at_kst >= %s")
+            params.append(datetime.combine(filters.exact_date_kst, time.min))
+            conditions.append("matches.created_at_kst < %s")
+            params.append(datetime.combine(filters.exact_date_kst + timedelta(days=1), time.min))
         if filters.from_date_kst is not None:
             conditions.append("matches.created_at_kst >= %s")
             params.append(datetime.combine(filters.from_date_kst, time.min))
@@ -263,6 +333,7 @@ class PlayerTrendService:
                     matches.perspective,
                     matches.match_type,
                     matches.map_name,
+                    matches.season_state,
                     matches.is_custom_match,
                     participants.win_place,
                     participants.raw_stats,
@@ -275,8 +346,22 @@ class PlayerTrendService:
                     summaries.damage_taken,
                     summaries.shots_fired,
                     summaries.shots_hit,
+                    summaries.hits_taken,
+                    summaries.headshot_hits,
+                    summaries.headshot_hits_taken,
                     summaries.headshot_kills,
-                    movement.in_game_sampled_distance_m
+                    summaries.hit_parts,
+                    summaries.taken_hit_parts,
+                    CASE
+                        WHEN JSON_EXTRACT(participants.raw_stats, '$.walkDistance') IS NOT NULL
+                          OR JSON_EXTRACT(participants.raw_stats, '$.rideDistance') IS NOT NULL
+                          OR JSON_EXTRACT(participants.raw_stats, '$.swimDistance') IS NOT NULL
+                        THEN
+                            COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(participants.raw_stats, '$.walkDistance')) AS DECIMAL(14, 3)), 0)
+                          + COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(participants.raw_stats, '$.rideDistance')) AS DECIMAL(14, 3)), 0)
+                          + COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(participants.raw_stats, '$.swimDistance')) AS DECIMAL(14, 3)), 0)
+                        ELSE COALESCE(movement.in_game_sampled_distance_m, 0)
+                    END AS movement_distance_m
                 FROM player_match_combat_summaries summaries
                 INNER JOIN matches
                     ON matches.match_id = summaries.match_id
@@ -325,8 +410,42 @@ class PlayerTrendService:
         accuracy_by_match: dict[str, list[dict[str, Any]]] = {}
         for accuracy_row in accuracy_rows:
             accuracy_by_match.setdefault(str(accuracy_row["match_id"]), []).append(accuracy_row)
+
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    outcomes.match_id,
+                    COUNT(*) AS fight_count,
+                    COALESCE(SUM(outcomes.outcome_type = 'win'), 0) AS fight_wins,
+                    COALESCE(SUM(outcomes.outcome_type = 'loss'), 0) AS fight_losses
+                FROM player_fight_outcomes outcomes
+                INNER JOIN matches
+                    ON matches.match_id = outcomes.match_id
+                WHERE outcomes.account_id = %s
+                  AND matches.shard = %s
+                  AND outcomes.is_friendly_fire = 0
+                  AND outcomes.match_id IN (
+                """
+                + placeholders
+                + """
+                  )
+                GROUP BY outcomes.match_id
+                """,
+                [player.account_id, player.shard, *match_ids],
+            )
+            fight_rows = cursor.fetchall()
+
+        fights_by_match = {
+            str(fight_row["match_id"]): fight_row
+            for fight_row in fight_rows
+        }
         for row in rows:
             row["weapon_accuracy_rows"] = accuracy_by_match.get(str(row["match_id"]), [])
+            fight_row = fights_by_match.get(str(row["match_id"]), {})
+            row["fight_count"] = _int(fight_row.get("fight_count"))
+            row["fight_wins"] = _int(fight_row.get("fight_wins"))
+            row["fight_losses"] = _int(fight_row.get("fight_losses"))
         return rows
 
 
@@ -351,10 +470,18 @@ class _TrendAccumulator:
     damage_taken: float = 0.0
     shots_fired: int = 0
     shots_hit: int = 0
+    hits_taken: int = 0
+    headshot_hits: int = 0
+    headshot_hits_taken: int = 0
     headshot_kills: int = 0
     survival_seconds: float = 0.0
     movement_distance_m: float = 0.0
     accuracy_rows: list[Mapping[str, Any]] = field(default_factory=list)
+    hit_parts: dict[str, int] = field(default_factory=dict)
+    taken_hit_parts: dict[str, int] = field(default_factory=dict)
+    fight_count: int = 0
+    fight_wins: int = 0
+    fight_losses: int = 0
     first_match_at_kst: datetime | None = None
     last_match_at_kst: datetime | None = None
 
@@ -370,14 +497,24 @@ class _TrendAccumulator:
         self.damage_taken += _float(row.get("damage_taken"))
         self.shots_fired += _int(row.get("shots_fired"))
         self.shots_hit += _int(row.get("shots_hit"))
+        self.hits_taken += _int(row.get("hits_taken"))
+        self.headshot_hits += _int(row.get("headshot_hits"))
+        self.headshot_hits_taken += _int(row.get("headshot_hits_taken"))
+        self.fight_count += _int(row.get("fight_count"))
+        self.fight_wins += _int(row.get("fight_wins"))
+        self.fight_losses += _int(row.get("fight_losses"))
         weapon_accuracy_rows = row.get("weapon_accuracy_rows")
         if isinstance(weapon_accuracy_rows, list):
             self.accuracy_rows.extend(
                 item for item in weapon_accuracy_rows if isinstance(item, Mapping)
             )
         self.headshot_kills += _int(row.get("headshot_kills"))
+        _merge_part_counts(self.hit_parts, row.get("hit_parts"))
+        _merge_part_counts(self.taken_hit_parts, row.get("taken_hit_parts"))
         self.survival_seconds += _survival_seconds(row)
-        self.movement_distance_m += _float(row.get("in_game_sampled_distance_m"))
+        self.movement_distance_m += _float(
+            row.get("movement_distance_m", row.get("in_game_sampled_distance_m"))
+        )
         if self.first_match_at_kst is None or created_at_kst < self.first_match_at_kst:
             self.first_match_at_kst = created_at_kst
         if self.last_match_at_kst is None or created_at_kst > self.last_match_at_kst:
@@ -418,6 +555,28 @@ class _TrendAccumulator:
             avg_survival_seconds=_safe_divide(self.survival_seconds, self.match_count),
             avg_movement_distance_m=_safe_divide(self.movement_distance_m, self.match_count),
             accuracy_breakdown=accuracy_breakdown,
+            hits_taken=self.hits_taken,
+            headshot_hits=self.headshot_hits,
+            headshot_hits_taken=self.headshot_hits_taken,
+            headshot_hit_rate=_safe_divide(self.headshot_hits, self.shots_hit),
+            headshot_hit_taken_rate=_safe_divide(self.headshot_hits_taken, self.hits_taken),
+            hit_parts=dict(self.hit_parts),
+            taken_hit_parts=dict(self.taken_hit_parts),
+            hit_part_rates=_part_rates(self.hit_parts),
+            taken_hit_part_rates=_part_rates(self.taken_hit_parts),
+            avg_kills=_safe_divide(self.kills, self.match_count),
+            avg_assists=_safe_divide(self.assists, self.match_count),
+            avg_deaths=_safe_divide(self.deaths, self.match_count),
+            avg_dbnos_caused=_safe_divide(self.dbnos_caused, self.match_count),
+            avg_dbnos_taken=_safe_divide(self.dbnos_taken, self.match_count),
+            fight_count=self.fight_count,
+            fight_wins=self.fight_wins,
+            fight_losses=self.fight_losses,
+            fight_win_rate=_safe_divide(
+                self.fight_wins,
+                self.fight_wins + self.fight_losses,
+            ),
+            avg_fights_per_match=_safe_divide(self.fight_count, self.match_count),
         )
 
 
@@ -430,13 +589,13 @@ def summarize_player_trends(
     normalized_granularity = normalize_trend_granularity(granularity)
     limit = max(1, min(int(bucket_limit), 500))
     totals = _TrendAccumulator()
-    grouped: dict[str, tuple[str, tuple[int, ...], _TrendAccumulator]] = {}
+    grouped: dict[str, tuple[str, tuple[Any, ...], _TrendAccumulator]] = {}
 
     for row in rows:
         created_at_kst = _datetime(row.get("created_at_kst"))
         if created_at_kst is None:
             continue
-        period_key, period_label, sort_key = _period(created_at_kst, normalized_granularity)
+        period_key, period_label, sort_key = _period(row, created_at_kst, normalized_granularity)
         if period_key not in grouped:
             grouped[period_key] = (period_label, sort_key, _TrendAccumulator())
         grouped[period_key][2].add(row, created_at_kst)
@@ -484,9 +643,36 @@ def normalize_trend_granularity(value: str) -> TrendGranularity:
         "month": "month",
         "월": "month",
         "월별": "month",
+        "quarter": "quarter",
+        "분기": "quarter",
+        "분기별": "quarter",
+        "year": "year",
+        "연": "year",
+        "연도": "year",
+        "연도별": "year",
+        "map": "map",
+        "맵": "map",
+        "맵별": "map",
+        "game_mode": "game_mode",
+        "mode": "game_mode",
+        "모드": "game_mode",
+        "team_mode": "team_mode",
+        "team": "team_mode",
+        "팀": "team_mode",
+        "perspective": "perspective",
+        "view": "perspective",
+        "시점": "perspective",
+        "match_type": "match_type",
+        "매치유형": "match_type",
+        "season_state": "season_state",
+        "season": "season_state",
+        "시즌": "season_state",
     }
     if normalized not in aliases:
-        raise ValueError("granularity must be hour, date, week, or month.")
+        raise ValueError(
+            "granularity must be a time period or one of map, game_mode, team_mode, "
+            "perspective, match_type, season_state."
+        )
     return aliases[normalized]
 
 
@@ -514,9 +700,10 @@ def parse_optional_bool(value: str | bool | None, label: str) -> bool | None:
 
 
 def _period(
+    row: Mapping[str, Any],
     created_at_kst: datetime,
     granularity: TrendGranularity,
-) -> tuple[str, str, tuple[int, ...]]:
+) -> tuple[str, str, tuple[Any, ...]]:
     if granularity == "hour":
         hour = created_at_kst.hour
         return f"{hour:02d}", f"{hour:02d}시", (hour,)
@@ -527,11 +714,37 @@ def _period(
         iso = created_at_kst.isocalendar()
         key = f"{iso.year}-W{iso.week:02d}"
         return key, f"{iso.year}년 {iso.week:02d}주", (iso.year, iso.week)
-    key = f"{created_at_kst.year:04d}-{created_at_kst.month:02d}"
-    return key, f"{created_at_kst.year:04d}년 {created_at_kst.month:02d}월", (
-        created_at_kst.year,
-        created_at_kst.month,
-    )
+    if granularity == "month":
+        key = f"{created_at_kst.year:04d}-{created_at_kst.month:02d}"
+        return key, f"{created_at_kst.year:04d}년 {created_at_kst.month:02d}월", (
+            created_at_kst.year,
+            created_at_kst.month,
+        )
+    if granularity == "quarter":
+        quarter = (created_at_kst.month - 1) // 3 + 1
+        key = f"{created_at_kst.year:04d}-Q{quarter}"
+        return key, f"{created_at_kst.year:04d}년 {quarter}분기", (created_at_kst.year, quarter)
+    if granularity == "year":
+        key = f"{created_at_kst.year:04d}"
+        return key, f"{created_at_kst.year:04d}년", (created_at_kst.year,)
+
+    field_name = "map_name" if granularity == "map" else granularity
+    value = _optional_text(row.get(field_name)) or "unknown"
+    labels = {
+        "map": translate_code(value, "map"),
+        "game_mode": translate_code(value, "game_mode"),
+        "team_mode": {"solo": "솔로", "duo": "듀오", "squad": "스쿼드", "unknown": "알 수 없음"}.get(
+            value,
+            value,
+        ),
+        "perspective": {"fpp": "1인칭", "tpp": "3인칭", "unknown": "알 수 없음"}.get(value, value),
+        "match_type": {"official": "일반", "competitive": "경쟁전", "custom": "커스텀"}.get(
+            value,
+            value,
+        ),
+        "season_state": value,
+    }
+    return value, labels[granularity], (value.lower(),)
 
 
 def _survival_seconds(row: Mapping[str, Any]) -> float:
@@ -603,3 +816,38 @@ def _float(value: Any) -> float:
 
 def _safe_divide(numerator: int | float, denominator: int | float) -> float:
     return float(numerator) / float(denominator) if denominator else 0.0
+
+
+def _merge_part_counts(target: dict[str, int], value: Any) -> None:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return
+    if not isinstance(value, Mapping):
+        return
+    for key, count in value.items():
+        normalized_count = _int(count)
+        if normalized_count > 0:
+            normalized_key = str(key)
+            target[normalized_key] = target.get(normalized_key, 0) + normalized_count
+
+
+def _part_rates(parts: Mapping[str, int]) -> dict[str, float]:
+    total = sum(max(0, _int(value)) for value in parts.values())
+    if total <= 0:
+        return {}
+    return {
+        str(key): max(0, _int(value)) / total
+        for key, value in parts.items()
+        if _int(value) > 0
+    }
+
+
+def _bounded_int(value: int | None, label: str, minimum: int, maximum: int) -> int | None:
+    if value is None:
+        return None
+    parsed = int(value)
+    if parsed < minimum or parsed > maximum:
+        raise ValueError(f"{label} must be between {minimum} and {maximum}.")
+    return parsed

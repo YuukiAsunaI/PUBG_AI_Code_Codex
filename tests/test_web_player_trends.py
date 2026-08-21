@@ -52,6 +52,7 @@ class WebPlayerTrendTests(unittest.TestCase):
                         "shots_hit": 20,
                     }
                 ],
+                [],
             ]
         )
 
@@ -72,6 +73,7 @@ class WebPlayerTrendTests(unittest.TestCase):
             report["totals"].get("accuracy_breakdown", {}).get("single_projectile_attacks"),
             100,
         )
+        self.assertEqual(report["totals"].get("fight_count"), 0)
         self.assertEqual(report["buckets"][0]["period_key"], "21")
         self.assertTrue(connection.closed)
 

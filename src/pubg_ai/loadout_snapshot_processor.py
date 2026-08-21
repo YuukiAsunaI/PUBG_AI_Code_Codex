@@ -401,7 +401,12 @@ def _apply_item_event(
     if not attachment_code.startswith("Item_Attach_"):
         return
 
-    attachment_names[attachment_code] = event.item_name_ko or translate_code(attachment_code, "item")
+    translated_name = translate_code(attachment_code, "item")
+    attachment_names[attachment_code] = (
+        translated_name
+        if translated_name != attachment_code
+        else event.item_name_ko or attachment_code
+    )
     weapon_attachments = attachments_by_weapon.setdefault(weapon_code, set())
     if event.action == "attach":
         weapon_attachments.add(attachment_code)

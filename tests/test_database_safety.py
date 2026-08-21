@@ -4,7 +4,12 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
-from pubg_ai.database import DatabaseError, _ensure_api_fetch_job_unique_index, mysql_transaction
+from pubg_ai.database import (
+    DatabaseError,
+    _ensure_api_fetch_job_unique_index,
+    _ensure_replay_artifact_versioned_unique_index,
+    mysql_transaction,
+)
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.match_job_processor import MatchJobProcessor
 from pubg_ai.raw_storage import RawPayloadStore
@@ -127,6 +132,28 @@ class QueueUniquenessTests(unittest.TestCase):
         with self.assertRaises(DatabaseError):
             _ensure_api_fetch_job_unique_index(cursor, "pubg_ai")
 
+    def test_replay_artifact_migration_replaces_legacy_unique_index(self) -> None:
+        cursor = ReplayIndexMigrationCursor(
+            ["match_id", "artifact_type", "artifact_name", "account_id"]
+        )
+
+        changed = _ensure_replay_artifact_versioned_unique_index(cursor, "pubg_ai")
+
+        self.assertTrue(changed)
+        alter_sql = next(query for query, _ in cursor.executed if "ALTER TABLE" in query)
+        self.assertIn("DROP INDEX uq_replay_artifacts", alter_sql)
+        self.assertIn("renderer_version", alter_sql)
+
+    def test_replay_artifact_migration_is_idempotent(self) -> None:
+        cursor = ReplayIndexMigrationCursor(
+            ["match_id", "artifact_type", "artifact_name", "account_id", "renderer_version"]
+        )
+
+        changed = _ensure_replay_artifact_versioned_unique_index(cursor, "pubg_ai")
+
+        self.assertFalse(changed)
+        self.assertFalse(any("ALTER TABLE" in query for query, _ in cursor.executed))
+
     def test_match_enqueue_treats_duplicate_upsert_as_existing(self) -> None:
         connection = QueueConnection(insert_rowcount=0)
         collector = RegisteredPlayerMatchCollector(connection, object())  # type: ignore[arg-type]
@@ -238,6 +265,20 @@ class MigrationCursor:
         if "duplicate_groups" in self.query:
             return {"duplicate_groups": self.duplicate_groups}
         return {"found": 1} if self.index_exists else None
+
+
+class ReplayIndexMigrationCursor:
+    def __init__(self, columns: list[str]) -> None:
+        self.columns = columns
+        self.query = ""
+        self.executed: list[tuple[str, object]] = []
+
+    def execute(self, query: str, params: object = None) -> None:
+        self.query = query
+        self.executed.append((query, params))
+
+    def fetchall(self) -> list[dict[str, object]]:
+        return [{"column_name": column} for column in self.columns]
 
 
 class QueueConnection:

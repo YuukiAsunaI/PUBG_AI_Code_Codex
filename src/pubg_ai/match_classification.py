@@ -57,6 +57,8 @@ def classify_match_payload(
 
 def team_mode_from_game_mode(game_mode: str) -> TeamMode:
     mode = game_mode.lower()
+    if mode == "sdm" or mode.startswith("sdm-"):
+        return "solo"
     if "solo" in mode:
         return "solo"
     if "duo" in mode:

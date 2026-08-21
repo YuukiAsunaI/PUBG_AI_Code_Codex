@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from io import BytesIO
+from pathlib import Path
 import unittest
 
 from PIL import Image
@@ -11,10 +12,13 @@ from pubg_ai.map_snapshot_renderer import (
     CombatLocation,
     MapAssetProvider,
     MapSnapshotContext,
+    MapSnapshotProcessor,
     PlaneRoute,
     PositionSample,
+    extend_line_to_world_bounds,
     render_player_map_snapshot,
 )
+from pubg_ai.replay_storage import ReplayArtifactStore
 
 
 class NoAssetProvider(MapAssetProvider):
@@ -26,6 +30,25 @@ class NoAssetProvider(MapAssetProvider):
 
 
 class MapSnapshotRendererTests(unittest.TestCase):
+    def test_snapshot_candidates_require_renderable_position_samples(self) -> None:
+        connection = QueryConnection()
+        processor = MapSnapshotProcessor(
+            connection,
+            ReplayArtifactStore(Path("unused")),
+            asset_provider=NoAssetProvider(),
+        )
+
+        self.assertEqual(processor._list_snapshot_jobs(limit=10, force=False), [])
+        query = connection.query
+        self.assertIn("FROM player_position_samples candidate_positions", query)
+        self.assertIn("candidate_positions.common_is_game > 0", query)
+        self.assertIn("COALESCE(candidate_positions.is_in_vehicle, 0)", query)
+
+    def test_extends_observed_plane_segment_to_map_edges(self) -> None:
+        route = extend_line_to_world_bounds(100.0, 900.0, 300.0, 700.0, 1000.0)
+
+        self.assertEqual(route, (0.0, 1000.0, 1000.0, 0.0))
+
     def test_renders_jpeg_snapshot_with_fallback_grid(self) -> None:
         context = MapSnapshotContext(
             match_id="match-1",
@@ -71,6 +94,31 @@ class MapSnapshotRendererTests(unittest.TestCase):
         self.assertEqual(image.format, "JPEG")
         self.assertEqual(image.size, (1280, 1418))
         self.assertGreater(len(body), 20_000)
+
+
+class QueryConnection:
+    def __init__(self) -> None:
+        self.query = ""
+
+    def cursor(self) -> "QueryCursor":
+        return QueryCursor(self)
+
+
+class QueryCursor:
+    def __init__(self, connection: QueryConnection) -> None:
+        self.connection = connection
+
+    def __enter__(self) -> "QueryCursor":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def execute(self, query: str, params: object = None) -> None:
+        self.connection.query = query
+
+    def fetchall(self) -> list[dict[str, object]]:
+        return []
 
 
 if __name__ == "__main__":

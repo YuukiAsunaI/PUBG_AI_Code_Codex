@@ -21,7 +21,10 @@ from pubg_ai.time_utils import now_kst, to_kst
 
 
 PROCESSOR_NAME = "movement"
-PARSER_VERSION = "movement-v1"
+PARSER_VERSION = "movement-v4"
+MAX_CONTINUOUS_SAMPLE_GAP_SECONDS = 45.0
+MAX_CONTINUOUS_HORIZONTAL_SPEED_MPS = 120.0
+TRANSPORT_AIRCRAFT_ALTITUDE_CM = 100000.0
 
 
 class TelemetryMovementProcessingError(RuntimeError):
@@ -271,16 +274,20 @@ class TelemetryMovementProcessor:
                 continue
 
             try:
+                movement_account_ids = self._movement_account_ids_for_match(
+                    match_id=match_id,
+                    tracked_account_ids=tracked_account_ids,
+                )
                 events = self._load_telemetry_events(payload)
                 position_samples = parse_position_samples(
                     events,
                     match_id=match_id,
-                    tracked_account_ids=tracked_account_ids,
+                    tracked_account_ids=movement_account_ids,
                 )
                 landing_events = parse_landing_events(
                     events,
                     match_id=match_id,
-                    tracked_account_ids=tracked_account_ids,
+                    tracked_account_ids=movement_account_ids,
                 )
                 movement_summaries = summarize_movement(
                     position_samples,
@@ -303,6 +310,7 @@ class TelemetryMovementProcessor:
                 self._replace_movement_rows(
                     match_id=match_id,
                     tracked_account_ids=tracked_account_ids,
+                    movement_account_ids=movement_account_ids,
                     position_samples=position_samples,
                     landing_events=landing_events,
                     movement_summaries=movement_summaries,
@@ -366,6 +374,48 @@ class TelemetryMovementProcessor:
             force=force,
         )
 
+    def _movement_account_ids_for_match(
+        self,
+        *,
+        match_id: str,
+        tracked_account_ids: set[str],
+    ) -> set[str]:
+        if not tracked_account_ids:
+            return set()
+        ordered = sorted(tracked_account_ids)
+        placeholders = ", ".join(["%s"] * len(ordered))
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT DISTINCT teammate.account_id
+                FROM match_participants tracked
+                INNER JOIN match_participants teammate
+                    ON teammate.match_id = tracked.match_id
+                   AND (
+                        (
+                            tracked.roster_id IS NOT NULL
+                            AND teammate.roster_id = tracked.roster_id
+                        )
+                        OR (
+                            tracked.roster_id IS NULL
+                            AND tracked.team_id IS NOT NULL
+                            AND teammate.team_id = tracked.team_id
+                        )
+                   )
+                WHERE tracked.match_id = %s
+                  AND tracked.account_id IN ({placeholders})
+                  AND teammate.account_id IS NOT NULL
+                  AND teammate.account_id <> ''
+                """,
+                (match_id, *ordered),
+            )
+            teammates = {
+                account_id
+                for row in cursor.fetchall()
+                if (account_id := _optional_text(row.get("account_id"))) is not None
+            }
+        return set(tracked_account_ids) | teammates
+
     def _load_telemetry_events(self, payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
         relative_path = _required_text(payload.get("relative_path"), "relative_path")
         compression = _required_text(payload.get("compression"), "compression")
@@ -391,6 +441,7 @@ class TelemetryMovementProcessor:
         *,
         match_id: str,
         tracked_account_ids: set[str],
+        movement_account_ids: set[str],
         position_samples: list[PositionSample],
         landing_events: list[LandingEvent],
         movement_summaries: list[MovementSummary],
@@ -407,7 +458,11 @@ class TelemetryMovementProcessor:
         ]
         output_counts = count_outputs_by_account(player_rows)
         with mysql_transaction(self.connection):
-            self._delete_existing_rows(match_id=match_id, account_ids=tracked_account_ids)
+            self._delete_existing_rows(
+                match_id=match_id,
+                tracked_account_ids=tracked_account_ids,
+                movement_account_ids=movement_account_ids,
+            )
             self._insert_position_samples(position_samples)
             self._insert_landing_events(landing_events)
             self._insert_movement_summaries(movement_summaries)
@@ -424,23 +479,30 @@ class TelemetryMovementProcessor:
                 output_counts=output_counts,
             )
 
-    def _delete_existing_rows(self, *, match_id: str, account_ids: set[str]) -> None:
+    def _delete_existing_rows(
+        self,
+        *,
+        match_id: str,
+        tracked_account_ids: set[str],
+        movement_account_ids: set[str],
+    ) -> None:
         with self.connection.cursor() as cursor:
-            if account_ids:
-                placeholders = ", ".join(["%s"] * len(account_ids))
-                params = [match_id, *sorted(account_ids)]
-                for table_name in (
-                    "player_position_samples",
-                    "player_landing_events",
-                    "player_movement_summaries",
-                    "player_combat_location_events",
-                ):
+            table_scopes = (
+                ("player_position_samples", movement_account_ids),
+                ("player_landing_events", movement_account_ids),
+                ("player_movement_summaries", tracked_account_ids),
+                ("player_combat_location_events", tracked_account_ids),
+            )
+            for table_name, account_ids in table_scopes:
+                if account_ids:
+                    ordered = sorted(account_ids)
+                    placeholders = ", ".join(["%s"] * len(ordered))
                     cursor.execute(
                         f"""
                         DELETE FROM {table_name}
                         WHERE match_id = %s AND account_id IN ({placeholders})
                         """,
-                        params,
+                        (match_id, *ordered),
                     )
 
             cursor.execute("DELETE FROM match_care_package_events WHERE match_id = %s", (match_id,))
@@ -1194,64 +1256,27 @@ def parse_plane_route(
     match_id: str,
     preferred_account_ids: set[str],
 ) -> PlaneRoute | None:
-    aircraft_samples_by_account: dict[str, list[PositionSample]] = defaultdict(list)
-    fallback_aircraft_samples: list[PositionSample] = []
+    del preferred_account_ids
+    aircraft_samples: list[PositionSample] = []
 
     for event_index, event in enumerate(events):
-        if event.get("_T") != "LogPlayerPosition":
-            continue
+        sample = _plane_route_sample(event, match_id=match_id, event_index=event_index)
+        if sample is not None and sample.x is not None and sample.y is not None:
+            aircraft_samples.append(sample)
 
-        character = _mapping_value(event.get("character"))
-        if not _looks_like_aircraft_sample(event, character):
-            continue
-
-        account_id = _optional_text(character.get("accountId"))
-        location = _mapping_value(character.get("location"))
-        sample = PositionSample(
-            match_id=match_id,
-            account_id=account_id or "",
-            event_index=event_index,
-            event_at_kst=_parse_event_time(event.get("_D")),
-            common_is_game=_common_is_game(event),
-            elapsed_time_seconds=_optional_float(event.get("elapsedTime")),
-            num_alive_players=_optional_int(event.get("numAlivePlayers")),
-            x=_optional_float(location.get("x")),
-            y=_optional_float(location.get("y")),
-            z=_optional_float(location.get("z")),
-            is_in_vehicle=_optional_bool(character.get("isInVehicle")),
-            is_in_blue_zone=_optional_bool(character.get("isInBlueZone")),
-            is_in_red_zone=_optional_bool(character.get("isInRedZone")),
-            in_special_zone=_optional_text(character.get("inSpecialZone")),
-            is_dbno=_optional_bool(character.get("isDBNO")),
-            zone=character.get("zone") if character.get("zone") is not None else [],
-        )
-        fallback_aircraft_samples.append(sample)
-        if account_id:
-            aircraft_samples_by_account[account_id].append(sample)
-
-    selected_samples: list[PositionSample] = []
-    selected_account_id: str | None = None
-    for account_id in sorted(preferred_account_ids):
-        samples = aircraft_samples_by_account.get(account_id, [])
-        if len(samples) >= 2:
-            selected_account_id = account_id
-            selected_samples = samples
-            break
-
-    if not selected_samples and len(fallback_aircraft_samples) >= 2:
-        selected_account_id = fallback_aircraft_samples[0].account_id or None
-        selected_samples = fallback_aircraft_samples
-
-    if len(selected_samples) < 2:
+    if len(aircraft_samples) < 2:
         return None
 
-    selected_samples = sorted(selected_samples, key=lambda sample: sample.event_index)
-    start = selected_samples[0]
-    end = selected_samples[-1]
+    aircraft_samples.sort(key=lambda sample: sample.event_index)
+    start = aircraft_samples[0]
+    end = aircraft_samples[-1]
+    if start.x == end.x and start.y == end.y:
+        return None
+
     return PlaneRoute(
         match_id=match_id,
-        source="log_player_position_aircraft_heuristic",
-        sample_count=len(selected_samples),
+        source="global_transport_aircraft_events",
+        sample_count=len(aircraft_samples),
         start_event_index=start.event_index,
         end_event_index=end.event_index,
         start_event_at_kst=start.event_at_kst,
@@ -1262,7 +1287,7 @@ def parse_plane_route(
         end_x=end.x,
         end_y=end.y,
         end_z=end.z,
-        sample_account_id=selected_account_id,
+        sample_account_id=None,
     )
 
 
@@ -1359,10 +1384,13 @@ def _sampled_distance_m(samples: list[PositionSample], *, in_game_only: bool) ->
         if in_game_only and (sample.common_is_game is None or sample.common_is_game <= 0):
             previous = None
             continue
+        if _is_transport_aircraft_position(sample):
+            previous = None
+            continue
 
         if previous is not None:
             distance = _xy_distance_m(previous, sample)
-            if distance is not None:
+            if distance is not None and not _position_continuity_break(previous, sample, distance):
                 total += distance
         previous = sample
     return total
@@ -1372,6 +1400,40 @@ def _xy_distance_m(left: PositionSample, right: PositionSample) -> float | None:
     if left.x is None or left.y is None or right.x is None or right.y is None:
         return None
     return sqrt((right.x - left.x) ** 2 + (right.y - left.y) ** 2) / 100.0
+
+
+def _is_transport_aircraft_position(sample: PositionSample) -> bool:
+    return (
+        sample.is_in_vehicle is True
+        and sample.z is not None
+        and sample.z >= TRANSPORT_AIRCRAFT_ALTITUDE_CM
+    )
+
+
+def _position_continuity_break(
+    left: PositionSample,
+    right: PositionSample,
+    distance_m: float,
+) -> bool:
+    elapsed_delta: float | None = None
+    if left.elapsed_time_seconds is not None and right.elapsed_time_seconds is not None:
+        elapsed_delta = right.elapsed_time_seconds - left.elapsed_time_seconds
+    elif left.event_at_kst is not None and right.event_at_kst is not None:
+        elapsed_delta = (right.event_at_kst - left.event_at_kst).total_seconds()
+    if elapsed_delta is None or elapsed_delta <= 0:
+        return True
+    if elapsed_delta > MAX_CONTINUOUS_SAMPLE_GAP_SECONDS:
+        return True
+    if distance_m / elapsed_delta > MAX_CONTINUOUS_HORIZONTAL_SPEED_MPS:
+        return True
+    if (
+        left.z is not None
+        and right.z is not None
+        and right.z >= TRANSPORT_AIRCRAFT_ALTITUDE_CM
+        and right.z - left.z >= 30000.0
+    ):
+        return True
+    return False
 
 
 def _damage_distance_m(value: Any) -> float | None:
@@ -1404,6 +1466,65 @@ def _looks_like_aircraft_sample(event: Mapping[str, Any], character: Mapping[str
     location = _mapping_value(character.get("location"))
     z = _optional_float(location.get("z"))
     return z is not None and z >= 100000.0
+
+
+def _plane_route_sample(
+    event: Mapping[str, Any],
+    *,
+    match_id: str,
+    event_index: int,
+) -> PositionSample | None:
+    event_type = event.get("_T")
+    character = _mapping_value(event.get("character"))
+    location: Mapping[str, Any]
+
+    if event_type == "LogPlayerPosition":
+        if not _looks_like_aircraft_sample(event, character):
+            return None
+        location = _mapping_value(character.get("location"))
+    elif event_type in {"LogVehicleRide", "LogVehicleLeave"}:
+        common_is_game = _common_is_game(event)
+        if common_is_game is None or common_is_game > 0.2:
+            return None
+        vehicle = _mapping_value(event.get("vehicle"))
+        if not _is_transport_aircraft(vehicle):
+            return None
+        vehicle_location = _mapping_value(vehicle.get("location"))
+        character_location = _mapping_value(character.get("location"))
+        location = vehicle_location if vehicle_location else character_location
+    else:
+        return None
+
+    account_id = _optional_text(character.get("accountId")) or ""
+    return PositionSample(
+        match_id=match_id,
+        account_id=account_id,
+        event_index=event_index,
+        event_at_kst=_parse_event_time(event.get("_D")),
+        common_is_game=_common_is_game(event),
+        elapsed_time_seconds=_optional_float(event.get("elapsedTime")),
+        num_alive_players=_optional_int(event.get("numAlivePlayers")),
+        x=_optional_float(location.get("x")),
+        y=_optional_float(location.get("y")),
+        z=_optional_float(location.get("z")),
+        is_in_vehicle=True,
+        is_in_blue_zone=_optional_bool(character.get("isInBlueZone")),
+        is_in_red_zone=_optional_bool(character.get("isInRedZone")),
+        in_special_zone=_optional_text(character.get("inSpecialZone")),
+        is_dbno=_optional_bool(character.get("isDBNO")),
+        zone=character.get("zone") if character.get("zone") is not None else [],
+    )
+
+
+def _is_transport_aircraft(vehicle: Mapping[str, Any]) -> bool:
+    identifiers = (
+        _optional_text(vehicle.get("vehicleType")),
+        _optional_text(vehicle.get("vehicleId")),
+    )
+    normalized = [value.lower() for value in identifiers if value]
+    if any("redeployaircraft" in value for value in normalized):
+        return False
+    return any("transportaircraft" in value for value in normalized)
 
 
 def _common_is_game(event: Mapping[str, Any]) -> float | None:

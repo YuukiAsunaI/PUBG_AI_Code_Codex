@@ -33,7 +33,7 @@ ITEM_EVENT_ACTIONS = {
 
 
 PROCESSOR_NAME = "items"
-PARSER_VERSION = "items-v1"
+PARSER_VERSION = "items-v3"
 
 
 class TelemetryItemProcessingError(RuntimeError):

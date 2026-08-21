@@ -156,7 +156,11 @@ def main(argv: list[str] | None = None) -> int:
     match_stats_parser.add_argument("--shard", default="steam")
 
     ranking_parser = subparsers.add_parser("player-ranking", help="Print registered player rankings.")
-    ranking_parser.add_argument("--metric", default="kda", help="kda, 승률, 평딜, 딜, 킬, 경기, 명중률, 헤드샷, 기절")
+    ranking_parser.add_argument(
+        "--metric",
+        default="kda",
+        help="kda, 승률, 평딜, 딜, 킬, 경기, 명중률, 헤드샷, 헤드샷킬, 기절",
+    )
     ranking_parser.add_argument("--shard", default="steam")
     ranking_parser.add_argument("--guild-id", default=None, help="Limit ranking to one Discord guild scope.")
     ranking_parser.add_argument("--limit", default=10, type=int)

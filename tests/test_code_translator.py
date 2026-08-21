@@ -25,6 +25,50 @@ class CodeTranslatorTests(unittest.TestCase):
         self.assertTrue(translated.known)
         self.assertEqual(translated.label, "베릴 M762")
 
+    def test_rpd_and_current_attachment_codes_are_translated(self) -> None:
+        translator = CodeTranslator()
+
+        self.assertEqual(translator.translate("Item_Weapon_RPD_C", "item").label, "RPD")
+        self.assertEqual(translator.translate("WeapRPD_C", "damage_causer").label, "RPD")
+        self.assertEqual(
+            translator.translate("Item_Attach_Weapon_Lower_TiltedGrip_C", "item").label,
+            "틸티드 그립",
+        )
+        self.assertEqual(
+            translator.translate("Item_Attach_Weapon_Muzzle_AR_MuzzleBrake_C", "item").label,
+            "총구 제동기",
+        )
+
+    def test_current_real_telemetry_codes_are_translated(self) -> None:
+        translator = CodeTranslator()
+        cases = {
+            ("sdm-fpp", "game_mode"): "솔로 데스매치 (1인칭)",
+            ("InstantRevivalKit_C", "item"): "긴급 소생 키트",
+            ("Item_Back_B_01_StartParachutePack_C", "item"): "낙하산",
+            ("Item_Back_BlueBlocker", "item"): "전파 방해 배낭",
+            ("Item_BulletproofShield_C", "item"): "접이식 방패",
+            ("Item_DihorOtok_Key_C", "item"): "비밀의 방 열쇠",
+            ("Item_EmergencyPickup_C", "item"): "긴급 수송",
+            ("Item_Weapon_Ziplinegun_C", "item"): "집라인 건",
+            ("WeapFamasG2_C", "damage_causer"): "FAMAS",
+            ("TslGameModeBase_BattleRoyaleBP_C", "damage_causer"): "블루존",
+            ("Buff_DecreaseBreathInApnea_C", "damage_causer"): "익사",
+            ("BP_Niva_06_C", "damage_causer"): "지마",
+            ("BP_Niva_06_C", "vehicle"): "지마",
+        }
+
+        for (code, category), expected in cases.items():
+            with self.subTest(code=code, category=category):
+                translated = translator.translate(code, category)
+                self.assertTrue(translated.known)
+                self.assertEqual(translated.label, expected)
+
+    def test_explicit_empty_tables_do_not_enable_defaults(self) -> None:
+        translated = CodeTranslator({}).translate("Item_Weapon_BerylM762_C", "item")
+
+        self.assertFalse(translated.known)
+        self.assertEqual(translated.label, "Item_Weapon_BerylM762_C")
+
     def test_unknown_code_falls_back_to_original_code(self) -> None:
         translator = CodeTranslator()
 
@@ -133,6 +177,19 @@ class CodeTranslatorTests(unittest.TestCase):
                 translator.translate("Item_Weapon_BerylM762_C", "item").label,
                 "베릴 M762",
             )
+
+    def test_json_file_can_explicitly_disable_default_tables(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "translations.json"
+            path.write_text("{}", encoding="utf-8")
+
+            translated = CodeTranslator.from_json_file(
+                path,
+                include_defaults=False,
+            ).translate("Item_Weapon_BerylM762_C", "item")
+
+            self.assertFalse(translated.known)
+            self.assertEqual(translated.label, "Item_Weapon_BerylM762_C")
 
     def test_can_load_legacy_python_dictionary_file_safely(self) -> None:
         with TemporaryDirectory() as temp_dir:

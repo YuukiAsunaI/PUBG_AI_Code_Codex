@@ -51,6 +51,14 @@ class WebDesktopShellTests(unittest.TestCase):
         self.assertIn("@media (max-width: 820px)", self.body)
         self.assertIn("@media (max-width: 520px)", self.body)
 
+    def test_recommendation_view_supports_large_samples_and_charts(self) -> None:
+        self.assertIn('name="min_matches" type="number" min="1" step="1"', self.body)
+        self.assertNotIn('name="min_matches" type="number" min="1" max="50"', self.body)
+        self.assertIn('data-recommendation-view="summary"', self.body)
+        self.assertIn('data-recommendation-view="chart"', self.body)
+        self.assertIn("renderRecommendationCharts", self.body)
+        self.assertIn("data-recommendation-chart-metric", self.body)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -62,6 +62,52 @@ class DiscordPermissionManagerTests(unittest.TestCase):
             with self.assertRaises(LocalSettingsError):
                 manager.grant(user_id="user-1", group="unknown")
 
+    def test_custom_group_controls_selected_commands_and_cannot_delete_while_assigned(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            manager = _manager(Path(temp_dir))
+
+            created = manager.upsert_command_group(
+                group="combat_reader",
+                commands=["전적", "pubg-weapon"],
+            )
+            manager.grant(user_id="user-1", group="combat_reader")
+
+            self.assertTrue(created.changed)
+            self.assertEqual(
+                set(manager.load().command_groups["combat_reader"]),
+                {"전적", "무기"},
+            )
+            with self.assertRaisesRegex(LocalSettingsError, "still assigned"):
+                manager.delete_command_group("combat_reader")
+
+            manager.revoke(user_id="user-1", group="combat_reader")
+            deleted = manager.delete_command_group("combat_reader")
+
+            self.assertTrue(deleted.changed)
+            self.assertNotIn("combat_reader", manager.load().command_groups)
+
+    def test_built_in_group_is_read_only(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            manager = _manager(Path(temp_dir))
+
+            with self.assertRaisesRegex(LocalSettingsError, "read-only"):
+                manager.upsert_command_group(group="profile_read", commands=["전적"])
+
+    def test_custom_prefix_alias_targets_canonical_command(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            manager = _manager(Path(temp_dir))
+
+            created = manager.set_command_alias(alias="내전적", target_command="pubg-stats")
+
+            self.assertTrue(created.changed)
+            self.assertEqual(manager.load().command_aliases, {"내전적": "전적"})
+            with self.assertRaisesRegex(LocalSettingsError, "conflicts"):
+                manager.set_command_alias(alias="전적", target_command="전적")
+
+            removed = manager.remove_command_alias("내전적")
+            self.assertTrue(removed.changed)
+            self.assertEqual(manager.load().command_aliases, {})
+
 
 def _manager(base_dir: Path) -> DiscordPermissionManager:
     return DiscordPermissionManager(

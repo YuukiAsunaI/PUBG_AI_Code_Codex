@@ -16,7 +16,7 @@ from pubg_ai.time_utils import now_kst, to_kst
 from pubg_ai.weapon_stats import normalize_weapon_code
 
 
-FIGHT_OUTCOME_PARSER_VERSION = "fight-outcomes-v2"
+FIGHT_OUTCOME_PARSER_VERSION = "fight-outcomes-v3"
 FightOutcomeType = Literal["win", "loss"]
 FightOutcomeReason = Literal["kill", "dbno_caused", "death", "dbno_taken"]
 

@@ -32,7 +32,7 @@ class AppConfig:
         env: Mapping[str, str] | None = None,
         base_dir: Path | None = None,
     ) -> "AppConfig":
-        values = env or os.environ
+        values = os.environ if env is None else env
         base = base_dir or Path.cwd()
         raw_dir = _config_path(values.get("PUBG_RAW_DATA_DIR", "./data/raw"), base)
         replay_dir = _config_path(
@@ -96,7 +96,7 @@ class AppConfig:
         env: Mapping[str, str] | None = None,
         base_dir: Path | None = None,
     ) -> "AppConfig":
-        values = env or os.environ
+        values = os.environ if env is None else env
         base = base_dir or Path.cwd()
         config = cls.from_env(values, base)
         settings_file = _config_path(
@@ -164,7 +164,7 @@ class SecretConfig:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "SecretConfig":
-        values = env or os.environ
+        values = os.environ if env is None else env
         return cls(
             pubg_api_key=_non_empty(values.get("PUBG_API_KEY")),
             discord_bot_token=_non_empty(values.get("DISCORD_BOT_TOKEN")),
@@ -188,7 +188,7 @@ class DatabaseConfig:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "DatabaseConfig":
-        values = env or os.environ
+        values = os.environ if env is None else env
         return cls(
             host=values.get("MYSQL_HOST", "127.0.0.1").strip() or "127.0.0.1",
             port=_env_int(

@@ -7,7 +7,13 @@ import tempfile
 import unittest
 
 from pubg_ai.replay_storage import ReplayArtifactStore
-from pubg_ai.replay_timeline_builder import ReplayTimelineProcessor
+from pubg_ai.replay_timeline_builder import (
+    ReplayTimelineProcessor,
+    _apply_timeline_clock,
+    _assign_position_segments,
+    _build_timeline_anchors,
+    _derive_drop_starts,
+)
 
 
 class ReplayTimelineProcessorTests(unittest.TestCase):
@@ -237,7 +243,11 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
             path = Path(temp_dir) / artifact.relative_path
             payload = json.loads(path.read_text(encoding="utf-8"))
 
-        self.assertEqual(payload["schema_version"], "player-timeline-v1")
+        self.assertEqual(payload["schema_version"], "player-timeline-v6")
+        self.assertEqual(payload["time_basis"], "telemetry_elapsed_time_with_piecewise_timestamp_interpolation")
+        self.assertEqual(payload["clock"]["anchor_count"], 4)
+        self.assertEqual(payload["clock"]["interpolation"], "piecewise-linear")
+        self.assertTrue(payload["time_origin_at_kst"].startswith("2026-06-28T09:13:17"))
         self.assertEqual(payload["match"]["match_id"], "match-1")
         self.assertEqual(payload["player"]["name"], "Yuuki_Asuna---")
         self.assertEqual(payload["team"]["member_count"], 2)
@@ -255,13 +265,28 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
         self.assertEqual(payload["counts"]["combat_events"], 1)
         self.assertEqual(payload["counts"]["phase_events"], 1)
         self.assertEqual(payload["positions"][0]["map"]["x_pct"], 100000.0 / 816000.0)
+        self.assertEqual(payload["positions"][0]["time_seconds"], 43.0)
+        self.assertEqual(payload["positions"][1]["time_seconds"], 103.0)
+        self.assertEqual(payload["landings"][0]["time_seconds"], 88.0)
+        position_query = next(
+            query
+            for query, _ in connection.executed
+            if "FROM player_position_samples" in query and "elapsed_time_seconds" in query
+        )
+        self.assertIn("common_is_game > 0", position_query)
+        self.assertNotIn("COALESCE(is_in_vehicle, 0)", position_query)
         self.assertEqual(payload["team_tracks"][0]["name"], "TrackedMate")
         self.assertEqual(payload["team_tracks"][0]["positions"][0]["map"]["x_pct"], 101000.0 / 816000.0)
         self.assertEqual(payload["combat_events"][0]["damage_causer_label"], "M416")
+        self.assertEqual(payload["combat_events"][0]["time_seconds"], 283.0)
         self.assertEqual(payload["combat_events"][0]["related_name"], "EnemyRegistered")
         self.assertTrue(payload["combat_events"][0]["related_registered"])
         self.assertEqual(payload["care_packages"][0]["item_codes"], ["Item_Weapon_AWM_C"])
+        self.assertEqual(payload["care_packages"][0]["time_seconds"], 403.0)
+        self.assertEqual(payload["plane_route"]["start_time_seconds"], 3.0)
+        self.assertEqual(payload["plane_route"]["end_time_seconds"], 43.0)
         self.assertEqual(payload["phase_events"][0]["elapsed_time_seconds"], 340.0)
+        self.assertEqual(payload["phase_events"][0]["time_seconds"], 340.0)
         self.assertEqual(payload["phase_events"][0]["num_alive_teams"], 28)
         self.assertEqual(payload["phase_events"][0]["safety_zone"]["radius_m"], 2910.0)
         self.assertEqual(payload["phase_events"][0]["safety_zone"]["map"]["x_pct"], 202000.0 / 816000.0)
@@ -270,6 +295,50 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
         self.assertIsNone(payload["phase_events"][0]["black_zone"])
         self.assertIn("INSERT INTO replay_artifacts", connection.executed[-1][0])
         self.assertIn("player-timeline", connection.executed[-1][1])
+
+    def test_piecewise_clock_places_events_between_neighbouring_position_samples(self) -> None:
+        positions = [
+            {
+                "event_at_kst": "2026-08-21T04:36:51+09:00",
+                "elapsed_time_seconds": 47.0,
+            },
+            {
+                "event_at_kst": "2026-08-21T04:37:31+09:00",
+                "elapsed_time_seconds": 86.0,
+            },
+        ]
+        anchors = _build_timeline_anchors(preferred_events=positions, fallback_events=[])
+        events = [{"event_index": 10, "event_at_kst": "2026-08-21T04:37:11+09:00"}]
+
+        _apply_timeline_clock(events, anchors)
+
+        self.assertAlmostEqual(events[0]["time_seconds"], 66.5)
+
+    def test_position_segments_break_on_gap_and_implausible_jump(self) -> None:
+        positions = [
+            {"event_index": 1, "time_seconds": 1.0, "x": 1000.0, "y": 1000.0, "z": 0.0},
+            {"event_index": 2, "time_seconds": 2.0, "x": 1100.0, "y": 1100.0, "z": 0.0},
+            {"event_index": 3, "time_seconds": 52.0, "x": 1200.0, "y": 1200.0, "z": 0.0},
+            {"event_index": 4, "time_seconds": 53.0, "x": 250000.0, "y": 250000.0, "z": 0.0},
+        ]
+
+        _assign_position_segments(positions)
+
+        self.assertEqual([row["segment_id"] for row in positions], [0, 0, 1, 2])
+        self.assertEqual(positions[2]["segment_start_reason"], "sample_gap")
+        self.assertEqual(positions[3]["segment_start_reason"], "position_jump")
+
+    def test_drop_start_is_first_airborne_sample_per_path_segment(self) -> None:
+        positions = [
+            {"event_index": 1, "segment_id": 0, "z": 140000.0, "is_in_vehicle": False},
+            {"event_index": 2, "segment_id": 0, "z": 90000.0, "is_in_vehicle": False},
+            {"event_index": 3, "segment_id": 1, "z": 0.0, "is_in_vehicle": False},
+            {"event_index": 4, "segment_id": 2, "z": 50000.0, "is_in_vehicle": False},
+        ]
+
+        starts = _derive_drop_starts(positions)
+
+        self.assertEqual([row["event_index"] for row in starts], [1, 4])
 
     def test_skips_timeline_without_positions(self) -> None:
         connection = FakeConnection(
@@ -306,6 +375,9 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
 
         self.assertEqual(result.generated_timelines, 0)
         self.assertEqual(result.skipped_no_position, 1)
+        candidate_query = connection.executed[0][0]
+        self.assertIn("FROM player_position_samples candidate_positions", candidate_query)
+        self.assertIn("candidate_positions.common_is_game > 0", candidate_query)
 
 
 class FakeConnection:

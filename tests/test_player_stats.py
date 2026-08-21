@@ -1,12 +1,41 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 import unittest
 
-from pubg_ai.player_stats import PlayerStatsService, weapon_code_from_identifier
+from pubg_ai.player_stats import (
+    PlayerStatsService,
+    _movement_distance_from_row,
+    weapon_code_from_identifier,
+)
+from pubg_ai.player_trends import PlayerTrendFilters
 
 
 class PlayerStatsServiceTests(unittest.TestCase):
+    def test_movement_distance_prefers_official_participant_totals(self) -> None:
+        distance = _movement_distance_from_row(
+            {
+                "raw_stats": {
+                    "walkDistance": 1250.5,
+                    "rideDistance": 3000.0,
+                    "swimDistance": 49.5,
+                },
+                "in_game_sampled_distance_m": 2700.0,
+            }
+        )
+
+        self.assertEqual(distance, 4300.0)
+
+    def test_movement_distance_falls_back_to_sampled_route(self) -> None:
+        distance = _movement_distance_from_row(
+            {
+                "raw_stats": {},
+                "in_game_sampled_distance_m": 2700.0,
+            }
+        )
+
+        self.assertEqual(distance, 2700.0)
+
     def test_builds_player_profile_summary(self) -> None:
         connection = FakeConnection(
             [
@@ -57,6 +86,7 @@ class PlayerStatsServiceTests(unittest.TestCase):
                         "damage_dealt": 1200.0,
                         "shots_fired": 500,
                         "shots_hit": 95,
+                        "headshot_hits": 19,
                         "headshot_kills": 2,
                     }
                 ],
@@ -101,6 +131,7 @@ class PlayerStatsServiceTests(unittest.TestCase):
         self.assertEqual(profile.top_weapons[0].weapon_code, "WeapBerylM762_C")
         self.assertEqual(profile.top_weapons[0].weapon_name, "베릴 M762")
         self.assertAlmostEqual(profile.top_weapons[0].accuracy, 0.19)
+        self.assertAlmostEqual(profile.top_weapons[0].to_record()["headshot_hit_rate"], 0.2)
         self.assertEqual(
             profile.top_weapons[0].accuracy_metric.metric_kind,
             "estimated_hit_rate",
@@ -210,6 +241,12 @@ class PlayerStatsServiceTests(unittest.TestCase):
                         "taken_hit_parts": {},
                     },
                 ],
+                [
+                    {"outcome_type": "win", "distance_m": 42.0},
+                    {"outcome_type": "win", "distance_m": 48.0},
+                    {"outcome_type": "loss", "distance_m": 45.0},
+                    {"outcome_type": "loss", "distance_m": 112.0},
+                ],
             ]
         )
 
@@ -218,6 +255,15 @@ class PlayerStatsServiceTests(unittest.TestCase):
             name="Yuuki_Asuna---",
             guild_id="guild-1",
             weapon="M416",
+            filters=PlayerTrendFilters(
+                map_name="Erangel_Main",
+                season_state="progress",
+                year=2026,
+                quarter=2,
+                month=6,
+                exact_date_kst=date(2026, 6, 29),
+                hour=1,
+            ),
         )
 
         self.assertIsNotNone(detail)
@@ -232,7 +278,81 @@ class PlayerStatsServiceTests(unittest.TestCase):
         self.assertAlmostEqual(detail.totals.avg_damage_dealt, 235.0)
         self.assertEqual(detail.totals.hit_parts, {"head": 8, "torso": 20, "leg": 3})
         self.assertEqual(detail.totals.taken_hit_parts, {"arm": 1})
+        self.assertEqual(detail.totals.fight_count, 4)
+        self.assertEqual(detail.totals.fight_wins, 2)
+        self.assertAlmostEqual(detail.totals.fight_win_rate, 0.5)
+        self.assertEqual(detail.totals.avg_fights_per_match, 2.0)
+        self.assertEqual(detail.effective_ranges[0].bucket_label, "25-50m")
+        self.assertEqual(detail.effective_ranges[0].wins, 2)
+        self.assertEqual(detail.effective_ranges[0].losses, 1)
         self.assertEqual(detail.recent_matches[0].match_id, "match-2")
+        self.assertEqual(detail.filters.year, 2026)
+        query, params = connection.executed[2]
+        self.assertIn("matches.map_name = %s", query)
+        self.assertIn("matches.season_state = %s", query)
+        self.assertIn("YEAR(matches.created_at_kst) = %s", query)
+        self.assertIn("QUARTER(matches.created_at_kst) = %s", query)
+        self.assertIn("MONTH(matches.created_at_kst) = %s", query)
+        self.assertIn("HOUR(matches.created_at_kst) = %s", query)
+        self.assertIn(datetime(2026, 6, 29), params)
+        fight_query, fight_params = connection.executed[3]
+        self.assertIn("outcomes.is_friendly_fire = 0", fight_query)
+        self.assertIn("matches.map_name = %s", fight_query)
+        self.assertEqual(fight_params[:3], ["account.test", "steam", "WeapHK416_C"])
+
+    def test_builds_registered_player_lookup_catalog(self) -> None:
+        connection = FakeConnection(
+            [
+                {
+                    "id": 1,
+                    "account_id": "account.test",
+                    "shard": "steam",
+                    "current_name": "Yuuki_Asuna---",
+                    "active": 1,
+                    "public_profile": 1,
+                    "registered_by_discord_user_id": "user-1",
+                    "registered_guild_id": "guild-1",
+                    "registered_channel_id": "channel-1",
+                },
+                [
+                    {"weapon_code": "WeapRPD_C", "match_count": 3},
+                    {"weapon_code": "WeapM24_C", "match_count": 2},
+                ],
+                [
+                    {
+                        "match_id": "match-2",
+                        "created_at_kst": datetime(2026, 8, 13, 21, 30),
+                        "map_name": "Erangel_Main",
+                        "game_mode": "squad-fpp",
+                        "team_mode": "squad",
+                        "perspective": "fpp",
+                        "match_type": "official",
+                        "season_state": "progress",
+                        "win_place": 1,
+                        "kills": 4,
+                        "assists": 2,
+                        "deaths": 0,
+                        "dbnos_caused": 5,
+                        "damage_dealt": 620.0,
+                    }
+                ],
+            ]
+        )
+
+        catalog = PlayerStatsService(connection).get_lookup_catalog(
+            shard="steam",
+            name="Yuuki_Asuna---",
+            global_scope=True,
+        )
+
+        self.assertIsNotNone(catalog)
+        assert catalog is not None
+        self.assertEqual(catalog.weapons[0].weapon_name, "RPD")
+        self.assertEqual(catalog.weapons[0].weapon_family, "LMG")
+        self.assertEqual(catalog.matches[0].match_id, "match-2")
+        self.assertEqual(catalog.facets["maps"], ["Erangel_Main"])
+        self.assertEqual(catalog.facets["years"], [2026])
+        self.assertEqual(catalog.to_record()["matches"][0]["map_name_ko"], "에란겔")
 
     def test_builds_match_detail_with_weapon_and_replay_summary(self) -> None:
         connection = FakeConnection(
@@ -453,6 +573,7 @@ class PlayerStatsServiceTests(unittest.TestCase):
         self.assertEqual(weapon_code_from_identifier("M416"), "WeapHK416_C")
         self.assertEqual(weapon_code_from_identifier("Beryl"), "WeapBerylM762_C")
         self.assertEqual(weapon_code_from_identifier("Item_Weapon_AK47_C"), "WeapAK47_C")
+        self.assertEqual(weapon_code_from_identifier("RPD"), "WeapRPD_C")
 
 
 class FakeConnection:

@@ -24,6 +24,29 @@ Desktop mode reveals native folder-picker buttons for Raw, Replay, deletion-back
 updates the form only; the existing Storage Settings API performs validation and persistence after Save. Browser mode
 keeps the same text inputs and hides the native-only buttons.
 
+## Player Analysis UX
+
+- Profile, trend, weapon, recommendation, and match forms only accept locally registered tracking targets. A shared
+  nickname datalist supports substring searching while the selected row resolves to its stored PUBG account ID.
+- Selecting a player loads that player's weapon catalog and up to 5,000 completed matches. Weapon and match lookup use
+  readable dropdown labels, and match search filters by date, map, mode, placement, kills, and match ID.
+- Weapon and trend lookup support map, game/team mode, perspective, match type, season state, custom match, KST year,
+  quarter, month, exact date, hour, and date-range filters. Trends can group by time, map, mode, perspective, match
+  type, or season state.
+- Recommendation output starts with a close/mid plus long-range two-weapon combination and keeps translated weapon and
+  attachment names consistent. Raw PUBG codes remain visible only when the translation dictionary has no entry.
+- Ranking uses Discord server names instead of requiring operators to remember guild IDs. The selector lists only
+  servers with registered tracking targets, shows each registered-player count and configured ranking scope, and keeps
+  an explicit all-server option. `서버 새로고침` synchronizes names from Discord without displaying or persisting the
+  bot token.
+- Discord permission and ranking-scope forms reuse the same server catalog. Server IDs remain visible as secondary
+  reference text in the saved-scope table, while normal selection is name-based.
+- Trend and weapon forms keep their common controls visible and place the less-frequent KST/date/season/custom-match
+  controls under `상세 필터`. Results use metric blocks, translated chips, grouped sections, and mobile trend cards to
+  avoid dense paragraph output and wide-table dependence.
+- Default backup and quarantine directories are created during manager startup. Missing-path alerts resolve on the
+  next status refresh while remaining available as resolved history records.
+
 ## Launch
 
 ```powershell

@@ -350,8 +350,9 @@ Run the Discord bot MVP:
 python -m pubg_ai.cli run-discord-bot --prefix !
 ```
 
-The Discord bot token stays only in `.env` as `DISCORD_BOT_TOKEN`. The bot currently uses text commands and requires
-Discord's message content intent to be enabled for the bot application.
+The Discord bot token stays only in `.env` as `DISCORD_BOT_TOKEN`. Core commands are registered as Discord hybrid
+commands, so the same handlers support both prefix and slash invocation. Prefix invocation still requires Discord's
+message content intent, and the application-command tree is synchronized when the bot becomes ready.
 
 Use the guarded live-acceptance workflow before enabling a production alert channel. The probe is read-only and its
 selected channel row includes `last_message_id` for a pre-send audit:
@@ -435,8 +436,10 @@ global admin. Only global admins can run `!pubg-ranking-scope guild|global [guil
 remains local-program/CLI managed. The running bot reloads permission settings before each gated command, so local
 manager and CLI changes apply without restarting the bot.
 
-Permission groups currently include `register`, `player_manage`, `profile_read`, `ranking_read`, `replay_read`,
-`settings_write`, and `admin`. `player_manage` grants only `유저삭제`/`pubg-unregister`, which stops future collection
+Built-in permission groups include `register`, `player_manage`, `profile_read`, `ranking_read`, `replay_read`,
+`settings_write`, and `admin`. The localhost manager can also create, edit, and remove custom groups by selecting
+commands from the validated command catalog. It can create prefix aliases that delegate only to a known command;
+arbitrary code or shell commands cannot be registered. `player_manage` grants only `유저삭제`/`pubg-unregister`, which stops future collection
 while retaining existing data. It does not grant permission management, destructive deletion review, alert control,
 or worker administration. Existing `admin` grants continue to imply `player_manage`, while a delegated
 `player_manage` grant does not imply `admin`.
@@ -537,7 +540,8 @@ The current runtime schema is version 23 with 48 tables. Version 23 adds per-acc
 completion state and a unique API-job target index; rerun `python -m pubg_ai.cli init-db` after updating. Existing raw
 and replay artifacts are not rewritten by this migration. Schema version 22 introduced `operational_drill_runs`, and
 schema version 21 introduced the two durable fight-outcome tables. See
-[`docs/PROJECT_AUDIT_2026-08-10.md`](docs/PROJECT_AUDIT_2026-08-10.md) for the latest full validation evidence.
+[`docs/PROJECT_AUDIT_2026-08-21.md`](docs/PROJECT_AUDIT_2026-08-21.md) for the latest full validation evidence. The
+previous 2026-08-14 baseline remains in [`docs/PROJECT_AUDIT_2026-08-14.md`](docs/PROJECT_AUDIT_2026-08-14.md).
 
 Each packet is guarded by six `ON DELETE RESTRICT` foreign keys. Generation appends only one version 20 audit row; it
 grants no authorization,
@@ -590,7 +594,9 @@ and the local page pre-fills the matching form or replay artifact filter from th
 `local_recommendations`, `local_match`, or `local_replay` links when the base URL is configured.
 `유저등록`, `유저조회`, and `유저삭제` success responses include contextual `local_registered_players` links,
 while `랭킹` success responses include `local_ranking` links. The local page can highlight a linked registered player
-row or pre-fill the ranking form from those URLs. Authorized `pubg-permission` and `pubg-ranking-scope` success,
+row or pre-fill the ranking form from those URLs. Ranking, Discord permission, and ranking-scope forms use synchronized
+Discord server-name selectors; guild IDs remain secondary reference data, and ranking lists only servers that have
+registered tracking targets. Authorized `pubg-permission` and `pubg-ranking-scope` success,
 usage, and settings-error responses include contextual `#discord-permissions` or `#discord-scopes` links that pre-fill
 the local forms. `pubg-settings` responses link to stable `#collector-settings`, `#storage-settings`, and
 `#discord-scopes` sections; successful collector/public-profile updates pre-fill the affected local controls.
@@ -603,6 +609,15 @@ blockers. Catalog totals remain complete when the displayed file list is limited
 and rehearsal require current plan/fingerprint bindings. Every view and mutation response explicitly reports that
 deletion execution is disabled and not ready.
 Permission-denied and blocked privilege-boundary attempts remain plain text by design.
+
+The local player-analysis forms use registered-player nickname search backed by stored account IDs. Weapon and match
+selection come from that player's local catalog instead of requiring raw codes or memorized match IDs. Weapon and
+trend views expose map/mode/season-state and KST year/quarter/month/date/hour filters, while recommendation results lead
+with a close/mid plus DMR/SR/Crossbow two-weapon combination and weapon-specific translated attachments. Accuracy,
+headshot-hit probability, fight-win probability, hit/taken body-part distributions, and per-match combat averages are
+available in current totals and trend graphs. Headshot-hit probability is head hits divided by hits, never by misses.
+Loadout score details expose their performance components and the heuristic PUBG inventory-unit cost of mixed ammo,
+shared ammo pools, and LMG reserve ammunition.
 
 Run the Windows desktop manager (recommended):
 

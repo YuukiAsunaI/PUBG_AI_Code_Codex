@@ -41,6 +41,26 @@ class DiscordPermissionChecker:
     def command_names(self, command_group: str) -> list[str]:
         return list(self.settings.command_groups.get(command_group, []))
 
+    def command_groups_for(self, command_name: str) -> list[str]:
+        normalized = str(command_name or "").casefold()
+        if not normalized:
+            return []
+        return sorted(
+            group
+            for group, commands in self.settings.command_groups.items()
+            if any(str(command).casefold() == normalized for command in commands)
+        )
+
+    def is_command_allowed(
+        self,
+        identity: DiscordCommandIdentity,
+        command_name: str,
+    ) -> bool:
+        return any(
+            self.is_allowed(identity, group)
+            for group in self.command_groups_for(command_name)
+        )
+
 
 def _grants_group(grants: list[str], command_group: str) -> bool:
     if command_group in grants:

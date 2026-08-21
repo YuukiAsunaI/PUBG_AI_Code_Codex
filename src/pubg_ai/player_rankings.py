@@ -41,6 +41,8 @@ class PlayerRankingRow:
     avg_movement_distance_m: float
     last_match_at_kst: datetime | None
     accuracy_breakdown: AccuracyBreakdown | None = None
+    headshot_hits: int = 0
+    headshot_hit_rate: float = 0.0
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
@@ -168,6 +170,7 @@ class PlayerRankingService:
                     COALESCE(SUM(summaries.damage_taken), 0) AS damage_taken,
                     COALESCE(SUM(summaries.shots_fired), 0) AS shots_fired,
                     COALESCE(SUM(summaries.shots_hit), 0) AS shots_hit,
+                    COALESCE(SUM(summaries.headshot_hits), 0) AS headshot_hits,
                     COALESCE(SUM(summaries.headshot_kills), 0) AS headshot_kills,
                     COALESCE(AVG(
                         COALESCE(
@@ -176,7 +179,18 @@ class PlayerRankingService:
                             0
                         )
                     ), 0) AS avg_survival_seconds,
-                    COALESCE(AVG(COALESCE(movement.in_game_sampled_distance_m, 0)), 0) AS avg_movement_distance_m,
+                    COALESCE(AVG(
+                        CASE
+                            WHEN JSON_EXTRACT(participants.raw_stats, '$.walkDistance') IS NOT NULL
+                              OR JSON_EXTRACT(participants.raw_stats, '$.rideDistance') IS NOT NULL
+                              OR JSON_EXTRACT(participants.raw_stats, '$.swimDistance') IS NOT NULL
+                            THEN
+                                COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(participants.raw_stats, '$.walkDistance')) AS DECIMAL(14, 3)), 0)
+                              + COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(participants.raw_stats, '$.rideDistance')) AS DECIMAL(14, 3)), 0)
+                              + COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(participants.raw_stats, '$.swimDistance')) AS DECIMAL(14, 3)), 0)
+                            ELSE COALESCE(movement.in_game_sampled_distance_m, 0)
+                        END
+                    ), 0) AS avg_movement_distance_m,
                     MAX(matches.created_at_kst) AS last_match_at_kst
                 FROM registered_players
                 INNER JOIN player_match_combat_summaries summaries
@@ -210,11 +224,7 @@ class PlayerRankingService:
             )
             raw_rows = cursor.fetchall()
 
-        accuracy_by_account = (
-            self._load_accuracy_breakdowns(shard=shard, raw_rows=raw_rows)
-            if metric.key == "accuracy"
-            else {}
-        )
+        accuracy_by_account = self._load_accuracy_breakdowns(shard=shard, raw_rows=raw_rows)
         return [
             _ranking_row_from_record(
                 row,
@@ -292,6 +302,7 @@ def _ranking_row_from_record(
     damage_taken = _float(row.get("damage_taken"))
     shots_fired = _int(row.get("shots_fired"))
     shots_hit = _int(row.get("shots_hit"))
+    headshot_hits = _int(row.get("headshot_hits"))
     headshot_kills = _int(row.get("headshot_kills"))
 
     values = {
@@ -303,6 +314,7 @@ def _ranking_row_from_record(
         "damage_dealt": damage_dealt,
         "shots_fired": shots_fired,
         "shots_hit": shots_hit,
+        "headshot_hits": headshot_hits,
         "headshot_kills": headshot_kills,
     }
     win_rate = _safe_divide(wins, match_count)
@@ -312,6 +324,7 @@ def _ranking_row_from_record(
         if accuracy_breakdown is None
         else accuracy_breakdown.estimated_hit_rate or 0.0
     )
+    headshot_hit_rate = _safe_divide(headshot_hits, shots_hit)
     headshot_kill_rate = _safe_divide(headshot_kills, kills)
     avg_damage_dealt = _safe_divide(damage_dealt, match_count)
     avg_damage_taken = _safe_divide(damage_taken, match_count)
@@ -324,6 +337,7 @@ def _ranking_row_from_record(
         "kills": kills,
         "matches": match_count,
         "accuracy": accuracy,
+        "headshot_hit_rate": headshot_hit_rate,
         "headshot_rate": headshot_kill_rate,
         "dbnos": _int(row.get("dbnos_caused")),
     }
@@ -344,12 +358,14 @@ def _ranking_row_from_record(
         damage_taken=damage_taken,
         shots_fired=shots_fired,
         shots_hit=shots_hit,
+        headshot_hits=headshot_hits,
         headshot_kills=headshot_kills,
         avg_damage_dealt=avg_damage_dealt,
         avg_damage_taken=avg_damage_taken,
         win_rate=win_rate,
         kda=kda,
         accuracy=accuracy,
+        headshot_hit_rate=headshot_hit_rate,
         headshot_kill_rate=headshot_kill_rate,
         avg_survival_seconds=_float(row.get("avg_survival_seconds")),
         avg_movement_distance_m=_float(row.get("avg_movement_distance_m")),
@@ -413,6 +429,7 @@ RANKING_METRICS = {
     "kills": RankingMetric(key="kills", label="킬"),
     "matches": RankingMetric(key="matches", label="경기 수"),
     "accuracy": RankingMetric(key="accuracy", label="추정 명중률(일반 탄환)"),
+    "headshot_hit_rate": RankingMetric(key="headshot_hit_rate", label="헤드샷 명중 확률"),
     "headshot_rate": RankingMetric(key="headshot_rate", label="헤드샷 킬 비율"),
     "dbnos": RankingMetric(key="dbnos", label="기절"),
 }
@@ -435,8 +452,12 @@ RANKING_METRIC_ALIASES = {
     "matches": "matches",
     "명중률": "accuracy",
     "accuracy": "accuracy",
-    "헤드샷": "headshot_rate",
-    "headshot": "headshot_rate",
+    "헤드샷": "headshot_hit_rate",
+    "헤드샷명중": "headshot_hit_rate",
+    "headshot": "headshot_hit_rate",
+    "headshot_hit_rate": "headshot_hit_rate",
+    "헤드샷킬": "headshot_rate",
+    "headshot_kill_rate": "headshot_rate",
     "기절": "dbnos",
     "dbno": "dbnos",
     "dbnos": "dbnos",

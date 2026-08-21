@@ -16,7 +16,7 @@ from pubg_ai.desktop import (
     resolve_desktop_endpoint,
     run_desktop_app,
 )
-from pubg_ai.desktop_entry import find_project_base_dir
+from pubg_ai.desktop_entry import find_project_base_dir, main_entry
 
 
 class DesktopEndpointTests(unittest.TestCase):
@@ -167,6 +167,25 @@ class DesktopLauncherTests(unittest.TestCase):
                 resolved = find_project_base_dir()
 
         self.assertEqual(resolved, Path(temp_dir).resolve())
+
+    def test_packaged_entrypoint_does_not_report_clean_exit_as_error(self) -> None:
+        with (
+            patch("pubg_ai.desktop_entry.run", return_value=0),
+            patch("pubg_ai.desktop_entry._show_startup_error") as show_error,
+        ):
+            main_entry()
+
+        show_error.assert_not_called()
+
+    def test_packaged_entrypoint_reports_real_startup_failure(self) -> None:
+        with (
+            patch("pubg_ai.desktop_entry.run", side_effect=RuntimeError("startup failed")),
+            patch("pubg_ai.desktop_entry._show_startup_error") as show_error,
+            self.assertRaisesRegex(RuntimeError, "startup failed"),
+        ):
+            main_entry()
+
+        show_error.assert_called_once_with("startup failed")
 
 
 if __name__ == "__main__":

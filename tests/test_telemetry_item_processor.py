@@ -3,10 +3,17 @@ from __future__ import annotations
 import unittest
 
 from pubg_ai.code_translator import CodeTranslator
-from pubg_ai.telemetry_item_processor import parse_item_events, summarize_item_match_stats
+from pubg_ai.telemetry_item_processor import (
+    PARSER_VERSION,
+    parse_item_events,
+    summarize_item_match_stats,
+)
 
 
 class TelemetryItemProcessorTests(unittest.TestCase):
+    def test_translation_output_change_uses_v3_processing_state(self) -> None:
+        self.assertEqual(PARSER_VERSION, "items-v3")
+
     def test_parses_tracked_item_events_and_summarizes_quantities(self) -> None:
         translator = CodeTranslator(
             {

@@ -13,11 +13,14 @@ class WeaponAccuracyTests(unittest.TestCase):
         self.assertEqual(weapon_family("WeapHK416_C"), "AR")
         self.assertEqual(weapon_family("WeapMk12_C"), "DMR")
         self.assertEqual(weapon_family("WeapM24_C"), "SR")
+        self.assertEqual(weapon_family("WeapRPD_C"), "LMG")
         self.assertEqual(weapon_family("WeapSaiga12_C"), "SHOTGUN")
         self.assertEqual(weapon_family("WeapCrossbow_C"), "CROSSBOW")
         self.assertEqual(weapon_family("WeapFutureWeapon_C"), "UNCLASSIFIED")
         self.assertEqual(distance_weapon_family("WeapHK416_C"), "AR")
-        self.assertEqual(distance_weapon_family("WeapSaiga12_C"), "OTHER")
+        self.assertEqual(distance_weapon_family("WeapRPD_C"), "LMG")
+        self.assertEqual(distance_weapon_family("WeapMP5K_C"), "SMG")
+        self.assertEqual(distance_weapon_family("WeapSaiga12_C"), "SHOTGUN")
 
     def test_single_projectile_metric_is_an_unclamped_estimate(self) -> None:
         metric = weapon_accuracy_metric("WeapHK416_C", 100, 25)

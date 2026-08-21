@@ -57,9 +57,15 @@ def _show_startup_error(message: str) -> None:
         pass
 
 
-if __name__ == "__main__":
+def main_entry() -> None:
     try:
-        raise SystemExit(run())
-    except BaseException as exc:
+        exit_code = run()
+    except Exception as exc:
         _show_startup_error(str(exc))
         raise
+    if exit_code not in (None, 0):
+        raise SystemExit(exit_code)
+
+
+if __name__ == "__main__":
+    main_entry()

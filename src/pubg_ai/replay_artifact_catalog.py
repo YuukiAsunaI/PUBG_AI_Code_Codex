@@ -2,7 +2,17 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime
+import re
 from typing import Any
+
+
+MIN_PLAYABLE_TIMELINE_VERSION = 6
+_TIMELINE_RENDERER_PATTERN = re.compile(r"^player-timeline-v(?P<version>\d+)$")
+
+
+def is_timeline_playback_ready(renderer_version: str) -> bool:
+    match = _TIMELINE_RENDERER_PATTERN.fullmatch(str(renderer_version or "").strip())
+    return bool(match and int(match.group("version")) >= MIN_PLAYABLE_TIMELINE_VERSION)
 
 
 @dataclass(frozen=True)
@@ -31,6 +41,10 @@ class ReplayArtifactRecord:
     def view_url(self) -> str:
         return f"/replay/artifacts/{self.id}/file"
 
+    @property
+    def playback_ready(self) -> bool:
+        return self.artifact_type != "timeline" or is_timeline_playback_ready(self.renderer_version)
+
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
         record["match_created_at_kst"] = (
@@ -38,6 +52,7 @@ class ReplayArtifactRecord:
         )
         record["generated_at_kst"] = self.generated_at_kst.isoformat()
         record["view_url"] = self.view_url
+        record["playback_ready"] = self.playback_ready
         return record
 
 
@@ -53,6 +68,32 @@ def list_replay_artifacts(
     limit = normalize_artifact_limit(limit)
     where_sql = []
     params: list[Any] = []
+
+    where_sql.append(
+        """
+        NOT EXISTS (
+            SELECT 1
+            FROM replay_artifacts newer_artifacts
+            WHERE newer_artifacts.match_id = artifacts.match_id
+              AND newer_artifacts.artifact_type = artifacts.artifact_type
+              AND newer_artifacts.artifact_name = artifacts.artifact_name
+              AND newer_artifacts.account_id = artifacts.account_id
+              AND (
+                    CASE
+                        WHEN newer_artifacts.renderer_version REGEXP '-v[0-9]+$'
+                        THEN CAST(SUBSTRING_INDEX(newer_artifacts.renderer_version, '-v', -1) AS UNSIGNED)
+                        ELSE 0
+                    END
+                  ) > (
+                    CASE
+                        WHEN artifacts.renderer_version REGEXP '-v[0-9]+$'
+                        THEN CAST(SUBSTRING_INDEX(artifacts.renderer_version, '-v', -1) AS UNSIGNED)
+                        ELSE 0
+                    END
+                  )
+        )
+        """
+    )
 
     if artifact_type:
         where_sql.append("artifacts.artifact_type = %s")
@@ -100,7 +141,12 @@ def list_replay_artifacts(
                 ON registered_players.account_id = artifacts.account_id
                AND registered_players.shard = artifacts.shard
             {where_clause}
-            ORDER BY artifacts.generated_at_kst DESC, artifacts.id DESC
+            ORDER BY
+                matches.created_at_kst DESC,
+                artifacts.match_id ASC,
+                artifacts.account_id ASC,
+                artifacts.artifact_type ASC,
+                artifacts.id DESC
             LIMIT %s
             """,
             params,

@@ -26,7 +26,7 @@ class CodeTranslator:
         self,
         tables: Mapping[TranslationCategory, Mapping[str, str]] | None = None,
     ) -> None:
-        base_tables = tables or DEFAULT_TRANSLATION_TABLES
+        base_tables = DEFAULT_TRANSLATION_TABLES if tables is None else tables
         self.tables: dict[str, dict[str, str]] = {
             category: dict(values)
             for category, values in base_tables.items()
@@ -80,7 +80,12 @@ class CodeTranslator:
         if text is None:
             text = ""
 
-        label = self.tables.get(category, {}).get(text)
+        table = self.tables.get(category, {})
+        label = table.get(text)
+        if label is None:
+            alias = TRANSLATION_CODE_ALIASES.get((category, text))
+            if alias is not None:
+                label = table.get(alias)
         if label:
             return CodeTranslation(code=text, label=label, category=category, known=True)
 
@@ -249,6 +254,10 @@ EVENT_CODE_FIELDS = {
 
 ITEM_OBJECT_FIELDS = ["item", "parentItem", "childItem", "weapon", "victimWeapon"]
 
+TRANSLATION_CODE_ALIASES = {
+    ("damage_causer", "WeapFamasG2_C"): "WeapFAMASG2_C",
+}
+
 
 DEATH_TYPE_KO = {
     "alive": "생존",
@@ -266,6 +275,7 @@ GAME_MODE_KO = {
     "squad": "스쿼드",
     "squad-fpp": "1인칭 스쿼드",
     "tdm": "팀 데스매치",
+    "sdm-fpp": "솔로 데스매치 (1인칭)",
 }
 
 MAP_NAME_KO = {
@@ -284,6 +294,7 @@ MAP_NAME_KO = {
 }
 
 ITEM_ID_KO = {
+    "InstantRevivalKit_C": "긴급 소생 키트",
     "Item_Ammo_12GuageSlug_C": "12게이지 슬러그탄",
     "Item_Ammo_12Guage_C": "12게이지",
     "Item_Ammo_300Magnum_C": ".300 매그넘",
@@ -296,6 +307,7 @@ ITEM_ID_KO = {
     "Item_Ammo_Bolt_C": "석궁용 볼트",
     "Item_Ammo_Flare_C": "플레어건 탄약",
     "Item_Ammo_Mortar_C": "60mm 박격포탄",
+    "Item_Ammo_ZiplinegunHook_C": "집라인 건 후크",
     "Item_Armor_C_01_Lv3_C": "군용 조끼 Lv.3",
     "Item_Armor_C_00_Lv3_C": "군용 조끼 Lv.3",
     "Item_Armor_D_01_Lv2_C": "경찰 조끼 Lv.2",
@@ -304,10 +316,18 @@ ITEM_ID_KO = {
     "Item_Armor_E_00_Lv1_C": "경찰 조끼 Lv.1",
     "Item_Back_C_01_Lv3_C": "배낭 Lv.3",
     "Item_Back_C_00_Lv3_C": "배낭 Lv.3",
+    "Item_Back_C_02_Lv3_C": "배낭 Lv.3",
     "Item_Back_E_01_Lv1_C": "배낭 Lv.1",
     "Item_Back_E_00_Lv1_C": "배낭 Lv.1",
+    "Item_Back_E_02_Lv1_C": "배낭 Lv.1",
     "Item_Back_F_01_Lv2_C": "배낭 Lv.2",
     "Item_Back_F_00_Lv2_C": "배낭 Lv.2",
+    "Item_Back_F_02_Lv2_C": "배낭 Lv.2",
+    "Item_Back_B_01_StartParachutePack_C": "낙하산",
+    "Item_Back_BlueBlocker": "전파 방해 배낭",
+    "Item_Back_BlueBlocker_Lv1": "전파 방해 배낭 Lv.1",
+    "Item_Back_BlueBlocker_Lv3": "전파 방해 배낭 Lv.3",
+    "Item_BulletproofShield_C": "접이식 방패",
     "Item_Boost_AdrenalineSyringe_C": "아드레날린 주사기",
     "Item_Boost_EnergyDrink_C": "에너지 드링크",
     "Item_Boost_PainKiller_C": "진통제",
@@ -316,24 +336,39 @@ ITEM_ID_KO = {
     "Item_Heal_MedKit_C": "의료용 키트",
     "Item_Head_E_01_Lv1_C": "헬멧 Lv.1",
     "Item_Head_E_00_Lv1_C": "헬멧 Lv.1",
+    "Item_Head_E_02_Lv1_C": "헬멧 Lv.1",
     "Item_Head_F_01_Lv2_C": "헬멧 Lv.2",
     "Item_Head_F_00_Lv2_C": "헬멧 Lv.2",
+    "Item_Head_F_02_Lv2_C": "헬멧 Lv.2",
     "Item_Head_G_01_Lv3_C": "헬멧 Lv.3",
     "Item_Head_G_00_Lv3_C": "헬멧 Lv.3",
     "Item_JerryCan_C": "연료통",
     "Item_Tiger_SelfRevive_C": "자가제세동기",
     "Item_Bluechip_C": "블루칩",
     "Item_Revival_Transmitter_C": "부활 송신기",
+    "Item_BTSecretRoom_Key_C": "비밀의 방 열쇠",
+    "Item_Chimera_Key_C": "비밀의 방 열쇠",
+    "Item_Desert_Key_C": "비밀의 방 열쇠",
+    "Item_DihorOtok_Key_C": "비밀의 방 열쇠",
+    "Item_EmergencyPickup_C": "긴급 수송",
+    "Item_Neon_Key_C": "비밀의 방 열쇠",
+    "Item_Tiger_Key_C": "비밀의 방 열쇠",
+    "Item_Mountainbike_C": "산악 자전거",
+    "Item_Special_Ascender_NoChicken_C": "등강기",
+    "Item_Special_BackupParachute_C": "비상 낙하산",
+    "Item_Special_Bluechip_C": "블루칩",
     "Item_Weapon_ACE32_C": "ACE32",
     "Item_Weapon_AK47_C": "AKM",
     "Item_Weapon_AUG_C": "AUG",
     "Item_Weapon_AWM_C": "AWM",
+    "Item_Weapon_Apple_C": "사과",
     "Item_Weapon_Berreta686_C": "S686",
     "Item_Weapon_BerylM762_C": "베릴 M762",
     "Item_Weapon_BizonPP19_C": "PP-19 비존",
     "Item_Weapon_BluezoneGrenade_C": "블루존 수류탄",
     "Item_Weapon_C4_C": "C4",
     "Item_Weapon_Cowbar_C": "빠루",
+    "Item_Weapon_CoverStructDropHandFlare_C": "비상 엄폐물 플레어",
     "Item_Weapon_Crossbow_C": "석궁",
     "Item_Weapon_DP12_C": "DBS",
     "Item_Weapon_DP28_C": "DP-28",
@@ -350,6 +385,7 @@ ITEM_ID_KO = {
     "Item_Weapon_Groza_C": "그로자",
     "Item_Weapon_HK416_C": "M416",
     "Item_Weapon_JS9_C": "JS9",
+    "Item_Weapon_IntegratedRepair_C": "올인원 수리 키트",
     "Item_Weapon_K2_C": "K2",
     "Item_Weapon_Kar98k_C": "Kar98k",
     "Item_Weapon_L6_C": "링스 AMR",
@@ -360,6 +396,7 @@ ITEM_ID_KO = {
     "Item_Weapon_M79_C": "M79",
     "Item_Weapon_M9_C": "P92",
     "Item_Weapon_MG3_C": "MG3",
+    "Item_Weapon_RPD_C": "RPD",
     "Item_Weapon_MP5K_C": "MP5K",
     "Item_Weapon_MP9_C": "MP9",
     "Item_Weapon_Machete_C": "마체테",
@@ -376,19 +413,25 @@ ITEM_ID_KO = {
     "Item_Weapon_P90_C": "P90",
     "Item_Weapon_Pan_C": "프라이팬",
     "Item_Weapon_PanzerFaust100M_C": "판처파우스트",
+    "Item_Weapon_PackageFlare_C": "보급 플레어",
+    "Item_Weapon_PackageFlare_nonDest_C": "보급 플레어",
+    "Item_Weapon_Pickaxe_C": "곡괭이",
     "Item_Weapon_QBU88_C": "QBU",
     "Item_Weapon_QBZ95_C": "QBZ",
     "Item_Weapon_Rhino_C": "R45",
+    "Item_Weapon_Rock_C": "돌",
     "Item_Weapon_SCAR-L_C": "SCAR-L",
     "Item_Weapon_SKS_C": "SKS",
     "Item_Weapon_Saiga12_C": "S12K",
     "Item_Weapon_Sawnoff_C": "소드오프",
     "Item_Weapon_Sickle_C": "낫",
     "Item_Weapon_SmokeBomb_C": "연막탄",
+    "Item_Weapon_Snowball_C": "눈덩이",
     "Item_Weapon_SpikeTrap_C": "스파이크 트랩",
     "Item_Weapon_Spotter_Scope_C": "스포팅 스코프",
     "Item_Weapon_StickyGrenade_C": "점착 폭탄",
     "Item_Weapon_StunGun_C": "스턴건",
+    "Item_Weapon_TacPack_C": "전술 가방",
     "Item_Weapon_Thompson_C": "토미건",
     "Item_Weapon_TraumaBag_C": "트라우마 백",
     "Item_Weapon_UMP_C": "UMP9",
@@ -397,32 +440,46 @@ ITEM_ID_KO = {
     "Item_Weapon_Vector_C": "Vector",
     "Item_Weapon_Win1894_C": "Win94",
     "Item_Weapon_Winchester_C": "S1897",
+    "Item_Weapon_Ziplinegun_C": "집라인 건",
     "Item_Weapon_vz61Skorpion_C": "스콜피온",
     "Item_Attach_Weapon_Lower_AngledForeGrip_C": "앵글 손잡이",
     "Item_Attach_Weapon_Lower_Foregrip_C": "수직 손잡이",
     "Item_Attach_Weapon_Lower_HalfGrip_C": "하프 그립",
     "Item_Attach_Weapon_Lower_LaserPointer_C": "레이저 사이트",
     "Item_Attach_Weapon_Lower_LightweightForeGrip_C": "라이트 그립",
+    "Item_Attach_Weapon_Lower_TiltedGrip_C": "틸티드 그립",
     "Item_Attach_Weapon_Lower_ThumbGrip_C": "엄지 그립",
     "Item_Attach_Weapon_Magazine_ExtendedQuickDraw_Large_C": "대용량 퀵드로우 탄창",
+    "Item_Attach_Weapon_Magazine_ExtendedQuickDraw_Medium_C": "대용량 퀵드로우 탄창 (권총, SMG)",
+    "Item_Attach_Weapon_Magazine_ExtendedQuickDraw_SniperRifle_C": "대용량 퀵드로우 탄창 (DMR, SR)",
     "Item_Attach_Weapon_Magazine_Extended_Large_C": "대용량 탄창",
+    "Item_Attach_Weapon_Magazine_Extended_Medium_C": "대용량 탄창 (권총, SMG)",
+    "Item_Attach_Weapon_Magazine_Extended_SniperRifle_C": "대용량 탄창 (DMR, SR)",
     "Item_Attach_Weapon_Magazine_QuickDraw_Large_C": "퀵드로우 탄창",
+    "Item_Attach_Weapon_Magazine_QuickDraw_Medium_C": "퀵드로우 탄창 (권총, SMG)",
+    "Item_Attach_Weapon_Muzzle_AR_MuzzleBrake_C": "총구 제동기",
     "Item_Attach_Weapon_Muzzle_Choke_C": "초크",
     "Item_Attach_Weapon_Muzzle_Compensator_Large_C": "보정기",
+    "Item_Attach_Weapon_Muzzle_Compensator_Medium_C": "보정기 (권총, SMG)",
     "Item_Attach_Weapon_Muzzle_Compensator_SniperRifle_C": "저격소총 보정기",
     "Item_Attach_Weapon_Muzzle_Duckbill_C": "덕빌",
     "Item_Attach_Weapon_Muzzle_FlashHider_Large_C": "소염기",
+    "Item_Attach_Weapon_Muzzle_FlashHider_Medium_C": "소염기 (권총, SMG)",
+    "Item_Attach_Weapon_Muzzle_FlashHider_SniperRifle_C": "소염기 (DMR, SR)",
     "Item_Attach_Weapon_Muzzle_Suppressor_Large_C": "소음기",
+    "Item_Attach_Weapon_Muzzle_Suppressor_Medium_C": "소음기 (권총, SMG)",
     "Item_Attach_Weapon_Muzzle_Suppressor_SniperRifle_C": "저격소총 소음기",
     "Item_Attach_Weapon_Stock_AR_Composite_C": "전술 개머리판",
     "Item_Attach_Weapon_Stock_AR_HeavyStock_C": "중량형 개머리판",
     "Item_Attach_Weapon_Stock_Shotgun_BulletLoops_C": "탄띠",
+    "Item_Attach_Weapon_Stock_SniperRifle_BulletLoops_C": "탄띠 (SG, SR, Win94)",
     "Item_Attach_Weapon_Stock_SniperRifle_CheekPad_C": "칙패드",
     "Item_Attach_Weapon_Stock_UZI_C": "UZI 개머리판",
     "Item_Attach_Weapon_Upper_ACOG_01_C": "4배율 스코프",
     "Item_Attach_Weapon_Upper_Aimpoint_C": "2배율 스코프",
     "Item_Attach_Weapon_Upper_CQBSS_C": "8배율 스코프",
     "Item_Attach_Weapon_Upper_DotSight_01_C": "레드 도트 사이트",
+    "Item_Attach_Weapon_Upper_DualOptic_4x1x_C": "하이브리드 스코프",
     "Item_Attach_Weapon_Upper_Holosight_C": "홀로그램 조준기",
     "Item_Attach_Weapon_Upper_PM2_01_C": "15배율 스코프",
     "Item_Attach_Weapon_Upper_Scope3x_C": "3배율 스코프",
@@ -431,6 +488,22 @@ ITEM_ID_KO = {
 }
 
 DAMAGE_CAUSER_KO = {
+    "BP_BRDM_C": "BRDM-2",
+    "BP_BearV2_C": "북극곰",
+    "BP_CarePackageDrop_nonDest_C": "보급 상자 낙하",
+    "BP_FireEffectController_C": "화염병 불길",
+    "BP_MolotovFireDebuff_C": "화염병 화상",
+    "BP_Niva_06_C": "지마",
+    "BP_PonyCoupe_C": "포니 쿠페",
+    "Buff_DecreaseBreathInApnea_C": "익사",
+    "Dacia_A_02_v2_C": "다시아",
+    "Dacia_A_03_v2_Esports_C": "다시아",
+    "None": "없음",
+    "PlayerFemale_A_C": "플레이어",
+    "PlayerMale_A_C": "플레이어",
+    "TslGameModeBase_BattleRoyaleBP_C": "블루존",
+    "Uaz_B_01_esports_C": "UAZ",
+    "UltAIPawn_Base_Female_C": "AI 플레이어",
     "WeapACE32_C": "ACE32",
     "WeapAK47_C": "AKM",
     "WeapAUG_C": "AUG",
@@ -442,6 +515,7 @@ DAMAGE_CAUSER_KO = {
     "WeapC4_C": "C4",
     "WeapCowbar_C": "빠루",
     "WeapCrossbow_C": "석궁",
+    "WeapCrossbow_1_C": "석궁",
     "WeapDP12_C": "DBS",
     "WeapDP28_C": "DP-28",
     "WeapDecoyGrenade_C": "교란 수류탄",
@@ -454,6 +528,7 @@ DAMAGE_CAUSER_KO = {
     "WeapG18_C": "P18C",
     "WeapG36C_C": "G36C",
     "WeapGroza_C": "그로자",
+    "WeapIntegratedRepair_C": "올인원 수리 키트",
     "WeapHK416_C": "M416",
     "WeapJS9_C": "JS9",
     "WeapK2_C": "K2",
@@ -466,6 +541,9 @@ DAMAGE_CAUSER_KO = {
     "WeapM79_C": "M79",
     "WeapM9_C": "P92",
     "WeapMG3_C": "MG3",
+    "WeapRPD_C": "RPD",
+    "WeapPickaxe_C": "곡괭이",
+    "WeapZiplinegun_C": "집라인 건",
     "WeapMP5K_C": "MP5K",
     "WeapMP9_C": "MP9",
     "WeapMachete_C": "마체테",
@@ -481,6 +559,7 @@ DAMAGE_CAUSER_KO = {
     "WeapOriginS12_C": "O12",
     "WeapP90_C": "P90",
     "WeapPan_C": "프라이팬",
+    "WeapPanzerFaust100M_C": "판처파우스트",
     "WeapQBU88_C": "QBU",
     "WeapQBZ95_C": "QBZ",
     "WeapRhino_C": "R45",
@@ -489,6 +568,7 @@ DAMAGE_CAUSER_KO = {
     "WeapSaiga12_C": "S12K",
     "WeapSawnoff_C": "소드오프",
     "WeapSickle_C": "낫",
+    "WeapSickleProjectile_C": "낫 투사체",
     "WeapSmokeBomb_C": "연막탄",
     "WeapSpikeTrap_C": "스파이크 트랩",
     "WeapSpotter_Scope_C": "스포팅 스코프",
@@ -523,6 +603,7 @@ VEHICLE_ID_KO = {
     "BP_BRDM_C": "BRDM",
     "BP_Motorglider_C": "모터글라이더",
     "BP_CoupeRB_C": "쿠페 RB",
+    "BP_Niva_06_C": "지마",
     "BP_ATV_C": "ATV",
     "ParachutePlayer_C": "낙하산",
 }

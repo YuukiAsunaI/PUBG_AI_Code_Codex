@@ -356,6 +356,7 @@ class LocalSettingsStoreTests(unittest.TestCase):
                 user_grants={"discord-user-1": ["profile_read", "ranking_read"]},
                 guild_user_grants={"guild-1": {"discord-user-2": ["register"]}},
                 global_admin_user_ids=["global-admin-1"],
+                command_aliases={"내전적": "전적"},
             )
             loaded = store.load_discord_permission_settings()
 
@@ -364,6 +365,7 @@ class LocalSettingsStoreTests(unittest.TestCase):
             self.assertEqual(saved.global_admin_user_ids, ["global-admin-1"])
             self.assertEqual(loaded.user_grants["discord-user-1"], ["profile_read", "ranking_read"])
             self.assertIn("pubg-register", loaded.command_groups["register"])
+            self.assertEqual(loaded.command_aliases, {"내전적": "전적"})
 
     def test_discord_permission_settings_merge_new_default_commands(self) -> None:
         with TemporaryDirectory() as temp_dir:

@@ -114,7 +114,11 @@ class DatabaseSchemaTests(unittest.TestCase):
         ]:
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table_name}", schema)
 
-        self.assertEqual(SCHEMA_VERSION, 23)
+        self.assertEqual(SCHEMA_VERSION, 24)
+        self.assertIn(
+            "artifact_name,\n                account_id,\n                renderer_version",
+            schema,
+        )
         self.assertIn("fk_data_deletion_events_request", schema)
         self.assertIn("fk_data_deletion_confirmation_snapshot", schema)
         self.assertIn("uq_data_deletion_confirmation_snapshot", schema)

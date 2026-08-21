@@ -1,21 +1,28 @@
 from __future__ import annotations
 
+from bisect import bisect_right
 from dataclasses import asdict, dataclass
 from datetime import datetime
+from math import hypot
 from typing import Any, Mapping
 import json
 
 from pubg_ai.code_translator import translate_code
-from pubg_ai.map_snapshot_renderer import DEFAULT_WORLD_SIZE_CM, MAP_WORLD_SIZE_CM
+from pubg_ai.map_snapshot_renderer import DEFAULT_WORLD_SIZE_CM, MAP_WORLD_SIZE_CM, extend_line_to_world_bounds
+from pubg_ai.replay_path_policy import ReplayPathSampleState, select_replay_path_samples
 from pubg_ai.replay_storage import (
     ReplayArtifactStore,
     StoredReplayArtifact,
     content_addressed_filename,
 )
-from pubg_ai.time_utils import now_kst, to_kst
+from pubg_ai.time_utils import KST, now_kst, to_kst
 
 
-TIMELINE_RENDERER_VERSION = "player-timeline-v1"
+TIMELINE_RENDERER_VERSION = "player-timeline-v6"
+MAX_PATH_SAMPLE_GAP_SECONDS = 45.0
+MAX_PATH_HORIZONTAL_SPEED_MPS = 120.0
+TRANSPORT_AIRCRAFT_ALTITUDE_CM = 100000.0
+DROP_START_ALTITUDE_CM = 20000.0
 
 
 @dataclass(frozen=True)
@@ -98,16 +105,29 @@ class ReplayTimelineProcessor:
         )
 
     def _list_timeline_jobs(self, *, limit: int, force: bool) -> list[dict[str, Any]]:
-        where = ""
+        where = """
+            WHERE EXISTS (
+                SELECT 1
+                FROM player_position_samples candidate_positions
+                WHERE candidate_positions.match_id = summaries.match_id
+                  AND candidate_positions.account_id = summaries.account_id
+                  AND candidate_positions.common_is_game > 0
+                  AND NOT (
+                      COALESCE(candidate_positions.is_in_vehicle, 0) = 1
+                      AND COALESCE(candidate_positions.z, 0) >= 100000
+                  )
+            )
+        """
         if not force:
-            where = """
-                WHERE NOT EXISTS (
+            where += """
+                AND NOT EXISTS (
                     SELECT 1
                     FROM replay_artifacts artifacts
                     WHERE artifacts.match_id = summaries.match_id
                       AND artifacts.account_id = summaries.account_id
                       AND artifacts.artifact_type = 'timeline'
                       AND artifacts.artifact_name = 'player-timeline'
+                      AND artifacts.renderer_version = %s
                 )
             """
 
@@ -134,7 +154,7 @@ class ReplayTimelineProcessor:
                 ORDER BY matches.created_at_kst DESC, summaries.match_id ASC, summaries.account_id ASC
                 LIMIT %s
                 """,
-                (limit,),
+                ((TIMELINE_RENDERER_VERSION, limit) if not force else (limit,)),
             )
             return list(cursor.fetchall())
 
@@ -148,9 +168,10 @@ class ReplayTimelineProcessor:
                   AND account_id = %s
                   AND artifact_type = 'timeline'
                   AND artifact_name = 'player-timeline'
+                  AND renderer_version = %s
                 LIMIT 1
                 """,
-                (match_id, account_id),
+                (match_id, account_id, TIMELINE_RENDERER_VERSION),
             )
             return cursor.fetchone() is not None
 
@@ -170,6 +191,7 @@ class ReplayTimelineProcessor:
         )
         care_packages = self._load_care_packages(match_id=match_id, world_size_cm=world_size_cm)
         plane_route = self._load_plane_route(match_id=match_id, world_size_cm=world_size_cm)
+        positions = _filter_timeline_positions(positions, plane_route=plane_route)
         phase_events = self._load_phase_events(match_id=match_id, world_size_cm=world_size_cm)
         team_members = self._load_team_members(match_id=match_id, account_id=account_id, shard=str(job["shard"]))
         team_tracks = self._load_team_position_tracks(
@@ -177,13 +199,40 @@ class ReplayTimelineProcessor:
             tracked_account_id=account_id,
             team_members=team_members,
             world_size_cm=world_size_cm,
+            plane_route=plane_route,
         )
         _set_team_position_counts(team_members=team_members, tracked_account_id=account_id, positions=positions)
         _set_team_track_counts(team_members=team_members, team_tracks=team_tracks)
+        anchor_events = list(positions)
+        for track in team_tracks:
+            anchor_events.extend(track["positions"])
+        clock_anchors = _build_timeline_anchors(
+            preferred_events=anchor_events,
+            fallback_events=phase_events,
+        )
+        timeline_origin = _derive_timeline_origin(clock_anchors)
+        _apply_timeline_clock(positions, clock_anchors)
+        _apply_timeline_clock(landings, clock_anchors)
+        _apply_timeline_clock(combat_events, clock_anchors)
+        _apply_timeline_clock(care_packages, clock_anchors)
+        _apply_timeline_clock(phase_events, clock_anchors)
+        _assign_position_segments(positions)
+        for track in team_tracks:
+            _apply_timeline_clock(track["positions"], clock_anchors)
+            _assign_position_segments(track["positions"])
+            track["drop_starts"] = _derive_drop_starts(track["positions"])
+        _apply_plane_route_clock(plane_route, clock_anchors)
+        drop_starts = _derive_drop_starts(positions)
 
         return {
             "schema_version": TIMELINE_RENDERER_VERSION,
             "generated_at_kst": now_kst().isoformat(),
+            "time_origin_at_kst": timeline_origin.isoformat() if timeline_origin else None,
+            "time_basis": "telemetry_elapsed_time_with_piecewise_timestamp_interpolation",
+            "clock": {
+                "anchor_count": len(clock_anchors),
+                "interpolation": "piecewise-linear",
+            },
             "match": {
                 "match_id": match_id,
                 "shard": str(job["shard"]),
@@ -212,6 +261,7 @@ class ReplayTimelineProcessor:
                 "positions": len(positions),
                 "team_tracks": len(team_tracks),
                 "team_position_samples": sum(track["sample_count"] for track in team_tracks),
+                "drop_starts": len(drop_starts),
                 "landings": len(landings),
                 "combat_events": len(combat_events),
                 "care_packages": len(care_packages),
@@ -222,6 +272,7 @@ class ReplayTimelineProcessor:
             "phase_events": phase_events,
             "positions": positions,
             "team_tracks": team_tracks,
+            "drop_starts": drop_starts,
             "landings": landings,
             "combat_events": combat_events,
             "care_packages": care_packages,
@@ -247,6 +298,7 @@ class ReplayTimelineProcessor:
                     is_dbno
                 FROM player_position_samples
                 WHERE match_id = %s AND account_id = %s
+                  AND common_is_game > 0
                 ORDER BY event_index ASC
                 """,
                 (match_id, account_id),
@@ -257,7 +309,7 @@ class ReplayTimelineProcessor:
             {
                 "event_index": _int(row.get("event_index")),
                 "event_at_kst": _datetime_record(row.get("event_at_kst")),
-                "t": _optional_float(row.get("common_is_game")),
+                "common_is_game": _optional_float(row.get("common_is_game")),
                 "elapsed_time_seconds": _optional_float(row.get("elapsed_time_seconds")),
                 "num_alive_players": _optional_int(row.get("num_alive_players")),
                 "x": _optional_float(row.get("x")),
@@ -280,6 +332,7 @@ class ReplayTimelineProcessor:
         tracked_account_id: str,
         team_members: list[dict[str, Any]],
         world_size_cm: float,
+        plane_route: Mapping[str, Any] | None,
     ) -> list[dict[str, Any]]:
         tracks: list[dict[str, Any]] = []
         for member in team_members:
@@ -291,6 +344,7 @@ class ReplayTimelineProcessor:
                 account_id=account_id,
                 world_size_cm=world_size_cm,
             )
+            positions = _filter_timeline_positions(positions, plane_route=plane_route)
             if not positions:
                 continue
             tracks.append(
@@ -325,7 +379,7 @@ class ReplayTimelineProcessor:
             {
                 "event_index": _int(row.get("event_index")),
                 "event_at_kst": _datetime_record(row.get("event_at_kst")),
-                "t": _optional_float(row.get("common_is_game")),
+                "common_is_game": _optional_float(row.get("common_is_game")),
                 "x": _optional_float(row.get("x")),
                 "y": _optional_float(row.get("y")),
                 "z": _optional_float(row.get("z")),
@@ -389,7 +443,7 @@ class ReplayTimelineProcessor:
                 "event_type": _optional_text(row.get("event_type")),
                 "action": _optional_text(row.get("action")),
                 "event_at_kst": _datetime_record(row.get("event_at_kst")),
-                "t": _optional_float(row.get("common_is_game")),
+                "common_is_game": _optional_float(row.get("common_is_game")),
                 "related_account_id": _optional_text(row.get("related_account_id")),
                 "related_name": _optional_text(row.get("related_registered_name"))
                 or _optional_text(row.get("related_name")),
@@ -503,7 +557,7 @@ class ReplayTimelineProcessor:
                 "event_index": _int(row.get("event_index")),
                 "event_type": _optional_text(row.get("event_type")),
                 "event_at_kst": _datetime_record(row.get("event_at_kst")),
-                "t": _optional_float(row.get("common_is_game")),
+                "common_is_game": _optional_float(row.get("common_is_game")),
                 "item_package_id": _optional_text(row.get("item_package_id")),
                 "item_count": _int(row.get("item_count")),
                 "item_codes": _json_list(row.get("item_codes")),
@@ -543,6 +597,17 @@ class ReplayTimelineProcessor:
         if row is None:
             return None
 
+        extended = extend_line_to_world_bounds(
+            _optional_float(row.get("start_x")),
+            _optional_float(row.get("start_y")),
+            _optional_float(row.get("end_x")),
+            _optional_float(row.get("end_y")),
+            world_size_cm,
+        )
+        if extended is None:
+            return None
+        start_x, start_y, end_x, end_y = extended
+
         return {
             "source": _optional_text(row.get("source")),
             "sample_count": _int(row.get("sample_count")),
@@ -551,16 +616,16 @@ class ReplayTimelineProcessor:
             "start_event_at_kst": _datetime_record(row.get("start_event_at_kst")),
             "end_event_at_kst": _datetime_record(row.get("end_event_at_kst")),
             "start": {
-                "x": _optional_float(row.get("start_x")),
-                "y": _optional_float(row.get("start_y")),
+                "x": start_x,
+                "y": start_y,
                 "z": _optional_float(row.get("start_z")),
-                "map": _map_point(row.get("start_x"), row.get("start_y"), world_size_cm),
+                "map": _map_point(start_x, start_y, world_size_cm),
             },
             "end": {
-                "x": _optional_float(row.get("end_x")),
-                "y": _optional_float(row.get("end_y")),
+                "x": end_x,
+                "y": end_y,
                 "z": _optional_float(row.get("end_z")),
-                "map": _map_point(row.get("end_x"), row.get("end_y"), world_size_cm),
+                "map": _map_point(end_x, end_y, world_size_cm),
             },
             "sample_account_id": _optional_text(row.get("sample_account_id")),
         }
@@ -604,7 +669,7 @@ class ReplayTimelineProcessor:
             {
                 "event_index": _int(row.get("event_index")),
                 "event_at_kst": _datetime_record(row.get("event_at_kst")),
-                "t": _optional_float(row.get("common_is_game")),
+                "common_is_game": _optional_float(row.get("common_is_game")),
                 "elapsed_time_seconds": _optional_float(row.get("elapsed_time_seconds")),
                 "num_alive_players": _optional_int(row.get("num_alive_players")),
                 "num_alive_teams": _optional_int(row.get("num_alive_teams")),
@@ -702,6 +767,233 @@ class ReplayTimelineProcessor:
                     _mysql_kst_now(),
                 ),
             )
+
+
+def _build_timeline_anchors(
+    *,
+    preferred_events: list[dict[str, Any]],
+    fallback_events: list[dict[str, Any]],
+) -> list[tuple[float, float]]:
+    candidates = _timeline_anchor_candidates(preferred_events)
+    if len(candidates) < 2:
+        candidates = _timeline_anchor_candidates(fallback_events)
+    candidates.sort(key=lambda item: (item[0], item[1]))
+
+    anchors: list[tuple[float, float]] = []
+    for timestamp, elapsed in candidates:
+        if anchors and timestamp <= anchors[-1][0]:
+            if timestamp == anchors[-1][0] and elapsed > anchors[-1][1]:
+                anchors[-1] = (timestamp, elapsed)
+            continue
+        if anchors and elapsed < anchors[-1][1]:
+            continue
+        anchors.append((timestamp, elapsed))
+    return anchors
+
+
+def _timeline_anchor_candidates(events: list[dict[str, Any]]) -> list[tuple[float, float]]:
+    candidates: list[tuple[float, float]] = []
+    for event in events:
+        event_at = _record_datetime(event.get("event_at_kst"))
+        elapsed = _optional_float(event.get("elapsed_time_seconds"))
+        if event_at is None or elapsed is None or elapsed < 0:
+            continue
+        candidates.append((event_at.timestamp(), elapsed))
+    return candidates
+
+
+def _derive_timeline_origin(anchors: list[tuple[float, float]]) -> datetime | None:
+    if not anchors:
+        return None
+    timestamp, elapsed = anchors[0]
+    return datetime.fromtimestamp(timestamp - elapsed, tz=KST)
+
+
+def _apply_timeline_clock(
+    events: list[dict[str, Any]],
+    anchors: list[tuple[float, float]],
+) -> None:
+    for event in events:
+        elapsed = _optional_float(event.get("elapsed_time_seconds"))
+        if elapsed is not None and elapsed >= 0:
+            event["time_seconds"] = elapsed
+            continue
+        event_at = _record_datetime(event.get("event_at_kst"))
+        if event_at is not None and anchors:
+            event["time_seconds"] = _interpolate_timeline_seconds(event_at.timestamp(), anchors)
+        else:
+            event["time_seconds"] = None
+    events.sort(
+        key=lambda event: (
+            float("inf") if event.get("time_seconds") is None else float(event["time_seconds"]),
+            _int(event.get("event_index")),
+        )
+    )
+
+
+def _apply_plane_route_clock(
+    route: dict[str, Any] | None,
+    anchors: list[tuple[float, float]],
+) -> None:
+    if route is None or not anchors:
+        return
+    for prefix in ("start", "end"):
+        event_at = _record_datetime(route.get(f"{prefix}_event_at_kst"))
+        route[f"{prefix}_time_seconds"] = (
+            _interpolate_timeline_seconds(event_at.timestamp(), anchors)
+            if event_at is not None
+            else None
+        )
+
+
+def _interpolate_timeline_seconds(
+    timestamp: float,
+    anchors: list[tuple[float, float]],
+) -> float:
+    anchor_times = [anchor[0] for anchor in anchors]
+    right_index = bisect_right(anchor_times, timestamp)
+    if right_index <= 0:
+        anchor_at, anchor_elapsed = anchors[0]
+        return max(0.0, anchor_elapsed - (anchor_at - timestamp))
+    if right_index >= len(anchors):
+        anchor_at, anchor_elapsed = anchors[-1]
+        return max(0.0, anchor_elapsed + (timestamp - anchor_at))
+
+    left_at, left_elapsed = anchors[right_index - 1]
+    right_at, right_elapsed = anchors[right_index]
+    span = right_at - left_at
+    if span <= 0:
+        return max(0.0, left_elapsed)
+    ratio = max(0.0, min(1.0, (timestamp - left_at) / span))
+    return max(0.0, left_elapsed + (right_elapsed - left_elapsed) * ratio)
+
+
+def _assign_position_segments(events: list[dict[str, Any]]) -> None:
+    segment_id = 0
+    previous: dict[str, Any] | None = None
+    for event in events:
+        forced_reason = _optional_text(event.pop("_forced_segment_start_reason", None))
+        reason = "initial"
+        if previous is not None:
+            reason = forced_reason or _path_break_reason(previous, event) or ""
+            if reason:
+                segment_id += 1
+        event["segment_id"] = segment_id
+        event["segment_start_reason"] = reason if previous is None or reason else None
+        previous = event
+
+
+def _filter_timeline_positions(
+    positions: list[dict[str, Any]],
+    *,
+    plane_route: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    states = [
+        ReplayPathSampleState(
+            event_index=_int(position.get("event_index")),
+            z_cm=_optional_float(position.get("z")),
+            is_in_vehicle=position.get("is_in_vehicle") is True,
+        )
+        for position in positions
+    ]
+    selections = select_replay_path_samples(
+        states,
+        plane_start_event_index=(
+            _optional_int(plane_route.get("start_event_index")) if plane_route else None
+        ),
+        plane_end_event_index=(
+            _optional_int(plane_route.get("end_event_index")) if plane_route else None
+        ),
+        transport_aircraft_altitude_cm=TRANSPORT_AIRCRAFT_ALTITUDE_CM,
+        drop_start_altitude_cm=DROP_START_ALTITUDE_CM,
+    )
+    filtered: list[dict[str, Any]] = []
+    for selection in selections:
+        position = positions[selection.source_index]
+        if selection.force_segment_break:
+            position["_forced_segment_start_reason"] = "transport_aircraft"
+        filtered.append(position)
+    return filtered
+
+
+def _path_break_reason(left: Mapping[str, Any], right: Mapping[str, Any]) -> str | None:
+    left_time = _optional_float(left.get("time_seconds"))
+    right_time = _optional_float(right.get("time_seconds"))
+    if left_time is None or right_time is None:
+        return "missing_time"
+    elapsed = right_time - left_time
+    if elapsed <= 0:
+        return "non_monotonic_time"
+    if elapsed > MAX_PATH_SAMPLE_GAP_SECONDS:
+        return "sample_gap"
+
+    left_x = _optional_float(left.get("x"))
+    left_y = _optional_float(left.get("y"))
+    right_x = _optional_float(right.get("x"))
+    right_y = _optional_float(right.get("y"))
+    if None in {left_x, left_y, right_x, right_y}:
+        return "missing_position"
+    distance_m = hypot(float(right_x) - float(left_x), float(right_y) - float(left_y)) / 100.0
+    if distance_m / elapsed > MAX_PATH_HORIZONTAL_SPEED_MPS:
+        return "position_jump"
+
+    left_z = _optional_float(left.get("z"))
+    right_z = _optional_float(right.get("z"))
+    if (
+        left_z is not None
+        and right_z is not None
+        and right_z >= TRANSPORT_AIRCRAFT_ALTITUDE_CM
+        and right_z - left_z >= 30000.0
+    ):
+        return "altitude_jump"
+    return None
+
+
+def _derive_drop_starts(positions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    starts: list[dict[str, Any]] = []
+    seen_segments: set[int] = set()
+    for position in positions:
+        segment_id = _int(position.get("segment_id"))
+        if segment_id in seen_segments:
+            continue
+        seen_segments.add(segment_id)
+        altitude = _optional_float(position.get("z"))
+        if (
+            altitude is None
+            or altitude < DROP_START_ALTITUDE_CM
+            or position.get("is_in_vehicle") is True
+        ):
+            continue
+        starts.append(
+            {
+                key: position.get(key)
+                for key in (
+                    "event_index",
+                    "event_at_kst",
+                    "common_is_game",
+                    "elapsed_time_seconds",
+                    "time_seconds",
+                    "segment_id",
+                    "x",
+                    "y",
+                    "z",
+                    "map",
+                )
+            }
+        )
+    return starts
+
+
+def _record_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return to_kst(value)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return to_kst(parsed)
 
 
 def _map_point(x: Any, y: Any, world_size_cm: float) -> dict[str, float] | None:

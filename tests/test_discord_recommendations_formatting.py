@@ -49,6 +49,12 @@ class DiscordRecommendationFormattingTests(unittest.TestCase):
                     avg_damage_dealt=360.0,
                     accuracy=0.3,
                     reason="test",
+                    headshot_hits=36,
+                    headshot_hit_rate=0.2,
+                    fight_count=20,
+                    fight_wins=14,
+                    fight_losses=6,
+                    fight_win_rate=0.7,
                     accuracy_metric=weapon_accuracy_metric("WeapHK416_C", 600, 180),
                 )
             ],
@@ -176,14 +182,16 @@ class DiscordRecommendationFormattingTests(unittest.TestCase):
 
         body = format_player_recommendations(report)
 
-        self.assertIn("Yuuki_Asuna--- recommendations", body)
+        self.assertIn("Yuuki_Asuna--- 추천 분석", body)
         self.assertIn("M416", body)
         self.assertIn("추정 30.0%", body)
+        self.assertIn("헤드샷 명중 20.0%", body)
+        self.assertIn("교전 승률 70.0%", body)
         self.assertIn("Vertical Grip", body)
         self.assertIn("M416 + Vertical Grip", body)
         self.assertIn("M416 10-15m", body)
         self.assertIn("Erangel", body)
-        self.assertIn("Friend registered", body)
+        self.assertIn("Friend (등록 유저)", body)
         self.assertIn("Taego 용천", body)
         self.assertNotIn("/players/recommendations/weapon-attachment-evidence", body)
 
@@ -201,7 +209,7 @@ class DiscordRecommendationFormattingTests(unittest.TestCase):
         self.assertIn("weapon_code=WeapHK416_C", body_with_links)
         self.assertIn("attachment_code=Item_Attach_Weapon_Lower_Foregrip_C", body_with_links)
         self.assertIn(
-            "- local_recommendations: [open](http://127.0.0.1:8000/?shard=steam&account_id=account.test&min_matches=1#recommendation-lookup)",
+            "- 로컬 상세: [열기](http://127.0.0.1:8000/?shard=steam&account_id=account.test&min_matches=1#recommendation-lookup)",
             body_with_links,
         )
 

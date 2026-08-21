@@ -35,6 +35,7 @@ from pubg_ai.data_deletion_requests import (
     normalize_deletion_scope,
 )
 from pubg_ai.database import connect_mysql
+from pubg_ai.discord_guild_catalog import sync_discord_guild_catalog
 from pubg_ai.discord_permission_manager import DiscordPermissionManager
 from pubg_ai.discord_permissions import DiscordCommandIdentity, DiscordPermissionChecker
 from pubg_ai.fight_outcome_stats import FightOutcomeStatsService, PlayerFightOutcomeReport
@@ -961,12 +962,23 @@ def format_player_weapon_detail(detail: PlayerWeaponDetail, *, detail_base_url: 
         f"- 딜/평균 딜: {_number(totals.damage_dealt, 0)} / {_number(totals.avg_damage_dealt, 1)}",
         f"- 명중 지표: {_accuracy_metric_text(totals.accuracy, totals.accuracy_metric)} "
         f"({totals.shots_hit}/{totals.shots_fired})",
+        f"- 헤드샷 명중: {_percent(_safe_ratio(totals.headshot_hits, totals.shots_hit))} "
+        f"({totals.headshot_hits}/{totals.shots_hit}명중)",
         f"- 헤드샷 킬/기절: {totals.headshot_kills}/{totals.headshot_dbnos}",
+        f"- 교전 승률: {_percent(totals.fight_win_rate)} "
+        f"({totals.fight_wins}승/{totals.fight_losses}패, 경기당 {_number(totals.avg_fights_per_match, 2)}회)",
     ]
 
     hit_parts = _top_parts(totals.hit_parts)
     if hit_parts:
         lines.append(f"- 맞춘 부위: {hit_parts}")
+
+    if detail.effective_ranges:
+        lines.append("- 효율 거리: " + ", ".join(
+            f"{item.bucket_label} {_percent(item.observed_win_rate)} "
+            f"({item.wins}승/{item.losses}패)"
+            for item in detail.effective_ranges[:3]
+        ))
 
     if detail.recent_matches:
         lines.append("최근 사용 경기")
@@ -1087,69 +1099,84 @@ def format_player_recommendations(
     detail_base_url: str | None = None,
 ) -> str:
     lines = [
-        f"{report.player.current_name} recommendations ({report.player.shard})",
-        f"- min matches: {report.min_matches}",
+        f"{report.player.current_name} 추천 분석 ({report.player.shard})",
+        f"- 최소 표본 경기: {report.min_matches}",
     ]
     if report.weapons:
-        lines.append("- weapons: " + ", ".join(
-            f"{item.weapon_name} score {_number(item.score, 1)} "
-            f"({_number(item.avg_damage_dealt, 1)} dmg, {_percent(item.win_rate)} win, "
-            f"{_accuracy_metric_text(item.accuracy, item.accuracy_metric)})"
+        lines.append("- 추천 무기: " + ", ".join(
+            f"{item.weapon_name} 점수 {_number(item.score, 1)} "
+            f"(평균 딜 {_number(item.avg_damage_dealt, 1)}, 승률 {_percent(item.win_rate)}, "
+            f"{_accuracy_metric_text(item.accuracy, item.accuracy_metric)}, "
+            f"헤드샷 명중 {_percent(item.headshot_hit_rate)}, 교전 승률 {_percent(item.fight_win_rate)})"
             for item in report.weapons[:3]
         ))
     else:
-        lines.append("- weapons: no data")
+        lines.append("- 추천 무기: 표본 없음")
+
+    if report.loadouts:
+        lines.append("- 추천 2주무기: " + ", ".join(
+            f"{item.primary.weapon_name} + {item.secondary.weapon_name} "
+            f"(점수 {_number(item.score, 1)}, {item.inventory_burden.get('summary', '탄약 정보 없음')})"
+            for item in report.loadouts[:3]
+        ))
+
+    if report.attachment_combinations:
+        lines.append("- 실전 파츠 조합: " + ", ".join(
+            f"{item.weapon_name} + {' + '.join(item.attachment_names)} "
+            f"({item.match_count}경기, 승률 {_percent(item.win_rate)})"
+            for item in report.attachment_combinations[:3]
+        ))
 
     if report.weapon_attachments:
-        lines.append("- weapon parts: " + ", ".join(
+        lines.append("- 파츠별 개별 성과: " + ", ".join(
             f"{item.weapon_name} + {item.attachment_name} "
             f"({_number(item.avg_damage_dealt, 1)} dmg, {_percent(item.win_rate)} win)"
             f"{_recommendation_evidence_link(report, item, evidence_base_url)}"
             for item in report.weapon_attachments[:3]
         ))
     else:
-        lines.append("- weapon parts: no data")
+        lines.append("- 파츠별 개별 성과: 표본 없음")
 
     if report.weapon_ranges:
-        lines.append("- weapon ranges: " + ", ".join(
+        lines.append("- 성과 발생 거리: " + ", ".join(
             f"{item.weapon_name} {item.bucket_label} "
             f"({item.kills}K/{item.dbnos}DBNO)"
             for item in report.weapon_ranges[:3]
         ))
     else:
-        lines.append("- weapon ranges: no data")
+        lines.append("- 성과 발생 거리: 표본 없음")
 
     if report.attachments:
-        lines.append("- attachments: " + ", ".join(
-            f"{item.item_name} ({item.attached_events} attach)"
+        lines.append("- 전체 파츠: " + ", ".join(
+            f"{item.item_name} ({item.attached_events}회 장착)"
             for item in report.attachments[:3]
         ))
     else:
-        lines.append("- attachments: no data")
+        lines.append("- 전체 파츠: 표본 없음")
 
     if report.maps:
-        lines.append("- maps: " + ", ".join(
-            f"{item.map_name_ko} {_percent(item.win_rate)} win"
+        lines.append("- 맵: " + ", ".join(
+            f"{item.map_name_ko} 승률 {_percent(item.win_rate)}"
             for item in report.maps[:3]
         ))
     else:
-        lines.append("- maps: no data")
+        lines.append("- 맵: 표본 없음")
 
     if report.teammates:
-        lines.append("- teammates: " + ", ".join(
-            f"{item.name}{' registered' if item.registered else ''} {_percent(item.win_rate)} win"
+        lines.append("- 팀원: " + ", ".join(
+            f"{item.name}{' (등록 유저)' if item.registered else ''} 승률 {_percent(item.win_rate)}"
             for item in report.teammates[:3]
         ))
     else:
-        lines.append("- teammates: no data")
+        lines.append("- 팀원: 표본 없음")
 
     if report.drop_zones:
-        lines.append("- drop zones: " + ", ".join(
-            f"{item.map_name_ko} {_drop_zone_location_label(item)} {_percent(item.win_rate)} win"
+        lines.append("- 낙하 지역: " + ", ".join(
+            f"{item.map_name_ko} {_drop_zone_location_label(item)} 승률 {_percent(item.win_rate)}"
             for item in report.drop_zones[:3]
         ))
     else:
-        lines.append("- drop zones: no data")
+        lines.append("- 낙하 지역: 표본 없음")
 
     local_link = _local_section_url(
         detail_base_url,
@@ -1157,7 +1184,7 @@ def format_player_recommendations(
         {"shard": report.player.shard, "account_id": report.player.account_id, "min_matches": report.min_matches},
     )
     if local_link:
-        lines.append(f"- local_recommendations: [open]({local_link})")
+        lines.append(f"- 로컬 상세: [열기]({local_link})")
 
     return "\n".join(lines)
 
@@ -1177,8 +1204,10 @@ def create_discord_bot(
     bot = commands.Bot(command_prefix=command_prefix, intents=intents)
     permission_manager = DiscordPermissionManager(scope_settings_store) if scope_settings_store is not None else None
     alert_task_started = False
+    slash_commands_synced = False
     alert_last_worker_run_id: int | None = None
     sent_storage_alert_keys: set[str] = set()
+    custom_prefix_aliases: dict[str, str] = {}
 
     def guild_id_for(ctx: Any) -> str | None:
         return str(ctx.guild.id) if ctx.guild else None
@@ -1193,13 +1222,29 @@ def create_discord_bot(
     def has_global_scope(ctx: Any) -> bool:
         return permission_checker.is_global_admin(identity_for(ctx))
 
+    def sync_custom_prefix_aliases() -> None:
+        for alias, target in list(custom_prefix_aliases.items()):
+            target_command = bot.get_command(target)
+            if target_command is not None and bot.all_commands.get(alias) is target_command:
+                bot.all_commands.pop(alias, None)
+        custom_prefix_aliases.clear()
+
+        for alias, target in permission_checker.settings.command_aliases.items():
+            target_command = bot.get_command(target)
+            if target_command is None or bot.all_commands.get(alias) not in (None, target_command):
+                continue
+            bot.all_commands[alias] = target_command
+            custom_prefix_aliases[alias] = target
+
     def refresh_permission_settings() -> bool:
         if scope_settings_store is None:
+            sync_custom_prefix_aliases()
             return True
         try:
             permission_checker.settings = scope_settings_store.load_discord_permission_settings()
         except LocalSettingsError:
             return False
+        sync_custom_prefix_aliases()
         return True
 
     def guild_ranking_scope(ctx: Any) -> str:
@@ -1225,7 +1270,12 @@ def create_discord_bot(
         if not refresh_permission_settings():
             await ctx.reply("Discord 권한 설정을 불러오지 못했습니다.", mention_author=False)
             return False
-        if permission_checker.is_allowed(identity_for(ctx), command_group):
+        identity = identity_for(ctx)
+        command_name = str(getattr(getattr(ctx, "command", None), "name", "") or "")
+        if (
+            permission_checker.is_allowed(identity, command_group)
+            or permission_checker.is_command_allowed(identity, command_name)
+        ):
             return True
         await ctx.reply("이 명령어를 사용할 권한이 없습니다.", mention_author=False)
         return False
@@ -1321,15 +1371,60 @@ def create_discord_bot(
                 print(f"PUBG AI alert loop failed: {exc}")
             await asyncio.sleep(60)
 
+    def sync_known_guilds(guilds: Any) -> None:
+        records = [
+            {"guild_id": str(guild.id), "name": str(guild.name or "")}
+            for guild in guilds
+            if getattr(guild, "id", None) is not None
+        ]
+        if not records:
+            return
+        connection = connect_mysql(config.database)
+        try:
+            sync_discord_guild_catalog(connection, records)
+        finally:
+            connection.close()
+
     @bot.event
     async def on_ready() -> None:
-        nonlocal alert_task_started
+        nonlocal alert_task_started, slash_commands_synced
         print(f"PUBG AI Discord bot logged in as {bot.user}")
+        refresh_permission_settings()
+        if not slash_commands_synced:
+            try:
+                synced = await bot.tree.sync()
+                slash_commands_synced = True
+                print(f"synced {len(synced)} Discord application commands")
+            except Exception as exc:
+                print(f"failed to sync Discord application commands: {exc}")
+        try:
+            sync_known_guilds(bot.guilds)
+        except Exception as exc:
+            print(f"failed to sync Discord guild catalog: {exc}")
         if scope_settings_store is not None and not alert_task_started:
             alert_task_started = True
             bot.loop.create_task(alert_loop())
 
-    @bot.command(name="배그도움말", aliases=["pubg-help", "pubg-ai"])
+    @bot.event
+    async def on_guild_join(guild: Any) -> None:
+        try:
+            sync_known_guilds([guild])
+        except Exception as exc:
+            print(f"failed to add Discord guild to catalog: {exc}")
+
+    @bot.event
+    async def on_guild_update(_before: Any, after: Any) -> None:
+        try:
+            sync_known_guilds([after])
+        except Exception as exc:
+            print(f"failed to update Discord guild catalog: {exc}")
+
+    @bot.event
+    async def on_message(message: Any) -> None:
+        refresh_permission_settings()
+        await bot.process_commands(message)
+
+    @bot.hybrid_command(name="배그도움말", aliases=["pubg-help", "pubg-ai"])
     async def help_command(ctx: Any) -> None:
         await ctx.reply(
             "\n".join(
@@ -1367,7 +1462,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="유저조회", aliases=["pubg-profile"])
+    @bot.hybrid_command(name="유저조회", aliases=["pubg-profile"])
     async def list_players_command(ctx: Any, name: str | None = None, shard: str = "steam") -> None:
         if not await require_permission(ctx, "profile_read"):
             return
@@ -1396,7 +1491,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="전적", aliases=["pubg-stats"])
+    @bot.hybrid_command(name="전적", aliases=["pubg-stats"])
     async def player_stats_command(ctx: Any, name: str | None = None, shard: str = "steam") -> None:
         if not await require_permission(ctx, "profile_read"):
             return
@@ -1439,7 +1534,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="교전", aliases=["pubg-fights", "pubg-fight"])
+    @bot.hybrid_command(name="교전", aliases=["pubg-fights", "pubg-fight"])
     async def player_fight_outcomes_command(
         ctx: Any,
         name: str | None = None,
@@ -1489,7 +1584,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="추세", aliases=["pubg-trends", "pubg-trend"])
+    @bot.hybrid_command(name="추세", aliases=["pubg-trends", "pubg-trend"])
     async def player_trends_command(
         ctx: Any,
         name: str | None = None,
@@ -1539,7 +1634,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="무기", aliases=["pubg-weapon"])
+    @bot.hybrid_command(name="무기", aliases=["pubg-weapon"])
     async def player_weapon_command(
         ctx: Any,
         name: str | None = None,
@@ -1588,7 +1683,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="추천", aliases=["pubg-recommend"])
+    @bot.hybrid_command(name="추천", aliases=["pubg-recommend"])
     async def player_recommendations_command(
         ctx: Any,
         name: str | None = None,
@@ -1639,7 +1734,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="매치", aliases=["pubg-match"])
+    @bot.hybrid_command(name="매치", aliases=["pubg-match"])
     async def player_match_command(
         ctx: Any,
         match_id: str | None = None,
@@ -1695,7 +1790,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="랭킹", aliases=["pubg-ranking"])
+    @bot.hybrid_command(name="랭킹", aliases=["pubg-ranking"])
     async def ranking_command(
         ctx: Any,
         metric: str = "kda",
@@ -1747,7 +1842,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="유저등록", aliases=["pubg-register"])
+    @bot.hybrid_command(name="유저등록", aliases=["pubg-register"])
     async def register_player_command(ctx: Any, shard: str, nickname: str) -> None:
         if not await require_permission(ctx, "register"):
             return
@@ -1784,7 +1879,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="유저삭제", aliases=["pubg-unregister"])
+    @bot.hybrid_command(name="유저삭제", aliases=["pubg-unregister"])
     async def unregister_player_command(ctx: Any, shard: str, target: str) -> None:
         if not await require_permission(ctx, "player_manage"):
             return
@@ -1830,7 +1925,7 @@ def create_discord_bot(
                 mention_author=False,
             )
 
-    @bot.command(name="최근스냅샷", aliases=["pubg-replay"])
+    @bot.hybrid_command(name="최근스냅샷", aliases=["pubg-replay"])
     async def latest_snapshot_command(ctx: Any, match_id: str | None = None) -> None:
         if not await require_permission(ctx, "replay_read"):
             return
@@ -1909,7 +2004,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="pubg-settings")
+    @bot.hybrid_command(name="pubg-settings")
     async def discord_settings_command(
         ctx: Any,
         section: str | None = None,
@@ -2121,7 +2216,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="pubg-delete-data")
+    @bot.hybrid_command(name="pubg-delete-data")
     async def data_deletion_request_command(
         ctx: Any,
         shard: str | None = None,
@@ -2218,7 +2313,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="pubg-delete-cancel")
+    @bot.hybrid_command(name="pubg-delete-cancel")
     async def data_deletion_cancel_command(
         ctx: Any,
         request_id: str | None = None,
@@ -2291,7 +2386,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="pubg-permission")
+    @bot.hybrid_command(name="pubg-permission")
     async def discord_permission_command(
         ctx: Any,
         user_id: str | None = None,
@@ -2411,7 +2506,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="pubg-ranking-scope", aliases=["pubg-guild-scope"])
+    @bot.hybrid_command(name="pubg-ranking-scope", aliases=["pubg-guild-scope"])
     async def discord_ranking_scope_command(
         ctx: Any,
         ranking_scope: str | None = None,
@@ -2480,7 +2575,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="pubg-alerts")
+    @bot.hybrid_command(name="pubg-alerts")
     async def alerts_command(ctx: Any) -> None:
         if not await require_permission(ctx, "admin"):
             return
@@ -2529,7 +2624,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="pubg-alert-ack", aliases=["pubg-alert-acknowledge"])
+    @bot.hybrid_command(name="pubg-alert-ack", aliases=["pubg-alert-acknowledge"])
     async def alert_acknowledge_command(ctx: Any, alert_id: str | None = None) -> None:
         if not await require_permission(ctx, "admin"):
             return
@@ -2571,7 +2666,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="pubg-alert-snooze")
+    @bot.hybrid_command(name="pubg-alert-snooze")
     async def alert_snooze_command(
         ctx: Any,
         alert_id: str | None = None,
@@ -2618,7 +2713,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="pubg-alert-note")
+    @bot.hybrid_command(name="pubg-alert-note")
     async def alert_note_command(
         ctx: Any,
         alert_id: str | None = None,
@@ -2667,7 +2762,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="pubg-alert-resolution", aliases=["pubg-alert-resolve"])
+    @bot.hybrid_command(name="pubg-alert-resolution", aliases=["pubg-alert-resolve"])
     async def alert_resolution_command(
         ctx: Any,
         alert_id: str | None = None,
@@ -2716,7 +2811,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="pubg-alert-notes", aliases=["pubg-alert-note-list"])
+    @bot.hybrid_command(name="pubg-alert-notes", aliases=["pubg-alert-note-list"])
     async def alert_notes_command(
         ctx: Any,
         alert_id: str | None = None,
@@ -2764,7 +2859,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="pubg-alert-history", aliases=["pubg-alert-log"])
+    @bot.hybrid_command(name="pubg-alert-history", aliases=["pubg-alert-log"])
     async def alert_history_command(ctx: Any, *, filters: str | None = None) -> None:
         if not await require_permission(ctx, "admin"):
             return
@@ -2827,7 +2922,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="pubg-worker-runs", aliases=["pubg-worker-history", "pubg-worker-log"])
+    @bot.hybrid_command(name="pubg-worker-runs", aliases=["pubg-worker-history", "pubg-worker-log"])
     async def worker_runs_command(ctx: Any, *, filters: str | None = None) -> None:
         if not await require_permission(ctx, "admin"):
             return
@@ -2895,7 +2990,7 @@ def create_discord_bot(
             mention_author=False,
         )
 
-    @bot.command(name="pubg-worker-run", aliases=["pubg-worker-run-detail", "pubg-worker-detail"])
+    @bot.hybrid_command(name="pubg-worker-run", aliases=["pubg-worker-run-detail", "pubg-worker-detail"])
     async def worker_run_detail_command(ctx: Any, run_id: str | None = None) -> None:
         if not await require_permission(ctx, "admin"):
             return
@@ -3316,6 +3411,10 @@ def _percent(value: float) -> str:
     return f"{value * 100:.1f}%"
 
 
+def _safe_ratio(numerator: int | float, denominator: int | float) -> float:
+    return float(numerator) / float(denominator) if denominator else 0.0
+
+
 def _number(value: float, digits: int) -> str:
     return f"{value:.{digits}f}"
 
@@ -3345,7 +3444,7 @@ def _optional_number(value: int | None) -> str:
 
 
 def _ranking_score(metric: str, score: float) -> str:
-    if metric in {"win_rate", "accuracy", "headshot_rate"}:
+    if metric in {"win_rate", "accuracy", "headshot_hit_rate", "headshot_rate"}:
         return _percent(score)
     if metric in {"kda", "avg_damage"}:
         return _number(score, 2)

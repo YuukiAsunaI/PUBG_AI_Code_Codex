@@ -1,18 +1,23 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from datetime import datetime
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, time, timedelta
+from math import sqrt
 from typing import Any, Mapping
 import json
 
 from pubg_ai.code_translator import translate_code
+from pubg_ai.distance_buckets import distance_bucket
 from pubg_ai.player_registry import RegisteredPlayer
+from pubg_ai.player_trends import PlayerTrendFilters
 from pubg_ai.replay_artifact_catalog import ReplayArtifactRecord, list_replay_artifacts
 from pubg_ai.weapon_accuracy import (
     AccuracyBreakdown,
     WeaponAccuracyMetric,
     summarize_accuracy_rows,
+    distance_weapon_family,
     weapon_accuracy_metric,
+    weapon_family,
 )
 from pubg_ai.weapon_stats import normalize_weapon_code
 
@@ -42,11 +47,20 @@ class PlayerCombatTotals:
     first_match_at_kst: datetime | None = None
     last_match_at_kst: datetime | None = None
     accuracy_breakdown: AccuracyBreakdown | None = None
+    hits_taken: int = 0
+    headshot_hits: int = 0
+    headshot_hits_taken: int = 0
+    headshot_hit_rate: float = 0.0
+    headshot_hit_taken_rate: float = 0.0
+    hit_parts: dict[str, int] = field(default_factory=dict)
+    taken_hit_parts: dict[str, int] = field(default_factory=dict)
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
         record["first_match_at_kst"] = _datetime_record(self.first_match_at_kst)
         record["last_match_at_kst"] = _datetime_record(self.last_match_at_kst)
+        record["hit_part_rates"] = _part_rates(self.hit_parts)
+        record["taken_hit_part_rates"] = _part_rates(self.taken_hit_parts)
         return record
 
 
@@ -65,9 +79,13 @@ class PlayerWeaponStats:
     accuracy: float
     headshot_kills: int
     accuracy_metric: WeaponAccuracyMetric | None = None
+    headshot_hits: int = 0
 
     def to_record(self) -> dict[str, Any]:
-        return asdict(self)
+        record = asdict(self)
+        record["headshot_hit_rate"] = _safe_divide(self.headshot_hits, self.shots_hit)
+        record["headshot_kill_rate"] = _safe_divide(self.headshot_kills, self.kills)
+        return record
 
 
 @dataclass(frozen=True)
@@ -89,6 +107,8 @@ class PlayerRecentMatch:
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
         record["created_at_kst"] = _datetime_record(self.created_at_kst)
+        record["map_name_ko"] = translate_code(self.map_name, "map") if self.map_name else None
+        record["game_mode_ko"] = translate_code(self.game_mode, "game_mode") if self.game_mode else None
         return record
 
 
@@ -118,9 +138,22 @@ class PlayerWeaponDetailTotals:
     hit_parts: dict[str, int]
     taken_hit_parts: dict[str, int]
     accuracy_metric: WeaponAccuracyMetric | None = None
+    fight_count: int = 0
+    fight_wins: int = 0
+    fight_losses: int = 0
+    fight_win_rate: float = 0.0
+    avg_fights_per_match: float = 0.0
 
     def to_record(self) -> dict[str, Any]:
-        return asdict(self)
+        record = asdict(self)
+        record["headshot_hit_rate"] = _safe_divide(self.headshot_hits, self.shots_hit)
+        record["headshot_hit_taken_rate"] = _safe_divide(
+            self.taken_hit_parts.get("head", 0),
+            self.hits_taken,
+        )
+        record["hit_part_rates"] = _part_rates(self.hit_parts)
+        record["taken_hit_part_rates"] = _part_rates(self.taken_hit_parts)
+        return record
 
 
 @dataclass(frozen=True)
@@ -143,7 +176,27 @@ class PlayerWeaponRecentMatch:
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
         record["created_at_kst"] = _datetime_record(self.created_at_kst)
+        record["map_name_ko"] = translate_code(self.map_name, "map") if self.map_name else None
+        record["game_mode_ko"] = translate_code(self.game_mode, "game_mode") if self.game_mode else None
         return record
+
+
+@dataclass(frozen=True)
+class PlayerWeaponFightRange:
+    bucket_label: str
+    min_m: int
+    max_m: int
+    fight_count: int
+    wins: int
+    losses: int
+    observed_win_rate: float
+    confidence_adjusted_win_rate: float
+    efficiency_score: float
+    avg_distance_m: float
+    reliable_sample: bool
+
+    def to_record(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -153,6 +206,8 @@ class PlayerWeaponDetail:
     weapon_name: str
     totals: PlayerWeaponDetailTotals
     recent_matches: list[PlayerWeaponRecentMatch]
+    filters: PlayerTrendFilters = field(default_factory=PlayerTrendFilters)
+    effective_ranges: list[PlayerWeaponFightRange] = field(default_factory=list)
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -161,6 +216,60 @@ class PlayerWeaponDetail:
             "weapon_name": self.weapon_name,
             "totals": self.totals.to_record(),
             "recent_matches": [match.to_record() for match in self.recent_matches],
+            "filters": self.filters.to_record(),
+            "effective_ranges": [item.to_record() for item in self.effective_ranges],
+        }
+
+
+@dataclass(frozen=True)
+class PlayerCatalogWeapon:
+    weapon_code: str
+    weapon_name: str
+    weapon_family: str
+    match_count: int
+
+    def to_record(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class PlayerCatalogMatch:
+    match_id: str
+    created_at_kst: datetime | None
+    map_name: str | None
+    game_mode: str | None
+    team_mode: str | None
+    perspective: str | None
+    match_type: str | None
+    season_state: str | None
+    win_place: int | None
+    kills: int
+    assists: int
+    deaths: int
+    dbnos_caused: int
+    damage_dealt: float
+
+    def to_record(self) -> dict[str, Any]:
+        record = asdict(self)
+        record["created_at_kst"] = _datetime_record(self.created_at_kst)
+        record["map_name_ko"] = translate_code(self.map_name, "map") if self.map_name else None
+        record["game_mode_ko"] = translate_code(self.game_mode, "game_mode") if self.game_mode else None
+        return record
+
+
+@dataclass(frozen=True)
+class PlayerLookupCatalog:
+    player: RegisteredPlayer
+    weapons: list[PlayerCatalogWeapon]
+    matches: list[PlayerCatalogMatch]
+    facets: dict[str, list[Any]]
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "player": self.player.to_record(),
+            "weapons": [weapon.to_record() for weapon in self.weapons],
+            "matches": [match.to_record() for match in self.matches],
+            "facets": self.facets,
         }
 
 
@@ -184,7 +293,15 @@ class PlayerMatchWeaponStats:
     accuracy_metric: WeaponAccuracyMetric | None = None
 
     def to_record(self) -> dict[str, Any]:
-        return asdict(self)
+        record = asdict(self)
+        record["headshot_hit_rate"] = _safe_divide(
+            self.hit_parts.get("head", 0),
+            self.shots_hit,
+        )
+        record["headshot_kill_rate"] = _safe_divide(self.headshot_kills, self.kills)
+        record["hit_part_rates"] = _part_rates(self.hit_parts)
+        record["taken_hit_part_rates"] = _part_rates(self.taken_hit_parts)
+        return record
 
 
 @dataclass(frozen=True)
@@ -239,7 +356,9 @@ class PlayerMatchDetail:
             "match_id": self.match_id,
             "shard": self.shard,
             "map_name": self.map_name,
+            "map_name_ko": translate_code(self.map_name, "map") if self.map_name else None,
             "game_mode": self.game_mode,
+            "game_mode_ko": translate_code(self.game_mode, "game_mode") if self.game_mode else None,
             "match_type": self.match_type,
             "created_at_kst": _datetime_record(self.created_at_kst),
             "duration_seconds": self.duration_seconds,
@@ -275,6 +394,11 @@ class PlayerMatchDetail:
             "headshot_dbnos_taken": self.headshot_dbnos_taken,
             "hit_parts": self.hit_parts,
             "taken_hit_parts": self.taken_hit_parts,
+            "headshot_hit_rate": _safe_divide(self.headshot_hits, self.shots_hit),
+            "headshot_hit_taken_rate": _safe_divide(self.headshot_hits_taken, self.hits_taken),
+            "headshot_kill_rate": _safe_divide(self.headshot_kills, self.kills),
+            "hit_part_rates": _part_rates(self.hit_parts),
+            "taken_hit_part_rates": _part_rates(self.taken_hit_parts),
             "survival_seconds": self.survival_seconds,
             "landing_distance_m": self.landing_distance_m,
             "movement_distance_m": self.movement_distance_m,
@@ -331,6 +455,35 @@ class PlayerStatsService:
             recent_matches=self._get_recent_matches(player, limit=recent_limit),
         )
 
+    def get_lookup_catalog(
+        self,
+        *,
+        shard: str,
+        account_id: str | None = None,
+        name: str | None = None,
+        guild_id: str | None = None,
+        global_scope: bool = False,
+        match_limit: int = 1000,
+    ) -> PlayerLookupCatalog | None:
+        player = self._get_player(
+            shard=shard,
+            account_id=account_id,
+            name=name,
+            guild_id=guild_id,
+            global_scope=global_scope,
+        )
+        if player is None:
+            return None
+
+        weapons = self._get_catalog_weapons(player)
+        matches = self._get_catalog_matches(player, limit=match_limit)
+        return PlayerLookupCatalog(
+            player=player,
+            weapons=weapons,
+            matches=matches,
+            facets=_catalog_facets(matches),
+        )
+
     def get_weapon_detail(
         self,
         *,
@@ -341,7 +494,9 @@ class PlayerStatsService:
         guild_id: str | None = None,
         global_scope: bool = False,
         recent_limit: int = 5,
+        filters: PlayerTrendFilters | None = None,
     ) -> PlayerWeaponDetail | None:
+        normalized_filters = (filters or PlayerTrendFilters()).normalized()
         player = self._get_player(
             shard=shard,
             account_id=account_id,
@@ -356,15 +511,18 @@ class PlayerStatsService:
         if weapon_code is None:
             return None
 
-        rows = self._get_weapon_match_rows(player, weapon_code)
+        rows = self._get_weapon_match_rows(player, weapon_code, normalized_filters)
         if not rows:
             return None
+        fight_rows = self._get_weapon_fight_rows(player, weapon_code, normalized_filters)
 
         return _weapon_detail_from_rows(
             player=player,
             weapon_code=weapon_code,
             rows=rows,
             recent_limit=recent_limit,
+            filters=normalized_filters,
+            fight_rows=fight_rows,
         )
 
     def get_match_detail(
@@ -700,7 +858,12 @@ class PlayerStatsService:
                     COALESCE(SUM(summaries.damage_taken), 0) AS damage_taken,
                     COALESCE(SUM(summaries.shots_fired), 0) AS shots_fired,
                     COALESCE(SUM(summaries.shots_hit), 0) AS shots_hit,
+                    COALESCE(SUM(summaries.hits_taken), 0) AS hits_taken,
+                    COALESCE(SUM(summaries.headshot_hits), 0) AS headshot_hits,
+                    COALESCE(SUM(summaries.headshot_hits_taken), 0) AS headshot_hits_taken,
                     COALESCE(SUM(summaries.headshot_kills), 0) AS headshot_kills,
+                    JSON_ARRAYAGG(summaries.hit_parts) AS hit_part_maps,
+                    JSON_ARRAYAGG(summaries.taken_hit_parts) AS taken_hit_part_maps,
                     COALESCE(AVG(
                         COALESCE(
                             CAST(JSON_UNQUOTE(JSON_EXTRACT(participants.raw_stats, '$.timeSurvived')) AS DECIMAL(12, 3)),
@@ -708,7 +871,18 @@ class PlayerStatsService:
                             0
                         )
                     ), 0) AS avg_survival_seconds,
-                    COALESCE(AVG(COALESCE(movement.in_game_sampled_distance_m, 0)), 0) AS avg_movement_distance_m,
+                    COALESCE(AVG(
+                        CASE
+                            WHEN JSON_EXTRACT(participants.raw_stats, '$.walkDistance') IS NOT NULL
+                              OR JSON_EXTRACT(participants.raw_stats, '$.rideDistance') IS NOT NULL
+                              OR JSON_EXTRACT(participants.raw_stats, '$.swimDistance') IS NOT NULL
+                            THEN
+                                COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(participants.raw_stats, '$.walkDistance')) AS DECIMAL(14, 3)), 0)
+                              + COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(participants.raw_stats, '$.rideDistance')) AS DECIMAL(14, 3)), 0)
+                              + COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(participants.raw_stats, '$.swimDistance')) AS DECIMAL(14, 3)), 0)
+                            ELSE COALESCE(movement.in_game_sampled_distance_m, 0)
+                        END
+                    ), 0) AS avg_movement_distance_m,
                     MIN(matches.created_at_kst) AS first_match_at_kst,
                     MAX(matches.created_at_kst) AS last_match_at_kst
                 FROM player_match_combat_summaries summaries
@@ -733,6 +907,9 @@ class PlayerStatsService:
         deaths = _int(row.get("deaths"))
         shots_fired = _int(row.get("shots_fired"))
         shots_hit = _int(row.get("shots_hit"))
+        hits_taken = _int(row.get("hits_taken"))
+        headshot_hits = _int(row.get("headshot_hits"))
+        headshot_hits_taken = _int(row.get("headshot_hits_taken"))
         headshot_kills = _int(row.get("headshot_kills"))
         damage_dealt = _float(row.get("damage_dealt"))
         damage_taken = _float(row.get("damage_taken"))
@@ -762,6 +939,13 @@ class PlayerStatsService:
             first_match_at_kst=row.get("first_match_at_kst"),
             last_match_at_kst=row.get("last_match_at_kst"),
             accuracy_breakdown=accuracy_breakdown,
+            hits_taken=hits_taken,
+            headshot_hits=headshot_hits,
+            headshot_hits_taken=headshot_hits_taken,
+            headshot_hit_rate=_safe_divide(headshot_hits, shots_hit),
+            headshot_hit_taken_rate=_safe_divide(headshot_hits_taken, hits_taken),
+            hit_parts=_sum_json_part_maps(row.get("hit_part_maps")),
+            taken_hit_parts=_sum_json_part_maps(row.get("taken_hit_part_maps")),
         )
 
     def _get_accuracy_breakdown(
@@ -813,6 +997,7 @@ class PlayerStatsService:
                     COALESCE(SUM(weapon_stats.damage_dealt), 0) AS damage_dealt,
                     COALESCE(SUM(weapon_stats.shots_fired), 0) AS shots_fired,
                     COALESCE(SUM(weapon_stats.shots_hit), 0) AS shots_hit,
+                    COALESCE(SUM(weapon_stats.headshot_hits), 0) AS headshot_hits,
                     COALESCE(SUM(weapon_stats.headshot_kills), 0) AS headshot_kills
                 FROM player_weapon_match_stats weapon_stats
                 INNER JOIN matches
@@ -847,11 +1032,110 @@ class PlayerStatsService:
                     shots_fired=shots_fired,
                     shots_hit=shots_hit,
                     accuracy=metric.estimated_hit_rate or 0.0,
+                    headshot_hits=_int(row.get("headshot_hits")),
                     headshot_kills=_int(row.get("headshot_kills")),
                     accuracy_metric=metric,
                 )
             )
         return weapons
+
+    def _get_catalog_weapons(self, player: RegisteredPlayer) -> list[PlayerCatalogWeapon]:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    weapon_stats.weapon_code,
+                    COUNT(DISTINCT weapon_stats.match_id) AS match_count
+                FROM player_weapon_match_stats weapon_stats
+                INNER JOIN matches
+                    ON matches.match_id = weapon_stats.match_id
+                WHERE weapon_stats.account_id = %s
+                  AND matches.shard = %s
+                  AND (
+                    weapon_stats.shots_fired > 0
+                    OR weapon_stats.damage_dealt > 0
+                    OR weapon_stats.damage_taken > 0
+                    OR weapon_stats.kills > 0
+                    OR weapon_stats.assists > 0
+                    OR weapon_stats.dbnos > 0
+                    OR weapon_stats.dbnos_taken > 0
+                  )
+                GROUP BY weapon_stats.weapon_code
+                ORDER BY match_count DESC, weapon_stats.weapon_code ASC
+                """,
+                (player.account_id, player.shard),
+            )
+            rows = cursor.fetchall()
+
+        return [
+            PlayerCatalogWeapon(
+                weapon_code=str(row["weapon_code"]),
+                weapon_name=translate_code(str(row["weapon_code"]), "damage_causer"),
+                weapon_family=weapon_family(str(row["weapon_code"])),
+                match_count=_int(row.get("match_count")),
+            )
+            for row in rows
+        ]
+
+    def _get_catalog_matches(
+        self,
+        player: RegisteredPlayer,
+        *,
+        limit: int,
+    ) -> list[PlayerCatalogMatch]:
+        normalized_limit = max(1, min(int(limit), 5000))
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    matches.match_id,
+                    matches.created_at_kst,
+                    matches.map_name,
+                    matches.game_mode,
+                    matches.team_mode,
+                    matches.perspective,
+                    matches.match_type,
+                    matches.season_state,
+                    participants.win_place,
+                    summaries.kills,
+                    summaries.assists,
+                    summaries.deaths,
+                    summaries.dbnos_caused,
+                    summaries.damage_dealt
+                FROM player_match_combat_summaries summaries
+                INNER JOIN matches
+                    ON matches.match_id = summaries.match_id
+                LEFT JOIN match_participants participants
+                    ON participants.match_id = summaries.match_id
+                   AND participants.account_id = summaries.account_id
+                WHERE summaries.account_id = %s
+                  AND matches.shard = %s
+                ORDER BY matches.created_at_kst DESC, matches.match_id DESC
+                LIMIT %s
+                """,
+                (player.account_id, player.shard, normalized_limit),
+            )
+            rows = cursor.fetchall()
+
+        return [
+            PlayerCatalogMatch(
+                match_id=str(row["match_id"]),
+                created_at_kst=row.get("created_at_kst"),
+                map_name=row.get("map_name"),
+                game_mode=row.get("game_mode"),
+                team_mode=row.get("team_mode"),
+                perspective=row.get("perspective"),
+                match_type=row.get("match_type"),
+                season_state=row.get("season_state"),
+                win_place=_optional_int(row.get("win_place")),
+                kills=_int(row.get("kills")),
+                assists=_int(row.get("assists")),
+                deaths=_int(row.get("deaths")),
+                dbnos_caused=_int(row.get("dbnos_caused")),
+                damage_dealt=_float(row.get("damage_dealt")),
+            )
+            for row in rows
+        ]
 
     def _resolve_player_weapon_code(self, player: RegisteredPlayer, weapon: str) -> str | None:
         requested = _required_text(weapon, "weapon")
@@ -886,7 +1170,27 @@ class PlayerStatsService:
 
         return direct_code
 
-    def _get_weapon_match_rows(self, player: RegisteredPlayer, weapon_code: str) -> list[dict[str, Any]]:
+    def _get_weapon_match_rows(
+        self,
+        player: RegisteredPlayer,
+        weapon_code: str,
+        filters: PlayerTrendFilters,
+    ) -> list[dict[str, Any]]:
+        conditions = [
+            "weapon_stats.account_id = %s",
+            "matches.shard = %s",
+            "weapon_stats.weapon_code = %s",
+            """(
+                weapon_stats.shots_fired > 0
+                OR weapon_stats.damage_dealt > 0
+                OR weapon_stats.kills > 0
+                OR weapon_stats.assists > 0
+                OR weapon_stats.dbnos > 0
+            )""",
+        ]
+        params: list[Any] = [player.account_id, player.shard, weapon_code]
+        _append_match_filters(conditions, params, filters)
+
         with self.connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -915,6 +1219,10 @@ class PlayerStatsService:
                     matches.created_at_kst,
                     matches.map_name,
                     matches.game_mode,
+                    matches.team_mode,
+                    matches.perspective,
+                    matches.match_type,
+                    matches.season_state,
                     participants.win_place
                 FROM player_weapon_match_stats weapon_stats
                 INNER JOIN matches
@@ -922,19 +1230,46 @@ class PlayerStatsService:
                 LEFT JOIN match_participants participants
                     ON participants.match_id = weapon_stats.match_id
                    AND participants.account_id = weapon_stats.account_id
-                WHERE weapon_stats.account_id = %s
-                  AND matches.shard = %s
-                  AND weapon_stats.weapon_code = %s
-                  AND (
-                    weapon_stats.shots_fired > 0
-                    OR weapon_stats.damage_dealt > 0
-                    OR weapon_stats.kills > 0
-                    OR weapon_stats.assists > 0
-                    OR weapon_stats.dbnos > 0
-                  )
+                WHERE
+                """
+                + " AND ".join(conditions)
+                + """
                 ORDER BY matches.created_at_kst DESC, weapon_stats.match_id DESC
                 """,
-                (player.account_id, player.shard, weapon_code),
+                params,
+            )
+            return list(cursor.fetchall())
+
+    def _get_weapon_fight_rows(
+        self,
+        player: RegisteredPlayer,
+        weapon_code: str,
+        filters: PlayerTrendFilters,
+    ) -> list[dict[str, Any]]:
+        conditions = [
+            "outcomes.account_id = %s",
+            "matches.shard = %s",
+            "outcomes.weapon_code = %s",
+            "outcomes.is_friendly_fire = 0",
+        ]
+        params: list[Any] = [player.account_id, player.shard, weapon_code]
+        _append_match_filters(conditions, params, filters)
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    outcomes.outcome_type,
+                    outcomes.distance_m
+                FROM player_fight_outcomes outcomes
+                INNER JOIN matches
+                    ON matches.match_id = outcomes.match_id
+                WHERE
+                """
+                + " AND ".join(conditions)
+                + """
+                ORDER BY matches.created_at_kst DESC, outcomes.event_index DESC
+                """,
+                params,
             )
             return list(cursor.fetchall())
 
@@ -990,7 +1325,7 @@ class PlayerStatsService:
                 dbnos_caused=_int(row.get("dbnos_caused")),
                 damage_dealt=_float(row.get("damage_dealt")),
                 survival_seconds=_survival_seconds_from_row(row),
-                movement_distance_m=_optional_float(row.get("in_game_sampled_distance_m")),
+                movement_distance_m=_movement_distance_from_row(row),
             )
             for row in rows
         ]
@@ -1009,6 +1344,8 @@ def _weapon_detail_from_rows(
     weapon_code: str,
     rows: list[dict[str, Any]],
     recent_limit: int,
+    filters: PlayerTrendFilters,
+    fight_rows: list[dict[str, Any]] | None = None,
 ) -> PlayerWeaponDetail:
     match_count = len({str(row["match_id"]) for row in rows})
     wins = sum(1 for row in rows if _optional_int(row.get("win_place")) == 1)
@@ -1030,6 +1367,10 @@ def _weapon_detail_from_rows(
     hit_parts = _sum_part_maps(row.get("hit_parts") for row in rows)
     taken_hit_parts = _sum_part_maps(row.get("taken_hit_parts") for row in rows)
     accuracy_metric = weapon_accuracy_metric(weapon_code, shots_fired, shots_hit)
+    eligible_fights = list(fight_rows or [])
+    fight_wins = sum(str(row.get("outcome_type")) == "win" for row in eligible_fights)
+    fight_losses = sum(str(row.get("outcome_type")) == "loss" for row in eligible_fights)
+    fight_count = fight_wins + fight_losses
 
     return PlayerWeaponDetail(
         player=player,
@@ -1060,6 +1401,11 @@ def _weapon_detail_from_rows(
             hit_parts=hit_parts,
             taken_hit_parts=taken_hit_parts,
             accuracy_metric=accuracy_metric,
+            fight_count=fight_count,
+            fight_wins=fight_wins,
+            fight_losses=fight_losses,
+            fight_win_rate=_safe_divide(fight_wins, fight_count),
+            avg_fights_per_match=_safe_divide(fight_count, match_count),
         ),
         recent_matches=[
             PlayerWeaponRecentMatch(
@@ -1091,7 +1437,147 @@ def _weapon_detail_from_rows(
             )
             for row in rows[: max(1, min(int(recent_limit), 20))]
         ],
+        filters=filters,
+        effective_ranges=_weapon_fight_ranges(weapon_code, eligible_fights),
     )
+
+
+def _weapon_fight_ranges(
+    weapon_code: str,
+    rows: list[dict[str, Any]],
+) -> list[PlayerWeaponFightRange]:
+    grouped: dict[str, dict[str, Any]] = {}
+    family = distance_weapon_family(weapon_code)
+    for row in rows:
+        distance_m = _optional_float(row.get("distance_m"))
+        if distance_m is None or distance_m < 0:
+            continue
+        bucket = distance_bucket(distance_m, family)
+        item = grouped.setdefault(
+            bucket.label,
+            {
+                "bucket": bucket,
+                "wins": 0,
+                "losses": 0,
+                "distance_sum": 0.0,
+            },
+        )
+        outcome_type = str(row.get("outcome_type") or "")
+        if outcome_type == "win":
+            item["wins"] += 1
+        elif outcome_type == "loss":
+            item["losses"] += 1
+        else:
+            continue
+        item["distance_sum"] += distance_m
+
+    ranges: list[PlayerWeaponFightRange] = []
+    for item in grouped.values():
+        wins = _int(item["wins"])
+        losses = _int(item["losses"])
+        fight_count = wins + losses
+        if not fight_count:
+            continue
+        # Beta(2, 2) smoothing and a 10-fight confidence ramp keep one-off wins
+        # from outranking distance bands with repeatable evidence.
+        adjusted_rate = _safe_divide(wins + 2, fight_count + 4)
+        confidence = min(1.0, sqrt(fight_count / 10))
+        bucket = item["bucket"]
+        ranges.append(
+            PlayerWeaponFightRange(
+                bucket_label=bucket.label,
+                min_m=bucket.min_m,
+                max_m=bucket.max_m,
+                fight_count=fight_count,
+                wins=wins,
+                losses=losses,
+                observed_win_rate=_safe_divide(wins, fight_count),
+                confidence_adjusted_win_rate=adjusted_rate,
+                efficiency_score=adjusted_rate * confidence * 100,
+                avg_distance_m=_safe_divide(item["distance_sum"], fight_count),
+                reliable_sample=fight_count >= 5,
+            )
+        )
+    ranges.sort(
+        key=lambda item: (
+            -item.efficiency_score,
+            -item.fight_count,
+            item.min_m,
+        )
+    )
+    return ranges
+
+
+def _append_match_filters(
+    conditions: list[str],
+    params: list[Any],
+    filters: PlayerTrendFilters,
+) -> None:
+    for column, value in (
+        ("matches.game_mode", filters.game_mode),
+        ("matches.team_mode", filters.team_mode),
+        ("matches.perspective", filters.perspective),
+        ("matches.match_type", filters.match_type),
+        ("matches.map_name", filters.map_name),
+        ("matches.season_state", filters.season_state),
+    ):
+        if value is not None:
+            conditions.append(f"{column} = %s")
+            params.append(value)
+
+    if filters.is_custom_match is not None:
+        conditions.append("matches.is_custom_match = %s")
+        params.append(1 if filters.is_custom_match else 0)
+    for expression, value in (
+        ("YEAR(matches.created_at_kst)", filters.year),
+        ("QUARTER(matches.created_at_kst)", filters.quarter),
+        ("MONTH(matches.created_at_kst)", filters.month),
+        ("HOUR(matches.created_at_kst)", filters.hour),
+    ):
+        if value is not None:
+            conditions.append(f"{expression} = %s")
+            params.append(value)
+    if filters.exact_date_kst is not None:
+        conditions.append("matches.created_at_kst >= %s")
+        params.append(datetime.combine(filters.exact_date_kst, time.min))
+        conditions.append("matches.created_at_kst < %s")
+        params.append(datetime.combine(filters.exact_date_kst + timedelta(days=1), time.min))
+    if filters.from_date_kst is not None:
+        conditions.append("matches.created_at_kst >= %s")
+        params.append(datetime.combine(filters.from_date_kst, time.min))
+    if filters.to_date_kst is not None:
+        conditions.append("matches.created_at_kst < %s")
+        params.append(datetime.combine(filters.to_date_kst + timedelta(days=1), time.min))
+
+
+def _catalog_facets(matches: list[PlayerCatalogMatch]) -> dict[str, list[Any]]:
+    def values(attribute: str) -> list[Any]:
+        return sorted(
+            {
+                value
+                for match in matches
+                for value in [getattr(match, attribute)]
+                if value is not None and value != ""
+            }
+        )
+
+    years = sorted(
+        {
+            match.created_at_kst.year
+            for match in matches
+            if isinstance(match.created_at_kst, datetime)
+        },
+        reverse=True,
+    )
+    return {
+        "maps": values("map_name"),
+        "game_modes": values("game_mode"),
+        "team_modes": values("team_mode"),
+        "perspectives": values("perspective"),
+        "match_types": values("match_type"),
+        "season_states": values("season_state"),
+        "years": years,
+    }
 
 
 def _player_from_row(row: dict[str, Any]) -> RegisteredPlayer:
@@ -1117,10 +1603,6 @@ def _survival_seconds_from_row(row: dict[str, Any]) -> float | None:
 
 
 def _movement_distance_from_row(row: dict[str, Any]) -> float | None:
-    movement_distance = _optional_float(row.get("in_game_sampled_distance_m"))
-    if movement_distance is not None:
-        return movement_distance
-
     raw_stats = _json_mapping(row.get("raw_stats"))
     parts = [
         _optional_float(raw_stats.get("walkDistance")),
@@ -1128,7 +1610,9 @@ def _movement_distance_from_row(row: dict[str, Any]) -> float | None:
         _optional_float(raw_stats.get("swimDistance")),
     ]
     known_parts = [part for part in parts if part is not None]
-    return sum(known_parts) if known_parts else None
+    if known_parts:
+        return sum(known_parts)
+    return _optional_float(row.get("in_game_sampled_distance_m"))
 
 
 def _datetime_record(value: datetime | None) -> str | None:
@@ -1141,6 +1625,17 @@ def _sum_part_maps(values: Any) -> dict[str, int]:
         for key, count in _part_map(value).items():
             totals[key] = totals.get(key, 0) + count
     return totals
+
+
+def _sum_json_part_maps(value: Any) -> dict[str, int]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+    if not isinstance(value, list):
+        return _part_map(value)
+    return _sum_part_maps(value)
 
 
 def _part_map(value: Any) -> dict[str, int]:
@@ -1156,6 +1651,18 @@ def _part_map(value: Any) -> dict[str, int]:
         for key, count in value.items()
         if _int(count) > 0
     }
+
+
+def _part_rates(parts: Mapping[str, Any]) -> dict[str, float]:
+    counts = {
+        str(key): _int(value)
+        for key, value in parts.items()
+        if _int(value) > 0
+    }
+    total = sum(counts.values())
+    if total <= 0:
+        return {}
+    return {key: count / total for key, count in counts.items()}
 
 
 def _json_mapping(value: Any) -> Mapping[str, Any]:
@@ -1240,4 +1747,5 @@ WEAPON_ALIASES = {
     "mp5": "WeapMP5K_C",
     "mp5k": "WeapMP5K_C",
     "p90": "WeapP90_C",
+    "rpd": "WeapRPD_C",
 }

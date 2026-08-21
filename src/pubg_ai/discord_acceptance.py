@@ -37,6 +37,15 @@ class DiscordBotIdentity:
 
 
 @dataclass(frozen=True)
+class DiscordGuildSummary:
+    guild_id: str
+    guild_name: str
+
+    def to_record(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class DiscordChannelCandidate:
     guild_id: str
     guild_name: str
@@ -197,6 +206,24 @@ class DiscordAcceptanceClient:
             )
             probes.append(probe)
         return DiscordProbeReport(bot=bot, guild_count=all_guild_count, guilds=probes)
+
+    def list_guilds(self) -> list[DiscordGuildSummary]:
+        records = self._get_json("/users/@me/guilds", params={"limit": "200"}, operation="guild list")
+        if not isinstance(records, list):
+            raise DiscordAcceptanceError("Discord guild list returned an unexpected payload.")
+
+        guilds: list[DiscordGuildSummary] = []
+        for record in records:
+            if not isinstance(record, Mapping):
+                raise DiscordAcceptanceError("Discord guild list returned an unexpected record.")
+            guilds.append(
+                DiscordGuildSummary(
+                    guild_id=_required_snowflake(record.get("id"), "guild id"),
+                    guild_name=str(record.get("name") or "").strip(),
+                )
+            )
+        guilds.sort(key=lambda item: (item.guild_name.casefold(), item.guild_id))
+        return guilds
 
     def current_bot(self) -> DiscordBotIdentity:
         payload = self._get_json("/users/@me", operation="current bot")

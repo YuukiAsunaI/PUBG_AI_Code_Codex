@@ -9,7 +9,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 
 
 class DatabaseError(RuntimeError):
@@ -74,13 +74,15 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 applied += 1
             if _ensure_api_fetch_job_unique_index(cursor, config.database):
                 applied += 1
+            if _ensure_replay_artifact_versioned_unique_index(cursor, config.database):
+                applied += 1
             cursor.execute(
                 """
                 INSERT INTO schema_migrations (version, description, applied_at_kst)
                 VALUES (%s, %s, NOW(6))
                 ON DUPLICATE KEY UPDATE description = VALUES(description)
                 """,
-                (SCHEMA_VERSION, "per-account telemetry processing state and unique API jobs"),
+                (SCHEMA_VERSION, "versioned replay artifacts and per-account telemetry state"),
             )
             applied += 1
     finally:
@@ -1450,7 +1452,13 @@ def schema_statements() -> list[str]:
             renderer_version VARCHAR(64) NOT NULL,
             source_tables JSON NULL,
             generated_at_kst DATETIME(6) NOT NULL,
-            UNIQUE KEY uq_replay_artifacts (match_id, artifact_type, artifact_name, account_id),
+            UNIQUE KEY uq_replay_artifacts (
+                match_id,
+                artifact_type,
+                artifact_name,
+                account_id,
+                renderer_version
+            ),
             KEY idx_replay_artifacts_account_type (account_id, artifact_type, generated_at_kst),
             KEY idx_replay_artifacts_match_type (match_id, artifact_type),
             CONSTRAINT fk_replay_artifacts_match
@@ -1516,6 +1524,63 @@ def _ensure_api_fetch_job_unique_index(cursor: Any, database: str) -> bool:
         ADD UNIQUE KEY uq_api_fetch_jobs_target (job_type, shard, target_id)
         """
     )
+    return True
+
+
+def _ensure_replay_artifact_versioned_unique_index(cursor: Any, database: str) -> bool:
+    expected_columns = [
+        "match_id",
+        "artifact_type",
+        "artifact_name",
+        "account_id",
+        "renderer_version",
+    ]
+    cursor.execute(
+        """
+        SELECT column_name
+        FROM information_schema.statistics
+        WHERE table_schema = %s
+          AND table_name = 'replay_artifacts'
+          AND index_name = 'uq_replay_artifacts'
+        ORDER BY seq_in_index ASC
+        """,
+        (database,),
+    )
+    rows = list(cursor.fetchall())
+    current_columns = [
+        str(row.get("column_name") or row.get("COLUMN_NAME") or "")
+        for row in rows
+    ]
+    if current_columns == expected_columns:
+        return False
+
+    if current_columns:
+        cursor.execute(
+            """
+            ALTER TABLE replay_artifacts
+            DROP INDEX uq_replay_artifacts,
+            ADD UNIQUE KEY uq_replay_artifacts (
+                match_id,
+                artifact_type,
+                artifact_name,
+                account_id,
+                renderer_version
+            )
+            """
+        )
+    else:
+        cursor.execute(
+            """
+            ALTER TABLE replay_artifacts
+            ADD UNIQUE KEY uq_replay_artifacts (
+                match_id,
+                artifact_type,
+                artifact_name,
+                account_id,
+                renderer_version
+            )
+            """
+        )
     return True
 
 

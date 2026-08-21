@@ -21,6 +21,16 @@ class DistanceBucketTests(unittest.TestCase):
         self.assertEqual(distance_bucket(450, "DMR").label, "400-500m")
         self.assertEqual(distance_bucket(999.9, "SR").label, "900-1000m")
 
+    def test_smg_and_shotgun_keep_close_range_detail(self) -> None:
+        self.assertEqual(distance_bucket(4.9, "SMG").label, "0-5m")
+        self.assertEqual(distance_bucket(18, "SHOTGUN").label, "15-20m")
+        self.assertEqual(distance_bucket(125, "SMG").label, "100-200m")
+
+    def test_lmg_uses_close_and_long_range_buckets(self) -> None:
+        self.assertEqual(distance_bucket(8, "LMG").label, "0-10m")
+        self.assertEqual(distance_bucket(42, "LMG").label, "25-50m")
+        self.assertEqual(distance_bucket(450, "LMG").label, "400-500m")
+
     def test_over_1km_is_tracked_as_overflow(self) -> None:
         bucket = distance_bucket(1200, "SR")
 

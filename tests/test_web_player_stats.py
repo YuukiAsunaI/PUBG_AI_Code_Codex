@@ -13,6 +13,32 @@ from pubg_ai.web.app import create_app
 
 
 class WebPlayerStatsTests(unittest.TestCase):
+    def test_local_manager_uses_registered_player_weapon_and_match_catalogs(self) -> None:
+        response = TestClient(create_app()).get("/")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.text
+        self.assertIn('id="registeredPlayerOptions"', body)
+        self.assertIn('class="registered-player-input"', body)
+        self.assertIn('<select name="weapon" required>', body)
+        self.assertIn('name="match_search"', body)
+        self.assertIn('<select name="match_id" required>', body)
+        self.assertIn('<select name="guild_id" id="rankingGuildSelect">', body)
+        self.assertIn('id="rankingGuildRefresh"', body)
+        self.assertIn('<label>서버 범위', body)
+        self.assertIn('class="advanced-filters"', body)
+        self.assertIn('id="trendCards"', body)
+        self.assertIn('data-catalog-facet="maps"', body)
+        self.assertIn('<option value="quarter">분기</option>', body)
+        self.assertIn('<option value="map">맵</option>', body)
+        self.assertIn('name="exact_date_kst"', body)
+        self.assertIn('match_limit: "5000"', body)
+        self.assertIn('/players/catalog?', body)
+        self.assertEqual(
+            body.count('data-reset-analysis-form="profileForm"'),
+            1,
+        )
+
     def test_player_weapon_endpoint_returns_weapon_detail(self) -> None:
         connection = FakeConnection(
             [
@@ -57,6 +83,7 @@ class WebPlayerStatsTests(unittest.TestCase):
                         "taken_hit_parts": {},
                     }
                 ],
+                [],
             ]
         )
 
@@ -199,7 +226,8 @@ class WebPlayerStatsTests(unittest.TestCase):
                         "avg_movement_distance_m": 3650.0,
                         "last_match_at_kst": datetime(2026, 6, 29, 1, 0, 0),
                     }
-                ]
+                ],
+                [],
             ]
         )
 
@@ -214,6 +242,31 @@ class WebPlayerStatsTests(unittest.TestCase):
         self.assertFalse(payload["global_scope"])
         self.assertEqual(payload["rows"][0]["player"]["current_name"], "Yuuki_Asuna---")
         self.assertAlmostEqual(payload["rows"][0]["score"], 3.75)
+        self.assertTrue(connection.closed)
+
+    def test_discord_guild_endpoint_merges_names_and_registered_player_counts(self) -> None:
+        connection = FakeConnection(
+            [
+                [{"guild_id": "100", "name": "PUBG Server", "ranking_scope": "guild"}],
+                [{"guild_id": "100", "registered_player_count": 3}],
+                [],
+            ]
+        )
+
+        with patch("pubg_ai.web.app.connect_mysql", return_value=connection):
+            response = TestClient(create_app()).get("/discord/guilds")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["guilds"][0],
+            {
+                "guild_id": "100",
+                "name": "PUBG Server",
+                "ranking_scope": "guild",
+                "registered_player_count": 3,
+                "known_to_bot": True,
+            },
+        )
         self.assertTrue(connection.closed)
 
     def test_player_ranking_endpoint_uses_guild_global_scope_setting(self) -> None:
@@ -246,7 +299,8 @@ class WebPlayerStatsTests(unittest.TestCase):
                         "avg_movement_distance_m": 3650.0,
                         "last_match_at_kst": datetime(2026, 6, 29, 1, 0, 0),
                     }
-                ]
+                ],
+                [],
             ]
         )
 

@@ -298,6 +298,180 @@ class TelemetryMovementProcessorTests(unittest.TestCase):
         self.assertEqual(plane_route.start_x, 1000.0)
         self.assertEqual(plane_route.end_y, 12000.0)
 
+    def test_plane_route_excludes_redeploy_aircraft(self) -> None:
+        events = [
+            {
+                "_T": "LogVehicleRide",
+                "character": {
+                    "accountId": "account.tracked",
+                    "location": {"x": 1000, "y": 9000, "z": 150000},
+                },
+                "vehicle": {
+                    "vehicleType": "TransportAircraft",
+                    "location": {"x": 1000, "y": 9000, "z": 150000},
+                },
+                "common": {"isGame": 0.1},
+            },
+            {
+                "_T": "LogVehicleLeave",
+                "character": {
+                    "accountId": "account.other",
+                    "location": {"x": 8000, "y": 2000, "z": 150000},
+                },
+                "vehicle": {"vehicleType": "TransportAircraft"},
+                "common": {"isGame": 0.1},
+            },
+            {
+                "_T": "LogVehicleRide",
+                "character": {
+                    "accountId": "account.revived",
+                    "location": {"x": 9000, "y": 9000, "z": 100000},
+                },
+                "vehicle": {
+                    "vehicleType": "TransportAircraft",
+                    "vehicleId": "RedeployAircraft_Tiger_C",
+                },
+                "common": {"isGame": 1.5},
+            },
+        ]
+
+        route = parse_plane_route(
+            events,
+            match_id="match-no-redeploy",
+            preferred_account_ids={"account.tracked"},
+        )
+
+        self.assertIsNotNone(route)
+        assert route is not None
+        self.assertEqual(route.source, "global_transport_aircraft_events")
+        self.assertEqual(route.sample_count, 2)
+        self.assertEqual(route.start_x, 1000.0)
+        self.assertEqual(route.end_x, 8000.0)
+        self.assertIsNone(route.sample_account_id)
+
+    def test_plane_route_uses_all_players_after_tracked_player_jumps(self) -> None:
+        events = [
+            {
+                "_T": "LogVehicleRide",
+                "character": {
+                    "accountId": "account.tracked",
+                    "location": {"x": 1000, "y": 9000, "z": 150000},
+                },
+                "vehicle": {
+                    "vehicleType": "TransportAircraft",
+                    "location": {"x": 1000, "y": 9000, "z": 150000},
+                },
+                "common": {"isGame": 0.1},
+            },
+            {
+                "_T": "LogVehicleLeave",
+                "character": {
+                    "accountId": "account.tracked",
+                    "location": {"x": 2000, "y": 8000, "z": 150000},
+                },
+                "vehicle": {"vehicleType": "TransportAircraft"},
+                "common": {"isGame": 0.1},
+            },
+            {
+                "_T": "LogPlayerPosition",
+                "character": {
+                    "accountId": "account.other",
+                    "location": {"x": 8000, "y": 2000, "z": 150000},
+                    "isInVehicle": True,
+                },
+                "common": {"isGame": 0.1},
+            },
+        ]
+
+        route = parse_plane_route(
+            events,
+            match_id="match-global-plane",
+            preferred_account_ids={"account.tracked"},
+        )
+
+        self.assertIsNotNone(route)
+        assert route is not None
+        self.assertEqual(route.source, "global_transport_aircraft_events")
+        self.assertEqual(route.sample_count, 3)
+        self.assertEqual(route.start_x, 1000.0)
+        self.assertEqual(route.end_x, 8000.0)
+        self.assertIsNone(route.sample_account_id)
+
+    def test_sampled_distance_excludes_transport_plane_and_discontinuous_paths(self) -> None:
+        events = [
+            {
+                "_T": "LogPlayerPosition",
+                "_D": "2026-08-21T00:00:00Z",
+                "character": {
+                    "accountId": "account.tracked",
+                    "location": {"x": 1000, "y": 1000, "z": 150000},
+                    "isInVehicle": True,
+                },
+                "elapsedTime": 10,
+                "common": {"isGame": 0.1},
+            },
+            {
+                "_T": "LogPlayerPosition",
+                "_D": "2026-08-21T00:00:10Z",
+                "character": {
+                    "accountId": "account.tracked",
+                    "location": {"x": 300000, "y": 300000, "z": 90000},
+                    "isInVehicle": False,
+                },
+                "elapsedTime": 20,
+                "common": {"isGame": 0.2},
+            },
+            {
+                "_T": "LogPlayerPosition",
+                "_D": "2026-08-21T00:00:20Z",
+                "character": {
+                    "accountId": "account.tracked",
+                    "location": {"x": 300300, "y": 300400, "z": 80000},
+                    "isInVehicle": False,
+                },
+                "elapsedTime": 30,
+                "common": {"isGame": 0.3},
+            },
+            {
+                "_T": "LogPlayerPosition",
+                "_D": "2026-08-21T00:01:20Z",
+                "character": {
+                    "accountId": "account.tracked",
+                    "location": {"x": 600000, "y": 600000, "z": 0},
+                    "isInVehicle": False,
+                },
+                "elapsedTime": 90,
+                "common": {"isGame": 1},
+            },
+            {
+                "_T": "LogPlayerPosition",
+                "_D": "2026-08-21T00:01:30Z",
+                "character": {
+                    "accountId": "account.tracked",
+                    "location": {"x": 600000, "y": 600500, "z": 0},
+                    "isInVehicle": False,
+                },
+                "elapsedTime": 100,
+                "common": {"isGame": 1},
+            },
+        ]
+
+        samples = parse_position_samples(
+            events,
+            match_id="match-distance",
+            tracked_account_ids={"account.tracked"},
+        )
+        summaries = summarize_movement(
+            samples,
+            landing_events=[],
+            match_id="match-distance",
+            tracked_account_ids={"account.tracked"},
+        )
+
+        self.assertEqual(len(samples), 5)
+        self.assertAlmostEqual(summaries[0].total_sampled_distance_m, 10.0)
+        self.assertAlmostEqual(summaries[0].in_game_sampled_distance_m, 10.0)
+
 
 if __name__ == "__main__":
     unittest.main()

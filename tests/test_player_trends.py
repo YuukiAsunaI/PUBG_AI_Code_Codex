@@ -60,6 +60,12 @@ class PlayerTrendSummaryTests(unittest.TestCase):
         self.assertEqual(report.totals.kda, 3.5)
         self.assertEqual(report.totals.avg_damage_dealt, 150.0)
         self.assertEqual(report.totals.avg_survival_seconds, 1100.0)
+        self.assertAlmostEqual(report.totals.avg_kills, 4 / 3)
+        self.assertEqual(report.totals.fight_count, 6)
+        self.assertEqual(report.totals.fight_wins, 4)
+        self.assertEqual(report.totals.fight_losses, 2)
+        self.assertAlmostEqual(report.totals.fight_win_rate, 4 / 6)
+        self.assertEqual(report.totals.avg_fights_per_match, 2.0)
         self.assertAlmostEqual(report.buckets[1].metrics.win_rate, 0.5)
 
     def test_accuracy_uses_single_projectile_events_and_keeps_pellet_evidence(self) -> None:
@@ -96,6 +102,24 @@ class PlayerTrendSummaryTests(unittest.TestCase):
         self.assertEqual([bucket.period_key for bucket in weekly.buckets], ["2026-W31", "2026-W32"])
         self.assertEqual([bucket.period_key for bucket in hourly.buckets], ["01", "18", "23"])
         self.assertEqual(hourly.buckets[0].period_label, "01시")
+
+    def test_groups_by_map_quarter_year_and_match_dimensions(self) -> None:
+        rows = [
+            {**self.rows[0], "map_name": "Erangel_Main", "team_mode": "squad"},
+            {**self.rows[1], "map_name": "Tiger_Main", "team_mode": "squad"},
+            {**self.rows[2], "map_name": "Erangel_Main", "team_mode": "duo"},
+        ]
+
+        maps = summarize_player_trends(rows, granularity="map")
+        quarters = summarize_player_trends(rows, granularity="quarter")
+        years = summarize_player_trends(rows, granularity="year")
+        teams = summarize_player_trends(rows, granularity="team_mode")
+
+        self.assertEqual([bucket.period_key for bucket in maps.buckets], ["Erangel_Main", "Tiger_Main"])
+        self.assertEqual(maps.buckets[0].period_label, "에란겔")
+        self.assertEqual([bucket.period_key for bucket in quarters.buckets], ["2026-Q3"])
+        self.assertEqual([bucket.period_key for bucket in years.buckets], ["2026"])
+        self.assertEqual([bucket.period_label for bucket in teams.buckets], ["듀오", "스쿼드"])
 
     def test_returns_most_recent_buckets_when_limit_truncates(self) -> None:
         report = summarize_player_trends(self.rows, granularity="date", bucket_limit=2)
@@ -155,6 +179,9 @@ class PlayerTrendSummaryTests(unittest.TestCase):
             "shots_fired": 100,
             "shots_hit": 10,
             "headshot_kills": 1 if kills else 0,
+            "fight_count": kills + deaths,
+            "fight_wins": kills,
+            "fight_losses": deaths,
             "in_game_sampled_distance_m": 1000,
         }
 
@@ -189,7 +216,13 @@ class PlayerTrendServiceTests(unittest.TestCase):
                 perspective="fpp",
                 match_type="official",
                 map_name="Baltic_Main",
+                season_state="progress",
                 is_custom_match=False,
+                year=2026,
+                quarter=3,
+                month=8,
+                exact_date_kst=date(2026, 8, 2),
+                hour=21,
                 from_date_kst=date(2026, 7, 1),
                 to_date_kst=date(2026, 8, 2),
             ),
@@ -202,7 +235,12 @@ class PlayerTrendServiceTests(unittest.TestCase):
         self.assertIn("matches.perspective = %s", query)
         self.assertIn("matches.match_type = %s", query)
         self.assertIn("matches.map_name = %s", query)
+        self.assertIn("matches.season_state = %s", query)
         self.assertIn("matches.is_custom_match = %s", query)
+        self.assertIn("YEAR(matches.created_at_kst) = %s", query)
+        self.assertIn("QUARTER(matches.created_at_kst) = %s", query)
+        self.assertIn("MONTH(matches.created_at_kst) = %s", query)
+        self.assertIn("HOUR(matches.created_at_kst) = %s", query)
         self.assertIn("matches.created_at_kst >= %s", query)
         self.assertIn("matches.created_at_kst < %s", query)
         self.assertEqual(params[:2], ["account.test", "steam"])
@@ -236,6 +274,14 @@ class PlayerTrendServiceTests(unittest.TestCase):
                         "shots_hit": 25,
                     }
                 ],
+                [
+                    {
+                        "match_id": "match-1",
+                        "fight_count": 4,
+                        "fight_wins": 3,
+                        "fight_losses": 1,
+                    }
+                ],
             ]
         )
 
@@ -249,9 +295,14 @@ class PlayerTrendServiceTests(unittest.TestCase):
         assert report is not None
         self.assertAlmostEqual(report.totals.accuracy, 0.25)
         self.assertEqual(report.totals.accuracy_breakdown.single_projectile_attacks, 100)
+        self.assertEqual(report.totals.fight_count, 4)
+        self.assertEqual(report.totals.fight_win_rate, 0.75)
         query, params = connection.executions[2]
         self.assertIn("weapon_stats.match_id IN ( %s )", " ".join(query.split()))
         self.assertEqual(params, ["account.test", "steam", "match-1"])
+        fight_query, fight_params = connection.executions[3]
+        self.assertIn("outcomes.is_friendly_fire = 0", fight_query)
+        self.assertEqual(fight_params, ["account.test", "steam", "match-1"])
 
 class FakeCursor:
     def __init__(self, connection: "FakeConnection") -> None:

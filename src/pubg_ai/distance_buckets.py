@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 
-WeaponFamily = Literal["AR", "DMR", "SR", "OTHER"]
+WeaponFamily = Literal["AR", "DMR", "SR", "SMG", "LMG", "SHOTGUN", "OTHER"]
 
 
 @dataclass(frozen=True)
@@ -20,6 +20,7 @@ class DistanceBucket:
 
 
 AR_BREAKS = [0, 5, 10, 15, 20, 25, 50, 75, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
+LMG_BREAKS = [0, 10, 25, 50, 75, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
 LONG_RANGE_BREAKS = [0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
 
 
@@ -28,10 +29,15 @@ def distance_bucket(distance_m: float, weapon_family: WeaponFamily) -> DistanceB
         raise ValueError("distance_m cannot be negative.")
 
     family = weapon_family.upper()
-    if family not in {"AR", "DMR", "SR", "OTHER"}:
+    if family not in {"AR", "DMR", "SR", "SMG", "LMG", "SHOTGUN", "OTHER"}:
         family = "OTHER"
 
-    breaks = AR_BREAKS if family == "AR" else LONG_RANGE_BREAKS
+    if family in {"AR", "SMG", "SHOTGUN"}:
+        breaks = AR_BREAKS
+    elif family == "LMG":
+        breaks = LMG_BREAKS
+    else:
+        breaks = LONG_RANGE_BREAKS
     typed_family = family  # keeps dataclass values constrained after validation
 
     for start, end in zip(breaks, breaks[1:]):

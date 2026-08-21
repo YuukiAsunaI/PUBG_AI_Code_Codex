@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from math import sqrt
+from math import ceil, sqrt
 from typing import Any, Mapping
 import json
 
@@ -15,8 +15,100 @@ from pubg_ai.weapon_accuracy import (
     distance_weapon_family,
     recommendation_accuracy_score,
     weapon_accuracy_metric,
+    weapon_family,
 )
 from pubg_ai.weapon_stats import normalize_weapon_code
+
+
+AMMO_TYPE_BY_WEAPON = {
+    "WeapACE32_C": "7.62mm",
+    "WeapAK47_C": "7.62mm",
+    "WeapAUG_C": "5.56mm",
+    "WeapBerylM762_C": "7.62mm",
+    "WeapFAMASG2_C": "5.56mm",
+    "WeapG36C_C": "5.56mm",
+    "WeapGroza_C": "7.62mm",
+    "WeapHK416_C": "5.56mm",
+    "WeapK2_C": "5.56mm",
+    "WeapM16A4_C": "5.56mm",
+    "WeapMk47Mutant_C": "7.62mm",
+    "WeapQBZ95_C": "5.56mm",
+    "WeapSCAR-L_C": "5.56mm",
+    "WeapDragunov_C": "7.62mm",
+    "WeapFNFal_C": "7.62mm",
+    "WeapMads_QBU88_C": "5.56mm",
+    "WeapMini14_C": "5.56mm",
+    "WeapMk12_C": "5.56mm",
+    "WeapMk14_C": "7.62mm",
+    "WeapQBU88_C": "5.56mm",
+    "WeapSKS_C": "7.62mm",
+    "WeapVSS_C": "9mm",
+    "WeapAWM_C": ".300 매그넘",
+    "WeapKar98k_C": "7.62mm",
+    "WeapL6_C": ".50 BMG",
+    "WeapM24_C": "7.62mm",
+    "WeapMosin_C": "7.62mm",
+    "WeapMosinNagant_C": "7.62mm",
+    "WeapWin1894_C": ".45 ACP",
+    "WeapWin94_C": ".45 ACP",
+    "WeapBizonPP19_C": "9mm",
+    "WeapJS9_C": "9mm",
+    "WeapMP5K_C": "9mm",
+    "WeapMP9_C": "9mm",
+    "WeapP90_C": "5.7mm",
+    "WeapThompson_C": ".45 ACP",
+    "WeapUMP_C": ".45 ACP",
+    "WeapUZI_C": "9mm",
+    "WeapVector_C": "9mm",
+    "WeapDP28_C": "7.62mm",
+    "WeapM249_C": "5.56mm",
+    "WeapMG3_C": "7.62mm",
+    "WeapRPD_C": "7.62mm",
+    "WeapBerreta686_C": "12 게이지",
+    "WeapDP12_C": "12 게이지",
+    "WeapOriginS12_C": "12 게이지",
+    "WeapSaiga12_C": "12 게이지",
+    "WeapSawnoff_C": "12 게이지",
+    "WeapWinchester_C": "12 게이지",
+    "ProjCrossbow_C": "석궁 볼트",
+    "WeapCrossbow_C": "석궁 볼트",
+}
+
+# Per-round inventory units. Keep this versioned because PUBG can rebalance item weight.
+# Update 34.1 explicitly changed 7.62mm from 0.7 to 0.6; the API itself does not expose weight.
+AMMO_INVENTORY_WEIGHT_PER_ROUND = {
+    "5.56mm": 0.5,
+    "7.62mm": 0.6,
+    "9mm": 0.3,
+    ".45 ACP": 0.4,
+    "5.7mm": 0.25,
+    "12 게이지": 1.25,
+    ".300 매그넘": 1.0,
+    ".50 BMG": 1.5,
+    "석궁 볼트": 2.0,
+}
+
+RESERVE_ROUNDS_BY_FAMILY = {
+    "AR": 150,
+    "DMR": 90,
+    "SR": 45,
+    "SMG": 180,
+    "LMG": 220,
+    "SHOTGUN": 45,
+    "HANDGUN": 45,
+    "CROSSBOW": 25,
+    "UNCLASSIFIED": 100,
+}
+
+RESERVE_ROUNDS_BY_WEAPON = {
+    "WeapP90_C": 200,
+    "WeapAWM_C": 25,
+    "WeapL6_C": 10,
+    "WeapDP28_C": 180,
+    "WeapM249_C": 240,
+    "WeapMG3_C": 220,
+    "WeapRPD_C": 220,
+}
 
 
 @dataclass(frozen=True)
@@ -66,6 +158,34 @@ class WeaponAttachmentRecommendation:
 
     def to_record(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class WeaponAttachmentCombinationRecommendation:
+    weapon_code: str
+    weapon_name: str
+    attachment_codes: tuple[str, ...]
+    attachment_names: tuple[str, ...]
+    score: float
+    match_count: int
+    event_count: int
+    wins: int
+    kills: int
+    dbnos: int
+    finishes: int
+    headshots: int
+    damage_dealt: float
+    win_rate: float
+    avg_damage_dealt: float
+    avg_distance_m: float | None
+    reason: str
+    score_components: dict[str, float] = field(default_factory=dict)
+
+    def to_record(self) -> dict[str, Any]:
+        record = asdict(self)
+        record["attachment_codes"] = list(self.attachment_codes)
+        record["attachment_names"] = list(self.attachment_names)
+        return record
 
 
 @dataclass(frozen=True)
@@ -142,9 +262,16 @@ class WeaponRecommendation:
     avg_damage_dealt: float
     accuracy: float
     reason: str
+    headshot_hits: int = 0
+    headshot_hit_rate: float = 0.0
+    fight_count: int = 0
+    fight_wins: int = 0
+    fight_losses: int = 0
+    fight_win_rate: float = 0.0
     accuracy_metric: WeaponAccuracyMetric | None = None
     range_score: float = 0.0
     top_distance_buckets: list[WeaponDistanceBucketRecommendation] = field(default_factory=list)
+    score_components: dict[str, float] = field(default_factory=dict)
 
     def to_record(self) -> dict[str, Any]:
         return asdict(self)
@@ -166,6 +293,42 @@ class AttachmentRecommendation:
 
     def to_record(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class WeaponLoadoutRecommendation:
+    primary: WeaponRecommendation
+    secondary: WeaponRecommendation
+    primary_attachments: list[WeaponAttachmentRecommendation]
+    secondary_attachments: list[WeaponAttachmentRecommendation]
+    score: float
+    reason: str
+    score_components: dict[str, float] = field(default_factory=dict)
+    inventory_burden: dict[str, Any] = field(default_factory=dict)
+    primary_attachment_combination: WeaponAttachmentCombinationRecommendation | None = None
+    secondary_attachment_combination: WeaponAttachmentCombinationRecommendation | None = None
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "primary": self.primary.to_record(),
+            "secondary": self.secondary.to_record(),
+            "primary_attachments": [item.to_record() for item in self.primary_attachments],
+            "secondary_attachments": [item.to_record() for item in self.secondary_attachments],
+            "score": self.score,
+            "reason": self.reason,
+            "score_components": self.score_components,
+            "inventory_burden": self.inventory_burden,
+            "primary_attachment_combination": (
+                self.primary_attachment_combination.to_record()
+                if self.primary_attachment_combination
+                else None
+            ),
+            "secondary_attachment_combination": (
+                self.secondary_attachment_combination.to_record()
+                if self.secondary_attachment_combination
+                else None
+            ),
+        }
 
 
 @dataclass(frozen=True)
@@ -244,9 +407,60 @@ class DropZoneRecommendation:
     region_radius_m: float | None = None
     region_catalog_version: str | None = None
     region_source_commit: str | None = None
+    assists: int = 0
+    dbnos: int = 0
 
     def to_record(self) -> dict[str, Any]:
-        return asdict(self)
+        record = asdict(self)
+        record["avg_kills"] = _safe_divide(self.kills, self.match_count)
+        record["avg_assists"] = _safe_divide(self.assists, self.match_count)
+        record["avg_dbnos"] = _safe_divide(self.dbnos, self.match_count)
+        record["avg_deaths"] = _safe_divide(self.deaths, self.match_count)
+        return record
+
+
+@dataclass(frozen=True)
+class DropRegionStats:
+    map_name: str
+    map_name_ko: str
+    region_id: str
+    region_name_ko: str
+    match_count: int
+    wins: int
+    kills: int
+    assists: int
+    dbnos: int
+    deaths: int
+    damage_dealt: float
+    avg_survival_seconds: float
+    win_rate: float
+    score: float
+    zone_count: int
+
+    def to_record(self) -> dict[str, Any]:
+        record = asdict(self)
+        record["avg_kills"] = _safe_divide(self.kills, self.match_count)
+        record["avg_assists"] = _safe_divide(self.assists, self.match_count)
+        record["avg_dbnos"] = _safe_divide(self.dbnos, self.match_count)
+        record["avg_deaths"] = _safe_divide(self.deaths, self.match_count)
+        record["avg_damage_dealt"] = _safe_divide(self.damage_dealt, self.match_count)
+        return record
+
+
+@dataclass(frozen=True)
+class PlayerDropZoneReport:
+    player: RegisteredPlayer
+    min_matches: int
+    regions: list[DropRegionStats]
+    zones: list[DropZoneRecommendation]
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "player": self.player.to_record(),
+            "min_matches": self.min_matches,
+            "regions": [item.to_record() for item in self.regions],
+            "zones": [item.to_record() for item in self.zones],
+        }
 
 
 @dataclass(frozen=True)
@@ -260,13 +474,17 @@ class PlayerRecommendationReport:
     maps: list[MapRecommendation]
     teammates: list[TeammateRecommendation]
     drop_zones: list[DropZoneRecommendation]
+    attachment_combinations: list[WeaponAttachmentCombinationRecommendation] = field(default_factory=list)
+    loadouts: list[WeaponLoadoutRecommendation] = field(default_factory=list)
 
     def to_record(self) -> dict[str, Any]:
         return {
             "player": self.player.to_record(),
             "min_matches": self.min_matches,
+            "loadouts": [item.to_record() for item in self.loadouts],
             "weapons": [item.to_record() for item in self.weapons],
             "weapon_attachments": [item.to_record() for item in self.weapon_attachments],
+            "attachment_combinations": [item.to_record() for item in self.attachment_combinations],
             "weapon_ranges": [item.to_record() for item in self.weapon_ranges],
             "attachments": [item.to_record() for item in self.attachments],
             "maps": [item.to_record() for item in self.maps],
@@ -303,21 +521,76 @@ class PlayerRecommendationService:
         limit = max(1, min(int(limit), 20))
         min_matches = max(1, int(min_matches))
         weapon_ranges = self._weapon_distance_recommendations(player, limit=max(limit * 4, 12))
+        weapon_candidates = self._weapon_recommendations(
+            player,
+            limit=max(limit * 4, 20),
+            min_matches=min_matches,
+            distance_by_weapon=_distance_by_weapon(weapon_ranges),
+        )
+        attachment_candidates, attachment_combinations = self._weapon_attachment_recommendations(
+            player,
+            limit=max(limit * 8, 40),
+            min_matches=min_matches,
+        )
         return PlayerRecommendationReport(
             player=player,
             min_matches=min_matches,
-            weapons=self._weapon_recommendations(
-                player,
-                limit=limit,
-                min_matches=min_matches,
-                distance_by_weapon=_distance_by_weapon(weapon_ranges),
-            ),
-            weapon_attachments=self._weapon_attachment_recommendations(player, limit=limit, min_matches=min_matches),
-            weapon_ranges=weapon_ranges[:limit],
+            weapons=weapon_candidates[:limit],
+            weapon_attachments=attachment_candidates,
+            weapon_ranges=weapon_ranges,
             attachments=self._attachment_recommendations(player, limit=limit, min_matches=min_matches),
             maps=self._map_recommendations(player, limit=limit, min_matches=min_matches),
             teammates=self._teammate_recommendations(player, limit=limit, min_matches=min_matches),
             drop_zones=self._drop_zone_recommendations(player, limit=limit, min_matches=min_matches),
+            attachment_combinations=attachment_combinations,
+            loadouts=_build_weapon_loadouts(
+                weapon_candidates,
+                attachment_candidates,
+                attachment_combinations,
+                limit=limit,
+            ),
+        )
+
+    def get_drop_zone_analysis(
+        self,
+        *,
+        shard: str,
+        account_id: str | None = None,
+        name: str | None = None,
+        guild_id: str | None = None,
+        global_scope: bool = False,
+        limit: int = 100,
+        min_matches: int = 1,
+    ) -> PlayerDropZoneReport | None:
+        player = self._get_player(
+            shard=shard,
+            account_id=account_id,
+            name=name,
+            guild_id=guild_id,
+            global_scope=global_scope,
+        )
+        if player is None:
+            return None
+        normalized_limit = max(1, min(int(limit), 500))
+        normalized_min_matches = max(1, int(min_matches))
+        zones = self._drop_zone_recommendations(
+            player,
+            limit=500,
+            min_matches=1,
+        )
+        regions = _aggregate_drop_regions(
+            zones,
+            min_matches=normalized_min_matches,
+            limit=normalized_limit,
+        )
+        visible_zones = [
+            zone for zone in zones if zone.match_count >= normalized_min_matches
+        ][:normalized_limit]
+        return PlayerDropZoneReport(
+            player=player,
+            min_matches=normalized_min_matches,
+            regions=regions,
+            zones=visible_zones,
         )
 
     def get_weapon_attachment_evidence(
@@ -412,6 +685,25 @@ class PlayerRecommendationService:
             cursor.execute(
                 """
                 SELECT
+                    outcomes.weapon_code,
+                    COUNT(*) AS fight_count,
+                    COALESCE(SUM(outcomes.outcome_type = 'win'), 0) AS fight_wins,
+                    COALESCE(SUM(outcomes.outcome_type = 'loss'), 0) AS fight_losses
+                FROM player_fight_outcomes outcomes
+                INNER JOIN matches
+                    ON matches.match_id = outcomes.match_id
+                WHERE outcomes.account_id = %s
+                  AND matches.shard = %s
+                  AND outcomes.is_friendly_fire = 0
+                  AND outcomes.weapon_code IS NOT NULL
+                GROUP BY outcomes.weapon_code
+                """,
+                (player.account_id, player.shard),
+            )
+            fight_rows = cursor.fetchall()
+            cursor.execute(
+                """
+                SELECT
                     weapon_stats.weapon_code,
                     COUNT(DISTINCT weapon_stats.match_id) AS match_count,
                     COALESCE(SUM(CASE WHEN participants.win_place = 1 THEN 1 ELSE 0 END), 0) AS wins,
@@ -421,7 +713,8 @@ class PlayerRecommendationService:
                     COALESCE(SUM(weapon_stats.dbnos), 0) AS dbnos,
                     COALESCE(SUM(weapon_stats.damage_dealt), 0) AS damage_dealt,
                     COALESCE(SUM(weapon_stats.shots_fired), 0) AS shots_fired,
-                    COALESCE(SUM(weapon_stats.shots_hit), 0) AS shots_hit
+                    COALESCE(SUM(weapon_stats.shots_hit), 0) AS shots_hit,
+                    COALESCE(SUM(weapon_stats.headshot_hits), 0) AS headshot_hits
                 FROM player_weapon_match_stats weapon_stats
                 INNER JOIN matches
                     ON matches.match_id = weapon_stats.match_id
@@ -439,6 +732,11 @@ class PlayerRecommendationService:
             )
             rows = cursor.fetchall()
 
+        fight_by_weapon = {
+            normalize_weapon_code(str(row["weapon_code"])): row
+            for row in fight_rows
+            if row.get("weapon_code")
+        }
         recommendations: list[WeaponRecommendation] = []
         for row in rows:
             match_count = _int(row.get("match_count"))
@@ -450,12 +748,22 @@ class PlayerRecommendationService:
             damage_dealt = _float(row.get("damage_dealt"))
             shots_fired = _int(row.get("shots_fired"))
             shots_hit = _int(row.get("shots_hit"))
+            headshot_hits = _int(row.get("headshot_hits"))
             weapon_code = str(row["weapon_code"])
+            fight_row = fight_by_weapon.get(normalize_weapon_code(weapon_code), {})
+            fight_count = _int(fight_row.get("fight_count"))
+            fight_wins = _int(fight_row.get("fight_wins"))
+            fight_losses = _int(fight_row.get("fight_losses"))
+            fight_win_rate = _safe_divide(fight_wins, fight_wins + fight_losses)
             accuracy_metric = weapon_accuracy_metric(weapon_code, shots_fired, shots_hit)
             accuracy = accuracy_metric.estimated_hit_rate or 0.0
             top_distance_buckets = list(distance_by_weapon.get(weapon_code, []))[:3]
-            range_score = sum(bucket.score for bucket in top_distance_buckets[:2]) * 0.05
-            score = _performance_score(
+            range_evidence_events = sum(bucket.event_count for bucket in top_distance_buckets)
+            # Distance rows contain successful kill/DBNO/finish events, not all
+            # attempted fights. Treat them as bounded evidence confidence rather
+            # than a win-rate-like performance score.
+            range_score = min(12.0, sqrt(range_evidence_events) * 1.2)
+            score_components = _performance_score_components(
                 match_count=match_count,
                 wins=wins,
                 kills=kills,
@@ -464,7 +772,17 @@ class PlayerRecommendationService:
                 dbnos=dbnos,
                 damage_dealt=damage_dealt,
                 accuracy_score=recommendation_accuracy_score(accuracy_metric),
-            ) + range_score
+            )
+            fight_confidence = min(1.0, sqrt(fight_count / 20)) if fight_count else 0.0
+            fight_adjustment = (fight_win_rate - 0.5) * 40 * fight_confidence if fight_count else 0.0
+            score = score_components["confidence_adjusted_score"] + range_score + fight_adjustment
+            score_components["range_bonus"] = range_score
+            score_components["range_evidence_events"] = float(range_evidence_events)
+            score_components["range_bonus_cap"] = 12.0
+            score_components["fight_win_rate"] = fight_win_rate
+            score_components["fight_confidence"] = fight_confidence
+            score_components["fight_adjustment"] = fight_adjustment
+            score_components["total_score"] = score
             recommendations.append(
                 WeaponRecommendation(
                     weapon_code=weapon_code,
@@ -484,10 +802,21 @@ class PlayerRecommendationService:
                     dbnos_per_match=_safe_divide(dbnos, match_count),
                     avg_damage_dealt=_safe_divide(damage_dealt, match_count),
                     accuracy=accuracy,
-                    reason=_reason(match_count, wins, damage_dealt, kills),
+                    reason=(
+                        f"{match_count}경기 · 승률 {_safe_divide(wins, match_count) * 100:.1f}% · "
+                        f"평균 피해 {_safe_divide(damage_dealt, match_count):.1f} · "
+                        f"경기당 킬 {_safe_divide(kills, match_count):.2f}"
+                    ),
+                    headshot_hits=headshot_hits,
+                    headshot_hit_rate=_safe_divide(headshot_hits, shots_hit),
+                    fight_count=fight_count,
+                    fight_wins=fight_wins,
+                    fight_losses=fight_losses,
+                    fight_win_rate=fight_win_rate,
                     accuracy_metric=accuracy_metric,
                     range_score=range_score,
                     top_distance_buckets=top_distance_buckets,
+                    score_components=score_components,
                 )
             )
         return _top(recommendations, limit)
@@ -580,7 +909,7 @@ class PlayerRecommendationService:
                     dbnos=dbnos,
                     finishes=finishes,
                     avg_distance_m=_safe_divide(record["distance_sum"], event_count),
-                    reason=f"{event_count} events, {kills} kills, {dbnos} DBNOs at {bucket.label}",
+                    reason=f"{bucket.label} · {event_count}교전 · {kills}킬 · {dbnos}기절",
                 )
             )
         return _top(recommendations, limit)
@@ -591,18 +920,24 @@ class PlayerRecommendationService:
         *,
         limit: int,
         min_matches: int,
-    ) -> list[WeaponAttachmentRecommendation]:
-        snapshot_recommendations = self._loadout_snapshot_attachment_recommendations(
+    ) -> tuple[
+        list[WeaponAttachmentRecommendation],
+        list[WeaponAttachmentCombinationRecommendation],
+    ]:
+        snapshot_recommendations, combinations = self._loadout_snapshot_attachment_recommendations(
             player,
             limit=limit,
             min_matches=min_matches,
         )
         if snapshot_recommendations:
-            return snapshot_recommendations
-        return self._attach_event_weapon_attachment_recommendations(
-            player,
-            limit=limit,
-            min_matches=min_matches,
+            return snapshot_recommendations, combinations
+        return (
+            self._attach_event_weapon_attachment_recommendations(
+                player,
+                limit=limit,
+                min_matches=min_matches,
+            ),
+            combinations,
         )
 
     def _loadout_snapshot_attachment_recommendations(
@@ -611,7 +946,10 @@ class PlayerRecommendationService:
         *,
         limit: int,
         min_matches: int,
-    ) -> list[WeaponAttachmentRecommendation]:
+    ) -> tuple[
+        list[WeaponAttachmentRecommendation],
+        list[WeaponAttachmentCombinationRecommendation],
+    ]:
         with self.connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -726,9 +1064,9 @@ class PlayerRecommendationService:
             recommendations.append(
                 WeaponAttachmentRecommendation(
                     weapon_code=weapon_code,
-                    weapon_name=str(record["weapon_name"] or translate_code(weapon_code, "damage_causer")),
+                    weapon_name=translate_code(weapon_code, "damage_causer"),
                     attachment_code=attachment_code,
-                    attachment_name=str(record["attachment_name"] or translate_code(attachment_code, "item")),
+                    attachment_name=translate_code(attachment_code, "item"),
                     attachment_category=None,
                     attachment_sub_category=None,
                     score=score,
@@ -742,9 +1080,8 @@ class PlayerRecommendationService:
                     kills_per_match=_safe_divide(kills, match_count),
                     avg_damage_dealt=_safe_divide(damage_dealt, match_count),
                     reason=(
-                        f"{event_count} combat snapshots with "
                         f"{translate_code(weapon_code, 'damage_causer')} + "
-                        f"{translate_code(attachment_code, 'item')}"
+                        f"{translate_code(attachment_code, 'item')} · {event_count}교전 스냅샷"
                     ),
                     event_count=event_count,
                     finishes=finishes,
@@ -757,7 +1094,14 @@ class PlayerRecommendationService:
                     source="loadout_snapshots",
                 )
             )
-        return _top(recommendations, limit)
+        return (
+            _top(recommendations, limit),
+            _attachment_combinations_from_snapshot_rows(
+                rows,
+                limit=limit,
+                min_matches=min_matches,
+            ),
+        )
 
     def _attach_event_weapon_attachment_recommendations(
         self,
@@ -860,7 +1204,7 @@ class PlayerRecommendationService:
                     weapon_code=weapon_code,
                     weapon_name=translate_code(weapon_code, "damage_causer"),
                     attachment_code=attachment_code,
-                    attachment_name=str(record["attachment_name"] or translate_code(attachment_code, "item")),
+                    attachment_name=translate_code(attachment_code, "item"),
                     attachment_category=record["attachment_category"],
                     attachment_sub_category=record["attachment_sub_category"],
                     score=score,
@@ -874,8 +1218,8 @@ class PlayerRecommendationService:
                     kills_per_match=_safe_divide(kills, match_count),
                     avg_damage_dealt=_safe_divide(damage_dealt, match_count),
                     reason=(
-                        f"{match_count} matches with {translate_code(weapon_code, 'damage_causer')} + "
-                        f"{translate_code(attachment_code, 'item')}"
+                        f"{translate_code(weapon_code, 'damage_causer')} + "
+                        f"{translate_code(attachment_code, 'item')} · {match_count}경기"
                     ),
                     event_count=attached_events,
                     source="attach_events",
@@ -939,8 +1283,7 @@ class PlayerRecommendationService:
             attachment_codes = tuple(_json_string_list(row.get("attachment_codes")))
             if attachment_code not in attachment_codes:
                 continue
-            attachment_names = tuple(_json_string_list(row.get("attachment_names_ko")))
-            names_by_code = dict(zip(attachment_codes, attachment_names))
+            attachment_names = tuple(translate_code(code, "item") for code in attachment_codes)
             map_name = _optional_text(row.get("map_name"))
             evidence.append(
                 WeaponAttachmentSnapshotEvidence(
@@ -955,9 +1298,9 @@ class PlayerRecommendationService:
                     combat_action=str(row.get("combat_action") or ""),
                     combat_event_at_kst=_datetime_record(row.get("combat_event_at_kst")),
                     weapon_code=str(row.get("weapon_code") or weapon_code),
-                    weapon_name=str(row.get("weapon_name_ko") or translate_code(weapon_code, "damage_causer")),
+                    weapon_name=translate_code(str(row.get("weapon_code") or weapon_code), "damage_causer"),
                     attachment_code=attachment_code,
-                    attachment_name=names_by_code.get(attachment_code) or translate_code(attachment_code, "item"),
+                    attachment_name=translate_code(attachment_code, "item"),
                     equipped_attachment_codes=attachment_codes,
                     equipped_attachment_names=attachment_names,
                     distance_m=_optional_float(row.get("distance_m")),
@@ -1028,7 +1371,7 @@ class PlayerRecommendationService:
             attached_events = _int(row.get("attached_events"))
             score = _safe_divide(damage_dealt, match_count) + _safe_divide(wins, match_count) * 100 + attached_events * 2
             item_code = str(row["item_code"])
-            item_name = str(row.get("item_name_ko") or translate_code(item_code, "item"))
+            item_name = translate_code(item_code, "item")
             recommendations.append(
                 AttachmentRecommendation(
                     item_code=item_code,
@@ -1041,7 +1384,10 @@ class PlayerRecommendationService:
                     wins=wins,
                     win_rate=_safe_divide(wins, match_count),
                     avg_damage_dealt=_safe_divide(damage_dealt, match_count),
-                    reason=f"{attached_events} attach events, {_safe_divide(damage_dealt, match_count):.1f} avg damage",
+                    reason=(
+                        f"{attached_events}회 장착 · "
+                        f"평균 피해 {_safe_divide(damage_dealt, match_count):.1f}"
+                    ),
                 )
             )
         return _top(recommendations, limit)
@@ -1233,6 +1579,8 @@ class PlayerRecommendationService:
                     participants.win_place,
                     participants.raw_stats,
                     summaries.kills,
+                    summaries.assists,
+                    summaries.dbnos_caused,
                     summaries.deaths,
                     summaries.damage_dealt,
                     movement.landing_x,
@@ -1276,6 +1624,8 @@ class PlayerRecommendationService:
                     "match_count": 0,
                     "wins": 0,
                     "kills": 0,
+                    "assists": 0,
+                    "dbnos": 0,
                     "deaths": 0,
                     "damage_dealt": 0.0,
                     "survival_seconds": 0.0,
@@ -1288,6 +1638,8 @@ class PlayerRecommendationService:
             bucket["match_count"] += 1
             bucket["wins"] += 1 if _optional_int(row.get("win_place")) == 1 else 0
             bucket["kills"] += _int(row.get("kills"))
+            bucket["assists"] += _int(row.get("assists"))
+            bucket["dbnos"] += _int(row.get("dbnos_caused"))
             bucket["deaths"] += _int(row.get("deaths"))
             bucket["damage_dealt"] += _float(row.get("damage_dealt"))
             bucket["survival_seconds"] += _survival_seconds_from_row(row)
@@ -1303,13 +1655,17 @@ class PlayerRecommendationService:
                 continue
             wins = _int(bucket["wins"])
             kills = _int(bucket["kills"])
+            assists = _int(bucket["assists"])
+            dbnos = _int(bucket["dbnos"])
             deaths = _int(bucket["deaths"])
             damage_dealt = _float(bucket["damage_dealt"])
             score = _performance_score(
                 match_count=match_count,
                 wins=wins,
                 kills=kills,
+                assists=assists,
                 deaths=deaths,
+                dbnos=dbnos,
                 damage_dealt=damage_dealt,
             ) + _safe_divide(bucket["survival_seconds"], match_count) / 20
             map_name = str(bucket["map_name"])
@@ -1335,7 +1691,7 @@ class PlayerRecommendationService:
                     win_rate=_safe_divide(wins, match_count),
                     avg_damage_dealt=_safe_divide(damage_dealt, match_count),
                     avg_survival_seconds=_safe_divide(bucket["survival_seconds"], match_count),
-                    reason=f"{region_label} with {_safe_divide(wins, match_count) * 100:.1f}% win rate",
+                    reason=f"{region_label} · 승률 {_safe_divide(wins, match_count) * 100:.1f}%",
                     cluster_id=cluster_id,
                     centroid_x_cm=centroid_x_cm,
                     centroid_y_cm=centroid_y_cm,
@@ -1349,9 +1705,92 @@ class PlayerRecommendationService:
                     region_radius_m=region.radius_m,
                     region_catalog_version=region.catalog_version,
                     region_source_commit=region.source_commit,
+                    assists=assists,
+                    dbnos=dbnos,
                 )
             )
         return _top(recommendations, limit)
+
+
+def _aggregate_drop_regions(
+    zones: list[DropZoneRecommendation],
+    *,
+    min_matches: int,
+    limit: int,
+) -> list[DropRegionStats]:
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for zone in zones:
+        region_id = zone.region_id or zone.cluster_id or f"grid:{zone.grid_x}:{zone.grid_y}"
+        key = (zone.map_name, region_id)
+        group = groups.setdefault(
+            key,
+            {
+                "map_name": zone.map_name,
+                "map_name_ko": zone.map_name_ko,
+                "region_id": region_id,
+                "region_name_ko": zone.region_display_name_ko or f"격자 {zone.grid_x},{zone.grid_y}",
+                "match_count": 0,
+                "wins": 0,
+                "kills": 0,
+                "assists": 0,
+                "dbnos": 0,
+                "deaths": 0,
+                "damage_dealt": 0.0,
+                "survival_seconds": 0.0,
+                "zone_count": 0,
+            },
+        )
+        group["match_count"] += zone.match_count
+        group["wins"] += zone.wins
+        group["kills"] += zone.kills
+        group["assists"] += zone.assists
+        group["dbnos"] += zone.dbnos
+        group["deaths"] += zone.deaths
+        group["damage_dealt"] += zone.damage_dealt
+        group["survival_seconds"] += zone.avg_survival_seconds * zone.match_count
+        group["zone_count"] += 1
+
+    regions: list[DropRegionStats] = []
+    for group in groups.values():
+        match_count = _int(group["match_count"])
+        if match_count < min_matches:
+            continue
+        wins = _int(group["wins"])
+        kills = _int(group["kills"])
+        assists = _int(group["assists"])
+        dbnos = _int(group["dbnos"])
+        deaths = _int(group["deaths"])
+        damage_dealt = _float(group["damage_dealt"])
+        avg_survival_seconds = _safe_divide(group["survival_seconds"], match_count)
+        score = _performance_score(
+            match_count=match_count,
+            wins=wins,
+            kills=kills,
+            assists=assists,
+            deaths=deaths,
+            dbnos=dbnos,
+            damage_dealt=damage_dealt,
+        ) + avg_survival_seconds / 20
+        regions.append(
+            DropRegionStats(
+                map_name=str(group["map_name"]),
+                map_name_ko=str(group["map_name_ko"]),
+                region_id=str(group["region_id"]),
+                region_name_ko=str(group["region_name_ko"]),
+                match_count=match_count,
+                wins=wins,
+                kills=kills,
+                assists=assists,
+                dbnos=dbnos,
+                deaths=deaths,
+                damage_dealt=damage_dealt,
+                avg_survival_seconds=avg_survival_seconds,
+                win_rate=_safe_divide(wins, match_count),
+                score=score,
+                zone_count=_int(group["zone_count"]),
+            )
+        )
+    return _top(regions, limit)
 
 
 def _player_from_row(row: dict[str, Any]) -> RegisteredPlayer:
@@ -1377,6 +1816,346 @@ def _top(items: list[Any], limit: int) -> list[Any]:
             str(getattr(item, "reason", "")),
         ),
     )[:limit]
+
+
+def _attachment_combinations_from_snapshot_rows(
+    rows: list[Mapping[str, Any]],
+    *,
+    limit: int,
+    min_matches: int,
+) -> list[WeaponAttachmentCombinationRecommendation]:
+    grouped: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
+    for row in rows:
+        weapon_code = str(row.get("weapon_code") or "")
+        match_id = str(row.get("match_id") or "")
+        attachment_codes = tuple(sorted(set(_json_string_list(row.get("attachment_codes")))))
+        if not weapon_code.startswith("Weap") or not match_id or not attachment_codes:
+            continue
+        key = (weapon_code, attachment_codes)
+        record = grouped.setdefault(
+            key,
+            {
+                "weapon_code": weapon_code,
+                "attachment_codes": attachment_codes,
+                "match_ids": set(),
+                "win_match_ids": set(),
+                "damage_by_match": {},
+                "event_count": 0,
+                "kills": 0,
+                "dbnos": 0,
+                "finishes": 0,
+                "headshots": 0,
+                "distance_sum": 0.0,
+                "distance_count": 0,
+            },
+        )
+        record["match_ids"].add(match_id)
+        if _int(row.get("win")):
+            record["win_match_ids"].add(match_id)
+        record["damage_by_match"][match_id] = max(
+            _float(record["damage_by_match"].get(match_id)),
+            _float(row.get("damage_dealt")),
+        )
+        record["event_count"] += 1
+        action = str(row.get("combat_action") or "")
+        if action == "kill":
+            record["kills"] += 1
+        elif action == "dbno_caused":
+            record["dbnos"] += 1
+        elif action == "finish":
+            record["finishes"] += 1
+        if _int(row.get("is_headshot")):
+            record["headshots"] += 1
+        distance_m = _optional_float(row.get("distance_m"))
+        if distance_m is not None:
+            record["distance_sum"] += distance_m
+            record["distance_count"] += 1
+
+    combinations: list[WeaponAttachmentCombinationRecommendation] = []
+    for record in grouped.values():
+        match_count = len(record["match_ids"])
+        if match_count < min_matches:
+            continue
+        event_count = _int(record["event_count"])
+        wins = len(record["win_match_ids"])
+        kills = _int(record["kills"])
+        dbnos = _int(record["dbnos"])
+        finishes = _int(record["finishes"])
+        headshots = _int(record["headshots"])
+        damage_dealt = sum(_float(value) for value in record["damage_by_match"].values())
+        score_components = {
+            "kills": kills * 120.0,
+            "dbnos": dbnos * 70.0,
+            "finishes": finishes * 40.0,
+            "headshots": headshots * 20.0,
+            "events": event_count * 8.0,
+            "wins": wins * 50.0,
+            "average_damage": _safe_divide(damage_dealt, match_count) * 0.15,
+        }
+        score = sum(score_components.values())
+        weapon_code = str(record["weapon_code"])
+        attachment_codes = tuple(record["attachment_codes"])
+        attachment_names = tuple(translate_code(code, "item") for code in attachment_codes)
+        combinations.append(
+            WeaponAttachmentCombinationRecommendation(
+                weapon_code=weapon_code,
+                weapon_name=translate_code(weapon_code, "damage_causer"),
+                attachment_codes=attachment_codes,
+                attachment_names=attachment_names,
+                score=score,
+                match_count=match_count,
+                event_count=event_count,
+                wins=wins,
+                kills=kills,
+                dbnos=dbnos,
+                finishes=finishes,
+                headshots=headshots,
+                damage_dealt=damage_dealt,
+                win_rate=_safe_divide(wins, match_count),
+                avg_damage_dealt=_safe_divide(damage_dealt, match_count),
+                avg_distance_m=(
+                    _safe_divide(record["distance_sum"], record["distance_count"])
+                    if record["distance_count"]
+                    else None
+                ),
+                reason=(
+                    f"{match_count}경기 · {event_count}교전 · {kills}킬 · "
+                    f"{dbnos}기절 · 승률 {_safe_divide(wins, match_count) * 100:.1f}%"
+                ),
+                score_components=score_components,
+            )
+        )
+    ranked = _top(combinations, max(1, min(int(limit), 100)))
+    per_weapon: dict[str, int] = {}
+    selected: list[WeaponAttachmentCombinationRecommendation] = []
+    for item in ranked:
+        if per_weapon.get(item.weapon_code, 0) >= 5:
+            continue
+        selected.append(item)
+        per_weapon[item.weapon_code] = per_weapon.get(item.weapon_code, 0) + 1
+    return selected
+
+
+def _build_weapon_loadouts(
+    weapons: list[WeaponRecommendation],
+    attachments: list[WeaponAttachmentRecommendation],
+    attachment_combinations: list[WeaponAttachmentCombinationRecommendation],
+    *,
+    limit: int,
+) -> list[WeaponLoadoutRecommendation]:
+    close_range = [
+        weapon
+        for weapon in weapons
+        if weapon_family(weapon.weapon_code) in {"AR", "SMG", "LMG", "SHOTGUN"}
+    ]
+    long_range = [
+        weapon
+        for weapon in weapons
+        if weapon_family(weapon.weapon_code) in {"DMR", "SR", "CROSSBOW"}
+    ]
+    attachments_by_weapon: dict[str, list[WeaponAttachmentRecommendation]] = {}
+    for attachment in _top(attachments, len(attachments)):
+        selected = attachments_by_weapon.setdefault(attachment.weapon_code, [])
+        slot = _attachment_slot(attachment)
+        if any(_attachment_slot(existing) == slot for existing in selected):
+            continue
+        selected.append(attachment)
+    best_combination_by_weapon: dict[str, WeaponAttachmentCombinationRecommendation] = {}
+    for combination in _top(attachment_combinations, len(attachment_combinations)):
+        best_combination_by_weapon.setdefault(combination.weapon_code, combination)
+    attachment_by_weapon_code = {
+        (attachment.weapon_code, attachment.attachment_code): attachment
+        for attachment in attachments
+    }
+
+    def selected_attachments(
+        weapon_code: str,
+        combination: WeaponAttachmentCombinationRecommendation | None,
+    ) -> list[WeaponAttachmentRecommendation]:
+        if combination:
+            observed = [
+                attachment_by_weapon_code[(weapon_code, code)]
+                for code in combination.attachment_codes
+                if (weapon_code, code) in attachment_by_weapon_code
+            ]
+            if observed:
+                return observed
+        return attachments_by_weapon.get(weapon_code, [])[:5]
+
+    loadouts: list[WeaponLoadoutRecommendation] = []
+    for primary in close_range:
+        for secondary in long_range:
+            primary_combination = best_combination_by_weapon.get(primary.weapon_code)
+            secondary_combination = best_combination_by_weapon.get(secondary.weapon_code)
+            inventory_burden = _inventory_burden(primary, secondary)
+            primary_component = primary.score * 0.55
+            secondary_component = secondary.score * 0.45
+            inventory_adjustment = _float(inventory_burden["score_adjustment"])
+            score = primary_component + secondary_component + inventory_adjustment
+            loadouts.append(
+                WeaponLoadoutRecommendation(
+                    primary=primary,
+                    secondary=secondary,
+                    primary_attachments=selected_attachments(primary.weapon_code, primary_combination),
+                    secondary_attachments=selected_attachments(secondary.weapon_code, secondary_combination),
+                    score=score,
+                    reason=(
+                        f"근·중거리 {primary.weapon_name} + 중·장거리 {secondary.weapon_name} · "
+                        f"{inventory_burden['summary']}"
+                    ),
+                    score_components={
+                        "primary_performance_55pct": primary_component,
+                        "secondary_performance_45pct": secondary_component,
+                        "inventory_adjustment": inventory_adjustment,
+                        "total_score": score,
+                    },
+                    inventory_burden=inventory_burden,
+                    primary_attachment_combination=primary_combination,
+                    secondary_attachment_combination=secondary_combination,
+                )
+            )
+    return _top(loadouts, max(1, min(int(limit), 20)))
+
+
+def _inventory_burden(
+    primary: WeaponRecommendation,
+    secondary: WeaponRecommendation,
+) -> dict[str, Any]:
+    weapons = [primary, secondary]
+    profiles: list[dict[str, Any]] = []
+    for weapon in weapons:
+        family = weapon_family(weapon.weapon_code)
+        ammo_type = AMMO_TYPE_BY_WEAPON.get(weapon.weapon_code, "알 수 없음")
+        reserve_rounds = RESERVE_ROUNDS_BY_WEAPON.get(
+            weapon.weapon_code,
+            RESERVE_ROUNDS_BY_FAMILY.get(family, 100),
+        )
+        per_round_weight = AMMO_INVENTORY_WEIGHT_PER_ROUND.get(ammo_type, 0.5)
+        profiles.append(
+            {
+                "weapon_code": weapon.weapon_code,
+                "weapon_name": weapon.weapon_name,
+                "weapon_family": family,
+                "ammo_type": ammo_type,
+                "recommended_reserve_rounds": reserve_rounds,
+                "observed_shots_per_match": _safe_divide(weapon.shots_fired, weapon.match_count),
+                "inventory_weight_per_round": per_round_weight,
+                "reserve_inventory_weight": reserve_rounds * per_round_weight,
+            }
+        )
+
+    known_ammo_types = {
+        profile["ammo_type"]
+        for profile in profiles
+        if profile["ammo_type"] != "알 수 없음"
+    }
+    mixed_ammo = len(known_ammo_types) > 1
+    shared_ammo = len(known_ammo_types) == 1
+    lmg_count = sum(profile["weapon_family"] == "LMG" for profile in profiles)
+    carried_rounds_by_ammo: dict[str, int] = {}
+    if shared_ammo and profiles:
+        reserves = sorted(
+            (_int(profile["recommended_reserve_rounds"]) for profile in profiles),
+            reverse=True,
+        )
+        pooled_rounds = reserves[0] + _round_up_to_ten(reserves[1] * 0.35)
+        carried_rounds_by_ammo[next(iter(known_ammo_types))] = pooled_rounds
+    else:
+        for profile in profiles:
+            ammo_type = str(profile["ammo_type"])
+            if ammo_type == "알 수 없음":
+                continue
+            carried_rounds_by_ammo[ammo_type] = (
+                carried_rounds_by_ammo.get(ammo_type, 0)
+                + _int(profile["recommended_reserve_rounds"])
+            )
+    weight_by_ammo = {
+        ammo_type: rounds * AMMO_INVENTORY_WEIGHT_PER_ROUND.get(ammo_type, 0.5)
+        for ammo_type, rounds in carried_rounds_by_ammo.items()
+    }
+    total_inventory_weight = sum(weight_by_ammo.values())
+    mixed_ammo_penalty = 3.0 if mixed_ammo else 0.0
+    shared_ammo_bonus = 3.0 if shared_ammo else 0.0
+    reserve_pressure_penalty = max(0.0, total_inventory_weight - 85.0) * 0.12
+    lmg_extra_reserve_inventory_weight = sum(
+        max(
+            0,
+            _int(profile["recommended_reserve_rounds"]) - RESERVE_ROUNDS_BY_FAMILY["AR"],
+        )
+        * _float(profile["inventory_weight_per_round"])
+        for profile in profiles
+        if profile["weapon_family"] == "LMG"
+    )
+    # This is the LMG-attributable portion of reserve_pressure_penalty, not an extra deduction.
+    lmg_reserve_penalty = min(
+        reserve_pressure_penalty,
+        lmg_extra_reserve_inventory_weight * 0.12,
+    )
+    adjustment = shared_ammo_bonus - mixed_ammo_penalty - reserve_pressure_penalty
+    if total_inventory_weight >= 140:
+        pressure_level = "높음"
+    elif total_inventory_weight >= 100:
+        pressure_level = "보통"
+    else:
+        pressure_level = "낮음"
+
+    tradeoffs: list[str] = []
+    if mixed_ammo:
+        tradeoffs.append("탄종 2종을 각각 확보·소지하므로 회복·투척 아이템 또는 예비탄 여유가 줄 수 있음")
+    elif shared_ammo:
+        tradeoffs.append("같은 탄종을 공유해 두 무기의 예비탄을 하나의 탄약 풀로 운용함")
+    if lmg_count:
+        tradeoffs.append(
+            "LMG 지속 사격용 초과 예비탄 "
+            f"{lmg_extra_reserve_inventory_weight:.1f} 인벤토리 단위가 전체 탄약 부담에 포함됨"
+        )
+    if not tradeoffs:
+        tradeoffs.append("탄약 운용 부담이 일반적인 수준")
+
+    ammo_label = " + ".join(sorted(known_ammo_types)) if known_ammo_types else "탄종 확인 불가"
+    return {
+        "model_version": "inventory-weight-v3",
+        "is_heuristic": True,
+        "ammo_types": sorted(known_ammo_types),
+        "ammo_label": ammo_label,
+        "mixed_ammo": mixed_ammo,
+        "shared_ammo": shared_ammo,
+        "lmg_count": lmg_count,
+        "weapon_profiles": profiles,
+        "carried_rounds_by_ammo": carried_rounds_by_ammo,
+        "inventory_weight_by_ammo": weight_by_ammo,
+        "estimated_inventory_weight": total_inventory_weight,
+        "relative_pressure_index": total_inventory_weight,
+        "pressure_level": pressure_level,
+        "mixed_ammo_penalty": mixed_ammo_penalty,
+        "shared_ammo_bonus": shared_ammo_bonus,
+        "reserve_pressure_penalty": reserve_pressure_penalty,
+        "lmg_extra_reserve_inventory_weight": lmg_extra_reserve_inventory_weight,
+        "lmg_reserve_penalty": lmg_reserve_penalty,
+        "score_adjustment": adjustment,
+        "tradeoffs": tradeoffs,
+        "summary": (
+            f"{ammo_label} · 예상 탄약 인벤토리 {total_inventory_weight:.1f}단위 · "
+            f"부담 {pressure_level}"
+        ),
+        "basis": (
+            "kg가 아닌 PUBG 인벤토리 단위로, 발당 무게 × 권장 예비탄을 계산합니다. "
+            "동일 탄종은 공유 탄약 풀로 계산하고 LMG의 AR 기준 초과 예비탄도 전체 무게 부담에 "
+            "포함합니다. 권장 예비탄 수와 점수 가중치는 휴리스틱입니다."
+        ),
+    }
+
+
+def _attachment_slot(item: WeaponAttachmentRecommendation) -> str:
+    code = item.attachment_code.lower()
+    for marker in ("upper", "lower", "muzzle", "magazine", "stock"):
+        if f"_{marker}_" in code:
+            return marker
+    return str(item.attachment_sub_category or item.attachment_category or item.attachment_code).lower()
+
+
+def _round_up_to_ten(value: float) -> int:
+    return int(ceil(max(0.0, value) / 10) * 10)
 
 
 def _distance_by_weapon(
@@ -1424,8 +2203,42 @@ def _performance_score(
     damage_dealt: float = 0.0,
     accuracy_score: float = 0.0,
 ) -> float:
+    return _performance_score_components(
+        match_count=match_count,
+        wins=wins,
+        kills=kills,
+        assists=assists,
+        deaths=deaths,
+        dbnos=dbnos,
+        damage_dealt=damage_dealt,
+        accuracy_score=accuracy_score,
+    )["confidence_adjusted_score"]
+
+
+def _performance_score_components(
+    *,
+    match_count: int,
+    wins: int,
+    kills: int = 0,
+    assists: int = 0,
+    deaths: int = 0,
+    dbnos: int = 0,
+    damage_dealt: float = 0.0,
+    accuracy_score: float = 0.0,
+) -> dict[str, float]:
     if match_count <= 0:
-        return 0.0
+        return {
+            "average_damage": 0.0,
+            "kills": 0.0,
+            "dbnos": 0.0,
+            "assists": 0.0,
+            "wins": 0.0,
+            "accuracy": 0.0,
+            "deaths_penalty": 0.0,
+            "raw_score": 0.0,
+            "confidence_factor": 0.65,
+            "confidence_adjusted_score": 0.0,
+        }
     avg_damage = _safe_divide(damage_dealt, match_count)
     kills_per_match = _safe_divide(kills, match_count)
     dbnos_per_match = _safe_divide(dbnos, match_count)
@@ -1433,23 +2246,30 @@ def _performance_score(
     deaths_per_match = _safe_divide(deaths, match_count)
     win_rate = _safe_divide(wins, match_count)
     confidence = min(1.0, match_count / 5)
-    raw_score = (
-        avg_damage
-        + kills_per_match * 85
-        + dbnos_per_match * 35
-        + assists_per_match * 20
-        + win_rate * 120
-        + accuracy_score * 60
-        - deaths_per_match * 25
-    )
-    return max(0.0, raw_score) * (0.65 + confidence * 0.35)
+    components = {
+        "average_damage": avg_damage,
+        "kills": kills_per_match * 85,
+        "dbnos": dbnos_per_match * 35,
+        "assists": assists_per_match * 20,
+        "wins": win_rate * 120,
+        "accuracy": accuracy_score * 60,
+        "deaths_penalty": -(deaths_per_match * 25),
+    }
+    raw_score = sum(components.values())
+    confidence_factor = 0.65 + confidence * 0.35
+    return {
+        **components,
+        "raw_score": raw_score,
+        "confidence_factor": confidence_factor,
+        "confidence_adjusted_score": max(0.0, raw_score) * confidence_factor,
+    }
 
 
 def _reason(match_count: int, wins: int, damage_dealt: float, kills: int) -> str:
     return (
-        f"{match_count} matches, {_safe_divide(wins, match_count) * 100:.1f}% win, "
-        f"{_safe_divide(damage_dealt, match_count):.1f} avg damage, "
-        f"{_safe_divide(kills, match_count):.2f} K/match"
+        f"{match_count}경기 · 승률 {_safe_divide(wins, match_count) * 100:.1f}% · "
+        f"평균 피해 {_safe_divide(damage_dealt, match_count):.1f} · "
+        f"경기당 킬 {_safe_divide(kills, match_count):.2f}"
     )
 
 

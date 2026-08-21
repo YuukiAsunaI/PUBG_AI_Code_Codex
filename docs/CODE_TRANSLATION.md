@@ -53,6 +53,20 @@ Override JSON shape:
 The local management program can later expose a small dictionary editor, but the parser must never fail because a
 code is missing.
 
+## Current Attachment Naming
+
+Telemetry codes and Korean display names must stay distinct when attachments have similar English terms:
+
+| Telemetry code | Korean display |
+| --- | --- |
+| `Item_Attach_Weapon_Lower_Foregrip_C` | `수직 손잡이` |
+| `Item_Attach_Weapon_Lower_AngledForeGrip_C` | `앵글 손잡이` |
+| `Item_Attach_Weapon_Lower_TiltedGrip_C` | `틸티드 그립` |
+
+`TiltedGrip` is not an alias for the vertical or angled grip. PUBG Update 41.1 introduced it as a separate lower
+attachment under the official Korean name `틸티드 그립`. The angled grip was separately removed from world spawn in
+that update.
+
 ## Legacy Python Dictionary Import
 
 Existing local dictionary files such as `PUBG_Data.py` can be used as an override source without executing the file.
@@ -75,3 +89,5 @@ Supported legacy names include:
 
 - Existing local `PUBG_Data.py` was used as a structural reference for the code categories.
 - Official PUBG API assets provide authoritative raw code dictionaries.
+- PUBG Update 41.1 provides the official Korean in-game name for the Tilted Grip:
+  <https://pubg.com/ko/news/9926>.

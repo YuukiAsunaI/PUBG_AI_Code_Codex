@@ -56,6 +56,7 @@ class MatchClassificationTests(unittest.TestCase):
 
     def test_game_mode_helpers(self) -> None:
         self.assertEqual(team_mode_from_game_mode("solo-fpp"), "solo")
+        self.assertEqual(team_mode_from_game_mode("sdm-fpp"), "solo")
         self.assertEqual(team_mode_from_game_mode("duo"), "duo")
         self.assertEqual(team_mode_from_game_mode("squad-fpp"), "squad")
         self.assertEqual(perspective_from_game_mode("duo-fpp"), "fpp")

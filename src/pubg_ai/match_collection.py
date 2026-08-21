@@ -105,7 +105,7 @@ class RegisteredPlayerMatchCollector:
                        last_error, created_at_kst, updated_at_kst
                 FROM api_fetch_jobs
                 WHERE job_type = 'match'
-                ORDER BY created_at_kst DESC, id DESC
+                ORDER BY updated_at_kst DESC, id DESC
                 LIMIT %s
                 """,
                 (limit,),

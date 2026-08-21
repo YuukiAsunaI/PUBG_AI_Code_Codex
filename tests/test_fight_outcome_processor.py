@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from pubg_ai.fight_outcome_processor import build_fight_outcomes
+from pubg_ai.fight_outcome_processor import FIGHT_OUTCOME_PARSER_VERSION, build_fight_outcomes
 
 
 def character(account_id: str, team_id: int) -> dict[str, object]:
@@ -34,6 +34,9 @@ def attack(
 
 
 class FightOutcomeParserTests(unittest.TestCase):
+    def test_attachment_translation_change_uses_v3_processing_state(self) -> None:
+        self.assertEqual(FIGHT_OUTCOME_PARSER_VERSION, "fight-outcomes-v3")
+
     def test_duo_dbno_is_a_win_and_loss_with_each_players_own_loadout(self) -> None:
         events = [
             attack(

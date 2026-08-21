@@ -11,6 +11,35 @@ from pubg_ai.loadout_snapshot_processor import (
 
 
 class LoadoutSnapshotProcessorTests(unittest.TestCase):
+    def test_known_attachment_code_uses_current_dictionary_over_stored_legacy_name(self) -> None:
+        snapshots = build_loadout_snapshots(
+            match_id="match-translation",
+            account_id="account.test",
+            item_events=[
+                ItemLoadoutEvent(
+                    event_index=1,
+                    action="attach",
+                    item_code="Item_Attach_Weapon_Lower_TiltedGrip_C",
+                    item_name_ko="경사 손잡이",
+                    item_category="Attachment",
+                    item_sub_category="Lower",
+                    parent_item_code="Item_Weapon_HK416_C",
+                )
+            ],
+            combat_events=[
+                CombatLoadoutEvent(
+                    event_index=2,
+                    action="kill",
+                    event_at_kst=datetime(2026, 1, 1, 12, 0, 0),
+                    damage_causer_name="WeapHK416_C",
+                    distance_m=20.0,
+                    is_headshot=False,
+                )
+            ],
+        )
+
+        self.assertEqual(snapshots[0].attachment_names_ko, ("틸티드 그립",))
+
     def test_builds_time_ordered_weapon_attachment_snapshots(self) -> None:
         item_events = [
             ItemLoadoutEvent(
