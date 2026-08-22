@@ -45,6 +45,93 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
         self.assertEqual(len(engagements), 1)
         self.assertEqual(engagements[0]["shots"], 1)
         self.assertEqual(engagements[0]["throws"], 1)
+        self.assertEqual(engagements[0]["evidence"], "inferred_attack_activity")
+        self.assertEqual(engagements[0]["opponent_count"], 0)
+
+    def test_engagements_exclude_environmental_damage_and_require_opponent_for_hits(self) -> None:
+        events = [
+            {
+                "actor_account_id": "account.tracked",
+                "actor_name": "Tracked",
+                "actor_is_self": True,
+                "action": "hit_caused",
+                "time_seconds": 9.0,
+                "event_index": 0,
+                "weapon_label": "M416",
+                "related_account_id": "account.teammate",
+                "map": {"x_pct": 0.1, "y_pct": 0.2},
+            },
+            {
+                "actor_account_id": "account.tracked",
+                "actor_name": "Tracked",
+                "actor_is_self": True,
+                "action": "hit_taken",
+                "time_seconds": 10.0,
+                "event_index": 1,
+                "damage_causer_label": "블루존",
+                "damage_type_category": "Damage_BlueZone",
+                "related_account_id": None,
+                "map": {"x_pct": 0.1, "y_pct": 0.2},
+            },
+            {
+                "actor_account_id": "account.tracked",
+                "actor_name": "Tracked",
+                "actor_is_self": True,
+                "action": "shot",
+                "time_seconds": 11.0,
+                "event_index": 2,
+                "weapon_label": "M416",
+                "related_account_id": None,
+                "map": {"x_pct": 0.2, "y_pct": 0.3},
+            },
+            {
+                "actor_account_id": "account.tracked",
+                "actor_name": "Tracked",
+                "actor_is_self": True,
+                "action": "hit_caused",
+                "time_seconds": 12.0,
+                "event_index": 3,
+                "weapon_label": "M416",
+                "related_account_id": "account.enemy",
+                "map": {"x_pct": 0.2, "y_pct": 0.3},
+            },
+            {
+                "actor_account_id": "account.tracked",
+                "actor_name": "Tracked",
+                "actor_is_self": True,
+                "action": "finish",
+                "time_seconds": 13.0,
+                "event_index": 4,
+                "damage_type_category": "Damage_BlueZone",
+                "weapon_label": "블루존",
+                "related_account_id": "account.enemy",
+                "map": {"x_pct": 0.2, "y_pct": 0.3},
+            },
+            {
+                "actor_account_id": "account.tracked",
+                "actor_name": "Tracked",
+                "actor_is_self": True,
+                "action": "death",
+                "time_seconds": 40.0,
+                "event_index": 5,
+                "damage_causer_label": "추락",
+                "related_account_id": None,
+                "map": {"x_pct": 0.4, "y_pct": 0.5},
+            },
+        ]
+
+        engagements = _derive_engagements(
+            events,
+            team_account_ids={"account.tracked", "account.teammate"},
+        )
+
+        self.assertEqual(len(engagements), 1)
+        self.assertEqual(engagements[0]["event_count"], 3)
+        self.assertEqual(engagements[0]["hits_taken"], 0)
+        self.assertEqual(engagements[0]["evidence"], "verified_opponent")
+        self.assertEqual(engagements[0]["opponent_count"], 1)
+        self.assertEqual(engagements[0]["opponent_account_ids"], ["account.enemy"])
+        self.assertEqual(engagements[0]["weapons"], ["M416"])
 
     def test_generates_player_timeline_json_artifact(self) -> None:
         connection = FakeConnection(
@@ -342,12 +429,13 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
             path = Path(temp_dir) / artifact.relative_path
             payload = json.loads(path.read_text(encoding="utf-8"))
 
-        self.assertEqual(payload["schema_version"], "player-timeline-v9")
+        self.assertEqual(payload["schema_version"], "player-timeline-v13")
         self.assertEqual(payload["time_basis"], "telemetry_elapsed_time_with_piecewise_timestamp_interpolation")
         self.assertEqual(payload["clock"]["anchor_count"], 4)
         self.assertEqual(payload["clock"]["interpolation"], "piecewise-linear")
         self.assertTrue(payload["time_origin_at_kst"].startswith("2026-06-28T09:13:17"))
         self.assertEqual(payload["match"]["match_id"], "match-1")
+        self.assertEqual(payload["player"]["account_id"], "account.tracked")
         self.assertEqual(payload["player"]["name"], "Yuuki_Asuna---")
         self.assertEqual(payload["team"]["member_count"], 2)
         self.assertEqual(payload["team"]["registered_member_count"], 2)

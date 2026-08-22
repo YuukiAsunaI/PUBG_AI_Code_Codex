@@ -18,11 +18,43 @@ from pubg_ai.replay_storage import (
 from pubg_ai.time_utils import KST, now_kst, to_kst
 
 
-TIMELINE_RENDERER_VERSION = "player-timeline-v9"
+TIMELINE_RENDERER_VERSION = "player-timeline-v13"
 MAX_PATH_SAMPLE_GAP_SECONDS = 45.0
 MAX_PATH_HORIZONTAL_SPEED_MPS = 120.0
 TRANSPORT_AIRCRAFT_ALTITUDE_CM = 100000.0
 DROP_START_ALTITUDE_CM = 20000.0
+ENGAGEMENT_ATTACK_ACTIONS = frozenset({"shot", "throw", "melee", "attack"})
+ENGAGEMENT_OPPONENT_ACTIONS = frozenset(
+    {
+        "hit_caused",
+        "hit_taken",
+        "dbno_caused",
+        "dbno_taken",
+        "kill",
+        "death",
+        "finish",
+        "finished_taken",
+    }
+)
+ENGAGEMENT_WEAPON_DAMAGE_CATEGORIES = frozenset(
+    {
+        "Damage_Gun",
+        "Damage_Gun_Penetrate_BRDM",
+        "Damage_Throwable",
+        "Damage_Explosion_Grenade",
+        "Damage_Melee",
+        "Damage_Punch",
+        "Damage_MeleeThrow",
+        "Damage_Molotov",
+        "Damage_Explosion_PanzerFaustWarhead",
+        "Damage_Explosion_PanzerFaustBackBlast",
+        "Damage_BlueZoneGrenade",
+        "Damage_Explosion_JerryCan",
+        "Damage_Explosion_Mortar",
+        "Damage_Explosion_StickyBomb",
+        "Damage_Explosion_C4",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -264,7 +296,14 @@ class ReplayTimelineProcessor:
             *combat_events,
             *(event for track in team_tracks for event in track["combat_events"]),
         ]
-        engagements = _derive_engagements(all_combat_events)
+        engagements = _derive_engagements(
+            all_combat_events,
+            team_account_ids={
+                member_account_id
+                for member in team_members
+                if (member_account_id := _optional_text(member.get("account_id"))) is not None
+            },
+        )
 
         return {
             "schema_version": TIMELINE_RENDERER_VERSION,
@@ -1116,26 +1155,21 @@ def _annotate_actor_events(events: list[dict[str, Any]], actor: Mapping[str, Any
         event["actor_is_ai_or_bot"] = bool(actor.get("is_ai_or_bot"))
 
 
-def _derive_engagements(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    combat_actions = {
-        "shot",
-        "throw",
-        "melee",
-        "attack",
-        "hit_caused",
-        "hit_taken",
-        "dbno_caused",
-        "dbno_taken",
-        "kill",
-        "death",
-        "finish",
-        "finished_taken",
-    }
+def _derive_engagements(
+    events: list[dict[str, Any]],
+    *,
+    team_account_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    team_ids = team_account_ids or set()
     by_actor: dict[str, list[dict[str, Any]]] = {}
     for event in events:
         actor_id = _optional_text(event.get("actor_account_id"))
         time_value = _optional_float(event.get("time_seconds"))
-        if actor_id is None or time_value is None or event.get("action") not in combat_actions:
+        if actor_id is None or time_value is None or not _is_engagement_signal(
+            event,
+            actor_id=actor_id,
+            team_account_ids=team_ids,
+        ):
             continue
         by_actor.setdefault(actor_id, []).append(event)
 
@@ -1162,13 +1196,15 @@ def _derive_engagements(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     related_id
                     for event in cluster
                     if (related_id := _optional_text(event.get("related_account_id"))) is not None
+                    and related_id != actor_id
+                    and related_id not in team_ids
                 }
             )
             weapon_labels = sorted(
                 {
                     weapon
                     for event in cluster
-                    if (weapon := _optional_text(event.get("weapon_label") or event.get("damage_causer_label"))) is not None
+                    if (weapon := _engagement_weapon_label(event)) is not None
                 }
             )
             wins = actions.count("kill") + actions.count("dbno_caused")
@@ -1202,6 +1238,8 @@ def _derive_engagements(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
                         1,
                     ),
                     "outcome": outcome,
+                    "evidence": "verified_opponent" if related_ids else "inferred_attack_activity",
+                    "opponent_count": len(related_ids),
                     "opponent_account_ids": related_ids,
                     "weapons": weapon_labels,
                     "map": (
@@ -1216,6 +1254,29 @@ def _derive_engagements(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             )
     engagements.sort(key=lambda item: (_optional_float(item.get("start_time_seconds")) or 0.0, str(item.get("actor_name") or "")))
     return engagements
+
+
+def _is_engagement_signal(
+    event: Mapping[str, Any],
+    *,
+    actor_id: str,
+    team_account_ids: set[str],
+) -> bool:
+    action = _optional_text(event.get("action"))
+    if action in ENGAGEMENT_ATTACK_ACTIONS:
+        return True
+    if action not in ENGAGEMENT_OPPONENT_ACTIONS:
+        return False
+    related_id = _optional_text(event.get("related_account_id"))
+    return related_id is not None and related_id != actor_id and related_id not in team_account_ids
+
+
+def _engagement_weapon_label(event: Mapping[str, Any]) -> str | None:
+    action = _optional_text(event.get("action"))
+    damage_category = _optional_text(event.get("damage_type_category"))
+    if action not in ENGAGEMENT_ATTACK_ACTIONS and damage_category not in ENGAGEMENT_WEAPON_DAMAGE_CATEGORIES:
+        return None
+    return _optional_text(event.get("weapon_label") or event.get("damage_causer_label"))
 
 
 def _record_datetime(value: Any) -> datetime | None:

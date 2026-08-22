@@ -3948,25 +3948,58 @@ _INDEX_HTML = """<!doctype html>
     .toggle-row { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; color: var(--muted); font-size: 13px; }
     .toggle-row label { display: inline-flex; grid-template-columns: none; align-items: center; gap: 6px; }
     .toggle-row input { width: auto; min-height: 0; }
+    .replay-explorer-bar {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(150px, 220px)) auto auto minmax(100px, 1fr);
+      gap: 10px;
+      align-items: end;
+      margin: 12px 0;
+    }
+    .replay-explorer-bar .checkbox-field {
+      display: inline-flex;
+      align-items: center;
+      align-self: center;
+      gap: 7px;
+      min-height: 38px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .replay-explorer-bar .checkbox-field input { width: auto; min-height: 0; }
+    .timeline-event-count { align-self: center; text-align: right; font-variant-numeric: tabular-nums; }
+    .replay-quick-nav {
+      display: grid;
+      grid-template-columns: 86px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      margin: 4px 0 12px;
+      padding: 9px 0;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+    .replay-quick-nav > strong { color: var(--muted); font-size: 11px; text-transform: uppercase; }
+    .replay-quick-actions { display: flex; flex-wrap: wrap; gap: 7px; min-width: 0; }
+    .replay-quick-actions button { min-height: 32px; padding: 6px 10px; font-size: 11px; }
     .replay-legend {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px 14px;
+      display: grid;
+      gap: 8px;
       margin: -2px 0 12px;
-      padding: 9px 11px;
+      padding: 10px 11px;
       border: 1px solid var(--line);
       border-radius: 4px;
       background: #0a0d0f;
       color: var(--muted);
       font-size: 11px;
     }
-    .replay-legend span { display: inline-flex; align-items: center; gap: 6px; min-height: 18px; white-space: nowrap; }
+    .replay-legend-group { display: flex; flex-wrap: wrap; gap: 7px 14px; align-items: center; }
+    .replay-legend-group > strong { width: 70px; color: var(--text); font-size: 11px; }
+    .replay-legend span { display: inline-flex; align-items: center; gap: 6px; min-height: 22px; white-space: nowrap; }
     .legend-line { display: inline-block; width: 28px; height: 0; border-top: 3px solid #4bd0a0; }
-    .legend-line.vehicle { border-top-color: #ffb84d; border-top-style: double; border-top-width: 5px; }
+    .legend-line.vehicle { border-top-color: #ffb84d; border-top-style: dashed; }
     .legend-line.airborne { border-top-color: #54c8ff; border-top-style: dashed; }
+    .legend-line.dbno { border-top-color: #ff5f6d; border-top-style: dotted; }
     .legend-symbol {
       display: inline-grid;
-      width: 20px;
+      width: 32px;
       height: 20px;
       place-items: center;
       color: #f5f7fa;
@@ -3981,9 +4014,66 @@ _INDEX_HTML = """<!doctype html>
     .legend-symbol.dbno { color: #ff9f43; }
     .legend-symbol.kill { color: #ff5f6d; font-size: 24px; }
     .legend-symbol.revive { color: #45d6b0; font-size: 21px; }
+    .legend-symbol.drop { color: #54c8ff; }
+    .legend-symbol.landing { color: #ffeb3b; }
+    .legend-symbol.hit-taken { color: #ff6b6b; }
+    .legend-symbol.environment { color: #c3ccd6; border: 1px dotted currentColor; font-size: 14px; }
+    .legend-symbol.dbno-taken { color: #ff5f6d; }
+    .legend-symbol.death { color: #ff8a80; border: 1px solid currentColor; font-size: 20px; }
+    .legend-symbol.engagement { border: 2px dashed #ffd54f; border-radius: 50%; font-size: 0; }
+    .legend-symbol.activity { border: 2px dotted #69b8e8; border-radius: 50%; font-size: 0; }
+    .timeline-now-event {
+      display: grid;
+      grid-template-columns: 30px minmax(0, 1fr) auto;
+      gap: 9px;
+      align-items: center;
+      min-height: 52px;
+      margin: 10px 0 12px;
+      padding: 8px 11px;
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--info);
+      background: #0d1114;
+    }
+    .timeline-now-event .event-copy { min-width: 0; display: grid; gap: 2px; }
+    .timeline-now-event strong, .timeline-now-event span { overflow-wrap: anywhere; }
+    .timeline-now-event .event-meta { color: var(--muted); font-size: 11px; }
+    .timeline-now-event .event-time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .timeline-event-badge {
+      display: inline-grid;
+      width: 26px;
+      height: 26px;
+      place-items: center;
+      flex: 0 0 26px;
+      border: 1px solid currentColor;
+      border-radius: 50%;
+      color: #cbd2d8;
+      background: #0b0d0f;
+      font-size: 14px;
+      font-style: normal;
+      font-weight: 800;
+      line-height: 1;
+    }
+    .timeline-event-badge.event-tone-drop { color: #54c8ff; border-radius: 3px; transform: rotate(45deg); }
+    .timeline-event-badge.event-tone-drop > span { transform: rotate(-45deg); }
+    .timeline-event-badge.event-tone-landing { color: #ffeb3b; border-radius: 3px 3px 50% 50%; }
+    .timeline-event-badge.event-tone-shot { color: #64d8ff; }
+    .timeline-event-badge.event-tone-throw { color: #ffb74d; border-radius: 3px; }
+    .timeline-event-badge.event-tone-attack { color: #ffb74d; }
+    .timeline-event-badge.event-tone-hit-caused { color: #ffd54f; }
+    .timeline-event-badge.event-tone-hit-taken { color: #ff6b6b; border-radius: 3px; }
+    .timeline-event-badge.event-tone-environment { color: #c3ccd6; border-radius: 3px; border-style: dotted; }
+    .timeline-event-badge.event-tone-dbno-caused { color: #ff9f43; border-radius: 3px; }
+    .timeline-event-badge.event-tone-dbno-taken { color: #ff5f6d; border-radius: 3px; background: #35171b; }
+    .timeline-event-badge.event-tone-kill { color: #ff5f6d; border-width: 2px; }
+    .timeline-event-badge.event-tone-death { color: #ff8a80; border-radius: 3px; border-width: 2px; }
+    .timeline-event-badge.event-tone-revive { color: #45d6b0; }
+    .timeline-event-badge.event-tone-engagement { color: #ffd54f; border-style: dashed; }
+    .timeline-event-badge.event-tone-activity { color: #69b8e8; border-style: dotted; }
+    .timeline-event-badge.event-tone-plane { color: #69b8e8; border-radius: 3px; }
+    .timeline-event-badge.event-tone-care { color: #ef9a9a; border-radius: 3px; }
     .timeline-range { display: grid; grid-template-columns: minmax(0, 1fr) minmax(210px, auto); gap: 12px; align-items: center; margin: 12px 0; }
     #timelineClock { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-    #timelineScrubber { padding: 0; }
+    #timelineScrubber { width: 100%; margin: 0; padding: 0; }
     .replay-detail-layout {
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
@@ -4011,21 +4101,30 @@ _INDEX_HTML = """<!doctype html>
       overflow: auto;
       padding-right: 4px;
     }
+    .timeline-event-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 52px;
+      gap: 6px;
+      min-width: 0;
+    }
     .timeline-event-row {
       display: grid;
-      grid-template-columns: 58px minmax(0, 1fr);
-      gap: 4px 8px;
+      grid-template-columns: 28px 54px minmax(0, 1fr);
+      gap: 7px;
       align-items: center;
       text-align: left;
-      min-height: 46px;
+      min-height: 52px;
       border: 1px solid var(--line);
       background: #fff;
       color: var(--text);
     }
-    .timeline-event-row span { color: var(--muted); font-size: 12px; }
-    .timeline-event-row strong { overflow-wrap: anywhere; }
-    .timeline-event-row em { grid-column: 2; color: var(--muted); font-size: 12px; font-style: normal; overflow-wrap: anywhere; }
-    .timeline-event-row.active { border-color: var(--accent); background: #eef7ff; }
+    .timeline-event-row > span:not(.timeline-event-copy) { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+    .timeline-event-copy { min-width: 0; display: grid; gap: 3px; }
+    .timeline-event-row strong { overflow-wrap: anywhere; font-size: 12px; }
+    .timeline-event-row em { color: var(--muted); font-size: 11px; font-style: normal; overflow-wrap: anywhere; }
+    .timeline-event-item.active .timeline-event-row { border-color: var(--accent); background: #eef7ff; }
+    .timeline-event-item.current .timeline-event-row { box-shadow: inset 3px 0 0 var(--info); }
+    .timeline-map-button { min-width: 0; width: 52px; min-height: 52px; padding: 5px; font-size: 11px; }
     .timeline-event-detail {
       border-left: 3px solid var(--accent);
       padding: 10px 12px;
@@ -4038,15 +4137,18 @@ _INDEX_HTML = """<!doctype html>
     }
     .team-member {
       display: grid;
+      width: 100%;
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 4px 8px;
       align-items: center;
+      text-align: left;
       border: 1px solid var(--line);
       background: #fff;
       padding: 8px 10px;
     }
     .team-member.self { border-color: #39ff14; }
     .team-member.registered { background: #eef7ff; border-color: var(--accent); }
+    .team-member.selected { box-shadow: inset 3px 0 0 var(--accent); }
     tr.linked-row td { background: #fff7ed; }
     tr.linked-row td:first-child { border-left: 3px solid var(--accent); }
     .team-member strong { overflow-wrap: anywhere; }
@@ -4061,6 +4163,10 @@ _INDEX_HTML = """<!doctype html>
       .query-primary, .filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .result-columns { grid-template-columns: 1fr; }
       .player-controls { grid-template-columns: 1fr; }
+      .replay-explorer-bar { grid-template-columns: 1fr; }
+      .timeline-event-count { text-align: left; }
+      .replay-quick-nav { grid-template-columns: 1fr; }
+      .replay-legend-group > strong { width: 100%; }
       .confirmation-input-row { grid-template-columns: 1fr; }
       .backup-evidence-form { grid-template-columns: 1fr; }
       .review-packet-verifier-form { grid-template-columns: 1fr; }
@@ -4537,9 +4643,13 @@ _INDEX_HTML = """<!doctype html>
       background: #0d1114;
       color: var(--text);
     }
-    .timeline-event-row.active {
+    .timeline-event-item.active .timeline-event-row {
       border-color: var(--accent);
       background: #13211d;
+    }
+    .timeline-event-item.current .timeline-event-row {
+      border-color: var(--info);
+      box-shadow: inset 3px 0 0 var(--info);
     }
     .team-member.registered {
       border-color: var(--info);
@@ -5909,20 +6019,69 @@ _INDEX_HTML = """<!doctype html>
           </select>
         </label>
       </div>
+      <div class="replay-explorer-bar" aria-label="이벤트 탐색 조건">
+        <label>이벤트 대상
+          <select id="timelineActorFilter"><option value="focus">선택 유저</option><option value="all">전체 팀</option></select>
+        </label>
+        <label>이벤트 종류
+          <select id="timelineEventTypeFilter">
+            <option value="all">전체 사건</option>
+            <option value="drop_landing">낙하·착지</option>
+            <option value="engagement">교전·공격 활동</option>
+            <option value="attack">발사·투척·공격</option>
+            <option value="hit">명중·피격</option>
+            <option value="environment">환경·상태 피해</option>
+            <option value="dbno">기절</option>
+            <option value="kill">킬·사망</option>
+            <option value="revive">부활</option>
+            <option value="world">비행기·보급</option>
+          </select>
+        </label>
+        <label class="checkbox-field"><input type="checkbox" id="timelineFollowEvents" checked>목록 자동 추적</label>
+        <button class="secondary" type="button" id="timelineEventFilterReset">필터 초기화</button>
+        <div class="status timeline-event-count" id="timelineEventCount">0개 사건</div>
+      </div>
+      <div class="replay-quick-nav" aria-label="주요 위치 바로가기">
+        <strong>주요 위치</strong>
+        <div class="replay-quick-actions" id="timelineQuickEvents"><span class="status">경기를 불러오세요.</span></div>
+      </div>
       <div class="replay-legend" aria-label="리플레이 기호 범례">
-        <span><i class="legend-line foot"></i>도보</span>
-        <span><i class="legend-line vehicle"></i>차량</span>
-        <span><i class="legend-line airborne"></i>낙하</span>
-        <span><i class="legend-symbol shot">•</i>발사</span>
-        <span><i class="legend-symbol throw">◆</i>투척</span>
-        <span><i class="legend-symbol hit">➜</i>피격 방향</span>
-        <span><i class="legend-symbol dbno">◇</i>기절</span>
-        <span><i class="legend-symbol kill">×</i>킬·사망</span>
-        <span><i class="legend-symbol revive">+</i>부활</span>
+        <div class="replay-legend-group">
+          <strong>이동 경로</strong>
+          <span><i class="legend-line foot"></i>도보</span>
+          <span><i class="legend-line vehicle"></i>차량</span>
+          <span><i class="legend-line airborne"></i>낙하</span>
+          <span><i class="legend-line dbno"></i>기절 이동</span>
+        </div>
+        <div class="replay-legend-group">
+          <strong>주요 위치</strong>
+          <span><i class="legend-symbol drop">◆</i>낙하 시작</span>
+          <span><i class="legend-symbol landing">▲</i>착지</span>
+          <span><i class="legend-symbol engagement"></i>교전(상대 확인)</span>
+          <span><i class="legend-symbol activity"></i>공격 활동(상대 미확인)</span>
+          <span><i class="legend-symbol revive">+</i>부활</span>
+        </div>
+        <div class="replay-legend-group">
+          <strong>전투 사건</strong>
+          <span><i class="legend-symbol shot">◎</i>발사</span>
+          <span><i class="legend-symbol throw">◆</i>투척</span>
+          <span><i class="legend-symbol hit">⊙</i>명중시킴</span>
+          <span><i class="legend-symbol hit-taken">■</i>피격당함</span>
+          <span><i class="legend-symbol environment">!</i>환경·상태 피해</span>
+          <span><i class="legend-symbol dbno">◇+</i>기절시킴</span>
+          <span><i class="legend-symbol dbno-taken">◆−</i>기절당함</span>
+          <span><i class="legend-symbol kill">×</i>킬 위치</span>
+          <span><i class="legend-symbol death">×</i>사망 위치</span>
+        </div>
       </div>
       <div class="timeline-range">
-        <input id="timelineScrubber" type="range" min="0" max="0" value="0" step="0.1">
+        <input id="timelineScrubber" type="range" min="0" max="0" value="0" step="0.1" aria-label="리플레이 재생 위치">
         <div class="status" id="timelineClock">0.0초</div>
+      </div>
+      <div class="timeline-now-event" id="timelineNowEvent" aria-live="polite" aria-atomic="true">
+        <i class="timeline-event-badge"><span>·</span></i>
+        <span class="event-copy"><strong>현재 사건 없음</strong><span class="event-meta">재생을 시작하거나 사건을 선택하세요.</span></span>
+        <span class="event-time">0:00.0</span>
       </div>
       <div class="replay-detail-layout">
         <div class="replay-canvas-wrap">
@@ -6177,6 +6336,13 @@ _INDEX_HTML = """<!doctype html>
     const timelineEventDetail = document.querySelector("#timelineEventDetail");
     const timelineEventList = document.querySelector("#timelineEventList");
     const timelineTeamList = document.querySelector("#timelineTeamList");
+    const timelineActorFilter = document.querySelector("#timelineActorFilter");
+    const timelineEventTypeFilter = document.querySelector("#timelineEventTypeFilter");
+    const timelineFollowEvents = document.querySelector("#timelineFollowEvents");
+    const timelineEventFilterReset = document.querySelector("#timelineEventFilterReset");
+    const timelineEventCount = document.querySelector("#timelineEventCount");
+    const timelineQuickEvents = document.querySelector("#timelineQuickEvents");
+    const timelineNowEvent = document.querySelector("#timelineNowEvent");
     const replayCanvas = document.querySelector("#replayCanvas");
     const replayPlayerStatus = document.querySelector("#replayPlayerStatus");
     const timelineShowPath = document.querySelector("#timelineShowPath");
@@ -6198,7 +6364,9 @@ _INDEX_HTML = """<!doctype html>
     let activeTimeline = null;
     let activeTimelineArtifact = null;
     let activeTimelineEvents = [];
+    let activeTimelineVisibleEvents = [];
     let activeTimelineSelectedEventId = null;
+    let activeTimelineCurrentEventId = null;
     let activeTimelineDetailKey = "";
     let activeTimelineDuration = 0;
     let activeTimelineTime = 0;
@@ -6207,6 +6375,8 @@ _INDEX_HTML = """<!doctype html>
     let replayAnimationId = null;
     let replayLastFrameMs = 0;
     let replayPlaying = false;
+    let replayPinnedMap = null;
+    let replayPinnedEventId = null;
     let activeReplayPlayer = null;
     let activeAnalysisPlayer = null;
     let activeProfilePlayer = null;
@@ -12072,19 +12242,29 @@ _INDEX_HTML = """<!doctype html>
       activeTimeline = null;
       activeTimelineArtifact = null;
       activeTimelineEvents = [];
+      activeTimelineVisibleEvents = [];
       activeTimelineSelectedEventId = null;
+      activeTimelineCurrentEventId = null;
       activeTimelineDetailKey = "";
       activeTimelineDuration = 0;
       activeTimelineTime = 0;
+      replayPinnedMap = null;
+      replayPinnedEventId = null;
+      timelineActorFilter.value = "focus";
+      timelineEventTypeFilter.value = "all";
+      timelineFollowEvents.checked = true;
       timelineSelect.disabled = true;
       timelineSelect.innerHTML = '<option value="">유저를 선택하세요</option>';
       timelineScrubber.max = "0";
       timelineScrubber.value = "0";
       timelineClock.textContent = "0.0초";
       replayPlayerStatus.textContent = message;
+      renderTimelineActorFilter();
+      renderTimelineQuickEvents();
       renderTimelineTeamList();
       renderTimelineEventList();
       renderTimelineEventDetail(null);
+      renderTimelineNowEvent(null);
       drawEmptyReplayCanvas();
     }
 
@@ -12167,10 +12347,17 @@ _INDEX_HTML = """<!doctype html>
         activeTimeline = null;
         activeTimelineArtifact = null;
         activeTimelineEvents = [];
+        activeTimelineVisibleEvents = [];
         activeTimelineSelectedEventId = null;
+        activeTimelineCurrentEventId = null;
+        replayPinnedMap = null;
+        replayPinnedEventId = null;
+        renderTimelineActorFilter();
+        renderTimelineQuickEvents();
         renderTimelineTeamList();
         renderTimelineEventList();
         renderTimelineEventDetail(null);
+        renderTimelineNowEvent(null);
         replayPlayerStatus.textContent = "재생할 타임라인 파일이 없습니다.";
         drawEmptyReplayCanvas();
         return;
@@ -12185,17 +12372,26 @@ _INDEX_HTML = """<!doctype html>
       activeTimeline = normalizeTimelineTiming(payload);
       activeTimelineArtifact = artifact;
       activeTimelineEvents = timelineEvents(activeTimeline);
+      activeTimelineVisibleEvents = [];
       activeTimelineSelectedEventId = null;
+      activeTimelineCurrentEventId = null;
       activeTimelineDetailKey = "";
       activeTimelineDuration = Math.max(1, timelineDuration(activeTimeline));
       activeTimelineTime = 0;
+      replayPinnedMap = null;
+      replayPinnedEventId = null;
+      timelineActorFilter.value = "focus";
+      timelineEventTypeFilter.value = "all";
       timelineScrubber.max = String(activeTimelineDuration);
       timelineScrubber.value = "0";
       replayPlayerStatus.textContent = `${activeTimeline.player?.name || artifact.player_name || "알 수 없음"} · ${formatKstShort(artifact.match_created_at_kst)} · ${activeTimeline.match?.map_name || "-"} · ${compactIdentifier(activeTimeline.match?.match_id || artifact.match_id)}`;
       await loadReplayMapImage(activeTimeline.match?.map_name);
+      renderTimelineActorFilter();
+      renderTimelineQuickEvents();
       renderTimelineTeamList();
       renderTimelineEventList();
       renderTimelineEventDetail(null);
+      renderTimelineNowEvent(null);
       renderReplayFrame();
     }
 
@@ -12206,7 +12402,7 @@ _INDEX_HTML = """<!doctype html>
 
     function validateTimelinePayload(timeline) {
       const version = timelineSchemaVersion(timeline?.schema_version);
-      if (version === null || version < 9) {
+      if (version === null || version < 13) {
         throw new Error("이 타임라인은 현재 재생기와 호환되지 않습니다. 타임라인 저장을 실행해 재생성하세요.");
       }
       if (!Number.isFinite(Date.parse(timeline?.time_origin_at_kst || ""))) {
@@ -12465,7 +12661,7 @@ _INDEX_HTML = """<!doctype html>
           add("landing", event, `${replayActorName(event)} · 낙하산 착지`, `비행 거리 ${distanceM(event.distance_m)}`);
         }
         for (const event of track.combat_events || []) {
-          const action = combatActionLabel(event.action);
+          const action = combatEventActionLabel(event);
           const weapon = event.weapon_label || event.damage_causer_label || event.weapon_code || event.damage_causer_name || "-";
           const suffix = event.is_headshot ? " · 헤드샷" : "";
           const related = event.related_name || event.related_account_id;
@@ -12492,11 +12688,12 @@ _INDEX_HTML = """<!doctype html>
           time_seconds: engagement.start_time_seconds,
         };
         const outcome = engagement.outcome === "won" ? "우세" : engagement.outcome === "lost" ? "열세" : "공방";
+        const verifiedOpponent = engagement.evidence === "verified_opponent" || Number(engagement.opponent_count || 0) > 0;
         add(
           "engagement",
           source,
-          `${engagement.actor_name || "팀원"} · 교전`,
-          `${outcome} / ${engagement.event_count || 0}개 사건 / 킬 ${engagement.kills || 0} / 기절 ${engagement.dbnos_caused || 0}`,
+          `${engagement.actor_name || "팀원"} · ${verifiedOpponent ? "교전" : "공격 활동"}`,
+          `${verifiedOpponent ? `상대 ${engagement.opponent_count || 0}명 확인` : "상대 미확인"} / ${outcome} / ${engagement.event_count || 0}개 사건 / 킬 ${engagement.kills || 0} / 기절 ${engagement.dbnos_caused || 0}`,
         );
       }
       for (const event of timeline.care_packages || []) {
@@ -12536,8 +12733,250 @@ _INDEX_HTML = """<!doctype html>
       return labels[action] || action || "교전";
     }
 
+    function isNonOpponentDamage(event) {
+      if (!["hit_taken", "dbno_taken", "death", "finished_taken"].includes(event?.action)) return false;
+      const actorId = String(event.actor_account_id || "");
+      const relatedId = String(event.related_account_id || "");
+      if (relatedId) return relatedId === actorId;
+      const category = String(event.damage_type_category || "");
+      return category !== "Damage_Gun" && category !== "Damage_Explosion_Grenade" && category !== "Damage_Molotov";
+    }
+
+    function combatEventActionLabel(event) {
+      if (isNonOpponentDamage(event)) {
+        return ["death", "finished_taken"].includes(event.action) ? "환경·상태 사망" : "환경·상태 피해";
+      }
+      return combatActionLabel(event.action);
+    }
+
     function isReviveAction(action) {
       return action === "revive_given" || action === "revive_received";
+    }
+
+    function timelineEventPresentation(event) {
+      const category = event?.category || "event";
+      if (category === "drop") return { tone: "drop", symbol: "◆", name: "낙하 시작" };
+      if (category === "landing") return { tone: "landing", symbol: "▲", name: "착지" };
+      if (category === "engagement") {
+        return event?.source?.evidence === "verified_opponent" || Number(event?.source?.opponent_count || 0) > 0
+          ? { tone: "engagement", symbol: "○", name: "교전" }
+          : { tone: "activity", symbol: "○", name: "공격 활동" };
+      }
+      if (category === "plane") return { tone: "plane", symbol: "━", name: "비행기 동선" };
+      if (category === "care") return { tone: "care", symbol: "■", name: "보급" };
+      if (category !== "combat") return { tone: "event", symbol: "·", name: "사건" };
+
+      const action = event?.source?.action;
+      if (isNonOpponentDamage(event?.source)) {
+        return ["death", "finished_taken"].includes(action)
+          ? { tone: "death", symbol: "×", name: "환경·상태 사망" }
+          : { tone: "environment", symbol: "!", name: "환경·상태 피해" };
+      }
+      const presentations = {
+        shot: { tone: "shot", symbol: "◎", name: "발사" },
+        throw: { tone: "throw", symbol: "◆", name: "투척" },
+        melee: { tone: "attack", symbol: "△", name: "근접 공격" },
+        attack: { tone: "attack", symbol: "△", name: "공격" },
+        hit_caused: { tone: "hit-caused", symbol: "⊙", name: "명중시킴" },
+        hit_taken: { tone: "hit-taken", symbol: "■", name: "피격당함" },
+        dbno_caused: { tone: "dbno-caused", symbol: "+", name: "기절시킴" },
+        dbno_taken: { tone: "dbno-taken", symbol: "−", name: "기절당함" },
+        kill: { tone: "kill", symbol: "×", name: "킬" },
+        finish: { tone: "kill", symbol: "×", name: "확정 처치" },
+        death: { tone: "death", symbol: "×", name: "사망" },
+        finished_taken: { tone: "death", symbol: "×", name: "확정 처치당함" },
+        revive_given: { tone: "revive", symbol: "+", name: "팀원 부활" },
+        revive_received: { tone: "revive", symbol: "+", name: "부활받음" },
+      };
+      return presentations[action] || { tone: "event", symbol: "·", name: combatActionLabel(action) };
+    }
+
+    function timelineEventBadgeHtml(event) {
+      const presentation = timelineEventPresentation(event);
+      return `<i class="timeline-event-badge event-tone-${presentation.tone}" title="${attr(presentation.name)}" aria-label="${attr(presentation.name)}"><span>${escapeHtml(presentation.symbol)}</span></i>`;
+    }
+
+    function timelineEventActorId(event) {
+      return String(event?.source?.actor_account_id || event?.source?.account_id || "");
+    }
+
+    function timelineEventMatchesActor(event) {
+      const selected = timelineActorFilter?.value || "focus";
+      const source = event?.source || {};
+      const actorId = timelineEventActorId(event);
+      if (!actorId) return true;
+      if (selected === "all") return true;
+      if (selected === "focus") return source.actor_is_self !== false;
+      return actorId === selected;
+    }
+
+    function timelineEventMatchesType(event) {
+      const selected = timelineEventTypeFilter?.value || "all";
+      if (selected === "all") return true;
+      if (selected === "drop_landing") return ["drop", "landing"].includes(event.category);
+      if (selected === "engagement") return event.category === "engagement";
+      if (selected === "world") return ["plane", "care"].includes(event.category);
+      if (event.category !== "combat") return false;
+      const action = event.source?.action;
+      if (selected === "environment") return isNonOpponentDamage(event.source);
+      if (selected === "attack") return ["shot", "throw", "melee", "attack"].includes(action);
+      if (selected === "hit") return ["hit_caused", "hit_taken"].includes(action) && !isNonOpponentDamage(event.source);
+      if (selected === "dbno") return ["dbno_caused", "dbno_taken"].includes(action);
+      if (selected === "kill") return ["kill", "finish", "death", "finished_taken"].includes(action);
+      if (selected === "revive") return isReviveAction(action);
+      return true;
+    }
+
+    function filteredTimelineEvents() {
+      return activeTimelineEvents.filter((event) => (
+        timelineEventVisible(event)
+        && timelineEventMatchesActor(event)
+        && timelineEventMatchesType(event)
+      ));
+    }
+
+    function timelineEventMapPoint(event) {
+      const source = event?.source || {};
+      if (
+        event?.category === "combat"
+        && ["hit_caused", "dbno_caused", "kill", "finish"].includes(source.action)
+        && source.related_map
+      ) return source.related_map;
+      return source.map || null;
+    }
+
+    function renderTimelineActorFilter() {
+      if (!timelineActorFilter) return;
+      const previous = timelineActorFilter.value || "focus";
+      const members = activeTimeline?.team?.members || [];
+      const options = [
+        { value: "focus", label: `선택 유저${activeTimeline?.player?.name ? ` · ${activeTimeline.player.name}` : ""}` },
+        { value: "all", label: "전체 팀" },
+        ...members.filter((member) => !member.is_self && member.account_id).map((member) => ({
+          value: member.account_id,
+          label: `${member.name || compactIdentifier(member.account_id)}${member.registered ? " · 등록 유저" : ""}`,
+        })),
+      ];
+      timelineActorFilter.innerHTML = options.map((option) => (
+        `<option value="${attr(option.value)}">${escapeHtml(option.label)}</option>`
+      )).join("");
+      timelineActorFilter.value = options.some((option) => option.value === previous) ? previous : "focus";
+    }
+
+    function quickTimelineCandidates() {
+      return activeTimelineEvents.filter((event) => {
+        if (!timelineEventMapPoint(event)) return false;
+        return timelineEventMatchesActor(event);
+      });
+    }
+
+    function renderTimelineQuickEvents() {
+      if (!timelineQuickEvents) return;
+      if (!activeTimeline) {
+        timelineQuickEvents.innerHTML = `<span class="status">경기를 불러오세요.</span>`;
+        return;
+      }
+      const candidates = quickTimelineCandidates();
+      const definitions = [
+        { label: "낙하 시작", match: (event) => event.category === "drop" },
+        { label: "착지 위치", match: (event) => event.category === "landing" },
+        { label: "첫 교전", match: (event) => event.category === "engagement" && (event.source?.evidence === "verified_opponent" || Number(event.source?.opponent_count || 0) > 0) },
+        { label: "첫 공격 활동", match: (event) => event.category === "engagement" && event.source?.evidence === "inferred_attack_activity" },
+        { label: "첫 명중", match: (event) => event.category === "combat" && event.source?.action === "hit_caused" },
+        { label: "첫 기절시킴", match: (event) => event.category === "combat" && event.source?.action === "dbno_caused" },
+        { label: "첫 기절당함", match: (event) => event.category === "combat" && event.source?.action === "dbno_taken" },
+        { label: "첫 킬", match: (event) => event.category === "combat" && ["kill", "finish"].includes(event.source?.action) },
+        { label: "사망 위치", match: (event) => event.category === "combat" && ["death", "finished_taken"].includes(event.source?.action) },
+      ];
+      const shortcuts = definitions.map((definition) => ({
+        ...definition,
+        event: candidates.find(definition.match),
+      })).filter((item) => item.event);
+      timelineQuickEvents.innerHTML = shortcuts.length
+        ? shortcuts.map((item) => `<button class="secondary" type="button" data-timeline-map-event="${attr(item.event.id)}" title="${attr(`${item.label}를 지도에서 보기`)}">${escapeHtml(item.label)} · ${formatReplayTime(item.event.time)}</button>`).join("")
+        : `<span class="status">선택 대상의 주요 위치 기록이 없습니다.</span>`;
+    }
+
+    function currentPlaybackTimelineEvent() {
+      const visible = activeTimelineVisibleEvents;
+      let current = null;
+      for (const event of visible) {
+        if (event.time > activeTimelineTime) break;
+        current = event;
+      }
+      if (!current) return null;
+      const age = activeTimelineTime - current.time;
+      const keepSeconds = current.category === "combat" ? 4.5 : current.category === "engagement" ? 8 : 6;
+      return age <= keepSeconds ? current : null;
+    }
+
+    function renderTimelineNowEvent(event = undefined) {
+      if (!timelineNowEvent) return;
+      const current = event === undefined ? (selectedTimelineEvent() || currentPlaybackTimelineEvent()) : event;
+      const artifactKey = activeTimelineArtifact?.id || activeTimeline?.match?.match_id || "none";
+      const renderKey = current
+        ? `${artifactKey}:${current.id}:${activeTimelineSelectedEventId || ""}`
+        : `${artifactKey}:empty:${activeTimeline ? Math.floor(activeTimelineTime) : "none"}`;
+      if (timelineNowEvent.dataset.renderKey === renderKey) return;
+      timelineNowEvent.dataset.renderKey = renderKey;
+      if (!current) {
+        timelineNowEvent.innerHTML = `
+          <i class="timeline-event-badge"><span>·</span></i>
+          <span class="event-copy"><strong>현재 사건 없음</strong><span class="event-meta">${activeTimeline ? "다음 사건까지 재생 중" : "경기를 불러오세요."}</span></span>
+          <span class="event-time">${formatReplayTime(activeTimelineTime)}</span>
+        `;
+        return;
+      }
+      const source = current.source || {};
+      const meta = [current.meta, source.event_at_kst ? `KST ${formatKstShort(source.event_at_kst)}` : ""].filter(Boolean).join(" · ");
+      timelineNowEvent.innerHTML = `
+        ${timelineEventBadgeHtml(current)}
+        <span class="event-copy"><strong>${escapeHtml(current.label)}</strong><span class="event-meta">${escapeHtml(meta || timelineEventPresentation(current).name)}</span></span>
+        <span class="event-time">${formatReplayTime(current.time)}</span>
+      `;
+    }
+
+    function syncTimelineCurrentEvent() {
+      const current = currentPlaybackTimelineEvent();
+      const nextId = current?.id || null;
+      if (nextId === activeTimelineCurrentEventId) {
+        renderTimelineNowEvent(activeTimelineSelectedEventId ? selectedTimelineEvent() : current);
+        return;
+      }
+      activeTimelineCurrentEventId = nextId;
+      timelineEventList?.querySelectorAll(".timeline-event-item.current").forEach((element) => element.classList.remove("current"));
+      const item = Array.from(timelineEventList?.querySelectorAll("[data-timeline-event-item]") || [])
+        .find((element) => element.dataset.timelineEventItem === nextId);
+      if (item) {
+        item.classList.add("current");
+        if (replayPlaying && timelineFollowEvents?.checked) item.scrollIntoView({ block: "nearest" });
+      }
+      renderTimelineNowEvent(activeTimelineSelectedEventId ? selectedTimelineEvent() : current);
+    }
+
+    function refreshTimelineEventExplorer({ clearSelection = true } = {}) {
+      if (clearSelection) {
+        activeTimelineSelectedEventId = null;
+        activeTimelineCurrentEventId = null;
+        activeTimelineDetailKey = "";
+        replayPinnedMap = null;
+        replayPinnedEventId = null;
+      }
+      if (!clearSelection) {
+        const selected = selectedTimelineEvent();
+        if (selected && (!timelineEventVisible(selected) || !timelineEventMatchesActor(selected) || !timelineEventMatchesType(selected))) {
+          activeTimelineSelectedEventId = null;
+          activeTimelineDetailKey = "";
+          replayPinnedMap = null;
+          replayPinnedEventId = null;
+        }
+      }
+      renderTimelineTeamList();
+      renderTimelineQuickEvents();
+      renderTimelineEventList();
+      renderTimelineEventDetail(null);
+      renderTimelineNowEvent(null);
+      renderReplayFrame();
     }
 
     function renderTimelineTeamList() {
@@ -12562,12 +13001,14 @@ _INDEX_HTML = """<!doctype html>
           member.combat_event_count > 0 ? `전투 ${Number(member.combat_event_count || 0)}건` : "",
           member.win_place ? `${member.win_place}위` : "",
         ].filter(Boolean).join(" / ");
+        const actorFilterValue = member.is_self ? "focus" : member.account_id;
+        const selected = (timelineActorFilter?.value || "focus") === actorFilterValue;
         return `
-          <div class="team-member ${member.is_self ? "self" : ""} ${member.registered && !member.is_self ? "registered" : ""}">
+          <button type="button" class="team-member ${member.is_self ? "self" : ""} ${member.registered && !member.is_self ? "registered" : ""} ${selected ? "selected" : ""}" data-timeline-actor="${attr(actorFilterValue)}">
             <strong>${escapeHtml(member.name || member.account_id || "알 수 없음")}</strong>
             <span>${escapeHtml(badges.join(" / ") || "팀원")}</span>
             <span>${escapeHtml(stats || "-")}</span>
-          </div>
+          </button>
         `;
       }).join("");
     }
@@ -12581,17 +13022,22 @@ _INDEX_HTML = """<!doctype html>
 
     function renderTimelineEventList() {
       if (!timelineEventList) return;
-      const visibleEvents = activeTimelineEvents.filter(timelineEventVisible);
+      const visibleEvents = filteredTimelineEvents();
+      activeTimelineVisibleEvents = visibleEvents;
+      if (timelineEventCount) timelineEventCount.textContent = `${visibleEvents.length.toLocaleString("ko-KR")}개 사건`;
       if (!visibleEvents.length) {
         timelineEventList.innerHTML = `<div class="status">표시할 리플레이 이벤트가 없습니다.</div>`;
         return;
       }
       timelineEventList.innerHTML = visibleEvents.map((event) => `
-        <button class="timeline-event-row ${event.id === activeTimelineSelectedEventId ? "active" : ""}" type="button" data-timeline-event="${attr(event.id)}">
-          <span>${formatReplayTime(event.time)}</span>
-          <strong>${escapeHtml(event.label)}</strong>
-          <em>${escapeHtml(event.meta || "")}</em>
-        </button>
+        <div class="timeline-event-item ${event.id === activeTimelineSelectedEventId ? "active" : ""} ${event.id === activeTimelineCurrentEventId ? "current" : ""}" data-timeline-event-item="${attr(event.id)}">
+          <button class="timeline-event-row" type="button" data-timeline-event="${attr(event.id)}">
+            ${timelineEventBadgeHtml(event)}
+            <span>${formatReplayTime(event.time)}</span>
+            <span class="timeline-event-copy"><strong>${escapeHtml(event.label)}</strong><em>${escapeHtml(event.meta || "")}</em></span>
+          </button>
+          ${timelineEventMapPoint(event) ? `<button class="secondary timeline-map-button" type="button" data-timeline-map-event="${attr(event.id)}" title="${attr(`${event.label} 위치를 지도에서 보기`)}">지도</button>` : ""}
+        </div>
       `).join("");
     }
 
@@ -12615,8 +13061,8 @@ _INDEX_HTML = """<!doctype html>
     function renderTimelineEventDetail(event) {
       if (!timelineEventDetail) return;
       const selected = event || selectedTimelineEvent();
-      const nearest = selected || nearestTimelineEvent(activeTimelineTime, 2.5);
-      const key = nearest ? `${nearest.id}:${activeTimelineSelectedEventId || ""}:${activeTimelineTime.toFixed(1)}` : `empty:${activeTimelineEvents.length}`;
+      const nearest = selected || currentPlaybackTimelineEvent();
+      const key = nearest ? `${nearest.id}:${activeTimelineSelectedEventId || ""}` : `empty:${activeTimelineEvents.length}`;
       if (key === activeTimelineDetailKey) return;
       activeTimelineDetailKey = key;
 
@@ -12648,7 +13094,9 @@ _INDEX_HTML = """<!doctype html>
             detailLines.push(impactDetails.join(" / "));
           }
           if (source.attack_id !== null && source.attack_id !== undefined) detailLines.push(`공격 ID ${escapeHtml(String(source.attack_id))}`);
-          if (["hit_caused", "hit_taken", "dbno_caused", "dbno_taken", "kill", "death", "finish", "finished_taken"].includes(source.action)) {
+          if (isNonOpponentDamage(source)) {
+            detailLines.push(`분류 환경·상태 피해 / 원인 ${escapeHtml(source.damage_causer_label || source.damage_causer_name || source.damage_type_category || "-")}`);
+          } else if (["hit_caused", "hit_taken", "dbno_caused", "dbno_taken", "kill", "death", "finish", "finished_taken"].includes(source.action)) {
             detailLines.push(source.has_verified_direction ? "방향 근거 공격자·피격자 좌표" : "방향 근거 없음");
           }
         }
@@ -12656,6 +13104,9 @@ _INDEX_HTML = """<!doctype html>
         if (relatedLabel) detailLines.push(`상대 ${relatedLabel}`);
       } else if (nearest.category === "engagement") {
         detailLines.push(`구간 ${formatReplayTime(source.start_time_seconds)}–${formatReplayTime(source.end_time_seconds)}`);
+        detailLines.push(source.evidence === "verified_opponent" || Number(source.opponent_count || 0) > 0
+          ? `근거 상대 계정 ${Number(source.opponent_count || 0)}명 확인`
+          : "근거 공격 기록만 확인 · 상대 미확인");
         detailLines.push(`사건 ${source.event_count || 0} / 발사 ${source.shots || 0} / 투척 ${source.throws || 0} / 명중 ${source.hits_caused || 0} / 피격 ${source.hits_taken || 0}`);
         detailLines.push(`킬 ${source.kills || 0} / 기절 ${source.dbnos_caused || 0} / 가한 피해 ${Number(source.damage_caused || 0).toFixed(1)}`);
         if ((source.weapons || []).length) detailLines.push(`무기 ${escapeHtml(source.weapons.join(", "))}`);
@@ -12686,27 +13137,28 @@ _INDEX_HTML = """<!doctype html>
       return activeTimelineEvents.find((event) => event.id === activeTimelineSelectedEventId) || null;
     }
 
-    function nearestTimelineEvent(time, windowSeconds) {
-      let best = null;
-      let bestDelta = Infinity;
-      for (const event of activeTimelineEvents) {
-        const delta = Math.abs(event.time - time);
-        if (delta <= windowSeconds && delta < bestDelta) {
-          best = event;
-          bestDelta = delta;
-        }
-      }
-      return best;
-    }
-
-    function seekTimelineEvent(eventId) {
+    function seekTimelineEvent(eventId, focusMap = false) {
       const event = activeTimelineEvents.find((item) => item.id === eventId);
       if (!event) return;
       pauseReplay();
       activeTimelineSelectedEventId = event.id;
+      activeTimelineCurrentEventId = event.id;
       activeTimelineTime = Math.max(0, Math.min(activeTimelineDuration, event.time));
+      if (focusMap) {
+        const mapPoint = timelineEventMapPoint(event);
+        replayPinnedMap = mapPoint ? { x_pct: Number(mapPoint.x_pct), y_pct: Number(mapPoint.y_pct) } : null;
+        replayPinnedEventId = replayPinnedMap ? event.id : null;
+        if (replayPinnedMap) {
+          timelineFollowPlayer.checked = false;
+          if (Number(timelineZoom.value || 1) < 2) timelineZoom.value = "2";
+        }
+      } else {
+        replayPinnedMap = null;
+        replayPinnedEventId = null;
+      }
       renderTimelineEventList();
       renderTimelineEventDetail(event);
+      renderTimelineNowEvent(event);
       renderReplayFrame();
     }
 
@@ -12741,8 +13193,10 @@ _INDEX_HTML = """<!doctype html>
           });
         }
       }
+      syncTimelineCurrentEvent();
       drawReplaySelectedEvent();
       drawReplayPlayer(activeTimeline.positions || []);
+      drawReplayCurrentEventCallout();
       drawReplayOverlay();
       renderTimelineEventDetail(null);
       timelineClock.textContent = `${formatReplayTime(activeTimelineTime)} · ${formatReplayKst(activeTimelineTime)} KST`;
@@ -12949,8 +13403,8 @@ _INDEX_HTML = """<!doctype html>
       for (const event of events) {
         if (eventTime(event) > activeTimelineTime || !event.map) continue;
         const point = canvasPoint(event.map);
-        replayCtx.fillStyle = actorColor;
-        replayCtx.strokeStyle = "rgba(255,255,255,0.92)";
+        replayCtx.fillStyle = "#54c8ff";
+        replayCtx.strokeStyle = actorColor;
         replayCtx.lineWidth = 2;
         replayCtx.beginPath();
         replayCtx.moveTo(point.x, point.y - 10);
@@ -13000,10 +13454,19 @@ _INDEX_HTML = """<!doctype html>
         }
         if (["hit_caused", "hit_taken"].includes(event.action)) {
           if (!timelineShowHits.checked || eventAge > 5) continue;
+          if (isNonOpponentDamage(event)) {
+            drawEnvironmentalDamageMarker(actorPoint);
+            continue;
+          }
           const start = event.action === "hit_taken" ? relatedPoint : actorPoint;
           const end = event.action === "hit_taken" ? actorPoint : relatedPoint;
           if (start && end) drawDirectionArrow(start, end, event.action === "hit_taken" ? "#ff6b6b" : "#ffd54f");
-          drawHitMarker(end || actorPoint, event.action === "hit_taken" ? "#ff6b6b" : "#ffd54f", event.is_headshot);
+          drawHitMarker(
+            end || actorPoint,
+            event.action === "hit_taken" ? "#ff6b6b" : "#ffd54f",
+            event.is_headshot,
+            event.action === "hit_taken",
+          );
           continue;
         }
         if (["dbno_caused", "dbno_taken"].includes(event.action)) {
@@ -13011,7 +13474,7 @@ _INDEX_HTML = """<!doctype html>
           const marker = event.action === "dbno_caused" ? (relatedPoint || actorPoint) : actorPoint;
           if (event.action === "dbno_caused" && relatedPoint) drawDirectionArrow(actorPoint, relatedPoint, "rgba(255,159,67,0.72)");
           if (event.action === "dbno_taken" && relatedPoint) drawDirectionArrow(relatedPoint, actorPoint, "rgba(255,95,109,0.72)");
-          drawDiamond(marker, event.action === "dbno_caused" ? "#ff9f43" : "#ff5f6d", actorColor);
+          drawDbnoMarker(marker, event.action === "dbno_caused", actorColor);
           continue;
         }
         if (isReviveAction(event.action)) {
@@ -13022,9 +13485,9 @@ _INDEX_HTML = """<!doctype html>
           if (relatedPoint) drawDirectionArrow(actorPoint, relatedPoint, "rgba(255,95,109,0.68)");
           drawCircle(marker, 11, "rgba(8,11,13,0.72)", actorColor);
           drawX(marker, event.is_headshot ? "#ff1744" : "#ff5f6d");
-        } else if (["death", "finished_taken", "dbno_taken"].includes(event.action)) {
+        } else if (["death", "finished_taken"].includes(event.action)) {
           if (!timelineShowKills.checked) continue;
-          drawCircle(actorPoint, 11, "rgba(8,11,13,0.82)", actorColor);
+          drawSquare(actorPoint, 22, "rgba(8,11,13,0.82)", actorColor);
           drawX(actorPoint, "#ff5f6d");
         }
       }
@@ -13039,13 +13502,15 @@ _INDEX_HTML = """<!doctype html>
         if (engagement.actor_is_self === false && !timelineShowTeam.checked) continue;
         const point = canvasPoint(engagement.map);
         const pulse = 18 + Math.sin(activeTimelineTime * 4) * 3;
-        replayCtx.strokeStyle = engagement.outcome === "won"
-          ? "rgba(75,208,160,0.75)"
-          : engagement.outcome === "lost"
-            ? "rgba(255,95,109,0.78)"
-            : "rgba(255,213,79,0.72)";
+        replayCtx.strokeStyle = engagement.evidence === "inferred_attack_activity"
+          ? "rgba(105,184,232,0.74)"
+          : engagement.outcome === "won"
+            ? "rgba(75,208,160,0.75)"
+            : engagement.outcome === "lost"
+              ? "rgba(255,95,109,0.78)"
+              : "rgba(255,213,79,0.72)";
         replayCtx.lineWidth = 3;
-        replayCtx.setLineDash([5, 5]);
+        replayCtx.setLineDash(engagement.evidence === "inferred_attack_activity" ? [2, 7] : [7, 5]);
         replayCtx.beginPath();
         replayCtx.arc(point.x, point.y, pulse, 0, Math.PI * 2);
         replayCtx.stroke();
@@ -13073,7 +13538,7 @@ _INDEX_HTML = """<!doctype html>
 
     function drawShotBurst(point, color, age) {
       const radius = 4 + Math.max(0, age) * 3;
-      replayCtx.strokeStyle = color;
+      replayCtx.strokeStyle = "#64d8ff";
       replayCtx.lineWidth = 2;
       replayCtx.beginPath();
       replayCtx.arc(point.x, point.y, Math.min(14, radius), 0, Math.PI * 2);
@@ -13098,12 +13563,20 @@ _INDEX_HTML = """<!doctype html>
       drawDiamond(point, "#ffb74d", color);
     }
 
-    function drawHitMarker(point, color, headshot) {
-      drawCircle(point, headshot ? 7 : 5, "rgba(8,11,13,0.72)", color);
+    function drawHitMarker(point, color, headshot, taken = false) {
+      if (taken) drawSquare(point, headshot ? 14 : 10, "rgba(8,11,13,0.72)", color);
+      else drawCircle(point, headshot ? 7 : 5, "rgba(8,11,13,0.72)", color);
       if (!headshot) return;
       replayCtx.fillStyle = color;
       replayCtx.font = "bold 11px Arial";
       replayCtx.fillText("H", point.x + 8, point.y - 7);
+    }
+
+    function drawEnvironmentalDamageMarker(point) {
+      drawSquare(point, 12, "rgba(8,11,13,0.82)", "#c3ccd6");
+      replayCtx.fillStyle = "#f5f7fa";
+      replayCtx.font = "bold 11px Arial";
+      replayCtx.fillText("!", point.x - 2, point.y + 4);
     }
 
     function drawDiamond(point, fill, stroke) {
@@ -13120,9 +13593,23 @@ _INDEX_HTML = """<!doctype html>
       replayCtx.stroke();
     }
 
+    function drawDbnoMarker(point, caused, actorColor) {
+      drawDiamond(point, caused ? "rgba(8,11,13,0.82)" : "#ff5f6d", caused ? "#ff9f43" : actorColor);
+      replayCtx.strokeStyle = caused ? "#ff9f43" : "#ffffff";
+      replayCtx.lineWidth = 3;
+      replayCtx.beginPath();
+      replayCtx.moveTo(point.x - 5, point.y);
+      replayCtx.lineTo(point.x + 5, point.y);
+      if (caused) {
+        replayCtx.moveTo(point.x, point.y - 5);
+        replayCtx.lineTo(point.x, point.y + 5);
+      }
+      replayCtx.stroke();
+    }
+
     function drawReplaySelectedEvent() {
       const selected = selectedTimelineEvent();
-      const mapPoint = selected?.source?.map;
+      const mapPoint = timelineEventMapPoint(selected);
       if (!mapPoint) return;
       const point = canvasPoint(mapPoint);
       replayCtx.strokeStyle = "rgba(255,255,255,0.95)";
@@ -13135,6 +13622,54 @@ _INDEX_HTML = """<!doctype html>
       replayCtx.beginPath();
       replayCtx.arc(point.x, point.y, 24, 0, Math.PI * 2);
       replayCtx.stroke();
+    }
+
+    function drawReplayCurrentEventCallout() {
+      const event = selectedTimelineEvent() || currentPlaybackTimelineEvent();
+      const mapPoint = timelineEventMapPoint(event);
+      if (!event || !mapPoint) return;
+      const point = canvasPoint(mapPoint);
+      if (!canvasPointVisible(point, 34)) return;
+      const presentation = timelineEventPresentation(event);
+      const text = `${presentation.name} · ${replayActorName(event.source || {})}`.slice(0, 34);
+      replayCtx.save();
+      replayCtx.font = "bold 13px Arial";
+      const width = Math.min(270, replayCtx.measureText(text).width + 38);
+      const x = Math.max(6, Math.min(replayCanvas.width - width - 6, point.x + 18));
+      const y = Math.max(34, Math.min(replayCanvas.height - 8, point.y - 18));
+      replayCtx.fillStyle = "rgba(8,11,13,0.9)";
+      replayCtx.fillRect(x, y - 24, width, 28);
+      replayCtx.strokeStyle = replayEventToneColor(presentation.tone);
+      replayCtx.lineWidth = 2;
+      replayCtx.strokeRect(x, y - 24, width, 28);
+      replayCtx.fillStyle = replayEventToneColor(presentation.tone);
+      replayCtx.fillText(presentation.symbol, x + 8, y - 5);
+      replayCtx.fillStyle = "#f5f7fa";
+      replayCtx.fillText(text, x + 27, y - 5);
+      replayCtx.restore();
+    }
+
+    function replayEventToneColor(tone) {
+      const colors = {
+        drop: "#54c8ff",
+        landing: "#ffeb3b",
+        shot: "#64d8ff",
+        throw: "#ffb74d",
+        attack: "#ffb74d",
+        "hit-caused": "#ffd54f",
+        "hit-taken": "#ff6b6b",
+        environment: "#c3ccd6",
+        "dbno-caused": "#ff9f43",
+        "dbno-taken": "#ff5f6d",
+        kill: "#ff5f6d",
+        death: "#ff8a80",
+        revive: "#45d6b0",
+        engagement: "#ffd54f",
+        activity: "#69b8e8",
+        plane: "#69b8e8",
+        care: "#ef9a9a",
+      };
+      return colors[tone] || "#cbd2d8";
     }
 
     function drawReplayPlayer(samples) {
@@ -13178,7 +13713,8 @@ _INDEX_HTML = """<!doctype html>
       replayCtx.fillStyle = "#c3ccd6";
       replayCtx.fillText(`${activeTimeline?.match?.map_name || "-"} · ${activeTimeline?.match?.game_mode || "-"} · ${formatReplayTime(activeTimelineTime)}`, 24, 60);
       replayCtx.fillText(`KST ${formatReplayKst(activeTimelineTime)} · ${current?.movement_label || "위치 대기"}${current?.vehicle_label ? ` (${current.vehicle_label})` : ""}`, 24, 84);
-      replayCtx.fillText(`확대 ${replayZoom().toFixed(1)}x · 추적 ${timelineFollowPlayer.checked ? "켜짐" : "꺼짐"}`, 24, 108);
+      const viewportMode = replayPinnedEventId ? "선택 사건" : timelineFollowPlayer.checked ? "플레이어" : "맵 중앙";
+      replayCtx.fillText(`확대 ${replayZoom().toFixed(1)}x · 화면 중심 ${viewportMode}`, 24, 108);
     }
 
     function formatReplayKst(seconds) {
@@ -13315,6 +13851,7 @@ _INDEX_HTML = """<!doctype html>
     }
 
     function replayViewportCenter() {
+      if (replayPinnedMap) return replayPinnedMap;
       if (timelineFollowPlayer?.checked && activeTimeline) {
         const current = interpolatedPosition(activeTimeline.positions || [], activeTimelineTime);
         if (current) return current;
@@ -13335,6 +13872,15 @@ _INDEX_HTML = """<!doctype html>
       replayCtx.lineWidth = 2;
       replayCtx.fill();
       replayCtx.stroke();
+    }
+
+    function drawSquare(point, size, fill, stroke) {
+      const half = size / 2;
+      replayCtx.fillStyle = fill;
+      replayCtx.strokeStyle = stroke;
+      replayCtx.lineWidth = 2;
+      replayCtx.fillRect(point.x - half, point.y - half, size, size);
+      replayCtx.strokeRect(point.x - half, point.y - half, size, size);
     }
 
     function drawX(point, color) {
@@ -13367,6 +13913,13 @@ _INDEX_HTML = """<!doctype html>
     }
 
     function playReplay() {
+      if (activeTimelineSelectedEventId || replayPinnedMap) {
+        activeTimelineSelectedEventId = null;
+        activeTimelineDetailKey = "";
+        replayPinnedMap = null;
+        replayPinnedEventId = null;
+        renderTimelineEventList();
+      }
       replayPlaying = true;
       replayLastFrameMs = performance.now();
       timelinePlayButton.textContent = "일시정지";
@@ -13398,8 +13951,13 @@ _INDEX_HTML = """<!doctype html>
       pauseReplay();
       activeTimelineTime = 0;
       activeTimelineSelectedEventId = null;
+      activeTimelineCurrentEventId = null;
+      activeTimelineDetailKey = "";
+      replayPinnedMap = null;
+      replayPinnedEventId = null;
       renderTimelineEventList();
       renderTimelineEventDetail(null);
+      renderTimelineNowEvent(null);
       renderReplayFrame();
     }
 
@@ -15052,16 +15610,50 @@ _INDEX_HTML = """<!doctype html>
     timelineResetButton.addEventListener("click", resetReplay);
     timelineScrubber.addEventListener("input", () => {
       activeTimelineSelectedEventId = null;
+      activeTimelineCurrentEventId = null;
+      activeTimelineDetailKey = "";
+      replayPinnedMap = null;
+      replayPinnedEventId = null;
       activeTimelineTime = Number(timelineScrubber.value || 0);
       renderTimelineEventList();
       renderReplayFrame();
     });
     timelineEventList.addEventListener("click", (event) => {
+      const mapButton = event.target instanceof Element
+        ? event.target.closest("button[data-timeline-map-event]")
+        : null;
+      if (mapButton) {
+        seekTimelineEvent(mapButton.dataset.timelineMapEvent || "", true);
+        return;
+      }
       const button = event.target instanceof Element
         ? event.target.closest("button[data-timeline-event]")
         : null;
       if (!button) return;
       seekTimelineEvent(button.dataset.timelineEvent || "");
+    });
+    timelineQuickEvents.addEventListener("click", (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("button[data-timeline-map-event]")
+        : null;
+      if (!button) return;
+      seekTimelineEvent(button.dataset.timelineMapEvent || "", true);
+    });
+    timelineTeamList.addEventListener("click", (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("button[data-timeline-actor]")
+        : null;
+      if (!button) return;
+      timelineActorFilter.value = button.dataset.timelineActor || "focus";
+      refreshTimelineEventExplorer();
+    });
+    timelineActorFilter.addEventListener("change", () => refreshTimelineEventExplorer());
+    timelineEventTypeFilter.addEventListener("change", () => refreshTimelineEventExplorer());
+    timelineEventFilterReset.addEventListener("click", () => {
+      timelineActorFilter.value = "focus";
+      timelineEventTypeFilter.value = "all";
+      timelineFollowEvents.checked = true;
+      refreshTimelineEventExplorer();
     });
     for (const toggle of [
       timelineShowPath,
@@ -15079,8 +15671,22 @@ _INDEX_HTML = """<!doctype html>
       timelineFollowPlayer,
     ]) {
       toggle.addEventListener("change", () => {
-        renderTimelineEventList();
-        renderReplayFrame();
+        if (toggle === timelineFollowPlayer) {
+          if (timelineFollowPlayer.checked) {
+            replayPinnedMap = null;
+            replayPinnedEventId = null;
+          }
+          renderReplayFrame();
+          return;
+        }
+        if (toggle === timelineShowPhase) {
+          renderReplayFrame();
+          return;
+        }
+        if (toggle === timelineShowTeam && !timelineShowTeam.checked && !["focus", "all"].includes(timelineActorFilter.value)) {
+          timelineActorFilter.value = "focus";
+        }
+        refreshTimelineEventExplorer({ clearSelection: false });
       });
     }
     timelineZoom.addEventListener("change", renderReplayFrame);

@@ -57,8 +57,11 @@ class ReplayArtifactCatalogTests(unittest.TestCase):
         self.assertFalse(is_timeline_playback_ready("player-timeline-v6"))
         self.assertFalse(is_timeline_playback_ready("player-timeline-v7"))
         self.assertFalse(is_timeline_playback_ready("player-timeline-v8"))
-        self.assertTrue(is_timeline_playback_ready("player-timeline-v9"))
-        self.assertTrue(is_timeline_playback_ready("player-timeline-v12"))
+        self.assertFalse(is_timeline_playback_ready("player-timeline-v9"))
+        self.assertFalse(is_timeline_playback_ready("player-timeline-v10"))
+        self.assertFalse(is_timeline_playback_ready("player-timeline-v11"))
+        self.assertFalse(is_timeline_playback_ready("player-timeline-v12"))
+        self.assertTrue(is_timeline_playback_ready("player-timeline-v13"))
 
         record = ReplayArtifactRecord(
             id=8,

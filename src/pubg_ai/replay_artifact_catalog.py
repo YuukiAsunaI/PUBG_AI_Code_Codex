@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 
-MIN_PLAYABLE_TIMELINE_VERSION = 9
+MIN_PLAYABLE_TIMELINE_VERSION = 13
 _TIMELINE_RENDERER_PATTERN = re.compile(r"^player-timeline-v(?P<version>\d+)$")
 
 

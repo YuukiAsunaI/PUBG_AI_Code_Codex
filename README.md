@@ -335,24 +335,27 @@ GET /replay/artifacts?artifact_type=&limit=50
 GET /replay/artifacts/{artifact_id}/file
 ```
 
-The local web app includes a 2D replay player that loads generated `player-timeline-v9` JSON artifacts, uses cached
+The local web app includes a 2D replay player that loads generated `player-timeline-v13` JSON artifacts, uses cached
 official map PNG assets as the canvas background when available, and renders movement, plane route, phase rings,
-landing, combat, care-package, and revive markers when telemetry has the related events. The player includes one
-time-sorted event list and a KST detail panel, so a shot, verified hit, DBNO, kill, death, revive, landing, or care
-package event can seek playback directly to that moment. Movement is classified as airborne, vehicle, on-foot, or
-DBNO for the tracked player and every available teammate track. Actor colors remain distinct while movement colors,
-combat symbols, and engagement rings keep event meaning consistent.
+landing, combat, care-package, and revive markers when telemetry has the related events. Its grouped legend uses
+shape, line pattern, text, and color together. The current-event strip, time-sorted event list, KST detail panel, actor
+and event-type filters, and major-location shortcuts make each marker inspectable without memorizing a timestamp.
+Every located event has a map button; drop start, landing, first verified engagement, inferred attack activity, hit,
+DBNO, kill, and death shortcuts seek and center the map directly. Movement is classified as airborne, vehicle,
+on-foot, or DBNO for the tracked player and every available teammate track.
 
 Attack normalization requires a non-empty PUBG weapon item ID. Firearm shots, throwable uses, melee attacks, and
 other attacks are classified separately from item category/subcategory with item-code fallbacks for partial older
 events. Empty weapon placeholder attacks remain in immutable raw telemetry but are not presented as measured shots.
 
 Timeline JSON carries the tracked player's team roster, teammate position/combat tracks, registered-player emphasis,
-engagement clusters, and vehicle identity when telemetry provides it. A shot always gets a location marker. A
-direction line is only marked as verified when the telemetry event contains both attacker and target coordinates;
-the PUBG telemetry schema does not expose a general aim vector for a missed shot, so the replay never invents one.
-The replay view also supports layer toggles, map zoom, tracked-player follow mode, player/match filtering, and a
-scrollable event inspector for dense fights.
+engagement clusters, and vehicle identity when telemetry provides it. Opponent-backed engagements are separated from
+attack-only activity; environmental/self damage and teammate damage cannot establish opponent evidence. Resolution
+causes such as Blue Zone remain visible events but are not mislabeled as weapons. A shot always gets a location
+marker. A direction line is only marked as verified when the telemetry event contains both attacker and target
+coordinates; the PUBG telemetry schema does not expose a general aim vector for a missed shot, so the replay never
+invents one. Initial transport-aircraft points are identified from the plane event window, vehicle state, and altitude
+together because `common.isGame == 0.1` can remain present after the player has jumped.
 
 Run the Discord bot MVP:
 
