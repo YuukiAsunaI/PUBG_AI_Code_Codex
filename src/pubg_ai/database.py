@@ -9,7 +9,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 27
 
 
 class DatabaseError(RuntimeError):
@@ -78,13 +78,20 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 applied += 1
             if _ensure_player_position_vehicle_columns(cursor, config.database):
                 applied += 1
+            if _ensure_player_item_source_columns(cursor, config.database):
+                applied += 1
+            if _ensure_player_activity_heal_columns(cursor, config.database):
+                applied += 1
             cursor.execute(
                 """
                 INSERT INTO schema_migrations (version, description, applied_at_kst)
                 VALUES (%s, %s, NOW(6))
                 ON DUPLICATE KEY UPDATE description = VALUES(description)
                 """,
-                (SCHEMA_VERSION, "team combat replay events and vehicle-aware position samples"),
+                (
+                    SCHEMA_VERSION,
+                    "item and passive healing separation in player activity summaries",
+                ),
             )
             applied += 1
     finally:
@@ -1114,6 +1121,9 @@ def schema_statements() -> list[str]:
             picked_up_quantity INT NOT NULL DEFAULT 0,
             loot_box_pickup_events INT NOT NULL DEFAULT 0,
             carepackage_pickup_events INT NOT NULL DEFAULT 0,
+            custom_package_pickup_events INT NOT NULL DEFAULT 0,
+            vehicle_trunk_pickup_events INT NOT NULL DEFAULT 0,
+            vehicle_trunk_put_events INT NOT NULL DEFAULT 0,
             dropped_events INT NOT NULL DEFAULT 0,
             dropped_quantity INT NOT NULL DEFAULT 0,
             used_events INT NOT NULL DEFAULT 0,
@@ -1126,6 +1136,116 @@ def schema_statements() -> list[str]:
             UNIQUE KEY uq_player_item_match_stats (match_id, account_id, item_code),
             KEY idx_player_item_stats_account_item (account_id, item_code, match_id),
             CONSTRAINT fk_player_item_match_stats_match
+                FOREIGN KEY (match_id) REFERENCES matches(match_id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS player_activity_events (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            match_id VARCHAR(191) NOT NULL,
+            account_id VARCHAR(128) NOT NULL,
+            related_account_id VARCHAR(128) NULL,
+            event_index INT NOT NULL,
+            event_type VARCHAR(64) NOT NULL,
+            action VARCHAR(64) NOT NULL,
+            role VARCHAR(32) NOT NULL,
+            event_at_kst DATETIME(6) NULL,
+            common_is_game FLOAT NULL,
+            item_code VARCHAR(191) NULL,
+            item_name_ko VARCHAR(191) NULL,
+            amount FLOAT NULL,
+            damage FLOAT NULL,
+            distance_m FLOAT NULL,
+            swim_distance_m FLOAT NULL,
+            max_swim_depth FLOAT NULL,
+            vehicle_type VARCHAR(64) NULL,
+            vehicle_id VARCHAR(128) NULL,
+            vehicle_unique_id BIGINT NULL,
+            seat_index INT NULL,
+            max_speed FLOAT NULL,
+            object_type VARCHAR(128) NULL,
+            object_status VARCHAR(128) NULL,
+            is_ledge_grab TINYINT(1) NULL,
+            is_vault_on_vehicle TINYINT(1) NULL,
+            use_trauma_bag TINYINT(1) NULL,
+            location_x FLOAT NULL,
+            location_y FLOAT NULL,
+            location_z FLOAT NULL,
+            metadata JSON NULL,
+            raw_event JSON NULL,
+            updated_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_player_activity_events (
+                match_id,
+                account_id,
+                event_index,
+                action
+            ),
+            KEY idx_player_activity_account_action (account_id, action, match_id),
+            KEY idx_player_activity_related (related_account_id, match_id),
+            KEY idx_player_activity_event_type (event_type, match_id),
+            CONSTRAINT fk_player_activity_events_match
+                FOREIGN KEY (match_id) REFERENCES matches(match_id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS player_match_activity_summaries (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            match_id VARCHAR(191) NOT NULL,
+            account_id VARCHAR(128) NOT NULL,
+            heal_events INT NOT NULL DEFAULT 0,
+            heal_amount FLOAT NOT NULL DEFAULT 0,
+            item_heal_events INT NOT NULL DEFAULT 0,
+            item_heal_amount FLOAT NOT NULL DEFAULT 0,
+            passive_heal_events INT NOT NULL DEFAULT 0,
+            passive_heal_amount FLOAT NOT NULL DEFAULT 0,
+            throwable_uses INT NOT NULL DEFAULT 0,
+            flare_uses INT NOT NULL DEFAULT 0,
+            revives_caused INT NOT NULL DEFAULT 0,
+            revives_received INT NOT NULL DEFAULT 0,
+            trauma_bag_revives INT NOT NULL DEFAULT 0,
+            carry_events INT NOT NULL DEFAULT 0,
+            vehicle_rides INT NOT NULL DEFAULT 0,
+            vehicle_leaves INT NOT NULL DEFAULT 0,
+            vehicle_distance_m FLOAT NOT NULL DEFAULT 0,
+            vehicle_max_speed FLOAT NOT NULL DEFAULT 0,
+            vehicle_damage FLOAT NOT NULL DEFAULT 0,
+            vehicle_destroys INT NOT NULL DEFAULT 0,
+            wheel_destroys INT NOT NULL DEFAULT 0,
+            vaults INT NOT NULL DEFAULT 0,
+            ledge_grabs INT NOT NULL DEFAULT 0,
+            vehicle_vaults INT NOT NULL DEFAULT 0,
+            swim_sessions INT NOT NULL DEFAULT 0,
+            swim_distance_m FLOAT NOT NULL DEFAULT 0,
+            armor_destroys_caused INT NOT NULL DEFAULT 0,
+            armor_destroys_taken INT NOT NULL DEFAULT 0,
+            object_interactions INT NOT NULL DEFAULT 0,
+            object_destroys INT NOT NULL DEFAULT 0,
+            emergency_pickup_calls INT NOT NULL DEFAULT 0,
+            emergency_pickup_rides INT NOT NULL DEFAULT 0,
+            redeploys INT NOT NULL DEFAULT 0,
+            normalized_event_count INT NOT NULL DEFAULT 0,
+            updated_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_player_match_activity_summaries (match_id, account_id),
+            KEY idx_player_match_activity_account (account_id, match_id),
+            CONSTRAINT fk_player_match_activity_summaries_match
+                FOREIGN KEY (match_id) REFERENCES matches(match_id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS match_telemetry_event_counts (
+            match_id VARCHAR(191) NOT NULL,
+            event_type VARCHAR(64) NOT NULL,
+            event_count INT UNSIGNED NOT NULL DEFAULT 0,
+            tracked_event_count INT UNSIGNED NOT NULL DEFAULT 0,
+            normalized_event_count INT UNSIGNED NOT NULL DEFAULT 0,
+            parser_version VARCHAR(64) NOT NULL,
+            updated_at_kst DATETIME(6) NOT NULL,
+            PRIMARY KEY (match_id, event_type),
+            KEY idx_telemetry_event_counts_type (event_type, match_id),
+            CONSTRAINT fk_telemetry_event_counts_match
                 FOREIGN KEY (match_id) REFERENCES matches(match_id)
                 ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -1615,6 +1735,79 @@ def _ensure_player_position_vehicle_columns(cursor: Any, database: str) -> bool:
 
     clauses = ", ".join(f"ADD COLUMN {name} {definition}" for name, definition in missing)
     cursor.execute(f"ALTER TABLE player_position_samples {clauses}")
+    return True
+
+
+def _ensure_player_item_source_columns(cursor: Any, database: str) -> bool:
+    expected = {
+        "custom_package_pickup_events": (
+            "INT NOT NULL DEFAULT 0 AFTER carepackage_pickup_events"
+        ),
+        "vehicle_trunk_pickup_events": (
+            "INT NOT NULL DEFAULT 0 AFTER custom_package_pickup_events"
+        ),
+        "vehicle_trunk_put_events": (
+            "INT NOT NULL DEFAULT 0 AFTER vehicle_trunk_pickup_events"
+        ),
+    }
+    cursor.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = %s
+          AND table_name = 'player_item_match_stats'
+          AND column_name IN (
+              'custom_package_pickup_events',
+              'vehicle_trunk_pickup_events',
+              'vehicle_trunk_put_events'
+          )
+        """,
+        (database,),
+    )
+    existing = {
+        str(row.get("column_name") or row.get("COLUMN_NAME") or "")
+        for row in cursor.fetchall()
+    }
+    missing = [(name, definition) for name, definition in expected.items() if name not in existing]
+    if not missing:
+        return False
+
+    clauses = ", ".join(f"ADD COLUMN {name} {definition}" for name, definition in missing)
+    cursor.execute(f"ALTER TABLE player_item_match_stats {clauses}")
+    return True
+
+
+def _ensure_player_activity_heal_columns(cursor: Any, database: str) -> bool:
+    expected = {
+        "item_heal_events": "INT NOT NULL DEFAULT 0 AFTER heal_amount",
+        "item_heal_amount": "FLOAT NOT NULL DEFAULT 0 AFTER item_heal_events",
+        "passive_heal_events": "INT NOT NULL DEFAULT 0 AFTER item_heal_amount",
+        "passive_heal_amount": "FLOAT NOT NULL DEFAULT 0 AFTER passive_heal_events",
+    }
+    cursor.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = %s
+          AND table_name = 'player_match_activity_summaries'
+          AND column_name IN (
+              'item_heal_events',
+              'item_heal_amount',
+              'passive_heal_events',
+              'passive_heal_amount'
+          )
+        """,
+        (database,),
+    )
+    existing = {
+        str(row.get("column_name") or row.get("COLUMN_NAME") or "")
+        for row in cursor.fetchall()
+    }
+    missing = [(name, definition) for name, definition in expected.items() if name not in existing]
+    if not missing:
+        return False
+    clauses = ", ".join(f"ADD COLUMN {name} {definition}" for name, definition in missing)
+    cursor.execute(f"ALTER TABLE player_match_activity_summaries {clauses}")
     return True
 
 

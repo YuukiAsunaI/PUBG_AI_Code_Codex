@@ -19,6 +19,8 @@ NORMALIZED_PLAYER_TABLES = (
     "player_weapon_match_stats",
     "player_item_events",
     "player_item_match_stats",
+    "player_activity_events",
+    "player_match_activity_summaries",
     "player_position_samples",
     "player_landing_events",
     "player_movement_summaries",
@@ -34,6 +36,7 @@ SHARED_MATCH_TABLES = (
     "match_care_package_events",
     "match_plane_routes",
     "match_phase_events",
+    "match_telemetry_event_counts",
 )
 
 RAW_PAYLOAD_TABLES = (

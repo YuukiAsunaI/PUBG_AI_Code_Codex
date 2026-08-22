@@ -23,7 +23,7 @@ from pubg_ai.data_deletion_requests import DataDeletionRequest
 from pubg_ai.time_utils import now_kst, to_kst
 
 
-DRY_RUN_CONTRACT_VERSION = "deletion-dry-run-v2"
+DRY_RUN_CONTRACT_VERSION = "deletion-dry-run-v3"
 DRY_RUN_REQUEST_STATUSES = {"approved"}
 EXECUTION_BLOCKERS = (
     "executor_not_implemented",
@@ -44,12 +44,14 @@ _PLAYER_TABLE_ORDER = {
     "player_position_samples": 4,
     "player_landing_events": 5,
     "player_movement_summaries": 6,
-    "player_item_events": 7,
-    "player_item_match_stats": 8,
-    "player_weapon_match_stats": 9,
-    "player_match_combat_summaries": 10,
-    "match_participants": 11,
-    "raw_player_snapshots": 12,
+    "player_activity_events": 7,
+    "player_match_activity_summaries": 8,
+    "player_item_events": 9,
+    "player_item_match_stats": 10,
+    "player_weapon_match_stats": 11,
+    "player_match_combat_summaries": 12,
+    "match_participants": 13,
+    "raw_player_snapshots": 14,
 }
 AUDIT_TABLE_EXCLUSIONS = (
     "data_deletion_requests",

@@ -14,6 +14,7 @@ from pubg_ai.raw_storage import RawPayloadStore
 from pubg_ai.replay_storage import ReplayArtifactStore
 from pubg_ai.replay_timeline_builder import ReplayTimelineProcessor
 from pubg_ai.telemetry_combat_processor import TelemetryCombatProcessor
+from pubg_ai.telemetry_activity_processor import TelemetryActivityProcessor
 from pubg_ai.telemetry_item_processor import TelemetryItemProcessor
 from pubg_ai.telemetry_movement_processor import TelemetryMovementProcessor
 from pubg_ai.time_utils import isoformat_kst, now_kst
@@ -27,6 +28,7 @@ class PostProcessingWorkerError(RuntimeError):
 @dataclass(frozen=True)
 class PostProcessingWorkerOptions:
     combat_limit: int = 10
+    activity_limit: int = 10
     item_limit: int = 10
     movement_limit: int = 10
     loadout_limit: int = 50
@@ -46,6 +48,7 @@ class PostProcessingCycleResult:
     duration_seconds: float
     poll_interval_seconds: int
     combat: dict[str, Any] | None
+    activity: dict[str, Any] | None
     items: dict[str, Any] | None
     movement: dict[str, Any] | None
     loadout_snapshots: dict[str, Any] | None
@@ -95,6 +98,7 @@ def run_post_processing_cycle(
     raw_store_factory: RawStoreFactory = RawPayloadStore,
     replay_store_factory: ReplayStoreFactory = ReplayArtifactStore,
     combat_processor_factory: ProcessorFactory = TelemetryCombatProcessor,
+    activity_processor_factory: ProcessorFactory = TelemetryActivityProcessor,
     item_processor_factory: ProcessorFactory = TelemetryItemProcessor,
     movement_processor_factory: ProcessorFactory = TelemetryMovementProcessor,
     loadout_processor_factory: ProcessorFactory = LoadoutSnapshotProcessor,
@@ -108,6 +112,7 @@ def run_post_processing_cycle(
     started = now_kst()
     errors: list[str] = []
     combat: dict[str, Any] | None = None
+    activity: dict[str, Any] | None = None
     items: dict[str, Any] | None = None
     movement: dict[str, Any] | None = None
     loadout_snapshots: dict[str, Any] | None = None
@@ -122,6 +127,7 @@ def run_post_processing_cycle(
             duration_seconds=(finished - started).total_seconds(),
             poll_interval_seconds=config.app.collector_poll_interval_seconds,
             combat=combat,
+            activity=activity,
             items=items,
             movement=movement,
             loadout_snapshots=loadout_snapshots,
@@ -166,6 +172,15 @@ def run_post_processing_cycle(
             _append_reported_failures(errors, "combat", combat, "failed_payloads")
         except Exception as exc:
             errors.append(_safe_error("combat", exc))
+
+        try:
+            activity = activity_processor_factory(connection, raw_store).process_raw_telemetry(
+                limit=worker_options.activity_limit,
+                force=worker_options.force,
+            ).to_record()
+            _append_reported_failures(errors, "activity", activity, "failed_payloads")
+        except Exception as exc:
+            errors.append(_safe_error("activity", exc))
 
         try:
             items = item_processor_factory(connection, raw_store).process_raw_telemetry(
@@ -235,6 +250,7 @@ class PostProcessingWorkerController:
         raw_store_factory: RawStoreFactory = RawPayloadStore,
         replay_store_factory: ReplayStoreFactory = ReplayArtifactStore,
         combat_processor_factory: ProcessorFactory = TelemetryCombatProcessor,
+        activity_processor_factory: ProcessorFactory = TelemetryActivityProcessor,
         item_processor_factory: ProcessorFactory = TelemetryItemProcessor,
         movement_processor_factory: ProcessorFactory = TelemetryMovementProcessor,
         loadout_processor_factory: ProcessorFactory = LoadoutSnapshotProcessor,
@@ -248,6 +264,7 @@ class PostProcessingWorkerController:
         self._raw_store_factory = raw_store_factory
         self._replay_store_factory = replay_store_factory
         self._combat_processor_factory = combat_processor_factory
+        self._activity_processor_factory = activity_processor_factory
         self._item_processor_factory = item_processor_factory
         self._movement_processor_factory = movement_processor_factory
         self._loadout_processor_factory = loadout_processor_factory
@@ -331,6 +348,7 @@ class PostProcessingWorkerController:
                         raw_store_factory=self._raw_store_factory,
                         replay_store_factory=self._replay_store_factory,
                         combat_processor_factory=self._combat_processor_factory,
+                        activity_processor_factory=self._activity_processor_factory,
                         item_processor_factory=self._item_processor_factory,
                         movement_processor_factory=self._movement_processor_factory,
                         loadout_processor_factory=self._loadout_processor_factory,
@@ -413,6 +431,7 @@ class PostProcessingWorkerController:
 def _validate_options(options: PostProcessingWorkerOptions) -> None:
     for label, value, maximum in (
         ("combat_limit", options.combat_limit, 200),
+        ("activity_limit", options.activity_limit, 200),
         ("item_limit", options.item_limit, 200),
         ("movement_limit", options.movement_limit, 200),
         ("loadout_limit", options.loadout_limit, 500),

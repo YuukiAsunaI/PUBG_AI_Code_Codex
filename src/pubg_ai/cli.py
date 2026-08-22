@@ -9,6 +9,7 @@ from typing import Any, Callable
 
 from pubg_ai.collector_worker import CollectorWorkerOptions, run_collector_cycle
 from pubg_ai.config import RuntimeConfig, load_dotenv_values
+from pubg_ai.data_quality import audit_player_intelligence
 from pubg_ai.database import connect_mysql, count_tables, initialize_database
 from pubg_ai.discord_acceptance import (
     DISCORD_ACCEPTANCE_CONFIRMATION,
@@ -46,6 +47,7 @@ from pubg_ai.raw_storage import RawPayloadStore
 from pubg_ai.replay_storage import ReplayArtifactStore
 from pubg_ai.replay_timeline_builder import ReplayTimelineProcessor
 from pubg_ai.telemetry_combat_processor import TelemetryCombatProcessor
+from pubg_ai.telemetry_activity_processor import TelemetryActivityProcessor
 from pubg_ai.telemetry_item_processor import TelemetryItemProcessor
 from pubg_ai.telemetry_job_processor import TelemetryJobProcessor
 from pubg_ai.telemetry_movement_processor import TelemetryMovementProcessor
@@ -60,6 +62,10 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("config-status", help="Print safe runtime configuration status.")
     subparsers.add_parser("init-db", help="Create the MySQL database and MVP schema tables.")
     subparsers.add_parser("db-status", help="Check MySQL connection and table count.")
+    subparsers.add_parser(
+        "audit-player-intelligence",
+        help="Validate parser coverage and normalized player-intelligence data integrity.",
+    )
 
     lookup_parser = subparsers.add_parser("lookup-player", help="Resolve PUBG nickname to accountId.")
     lookup_parser.add_argument("nickname")
@@ -196,6 +202,13 @@ def main(argv: list[str] | None = None) -> int:
     parse_combat_parser.add_argument("--limit", default=10, type=int)
     parse_combat_parser.add_argument("--force", action="store_true", help="Reparse already summarized matches.")
 
+    parse_activity_parser = subparsers.add_parser(
+        "parse-telemetry-activity",
+        help="Parse support, throwable, vehicle, mobility, and interaction telemetry.",
+    )
+    parse_activity_parser.add_argument("--limit", default=10, type=int)
+    parse_activity_parser.add_argument("--force", action="store_true")
+
     parse_items_parser = subparsers.add_parser(
         "parse-telemetry-items",
         help="Parse raw telemetry files into registered-player item event and summary tables.",
@@ -265,6 +278,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Run the automatic telemetry parser and replay artifact worker loop.",
     )
     post_process_parser.add_argument("--combat-limit", default=10, type=int)
+    post_process_parser.add_argument("--activity-limit", default=10, type=int)
     post_process_parser.add_argument("--item-limit", default=10, type=int)
     post_process_parser.add_argument("--movement-limit", default=10, type=int)
     post_process_parser.add_argument("--loadout-limit", default=50, type=int)
@@ -750,6 +764,30 @@ def main(argv: list[str] | None = None) -> int:
         _run_web_app(host=args.host, port=args.port, base_dir=base_dir, env_file=args.env_file)
         return 0
 
+    if args.command == "audit-player-intelligence":
+        connection = connect_mysql(config.database)
+        try:
+            audit = audit_player_intelligence(connection)
+            _print_json({"player_intelligence_audit": audit.to_record()})
+        finally:
+            connection.close()
+        return 0 if audit.passed else 1
+
+    if args.command == "parse-telemetry-activity":
+        connection = connect_mysql(config.database)
+        try:
+            result = TelemetryActivityProcessor(
+                connection,
+                RawPayloadStore(
+                    config.app.raw_data_dir,
+                    compression=config.app.raw_compression,  # type: ignore[arg-type]
+                ),
+            ).process_raw_telemetry(limit=args.limit, force=args.force)
+            _print_json(result.to_record())
+        finally:
+            connection.close()
+        return 0
+
     if args.command == "run-desktop":
         from pubg_ai.desktop import DesktopLaunchError, run_desktop_app
 
@@ -787,6 +825,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "run-post-processing":
         options = PostProcessingWorkerOptions(
             combat_limit=args.combat_limit,
+            activity_limit=args.activity_limit,
             item_limit=args.item_limit,
             movement_limit=args.movement_limit,
             loadout_limit=args.loadout_limit,

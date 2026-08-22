@@ -16,6 +16,7 @@ from pubg_ai.raw_storage import RawPayloadStore
 from pubg_ai.telemetry_combat_processor import TelemetryCombatProcessor
 from pubg_ai.telemetry_processing_state import (
     list_pending_telemetry_payloads,
+    parser_version_rank,
     pending_tracked_account_ids,
     upsert_processing_states,
 )
@@ -98,7 +99,10 @@ class ProcessingStateTests(unittest.TestCase):
         self.assertEqual(accounts, {"account-late"})
         sql = "\n".join(query for query, _ in connection.cursor_obj.executed)
         self.assertIn("player_telemetry_processing_states", sql)
-        self.assertIn("states.parser_version <> %s", sql)
+        self.assertIn("SUBSTRING_INDEX(states.parser_version, '-v', -1)", sql)
+        self.assertIn("< %s", sql)
+        self.assertEqual(connection.cursor_obj.executed[0][1], ("items", 1, 10))
+        self.assertEqual(connection.cursor_obj.executed[1][1], ("match-1", "items", "steam", 1))
 
     def test_zero_output_is_still_marked_complete(self) -> None:
         connection = RoutingConnection()
@@ -114,7 +118,14 @@ class ProcessingStateTests(unittest.TestCase):
 
         query, rows = connection.cursor_obj.executed_many[-1]
         self.assertIn("player_telemetry_processing_states", query)
+        self.assertIn("VALUES(parser_version)", query)
+        self.assertIn(">= CAST(SUBSTRING_INDEX(parser_version", query)
         self.assertEqual(rows[0][4], 0)
+
+    def test_parser_version_rank_is_monotonic_and_rejects_unknown_format(self) -> None:
+        self.assertLess(parser_version_rank("items-v3"), parser_version_rank("items-v4"))
+        self.assertEqual(parser_version_rank("items-v12"), 12)
+        self.assertEqual(parser_version_rank("legacy"), 0)
 
 
 class QueueUniquenessTests(unittest.TestCase):

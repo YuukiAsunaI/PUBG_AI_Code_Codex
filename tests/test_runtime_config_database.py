@@ -99,6 +99,9 @@ class DatabaseSchemaTests(unittest.TestCase):
             "player_weapon_match_stats",
             "player_item_events",
             "player_item_match_stats",
+            "player_activity_events",
+            "player_match_activity_summaries",
+            "match_telemetry_event_counts",
             "player_position_samples",
             "player_landing_events",
             "player_movement_summaries",
@@ -114,10 +117,15 @@ class DatabaseSchemaTests(unittest.TestCase):
         ]:
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table_name}", schema)
 
-        self.assertEqual(SCHEMA_VERSION, 25)
+        self.assertEqual(SCHEMA_VERSION, 27)
         self.assertIn("vehicle_type VARCHAR(64)", schema)
         self.assertIn("vehicle_id VARCHAR(128)", schema)
         self.assertIn("vehicle_unique_id BIGINT", schema)
+        self.assertIn("custom_package_pickup_events INT", schema)
+        self.assertIn("vehicle_trunk_pickup_events INT", schema)
+        self.assertIn("vehicle_trunk_put_events INT", schema)
+        self.assertIn("item_heal_amount FLOAT", schema)
+        self.assertIn("passive_heal_amount FLOAT", schema)
         self.assertIn(
             "artifact_name,\n                account_id,\n                renderer_version",
             schema,

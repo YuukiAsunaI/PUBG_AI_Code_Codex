@@ -30,6 +30,7 @@ from pubg_ai.alert_history import (
 )
 from pubg_ai.collector_worker import CollectorWorkerController, CollectorWorkerError, CollectorWorkerOptions
 from pubg_ai.config import RuntimeConfig, load_dotenv_values
+from pubg_ai.data_quality import audit_player_intelligence
 from pubg_ai.data_deletion_backup import (
     DataDeletionBackupError,
     DataDeletionBackupService,
@@ -113,6 +114,8 @@ from pubg_ai.operational_drills import (
 )
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.match_job_processor import MatchJobProcessor
+from pubg_ai.metric_catalog import metric_catalog_records
+from pubg_ai.player_intelligence import PlayerIntelligenceService
 from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry
 from pubg_ai.player_rankings import PlayerRankingService
 from pubg_ai.post_processing_worker import (
@@ -134,6 +137,8 @@ from pubg_ai.replay_artifact_catalog import get_replay_artifact, list_replay_art
 from pubg_ai.replay_storage import ReplayArtifactStore, ReplayStorageError
 from pubg_ai.replay_timeline_builder import ReplayTimelineProcessor
 from pubg_ai.telemetry_combat_processor import TelemetryCombatProcessor
+from pubg_ai.telemetry_activity_processor import TelemetryActivityProcessor
+from pubg_ai.telemetry_event_catalog import telemetry_event_catalog_records
 from pubg_ai.telemetry_item_processor import TelemetryItemProcessor
 from pubg_ai.telemetry_job_processor import TelemetryJobProcessor
 from pubg_ai.telemetry_movement_processor import TelemetryMovementProcessor
@@ -414,6 +419,7 @@ class CollectorWorkerStartRequest(BaseModel):
 
 class PostProcessingWorkerStartRequest(BaseModel):
     combat_limit: int = Field(default=10, ge=1, le=200)
+    activity_limit: int = Field(default=10, ge=1, le=200)
     item_limit: int = Field(default=10, ge=1, le=200)
     movement_limit: int = Field(default=10, ge=1, le=200)
     loadout_limit: int = Field(default=50, ge=1, le=500)
@@ -1066,6 +1072,7 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
             state = post_processing_worker.start(
                 PostProcessingWorkerOptions(
                     combat_limit=request.combat_limit,
+                    activity_limit=request.activity_limit,
                     item_limit=request.item_limit,
                     movement_limit=request.movement_limit,
                     loadout_limit=request.loadout_limit,
@@ -1114,6 +1121,15 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
         finally:
             connection.close()
         return {"operational_drill_runs": [record.to_record() for record in records]}
+
+    @app.get("/operations/player-intelligence-audit")
+    def player_intelligence_data_quality_audit() -> dict[str, Any]:
+        connection = connect_mysql(current_config().database)
+        try:
+            audit = audit_player_intelligence(connection)
+            return {"player_intelligence_audit": audit.to_record()}
+        finally:
+            connection.close()
 
     @app.get("/workers/runs")
     def worker_runs(
@@ -2360,6 +2376,72 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
         finally:
             connection.close()
 
+    @app.get("/analytics/metrics")
+    def analytics_metrics(category: str | None = None) -> dict[str, Any]:
+        return {"metrics": metric_catalog_records(category=category)}
+
+    @app.get("/analytics/telemetry-events")
+    def analytics_telemetry_events() -> dict[str, Any]:
+        return {"events": telemetry_event_catalog_records()}
+
+    @app.get("/players/intelligence")
+    def player_intelligence(
+        shard: str = "steam",
+        name: str | None = None,
+        account_id: str | None = None,
+        game_mode: str | None = None,
+        team_mode: str | None = None,
+        perspective: str | None = None,
+        match_type: str | None = None,
+        map_name: str | None = None,
+        season_state: str | None = None,
+        is_custom_match: str | None = None,
+        year: int | None = Query(default=None, ge=2000, le=2100),
+        quarter: int | None = Query(default=None, ge=1, le=4),
+        month: int | None = Query(default=None, ge=1, le=12),
+        exact_date_kst: str | None = None,
+        hour: int | None = Query(default=None, ge=0, le=23),
+        from_date_kst: str | None = None,
+        to_date_kst: str | None = None,
+        trend_limit: int = Query(default=365, ge=1, le=1000),
+    ) -> dict[str, Any]:
+        if not name and not account_id:
+            raise HTTPException(status_code=400, detail="name or account_id is required.")
+        try:
+            filters = PlayerTrendFilters(
+                game_mode=game_mode,
+                team_mode=team_mode,
+                perspective=perspective,
+                match_type=match_type,
+                map_name=map_name,
+                season_state=season_state,
+                is_custom_match=parse_optional_bool(is_custom_match, "is_custom_match"),
+                year=year,
+                quarter=quarter,
+                month=month,
+                exact_date_kst=parse_trend_date(exact_date_kst, "exact_date_kst"),
+                hour=hour,
+                from_date_kst=parse_trend_date(from_date_kst, "from_date_kst"),
+                to_date_kst=parse_trend_date(to_date_kst, "to_date_kst"),
+            ).normalized()
+            connection = connect_mysql(config.database)
+            try:
+                report = PlayerIntelligenceService(connection).get_report(
+                    shard=shard,
+                    account_id=account_id,
+                    name=name,
+                    global_scope=True,
+                    filters=filters,
+                    trend_limit=trend_limit,
+                )
+            finally:
+                connection.close()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if report is None:
+            raise HTTPException(status_code=404, detail="registered player intelligence not found.")
+        return {"intelligence": report.to_record()}
+
     @app.get("/players/catalog")
     def player_catalog(
         shard: str = "steam",
@@ -3360,6 +3442,18 @@ _INDEX_HTML = """<!doctype html>
     td { overflow-wrap: anywhere; }
     .actions { display: flex; gap: 8px; justify-content: flex-end; }
     .status { color: var(--muted); font-size: 13px; }
+    .section-heading-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .section-heading-row h2 { margin-bottom: 5px; }
+    .data-quality-checks { min-width: 720px; table-layout: auto; }
+    .data-quality-checks th:nth-child(1) { width: 92px; }
+    .data-quality-checks th:nth-child(3),
+    .data-quality-checks th:nth-child(4) { width: 120px; }
     .recommendation-line {
       display: flex;
       align-items: center;
@@ -4477,6 +4571,137 @@ _INDEX_HTML = """<!doctype html>
       overflow-wrap: anywhere;
     }
     .analysis-player-context button { flex: 0 0 auto; }
+    .intelligence-view-toolbar {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 14px;
+      padding: 10px 0;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+    .intelligence-view-toolbar .segmented-control { flex-wrap: wrap; }
+    .intelligence-chart-options {
+      display: flex;
+      align-items: end;
+      gap: 8px;
+    }
+    .intelligence-chart-options label,
+    .intelligence-breakdown-option { min-width: 150px; }
+    .intelligence-status {
+      display: block;
+      color: var(--text);
+      line-height: 1.45;
+    }
+    .intelligence-quality-strip {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 12px;
+      padding: 10px 12px;
+      border-left: 3px solid var(--accent);
+      background: #0d1714;
+    }
+    .intelligence-quality-strip.warning {
+      border-left-color: var(--warning);
+      background: #18160d;
+    }
+    .intelligence-quality-strip.error {
+      border-left-color: var(--danger);
+      background: #1a1012;
+    }
+    .intelligence-quality-strip strong { display: block; color: var(--text); }
+    .intelligence-quality-strip small { color: var(--muted); }
+    .intelligence-quality-strip output {
+      flex: 0 0 auto;
+      color: var(--accent);
+      font-weight: 800;
+      font-size: 17px;
+    }
+    .intelligence-kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .intelligence-kpi {
+      min-width: 0;
+      padding: 11px 12px;
+      border: 1px solid var(--line);
+      border-left: 2px solid #67b7dc;
+      border-radius: 5px;
+      background: #0e1214;
+    }
+    .intelligence-kpi:nth-child(3n + 2) { border-left-color: var(--accent); }
+    .intelligence-kpi:nth-child(3n) { border-left-color: var(--warning); }
+    .intelligence-kpi span {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+    }
+    .intelligence-kpi strong {
+      display: block;
+      margin-top: 5px;
+      color: var(--text);
+      font-size: 17px;
+      overflow-wrap: anywhere;
+    }
+    .intelligence-data-section {
+      margin-top: 16px;
+      padding-top: 13px;
+      border-top: 1px solid var(--line);
+    }
+    .intelligence-data-section > h3 {
+      margin: 0 0 9px;
+      color: var(--text);
+      font-size: 12px;
+    }
+    .intelligence-metric-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0 18px;
+    }
+    .intelligence-metric-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: baseline;
+      gap: 10px;
+      min-width: 0;
+      padding: 7px 0;
+      border-bottom: 1px solid #20272b;
+    }
+    .intelligence-metric-row span { color: var(--muted); overflow-wrap: anywhere; }
+    .intelligence-metric-row strong { color: var(--text); text-align: right; }
+    .intelligence-table { width: 100%; min-width: 720px; }
+    .intelligence-table td:first-child,
+    .intelligence-table th:first-child { text-align: left; }
+    .intelligence-table td:not(:first-child),
+    .intelligence-table th:not(:first-child) { text-align: right; }
+    .intelligence-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px 18px;
+    }
+    .intelligence-list-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      padding: 7px 0;
+      border-bottom: 1px solid #20272b;
+    }
+    .intelligence-list-row small { display: block; color: var(--muted); }
+    .intelligence-definition {
+      display: grid;
+      grid-template-columns: minmax(130px, .7fr) minmax(0, 2fr) minmax(120px, .8fr);
+      gap: 12px;
+      padding: 9px 0;
+      border-bottom: 1px solid #20272b;
+    }
+    .intelligence-definition strong { color: var(--text); }
+    .intelligence-definition span,
+    .intelligence-definition small { color: var(--muted); overflow-wrap: anywhere; }
+    .intelligence-empty { padding: 18px 0; color: var(--muted); }
     main > section[data-view] {
       display: none;
       min-width: 0;
@@ -4757,6 +4982,10 @@ _INDEX_HTML = """<!doctype html>
       .workspace-heading { margin: 0 -12px 12px; padding: 14px 12px; }
       .workspace-section-tabs { margin-top: 0; }
       .analysis-player-context { align-items: flex-start; }
+      .intelligence-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .intelligence-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .section-heading-row { align-items: stretch; flex-direction: column; }
+      .section-heading-row button { align-self: flex-start; }
       main > section[data-view] { padding: 13px; }
       .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .trend-table-wrap { display: none; }
@@ -4784,6 +5013,15 @@ _INDEX_HTML = """<!doctype html>
         align-items: stretch;
         flex-direction: column;
       }
+      .intelligence-view-toolbar,
+      .intelligence-chart-options,
+      .intelligence-quality-strip { align-items: stretch; flex-direction: column; }
+      .intelligence-chart-options label,
+      .intelligence-breakdown-option { width: 100%; min-width: 0; }
+      .intelligence-kpi-grid,
+      .intelligence-metric-grid,
+      .intelligence-list { grid-template-columns: 1fr; }
+      .intelligence-definition { grid-template-columns: 1fr; gap: 3px; }
       .grid { grid-template-columns: 1fr; }
       #statusGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .query-primary, .filter-grid { grid-template-columns: 1fr; }
@@ -5346,6 +5584,76 @@ _INDEX_HTML = """<!doctype html>
       </div>
     </section>
     <datalist id="registeredPlayerOptions"></datalist>
+    <section id="intelligence-analysis" data-view="players">
+      <h2>종합 분석</h2>
+      <form id="intelligenceForm" class="analysis-form">
+        <div class="query-primary">
+          <label>플랫폼
+            <select name="shard"><option value="steam">steam</option><option value="kakao">kakao</option></select>
+          </label>
+          <label>등록 유저
+            <input class="registered-player-input" name="target" list="registeredPlayerOptions" autocomplete="off" placeholder="닉네임 일부 입력" required>
+          </label>
+          <button type="submit">분석</button>
+          <button class="secondary" type="button" data-reset-analysis-form="intelligenceForm">필터 초기화</button>
+        </div>
+        <details class="advanced-filters">
+          <summary>상세 필터</summary>
+          <div class="filter-grid">
+            <label>맵<select name="map_name" data-catalog-facet="maps"><option value="">전체</option></select></label>
+            <label>게임 모드<select name="game_mode" data-catalog-facet="game_modes"><option value="">전체</option></select></label>
+            <label>팀 모드<select name="team_mode" data-catalog-facet="team_modes"><option value="">전체</option></select></label>
+            <label>시점<select name="perspective" data-catalog-facet="perspectives"><option value="">전체</option></select></label>
+            <label>매치 유형<select name="match_type" data-catalog-facet="match_types"><option value="">전체</option></select></label>
+            <label>시즌 상태<select name="season_state" data-catalog-facet="season_states"><option value="">전체</option></select></label>
+            <label>커스텀<select name="is_custom_match"><option value="">전체</option><option value="false">일반</option><option value="true">커스텀</option></select></label>
+            <label>연도<select name="year" data-catalog-facet="years"><option value="">전체</option></select></label>
+            <label>분기<select name="quarter"><option value="">전체</option><option value="1">1분기</option><option value="2">2분기</option><option value="3">3분기</option><option value="4">4분기</option></select></label>
+            <label>월<select name="month"><option value="">전체</option><option value="1">1월</option><option value="2">2월</option><option value="3">3월</option><option value="4">4월</option><option value="5">5월</option><option value="6">6월</option><option value="7">7월</option><option value="8">8월</option><option value="9">9월</option><option value="10">10월</option><option value="11">11월</option><option value="12">12월</option></select></label>
+            <label>특정 일자 (KST)<input name="exact_date_kst" type="date"></label>
+            <label>시간대 (KST)<select name="hour"><option value="">전체</option></select></label>
+            <label>시작일 (KST)<input name="from_date_kst" type="date"></label>
+            <label>종료일 (KST)<input name="to_date_kst" type="date"></label>
+          </div>
+        </details>
+      </form>
+      <div class="intelligence-view-toolbar" id="intelligenceViewControls" hidden>
+        <div class="segmented-control" role="group" aria-label="종합 분석 보기">
+          <button type="button" class="active" data-intelligence-view="overview">핵심 요약</button>
+          <button type="button" data-intelligence-view="trends">변화 그래프</button>
+          <button type="button" data-intelligence-view="breakdowns">조건 비교</button>
+          <button type="button" data-intelligence-view="evidence">원본·정의</button>
+        </div>
+        <div class="intelligence-chart-options" id="intelligenceChartOptions" hidden>
+          <label id="intelligenceGranularityOption">집계
+            <select id="intelligenceTrendGranularity"><option value="daily">일자</option><option value="monthly">월</option></select>
+          </label>
+          <label>지표
+            <select id="intelligenceTrendMetric">
+              <option value="win_rate">치킨율</option>
+              <option value="fight_win_rate">교전 승리율</option>
+              <option value="accuracy">명중률</option>
+              <option value="headshot_hit_rate">헤드샷 명중 비율</option>
+              <option value="avg_damage_dealt">평균 준 피해</option>
+              <option value="avg_fights_per_match">경기당 교전</option>
+              <option value="avg_survival_seconds">평균 생존</option>
+              <option value="avg_heal_amount">경기당 총 체력 회복량</option>
+              <option value="avg_revives_caused">경기당 팀원 부활</option>
+              <option value="avg_throwable_uses">경기당 투척물 사용</option>
+            </select>
+          </label>
+        </div>
+        <label class="intelligence-breakdown-option" id="intelligenceBreakdownOption" hidden>비교 기준
+          <select id="intelligenceBreakdownDimension">
+            <option value="maps">맵</option><option value="team_modes">팀 모드</option>
+            <option value="game_modes">게임 모드</option><option value="perspectives">시점</option>
+            <option value="match_types">매치 유형</option><option value="hours">시간대</option>
+            <option value="weekdays">요일</option>
+          </select>
+        </label>
+      </div>
+      <div class="status intelligence-status" id="intelligenceBody" style="margin-top: 12px;">분석 대기 중</div>
+    </section>
     <section id="profile-lookup" data-view="players">
       <h2>전적 조회</h2>
       <form id="profileForm" class="query-form">
@@ -5778,6 +6086,9 @@ _INDEX_HTML = """<!doctype html>
         <label>전투 파싱
           <input name="combat_limit" type="number" min="1" max="200" value="10" required>
         </label>
+        <label>행동 파싱
+          <input name="activity_limit" type="number" min="1" max="200" value="10" required>
+        </label>
         <label>아이템 파싱
           <input name="item_limit" type="number" min="1" max="200" value="10" required>
         </label>
@@ -5806,6 +6117,16 @@ _INDEX_HTML = """<!doctype html>
         <button class="secondary" type="button" id="postProcessingWorkerStop">중지</button>
       </form>
       <div class="status" id="postProcessingWorkerStatus" style="margin-top: 12px;">자동 후처리 중지</div>
+    </section>
+    <section id="player-intelligence-audit" data-view="operations">
+      <div class="section-heading-row">
+        <div>
+          <h2>플레이어 데이터 품질</h2>
+          <div class="status" id="playerIntelligenceAuditStatus">아직 검사하지 않음</div>
+        </div>
+        <button type="button" id="playerIntelligenceAuditRun">검사 실행</button>
+      </div>
+      <div id="playerIntelligenceAuditBody" class="intelligence-empty">검사 결과 대기 중</div>
     </section>
     <section id="operational-drills" data-view="operations">
       <h2>운영 훈련</h2>
@@ -6181,6 +6502,15 @@ _INDEX_HTML = """<!doctype html>
     const analysisPlayerContextName = document.querySelector("#analysisPlayerContextName");
     const analysisPlayerContextMeta = document.querySelector("#analysisPlayerContextMeta");
     const clearAnalysisPlayerButton = document.querySelector("#clearAnalysisPlayer");
+    const intelligenceForm = document.querySelector("#intelligenceForm");
+    const intelligenceBody = document.querySelector("#intelligenceBody");
+    const intelligenceViewControls = document.querySelector("#intelligenceViewControls");
+    const intelligenceChartOptions = document.querySelector("#intelligenceChartOptions");
+    const intelligenceGranularityOption = document.querySelector("#intelligenceGranularityOption");
+    const intelligenceTrendGranularity = document.querySelector("#intelligenceTrendGranularity");
+    const intelligenceTrendMetric = document.querySelector("#intelligenceTrendMetric");
+    const intelligenceBreakdownOption = document.querySelector("#intelligenceBreakdownOption");
+    const intelligenceBreakdownDimension = document.querySelector("#intelligenceBreakdownDimension");
     const profileForm = document.querySelector("#profileForm");
     const trendForm = document.querySelector("#trendForm");
     const timeInsightForm = document.querySelector("#timeInsightForm");
@@ -6195,7 +6525,7 @@ _INDEX_HTML = """<!doctype html>
     const recommendationForm = document.querySelector("#recommendationForm");
     const dropZoneForm = document.querySelector("#dropZoneForm");
     const matchForm = document.querySelector("#matchForm");
-    const analysisForms = [profileForm, trendForm, timeInsightForm, comparisonForm, weaponForm, recommendationForm, dropZoneForm, matchForm];
+    const analysisForms = [intelligenceForm, profileForm, trendForm, timeInsightForm, comparisonForm, weaponForm, recommendationForm, dropZoneForm, matchForm];
     const rankingForm = document.querySelector("#rankingForm");
     const rankingGuildSelect = document.querySelector("#rankingGuildSelect");
     const rankingGuildRefresh = document.querySelector("#rankingGuildRefresh");
@@ -6230,6 +6560,9 @@ _INDEX_HTML = """<!doctype html>
     const telemetryJobsCards = document.querySelector("#telemetryJobsCards");
     const telemetryJobsSummary = document.querySelector("#telemetryJobsSummary");
     const operationalDrillForm = document.querySelector("#operationalDrillForm");
+    const playerIntelligenceAuditRun = document.querySelector("#playerIntelligenceAuditRun");
+    const playerIntelligenceAuditStatus = document.querySelector("#playerIntelligenceAuditStatus");
+    const playerIntelligenceAuditBody = document.querySelector("#playerIntelligenceAuditBody");
     const operationalDrillsReload = document.querySelector("#operationalDrillsReload");
     const operationalDrillsStatus = document.querySelector("#operationalDrillsStatus");
     const operationalDrillsBody = document.querySelector("#operationalDrillsBody");
@@ -6379,6 +6712,8 @@ _INDEX_HTML = """<!doctype html>
     let replayPinnedEventId = null;
     let activeReplayPlayer = null;
     let activeAnalysisPlayer = null;
+    let activeIntelligenceReport = null;
+    let activeIntelligenceView = "overview";
     let activeProfilePlayer = null;
     let activeTrendReport = null;
     let activeTrendView = "table";
@@ -6498,6 +6833,7 @@ _INDEX_HTML = """<!doctype html>
 
     const workspaceSectionsByView = {
       players: [
+        { key: "intelligence", label: "종합", ids: ["intelligence-analysis"] },
         { key: "profile", label: "전적", ids: ["profile-lookup"] },
         { key: "trends", label: "추세", ids: ["trend-lookup"] },
         { key: "time", label: "시간대", ids: ["time-analysis"] },
@@ -6541,6 +6877,7 @@ _INDEX_HTML = """<!doctype html>
         { key: "scopes", label: "서버 범위", ids: ["discord-scopes"] },
       ],
       operations: [
+        { key: "quality", label: "데이터 품질", ids: ["player-intelligence-audit"] },
         { key: "alerts", label: "알림", ids: ["alerts"] },
         { key: "deletions", label: "삭제 검토", ids: ["data-deletions"] },
         { key: "drills", label: "운영 훈련", ids: ["operational-drills"] },
@@ -8140,7 +8477,7 @@ _INDEX_HTML = """<!doctype html>
       ) {
         return activeAnalysisPlayer;
       }
-      for (const formElement of [trendForm, timeInsightForm, comparisonForm, weaponForm, matchForm]) {
+      for (const formElement of [intelligenceForm, trendForm, timeInsightForm, comparisonForm, weaponForm, matchForm]) {
         applyPlayerCatalog(formElement, catalog);
       }
       return refreshedPlayer;
@@ -8186,7 +8523,14 @@ _INDEX_HTML = """<!doctype html>
       for (const details of formElement.querySelectorAll("details")) details.open = false;
       catalogByForm.delete(formElement);
 
-      if (formElement === profileForm) {
+      if (formElement === intelligenceForm) {
+        activeIntelligenceReport = null;
+        activeIntelligenceView = "overview";
+        intelligenceViewControls.hidden = true;
+        intelligenceChartOptions.hidden = true;
+        intelligenceBreakdownOption.hidden = true;
+        intelligenceBody.textContent = "분석 대기 중";
+      } else if (formElement === profileForm) {
         activeProfilePlayer = null;
         profileBody.textContent = "조회 대기 중";
       } else if (formElement === trendForm) {
@@ -8233,7 +8577,7 @@ _INDEX_HTML = """<!doctype html>
           input.dataset.accountId = preservedPlayer.account_id;
         }
         if (formElement.elements.shard) formElement.elements.shard.value = preservedPlayer.shard;
-        if ([trendForm, timeInsightForm, comparisonForm, weaponForm, matchForm].includes(formElement)) {
+        if ([intelligenceForm, trendForm, timeInsightForm, comparisonForm, weaponForm, matchForm].includes(formElement)) {
           const catalog = await loadPlayerCatalog(preservedPlayer);
           if (
             !activeAnalysisPlayer
@@ -9970,6 +10314,263 @@ _INDEX_HTML = """<!doctype html>
       return true;
     }
 
+    function intelligenceDefinitions(report) {
+      return new Map((report.metric_definitions || []).map((definition) => [definition.key, definition]));
+    }
+
+    function intelligenceValue(key, value) {
+      if (value === null || value === undefined) return "미수집";
+      if (typeof value === "string") return value;
+      if (["win_rate", "top10_rate", "accuracy", "headshot_hit_rate", "headshot_hit_taken_rate", "fight_win_rate"].includes(key)) {
+        return percent(value);
+      }
+      if (key.includes("survival_seconds")) return minutes(value);
+      if (key.endsWith("distance_m") || key.endsWith("distance_meters")) return distanceKm(value);
+      if (key === "longest_kill_m" || key === "avg_landing_distance_m") return distanceM(value);
+      if (key === "kda" || key.startsWith("avg_") || key === "heal_amount" || key === "vehicle_damage") {
+        return Number(value || 0).toLocaleString("ko-KR", { maximumFractionDigits: 2 });
+      }
+      return Number(value || 0).toLocaleString("ko-KR", { maximumFractionDigits: 1 });
+    }
+
+    function intelligenceQuality(report) {
+      const coverage = report.coverage || {};
+      const activityMatches = report.support?.activity_covered_matches || 0;
+      const tone = coverage.status === "complete" ? "" : (coverage.status === "partial" ? "warning" : "error");
+      const labels = {
+        complete: "행동 텔레메트리 처리 완료",
+        partial: "행동 텔레메트리 일부 처리",
+        not_processed: "행동 텔레메트리 미처리",
+        unavailable: "저장된 텔레메트리 없음",
+      };
+      const last = coverage.last_processed_at_kst
+        ? ` · 마지막 처리 ${formatKstShort(coverage.last_processed_at_kst)}`
+        : "";
+      return `<div class="intelligence-quality-strip ${tone}">
+        <div><strong>${escapeHtml(labels[coverage.status] || "수집 상태 확인 필요")}</strong>
+          <small>${coverage.eligible_processed_matches || 0}/${coverage.telemetry_matches || 0}경기${escapeHtml(last)} · 미처리 ${coverage.missing_match_count || 0}경기 · 활동 평균 분모 ${activityMatches}경기</small>
+        </div>
+        <output>${escapeHtml(percent(coverage.coverage_rate || 0))}</output>
+      </div>`;
+    }
+
+    function intelligenceKpis(entries) {
+      return `<div class="intelligence-kpi-grid">${entries.map(([label, key, value]) => (
+        `<div class="intelligence-kpi"><span>${escapeHtml(label)}</span><strong>${escapeHtml(intelligenceValue(key, value))}</strong></div>`
+      )).join("")}</div>`;
+    }
+
+    function intelligenceMetricSection(report, title, entries) {
+      const definitions = intelligenceDefinitions(report);
+      return `<div class="intelligence-data-section"><h3>${escapeHtml(title)}</h3><div class="intelligence-metric-grid">${entries.map(([label, key, value]) => {
+        const definition = definitions.get(key);
+        const tooltip = definition ? `${definition.formula_ko} · 분모: ${definition.denominator_ko}` : "";
+        return `<div class="intelligence-metric-row"${tooltip ? ` title="${attr(tooltip)}"` : ""}><span>${escapeHtml(label)}</span><strong>${escapeHtml(intelligenceValue(key, value))}</strong></div>`;
+      }).join("")}</div></div>`;
+    }
+
+    function renderIntelligenceOverview(report) {
+      const overview = report.overview || {};
+      const combat = report.combat || {};
+      const survival = report.survival || {};
+      const support = report.support || {};
+      const mobility = report.mobility || {};
+      const vehicle = report.vehicle || {};
+      const environment = report.environment || {};
+      const loot = report.loot || {};
+      const topItems = (loot.top_picked_items || []).slice(0, 8);
+      const itemList = topItems.length
+        ? `<div class="intelligence-list">${topItems.map((item) => `<div class="intelligence-list-row"><span>${escapeHtml(item.item_name_ko || item.item_code || "-")}<small>${escapeHtml(item.item_category || "분류 없음")}</small></span><strong>${Number(item.picked_up_events || 0).toLocaleString("ko-KR")}회</strong></div>`).join("")}</div>`
+        : '<div class="intelligence-empty">현재 조건에서 정규화된 아이템 기록이 없습니다.</div>';
+      return intelligenceQuality(report) + intelligenceKpis([
+        ["경기", "matches", overview.matches], ["치킨율", "win_rate", overview.win_rate],
+        ["KDA", "kda", overview.kda], ["평균 준 피해", "avg_damage_dealt", overview.avg_damage_dealt],
+        ["명중률", "accuracy", combat.accuracy], ["헤드샷 명중", "headshot_hit_rate", combat.headshot_hit_rate],
+        ["교전 승리율", "fight_win_rate", combat.fight_win_rate], ["경기당 교전", "avg_fights_per_match", combat.avg_fights_per_match],
+        ["평균 생존", "avg_survival_seconds", overview.avg_survival_seconds], ["평균 이동", "avg_total_distance_m", overview.avg_total_distance_m],
+        ["총 체력 회복량", "heal_amount", support.heal_amount], ["팀원 부활", "revives_caused", support.revives_caused],
+      ])
+      + intelligenceMetricSection(report, "전투와 교전", [
+        ["킬 / 어시스트 / 사망", "kills", `${combat.kills || 0} / ${combat.assists || 0} / ${combat.deaths || 0}`],
+        ["가한 / 당한 기절", "dbnos_caused", `${combat.dbnos_caused || 0} / ${combat.dbnos_taken || 0}`],
+        ["준 / 받은 피해", "damage_dealt", `${Number(combat.damage_dealt || 0).toFixed(1)} / ${Number(combat.damage_taken || 0).toFixed(1)}`],
+        ["발사 / 명중", "shots_fired", `${combat.shots_fired || 0} / ${combat.shots_hit || 0}`],
+        ["헤드샷 명중 / 피격", "headshot_hits", `${combat.headshot_hits || 0} / ${combat.headshot_hits_taken || 0}`],
+        ["교전 승 / 패", "fight_count", `${combat.fight_wins || 0} / ${combat.fight_losses || 0}`],
+      ].map(([label, key, value]) => [label, key, value]))
+      + intelligenceMetricSection(report, "생존과 지원", [
+        ["활동 지표 처리 경기", "activity_covered_matches", `${support.activity_covered_matches || 0} / ${overview.matches || 0}`],
+        ["TOP 10 비율", "top10_rate", survival.top10_rate], ["평균 등수", "avg_placement", survival.avg_placement],
+        ["최장 킬 거리", "longest_kill_m", survival.longest_kill_m], ["최대 연속 킬", "max_kill_streak", survival.max_kill_streak],
+        ["회복 아이템 이벤트", "item_heal_events", support.item_heal_events], ["아이템 회복량", "item_heal_amount", support.item_heal_amount],
+        ["부스트 지속 회복량", "passive_heal_amount", support.passive_heal_amount], ["부스트 사용", "boost_uses", support.participant_boost_uses],
+        ["투척물 사용", "throwable_uses", support.throwable_uses], ["부활 받음", "revives_received", support.revives_received],
+      ])
+      + intelligenceMetricSection(report, "이동과 차량", [
+        ["보행 거리", "walk_distance_m", mobility.walk_distance_m], ["차량 거리", "ride_distance_m", mobility.ride_distance_m],
+        ["수영 거리", "swim_distance_m", mobility.swim_distance_m], ["파쿠르 / 렛지", "vaults", `${mobility.vaults || 0} / ${mobility.ledge_grabs || 0}`],
+        ["차량 탑승 / 하차", "vehicle_rides", `${vehicle.rides || 0} / ${vehicle.leaves || 0}`], ["차량 피해", "vehicle_damage", vehicle.damage],
+        ["차량 / 바퀴 파괴", "vehicle_destroys", `${vehicle.destroys || 0} / ${vehicle.wheel_destroys || 0}`], ["비상 호출 / 재배치", "redeploys", `${mobility.emergency_pickup_calls || 0} / ${mobility.redeploys || 0}`],
+      ])
+      + intelligenceMetricSection(report, "방어구와 환경", [
+        ["방어구 파괴", "armor_destroys_caused", environment.armor_destroys_caused], ["방어구 파괴당함", "armor_destroys_taken", environment.armor_destroys_taken],
+        ["오브젝트 상호작용", "object_interactions", environment.object_interactions], ["오브젝트 파괴", "object_destroys", environment.object_destroys],
+        ["트렁크에서 획득", "vehicle_trunk_pickup_events", loot.vehicle_trunk_pickup_events], ["트렁크에 보관", "vehicle_trunk_put_events", loot.vehicle_trunk_put_events],
+      ])
+      + `<div class="intelligence-data-section"><h3>주요 획득 아이템</h3>${itemList}</div>`;
+    }
+
+    function intelligenceChartDefinition(metric) {
+      const custom = {
+        avg_heal_amount: {
+          label: "경기당 총 체력 회복량",
+          value: (row) => Number(row.avg_heal_amount || 0),
+          format: (value) => `${Number(value).toFixed(1)}`,
+          basis: "LogHeal.healAmount 합계 ÷ 행동 파서 처리 경기 수",
+        },
+        avg_revives_caused: {
+          label: "경기당 팀원 부활",
+          value: (row) => Number(row.avg_revives_caused || 0),
+          format: (value) => `${Number(value).toFixed(2)}회`,
+          basis: "부활 실행 횟수 ÷ 행동 파서 처리 경기 수",
+        },
+        avg_throwable_uses: {
+          label: "경기당 투척물 사용",
+          value: (row) => Number(row.avg_throwable_uses || 0),
+          format: (value) => `${Number(value).toFixed(2)}회`,
+          basis: "투척물 사용 횟수 ÷ 행동 파서 처리 경기 수",
+        },
+      };
+      return custom[metric] || trendMetricDefinition(metric);
+    }
+
+    function intelligenceTrendBuckets(report) {
+      const granularity = intelligenceTrendGranularity.value || "daily";
+      const metric = intelligenceTrendMetric.value || "win_rate";
+      const activityMetric = ["avg_heal_amount", "avg_revives_caused", "avg_throwable_uses"].includes(metric);
+      return (report.trends?.[granularity] || []).filter((row) => (
+        !activityMetric || Number(row.activity_covered_matches || 0) > 0
+      )).map((row) => ({
+        ...row,
+        period_label: row.label,
+        match_count: row.matches,
+      }));
+    }
+
+    function intelligenceTotals(report) {
+      return {
+        match_count: report.overview?.matches || 0,
+        ...(report.combat || {}),
+        ...(report.survival || {}),
+        ...(report.support || {}),
+        ...(report.mobility || {}),
+      };
+    }
+
+    function renderIntelligenceTrends(report) {
+      const definition = intelligenceChartDefinition(intelligenceTrendMetric.value || "win_rate");
+      const buckets = intelligenceTrendBuckets(report);
+      if (!buckets.length) return intelligenceQuality(report) + '<div class="intelligence-empty">현재 조건에 표시할 시간 구간이 없습니다.</div>';
+      return intelligenceQuality(report) + `<div class="metric-chart">${renderTimeSeriesLineChart(definition, buckets, {
+        totals: intelligenceTotals(report),
+        availablePointCount: buckets.length,
+        title: `${definition.label} KST 변화`,
+      })}</div>`;
+    }
+
+    function renderIntelligenceBreakdowns(report) {
+      const dimension = intelligenceBreakdownDimension.value || "maps";
+      const metric = intelligenceTrendMetric.value || "win_rate";
+      const activityMetric = ["avg_heal_amount", "avg_revives_caused", "avg_throwable_uses"].includes(metric);
+      const rows = (report.breakdowns?.[dimension] || []).filter((row) => (
+        !activityMetric || Number(row.activity_covered_matches || 0) > 0
+      )).map((row) => ({
+        ...row,
+        period_label: row.label,
+        match_count: row.matches,
+      }));
+      const definition = intelligenceChartDefinition(metric);
+      if (!rows.length) return intelligenceQuality(report) + '<div class="intelligence-empty">현재 조건에 비교할 항목이 없습니다.</div>';
+      const tableRows = rows.map((row) => `<tr>
+        <td>${escapeHtml(row.label || row.key || "-")}</td><td>${Number(row.matches || 0).toLocaleString("ko-KR")}</td>
+        <td>${percent(row.win_rate)}</td><td>${Number(row.kda || 0).toFixed(2)}</td>
+        <td>${Number(row.avg_damage_dealt || 0).toFixed(1)}</td><td>${percent(row.accuracy)}</td>
+        <td>${percent(row.headshot_hit_rate)}</td><td>${percent(row.fight_win_rate)}</td>
+        <td>${Number(row.avg_fights_per_match || 0).toFixed(2)}</td><td>${minutes(row.avg_survival_seconds)}</td>
+      </tr>`).join("");
+      return intelligenceQuality(report)
+        + `<div class="metric-chart">${renderTrendComparisonChart(definition, rows)}</div>`
+        + `<div class="table-scroll intelligence-data-section"><table class="intelligence-table"><thead><tr><th>항목</th><th>경기</th><th>치킨율</th><th>KDA</th><th>평균 피해</th><th>명중</th><th>헤드샷</th><th>교전 승리</th><th>경기당 교전</th><th>평균 생존</th></tr></thead><tbody>${tableRows}</tbody></table></div>`;
+    }
+
+    function intelligenceDetailRows(rows, kind) {
+      if (!rows?.length) return '<div class="intelligence-empty">기록 없음</div>';
+      return `<div class="intelligence-list">${rows.slice(0, 16).map((row) => {
+        const label = row.item_name_ko || row.item_code || row.vehicle_type || row.object_type || row.action || "분류 없음";
+        const detail = kind === "vehicle"
+          ? `${Number(row.distance_m || 0).toFixed(0)}m · 피해 ${Number(row.damage || 0).toFixed(1)}`
+          : `${escapeHtml(row.action || "이벤트")} · ${Number(row.amount || 0).toFixed(1)}`;
+        return `<div class="intelligence-list-row"><span>${escapeHtml(label)}<small>${detail}</small></span><strong>${Number(row.event_count || 0).toLocaleString("ko-KR")}회</strong></div>`;
+      }).join("")}</div>`;
+    }
+
+    function renderIntelligenceEvidence(report) {
+      const coverage = report.coverage || {};
+      const eventCoverage = coverage.event_type_coverage || {};
+      const rawOnly = eventCoverage.raw_only_types || [];
+      const definitions = report.metric_definitions || [];
+      const rawRows = rawOnly.length ? rawOnly.map((row) => `<tr>
+        <td>${escapeHtml(row.label_ko || row.event_type)}</td><td class="identifier">${escapeHtml(row.event_type)}</td>
+        <td>${escapeHtml(row.domain || "-")}</td><td>${Number(row.event_count || 0).toLocaleString("ko-KR")}</td>
+        <td>${Number(row.tracked_event_count || 0).toLocaleString("ko-KR")}</td><td>${escapeHtml(row.note || "-")}</td>
+      </tr>`).join("") : '<tr><td colspan="6">원본 전용 이벤트가 없습니다.</td></tr>';
+      const definitionRows = definitions.map((definition) => `<div class="intelligence-definition">
+        <strong>${escapeHtml(definition.label_ko)}</strong>
+        <span>${escapeHtml(definition.formula_ko)}<br><small>분모: ${escapeHtml(definition.denominator_ko)}</small></span>
+        <small>${escapeHtml(definition.source)}${definition.caveat_ko ? `<br>${escapeHtml(definition.caveat_ko)}` : ""}</small>
+      </div>`).join("");
+      const details = report.activity_details || {};
+      return intelligenceQuality(report)
+        + `<div class="intelligence-data-section"><h3>회복 아이템</h3>${intelligenceDetailRows(details.healing_items, "item")}</div>`
+        + `<div class="intelligence-data-section"><h3>투척물과 플레어</h3>${intelligenceDetailRows(details.throwables, "item")}</div>`
+        + `<div class="intelligence-data-section"><h3>차량 행동</h3>${intelligenceDetailRows(details.vehicles, "vehicle")}</div>`
+        + `<div class="intelligence-data-section"><h3>원본 보존·미분류 이벤트</h3><div class="table-scroll"><table class="intelligence-table"><thead><tr><th>이벤트</th><th>코드</th><th>영역</th><th>전체</th><th>추적 관련</th><th>상태</th></tr></thead><tbody>${rawRows}</tbody></table></div></div>`
+        + `<div class="intelligence-data-section"><h3>지표 정의와 분모</h3>${definitionRows}</div>`;
+    }
+
+    function renderIntelligenceReport() {
+      if (!activeIntelligenceReport) {
+        intelligenceBody.textContent = "분석 대기 중";
+        return;
+      }
+      intelligenceChartOptions.hidden = !["trends", "breakdowns"].includes(activeIntelligenceView);
+      intelligenceGranularityOption.hidden = activeIntelligenceView !== "trends";
+      intelligenceBreakdownOption.hidden = activeIntelligenceView !== "breakdowns";
+      for (const button of intelligenceViewControls.querySelectorAll("[data-intelligence-view]")) {
+        button.classList.toggle("active", button.dataset.intelligenceView === activeIntelligenceView);
+      }
+      const renderers = {
+        overview: renderIntelligenceOverview,
+        trends: renderIntelligenceTrends,
+        breakdowns: renderIntelligenceBreakdowns,
+        evidence: renderIntelligenceEvidence,
+      };
+      intelligenceBody.innerHTML = (renderers[activeIntelligenceView] || renderIntelligenceOverview)(activeIntelligenceReport);
+    }
+
+    async function loadPlayerIntelligence(formElement) {
+      const form = new FormData(formElement);
+      const player = selectedRegisteredPlayer(formElement);
+      await setActiveAnalysisPlayer(player);
+      const params = new URLSearchParams({ shard: player.shard, account_id: player.account_id, trend_limit: "1000" });
+      appendAnalysisFilters(form, params);
+      intelligenceBody.textContent = "상세 데이터를 분석하는 중...";
+      const payload = await fetchAnalysisJson(`/players/intelligence?${params.toString()}`);
+      activeIntelligenceReport = payload.intelligence;
+      intelligenceViewControls.hidden = false;
+      renderIntelligenceReport();
+    }
+
     async function loadPlayerProfile(target, shard) {
       const params = new URLSearchParams({ shard });
       if (target.startsWith("account.")) {
@@ -11657,6 +12258,56 @@ _INDEX_HTML = """<!doctype html>
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.detail || response.statusText);
       renderJobQueue(payload, telemetryJobsBody, telemetryJobsCards, telemetryJobsSummary);
+    }
+
+    function renderPlayerIntelligenceAudit(audit) {
+      const counts = audit.counts || {};
+      const eventCatalog = audit.event_catalog || {};
+      const sources = audit.item_source_totals || {};
+      const checks = audit.checks || [];
+      const checkRows = checks.map((check) => `<tr>
+        <td><span class="alert-severity ${check.passed ? "alert-severity-ok" : "alert-severity-error"}">${check.passed ? "통과" : "실패"}</span></td>
+        <td>${escapeHtml(check.label_ko || check.key)}</td>
+        <td>${escapeHtml(check.expected)}</td>
+        <td>${escapeHtml(check.actual)}</td>
+      </tr>`).join("") || '<tr><td colspan="4">검사 항목 없음</td></tr>';
+      const parserRows = (audit.parser_versions || []).map((row) => `<tr>
+        <td>${escapeHtml(row.processor_name)}</td><td class="identifier">${escapeHtml(row.parser_version)}</td>
+        <td>${Number(row.matches || 0).toLocaleString("ko-KR")}</td>
+        <td>${Number(row.player_matches || 0).toLocaleString("ko-KR")}</td>
+      </tr>`).join("") || '<tr><td colspan="4">파서 상태 없음</td></tr>';
+      playerIntelligenceAuditStatus.textContent = `${audit.passed ? "전체 통과" : "확인 필요"} · ${formatKstShort(audit.generated_at_kst)}`;
+      playerIntelligenceAuditBody.className = "";
+      playerIntelligenceAuditBody.innerHTML = intelligenceKpis([
+        ["원본 경기", "raw_matches", counts.raw_matches],
+        ["추적 경기·플레이어", "eligible_player_matches", counts.eligible_player_matches],
+        ["행동 파서", "activity_matches", `${counts.activity_matches || 0} / ${counts.eligible_matches || 0}`],
+        ["아이템 파서", "item_matches", `${counts.item_matches || 0} / ${counts.eligible_matches || 0}`],
+        ["행동 원장", "activity_event_rows", counts.activity_event_rows],
+        ["아이템 원장", "item_event_rows", counts.item_event_rows],
+        ["정규화 이벤트 타입", "normalized_type_count", `${eventCatalog.normalized_type_count || 0} / ${eventCatalog.event_type_count || 0}`],
+        ["원본 전용 타입", "raw_only_type_count", eventCatalog.raw_only_type_count],
+      ]) + `<div class="intelligence-data-section"><h3>정합성 검사</h3>
+        <div class="table-scroll"><table class="data-quality-checks"><thead><tr><th>상태</th><th>검사</th><th>기대</th><th>실제</th></tr></thead><tbody>${checkRows}</tbody></table></div>
+      </div><div class="intelligence-data-section"><h3>파서 버전</h3>
+        <div class="table-scroll"><table class="intelligence-table"><thead><tr><th>처리기</th><th>버전</th><th>경기</th><th>경기·플레이어</th></tr></thead><tbody>${parserRows}</tbody></table></div>
+      </div><div class="intelligence-data-section"><h3>아이템 출처 합계</h3><div class="intelligence-metric-grid">
+        <div class="intelligence-metric-row"><span>루트박스 획득</span><strong>${Number(sources.loot_box_pickups || 0).toLocaleString("ko-KR")}</strong></div>
+        <div class="intelligence-metric-row"><span>보급 획득</span><strong>${Number(sources.carepackage_pickups || 0).toLocaleString("ko-KR")}</strong></div>
+        <div class="intelligence-metric-row"><span>커스텀 패키지 획득</span><strong>${Number(sources.custom_package_pickups || 0).toLocaleString("ko-KR")}</strong></div>
+        <div class="intelligence-metric-row"><span>트렁크 획득 / 보관</span><strong>${Number(sources.vehicle_trunk_pickups || 0).toLocaleString("ko-KR")} / ${Number(sources.vehicle_trunk_puts || 0).toLocaleString("ko-KR")}</strong></div>
+      </div></div>`;
+    }
+
+    async function runPlayerIntelligenceAudit() {
+      playerIntelligenceAuditRun.disabled = true;
+      playerIntelligenceAuditStatus.textContent = "검사 중";
+      try {
+        const payload = await requestJson("/operations/player-intelligence-audit", "GET");
+        renderPlayerIntelligenceAudit(payload.player_intelligence_audit || {});
+      } finally {
+        playerIntelligenceAuditRun.disabled = false;
+      }
     }
 
     function renderOperationalDrillDetail(record) {
@@ -14276,6 +14927,7 @@ _INDEX_HTML = """<!doctype html>
         ? [
             `last ${escapeHtml(lastCycle.finished_at_kst || "-")}`,
             `combat ${lastCycle.combat?.parsed_payloads ?? "-"}`,
+            `activity ${lastCycle.activity?.parsed_payloads ?? "-"}`,
             `items ${lastCycle.items?.parsed_payloads ?? "-"}`,
             `movement ${lastCycle.movement?.parsed_payloads ?? "-"}`,
             `loadout ${lastCycle.loadout_snapshots?.generated_snapshots ?? "-"}`,
@@ -14297,6 +14949,7 @@ _INDEX_HTML = """<!doctype html>
       const form = new FormData(event.currentTarget);
       const payload = await postJson("/post-processing/worker/start", {
         combat_limit: Number(form.get("combat_limit") || 10),
+        activity_limit: Number(form.get("activity_limit") || 10),
         item_limit: Number(form.get("item_limit") || 10),
         movement_limit: Number(form.get("movement_limit") || 10),
         loadout_limit: Number(form.get("loadout_limit") || 50),
@@ -14342,7 +14995,7 @@ _INDEX_HTML = """<!doctype html>
       await loadDiscordPermissions();
     }
 
-    for (const formElement of [profileForm, trendForm, timeInsightForm, comparisonForm, weaponForm, recommendationForm, dropZoneForm, matchForm, timelinePlayerForm]) {
+    for (const formElement of [...analysisForms, timelinePlayerForm]) {
       const input = formElement.elements.target;
       input.addEventListener("input", () => {
         if (resolveRegisteredPlayer(input.value, formElement.elements.shard?.value || "")) {
@@ -14426,6 +15079,28 @@ _INDEX_HTML = """<!doctype html>
         banner.textContent = `유저 등록 오류: ${error.message}`;
       }
     });
+
+    intelligenceForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        await loadPlayerIntelligence(event.currentTarget);
+        banner.textContent = "종합 분석 완료";
+      } catch (error) {
+        intelligenceBody.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+    intelligenceViewControls.addEventListener("click", (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("[data-intelligence-view]")
+        : null;
+      if (!button) return;
+      activeIntelligenceView = button.dataset.intelligenceView || "overview";
+      renderIntelligenceReport();
+    });
+    intelligenceTrendGranularity.addEventListener("change", renderIntelligenceReport);
+    intelligenceTrendMetric.addEventListener("change", renderIntelligenceReport);
+    intelligenceBreakdownDimension.addEventListener("change", renderIntelligenceReport);
 
     profileForm.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -15007,6 +15682,16 @@ _INDEX_HTML = """<!doctype html>
       } catch (error) {
         postProcessingWorkerStatus.textContent = `Error: ${error.message}`;
         banner.textContent = `Error: ${error.message}`;
+      }
+    });
+
+    playerIntelligenceAuditRun.addEventListener("click", async () => {
+      try {
+        await runPlayerIntelligenceAudit();
+        banner.textContent = "플레이어 데이터 품질 검사 완료";
+      } catch (error) {
+        playerIntelligenceAuditStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 

@@ -9,6 +9,7 @@ from pubg_ai.data_deletion_preview import (
     DataDeletionImpactPreviewService,
     DataDeletionPreviewError,
     NORMALIZED_PLAYER_TABLES,
+    SHARED_MATCH_TABLES,
 )
 from pubg_ai.data_deletion_requests import DataDeletionRequest
 
@@ -36,10 +37,13 @@ class DataDeletionImpactPreviewServiceTests(unittest.TestCase):
                     "_matched_matches": 2,
                     "match_participants": 2,
                     "player_item_events": 3,
+                    "player_activity_events": 4,
+                    "player_match_activity_summaries": 1,
                     "_related_combat_locations": 5,
                     "match_care_package_events": 1,
                     "match_plane_routes": 1,
                     "match_phase_events": 2,
+                    "match_telemetry_event_counts": 3,
                     "raw_player_snapshots": 4,
                 },
                 raw_summaries={
@@ -104,8 +108,8 @@ class DataDeletionImpactPreviewServiceTests(unittest.TestCase):
             record = preview.to_record()
 
             self.assertEqual(record["matched_match_count"], 2)
-            self.assertEqual(record["candidate_row_count"], 14)
-            self.assertEqual(record["preserved_reference_row_count"], 11)
+            self.assertEqual(record["candidate_row_count"], 19)
+            self.assertEqual(record["preserved_reference_row_count"], 14)
             self.assertEqual(record["raw_files"]["total_records"], 3)
             self.assertEqual(record["raw_files"]["deletion_candidate_records"], 0)
             self.assertEqual(record["raw_files"]["shared_match_records"], 3)
@@ -155,6 +159,11 @@ class DataDeletionImpactPreviewServiceTests(unittest.TestCase):
         self.assertEqual(
             {impact["table"] for impact in record["row_impacts"]},
             set(NORMALIZED_PLAYER_TABLES),
+        )
+        self.assertTrue(
+            {"player_activity_events", "player_match_activity_summaries"}.issubset(
+                NORMALIZED_PLAYER_TABLES
+            )
         )
 
     def test_file_limit_is_validated_before_querying(self) -> None:
@@ -240,9 +249,7 @@ class PreviewCursor:
             return
 
         known_tables = (
-            "match_care_package_events",
-            "match_plane_routes",
-            "match_phase_events",
+            *SHARED_MATCH_TABLES[1:],
             "registered_players",
             "player_aliases",
             "player_collection_states",

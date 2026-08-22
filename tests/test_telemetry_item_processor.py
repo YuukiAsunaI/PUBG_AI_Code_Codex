@@ -11,8 +11,8 @@ from pubg_ai.telemetry_item_processor import (
 
 
 class TelemetryItemProcessorTests(unittest.TestCase):
-    def test_translation_output_change_uses_v3_processing_state(self) -> None:
-        self.assertEqual(PARSER_VERSION, "items-v3")
+    def test_source_tracking_change_uses_v4_processing_state(self) -> None:
+        self.assertEqual(PARSER_VERSION, "items-v4")
 
     def test_parses_tracked_item_events_and_summarizes_quantities(self) -> None:
         translator = CodeTranslator(
@@ -26,6 +26,16 @@ class TelemetryItemProcessorTests(unittest.TestCase):
             }
         )
         events = [
+            {
+                "_T": "LogItemPickupFromVehicleTrunk",
+                "character": {"accountId": "account.tracked"},
+                "item": {"itemId": "Item_Ammo_556mm_C", "stackCount": 20},
+            },
+            {
+                "_T": "LogItemPutToVehicleTrunk",
+                "character": {"accountId": "account.tracked"},
+                "item": {"itemId": "Item_Ammo_556mm_C", "stackCount": 10},
+            },
             {
                 "_T": "LogItemPickup",
                 "_D": "2026-06-28T00:00:00Z",
@@ -81,16 +91,18 @@ class TelemetryItemProcessorTests(unittest.TestCase):
         stats = summarize_item_match_stats(item_events)
         by_code = {item.item_code: item for item in stats}
 
-        self.assertEqual(len(item_events), 4)
-        self.assertEqual(item_events[0].event_at_kst.hour, 9)
-        self.assertEqual(item_events[0].item_name_ko, "5.56mm")
-        self.assertEqual(item_events[0].location_x, 1.0)
-        self.assertEqual(item_events[3].action, "attach")
-        self.assertEqual(item_events[3].parent_item_code, "Item_Weapon_HK416_C")
-        self.assertEqual(item_events[3].child_item_name_ko, "레드도트")
+        self.assertEqual(len(item_events), 6)
+        self.assertEqual(item_events[2].event_at_kst.hour, 9)
+        self.assertEqual(item_events[2].item_name_ko, "5.56mm")
+        self.assertEqual(item_events[2].location_x, 1.0)
+        self.assertEqual(item_events[5].action, "attach")
+        self.assertEqual(item_events[5].parent_item_code, "Item_Weapon_HK416_C")
+        self.assertEqual(item_events[5].child_item_name_ko, "레드도트")
 
-        self.assertEqual(by_code["Item_Ammo_556mm_C"].picked_up_events, 1)
-        self.assertEqual(by_code["Item_Ammo_556mm_C"].picked_up_quantity, 30)
+        self.assertEqual(by_code["Item_Ammo_556mm_C"].picked_up_events, 2)
+        self.assertEqual(by_code["Item_Ammo_556mm_C"].picked_up_quantity, 50)
+        self.assertEqual(by_code["Item_Ammo_556mm_C"].vehicle_trunk_pickup_events, 1)
+        self.assertEqual(by_code["Item_Ammo_556mm_C"].vehicle_trunk_put_events, 1)
         self.assertEqual(by_code["Item_Ammo_556mm_C"].dropped_events, 1)
         self.assertEqual(by_code["Item_Ammo_556mm_C"].dropped_quantity, 5)
         self.assertEqual(by_code["Item_Heal_FirstAid_C"].used_events, 1)

@@ -23,6 +23,7 @@ class PostProcessingWorkerTests(unittest.TestCase):
 
         options = PostProcessingWorkerOptions(
             combat_limit=3,
+            activity_limit=2,
             item_limit=4,
             movement_limit=5,
             loadout_limit=6,
@@ -38,6 +39,7 @@ class PostProcessingWorkerTests(unittest.TestCase):
             raw_store_factory=lambda root, compression: FakeRawStore(root, compression, calls),
             replay_store_factory=lambda root: FakeReplayStore(root, calls),
             combat_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("combat", *args, calls=calls),
+            activity_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("activity", *args, calls=calls),
             item_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("items", *args, calls=calls),
             movement_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("movement", *args, calls=calls),
             loadout_processor_factory=lambda *args, **kwargs: FakeLoadoutProcessor(*args, calls=calls),
@@ -50,6 +52,7 @@ class PostProcessingWorkerTests(unittest.TestCase):
         self.assertEqual(result.poll_interval_seconds, 120)
         self.assertEqual(result.options, options.to_record())
         self.assertEqual(result.combat, {"parsed_payloads": 3, "failed_payloads": 0})
+        self.assertEqual(result.activity, {"parsed_payloads": 2, "failed_payloads": 0})
         self.assertEqual(result.items, {"parsed_payloads": 4, "failed_payloads": 0})
         self.assertEqual(result.movement, {"parsed_payloads": 5, "failed_payloads": 0})
         self.assertEqual(result.loadout_snapshots, {"generated_snapshots": 6, "failed_matches": 0})
@@ -61,6 +64,7 @@ class PostProcessingWorkerTests(unittest.TestCase):
         self.assertIn(("raw_store", (Path("raw"), "none")), calls)
         self.assertIn(("replay_store", Path("replays")), calls)
         self.assertIn(("combat", (3, True)), calls)
+        self.assertIn(("activity", (2, True)), calls)
         self.assertIn(("items", (4, True)), calls)
         self.assertIn(("movement", (5, True)), calls)
         self.assertIn(("loadout", (6, True)), calls)
@@ -80,6 +84,7 @@ class PostProcessingWorkerTests(unittest.TestCase):
             raw_store_factory=lambda root, compression: FakeRawStore(root, compression, []),
             replay_store_factory=lambda root: FakeReplayStore(root, []),
             combat_processor_factory=lambda *args, **kwargs: FailingTelemetryProcessor(),
+            activity_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("activity", *args, calls=[]),
             item_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("items", *args, calls=[]),
             movement_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("movement", *args, calls=[]),
             loadout_processor_factory=lambda *args, **kwargs: FakeLoadoutProcessor(*args, calls=[]),
@@ -121,6 +126,7 @@ class PostProcessingWorkerTests(unittest.TestCase):
             raw_store_factory=lambda root, compression: FakeRawStore(root, compression, []),
             replay_store_factory=lambda root: FakeReplayStore(root, []),
             combat_processor_factory=lambda *args, **kwargs: ReportedFailureTelemetryProcessor(),
+            activity_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("activity", *args, calls=[]),
             item_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("items", *args, calls=[]),
             movement_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("movement", *args, calls=[]),
             loadout_processor_factory=lambda *args, **kwargs: FakeLoadoutProcessor(*args, calls=[]),

@@ -12,6 +12,7 @@ Discord command layer, operational controls, and the research and evidence behin
 - [Local Architecture and MySQL Model](docs/LOCAL_ARCHITECTURE_AND_MYSQL_MODEL.md)
 - [Implementation Decisions](docs/IMPLEMENTATION_DECISIONS.md)
 - [Data Lifecycle and Operations](docs/DATA_LIFECYCLE_AND_OPERATIONS.md)
+- [Player Intelligence and Data Quality](docs/PLAYER_INTELLIGENCE_AND_DATA_QUALITY.md)
 - [Operational Recovery and Drills](docs/OPERATIONAL_DRILLS.md)
 - [Code Translation](docs/CODE_TRANSLATION.md)
 - [Sample Match Analysis](docs/SAMPLE_MATCH_ANALYSIS.md)
@@ -73,6 +74,12 @@ The first executable slice is now available:
 - queued telemetry downloader that stores large telemetry JSON files under the configured raw storage path
 - raw telemetry combat parser for registered-player match summaries and weapon-level stats
 - raw telemetry item parser for pickups, drops, uses, equips, attachment changes, and item summary stats
+- versioned activity parser for healing, revives, throwables, vehicles, mobility, environment interactions, and
+  per-match telemetry event coverage
+- progressive player-intelligence workspace with overview, KST trend graphs, categorical comparisons, raw evidence,
+  metric definitions, parser coverage, and item-source provenance
+- read-only data-quality audit in both CLI and local manager for schema, parser coverage, event reconciliation,
+  healing decomposition, and invalid negative values
 - combat loadout snapshot generator for weapon + attachment state at kill/DBNO/finish moments
 - versioned official-asset-backed map-region catalog for Korean named drop-zone recommendations with
   raw-coordinate fallback
@@ -677,6 +684,16 @@ Open:
 ```text
 http://127.0.0.1:8000
 ```
+
+Validate the current player-intelligence materialization after a collection or backfill cycle:
+
+```powershell
+python -m pubg_ai.cli audit-player-intelligence
+```
+
+The command returns exit code `0` only when all checks pass. Newly downloaded telemetry can temporarily make parser
+coverage incomplete until the activity and item post-processing stages catch up; this is reported as a failed audit,
+not silently treated as zero activity.
 
 The web app refuses non-localhost bind hosts by default. Do not run it with `0.0.0.0` unless a future authenticated
 remote-access mode is intentionally added.

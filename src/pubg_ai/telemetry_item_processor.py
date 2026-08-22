@@ -23,6 +23,9 @@ ITEM_EVENT_ACTIONS = {
     "LogItemPickup": "pickup",
     "LogItemPickupFromLootBox": "pickup_lootbox",
     "LogItemPickupFromCarepackage": "pickup_carepackage",
+    "LogItemPickupFromCustomPackage": "pickup_custom_package",
+    "LogItemPickupFromVehicleTrunk": "pickup_vehicle_trunk",
+    "LogItemPutToVehicleTrunk": "put_vehicle_trunk",
     "LogItemDrop": "drop",
     "LogItemUse": "use",
     "LogItemEquip": "equip",
@@ -33,7 +36,7 @@ ITEM_EVENT_ACTIONS = {
 
 
 PROCESSOR_NAME = "items"
-PARSER_VERSION = "items-v3"
+PARSER_VERSION = "items-v4"
 
 
 class TelemetryItemProcessingError(RuntimeError):
@@ -85,6 +88,9 @@ class ItemMatchStats:
     picked_up_quantity: int = 0
     loot_box_pickup_events: int = 0
     carepackage_pickup_events: int = 0
+    custom_package_pickup_events: int = 0
+    vehicle_trunk_pickup_events: int = 0
+    vehicle_trunk_put_events: int = 0
     dropped_events: int = 0
     dropped_quantity: int = 0
     used_events: int = 0
@@ -359,6 +365,9 @@ class TelemetryItemProcessor:
                 stats.picked_up_quantity,
                 stats.loot_box_pickup_events,
                 stats.carepackage_pickup_events,
+                stats.custom_package_pickup_events,
+                stats.vehicle_trunk_pickup_events,
+                stats.vehicle_trunk_put_events,
                 stats.dropped_events,
                 stats.dropped_quantity,
                 stats.used_events,
@@ -386,6 +395,9 @@ class TelemetryItemProcessor:
                     picked_up_quantity,
                     loot_box_pickup_events,
                     carepackage_pickup_events,
+                    custom_package_pickup_events,
+                    vehicle_trunk_pickup_events,
+                    vehicle_trunk_put_events,
                     dropped_events,
                     dropped_quantity,
                     used_events,
@@ -396,7 +408,11 @@ class TelemetryItemProcessor:
                     detached_events,
                     updated_at_kst
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s
+                )
                 """,
                 rows,
             )
@@ -494,6 +510,16 @@ def summarize_item_match_stats(item_events: Iterable[ItemEventRecord]) -> list[I
             stats.picked_up_events += 1
             stats.picked_up_quantity += event.quantity
             stats.carepackage_pickup_events += 1
+        elif event.action == "pickup_custom_package":
+            stats.picked_up_events += 1
+            stats.picked_up_quantity += event.quantity
+            stats.custom_package_pickup_events += 1
+        elif event.action == "pickup_vehicle_trunk":
+            stats.picked_up_events += 1
+            stats.picked_up_quantity += event.quantity
+            stats.vehicle_trunk_pickup_events += 1
+        elif event.action == "put_vehicle_trunk":
+            stats.vehicle_trunk_put_events += 1
         elif event.action == "drop":
             stats.dropped_events += 1
             stats.dropped_quantity += event.quantity

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import Any, Mapping
 
 from pubg_ai.time_utils import now_kst
@@ -17,6 +18,7 @@ def list_pending_telemetry_payloads(
     state_filter = ""
     params: list[Any] = []
     if not force:
+        parser_rank = parser_version_rank(parser_version)
         state_filter = """
             WHERE EXISTS (
                 SELECT 1
@@ -31,11 +33,11 @@ def list_pending_telemetry_payloads(
                 WHERE participants.match_id = raw_payloads.match_id
                   AND (
                         states.match_id IS NULL
-                        OR states.parser_version <> %s
+                        OR CAST(SUBSTRING_INDEX(states.parser_version, '-v', -1) AS UNSIGNED) < %s
                   )
             )
         """
-        params.extend([processor_name, parser_version])
+        params.extend([processor_name, parser_rank])
     params.append(limit)
 
     with connection.cursor() as cursor:
@@ -69,8 +71,13 @@ def pending_tracked_account_ids(
     state_filter = ""
     params: list[Any] = [processor_name, match_id, shard]
     if not force:
-        state_filter = "AND (states.match_id IS NULL OR states.parser_version <> %s)"
-        params.append(parser_version)
+        state_filter = """
+            AND (
+                states.match_id IS NULL
+                OR CAST(SUBSTRING_INDEX(states.parser_version, '-v', -1) AS UNSIGNED) < %s
+            )
+        """
+        params.append(parser_version_rank(parser_version))
 
     with connection.cursor() as cursor:
         cursor.execute(
@@ -132,10 +139,26 @@ def upsert_processing_states(
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
-                parser_version = VALUES(parser_version),
-                output_count = VALUES(output_count),
-                processed_at_kst = VALUES(processed_at_kst),
-                updated_at_kst = VALUES(updated_at_kst)
+                output_count = IF(
+                    CAST(SUBSTRING_INDEX(VALUES(parser_version), '-v', -1) AS UNSIGNED)
+                        >= CAST(SUBSTRING_INDEX(parser_version, '-v', -1) AS UNSIGNED),
+                    VALUES(output_count), output_count
+                ),
+                processed_at_kst = IF(
+                    CAST(SUBSTRING_INDEX(VALUES(parser_version), '-v', -1) AS UNSIGNED)
+                        >= CAST(SUBSTRING_INDEX(parser_version, '-v', -1) AS UNSIGNED),
+                    VALUES(processed_at_kst), processed_at_kst
+                ),
+                updated_at_kst = IF(
+                    CAST(SUBSTRING_INDEX(VALUES(parser_version), '-v', -1) AS UNSIGNED)
+                        >= CAST(SUBSTRING_INDEX(parser_version, '-v', -1) AS UNSIGNED),
+                    VALUES(updated_at_kst), updated_at_kst
+                ),
+                parser_version = IF(
+                    CAST(SUBSTRING_INDEX(VALUES(parser_version), '-v', -1) AS UNSIGNED)
+                        >= CAST(SUBSTRING_INDEX(parser_version, '-v', -1) AS UNSIGNED),
+                    VALUES(parser_version), parser_version
+                )
             """,
             rows,
         )
@@ -148,6 +171,11 @@ def count_outputs_by_account(rows: list[Any], *, account_attribute: str = "accou
         if isinstance(account_id, str) and account_id:
             counts[account_id] = counts.get(account_id, 0) + 1
     return counts
+
+
+def parser_version_rank(parser_version: str) -> int:
+    match = re.search(r"-v(\d+)$", str(parser_version or "").strip())
+    return int(match.group(1)) if match else 0
 
 
 def _account_query_params(params: list[Any]) -> tuple[Any, ...]:

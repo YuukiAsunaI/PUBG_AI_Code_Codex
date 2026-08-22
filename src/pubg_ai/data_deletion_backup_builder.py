@@ -33,7 +33,7 @@ from pubg_ai.storage_contract import storage_paths_overlap
 from pubg_ai.time_utils import now_kst, to_kst
 
 
-BACKUP_BUILDER_CONTRACT_VERSION = "deletion-backup-builder-v1"
+BACKUP_BUILDER_CONTRACT_VERSION = "deletion-backup-builder-v2"
 MYSQL_BACKUP_FORMAT_VERSION = "mysql-row-jsonl-v1"
 REPLAY_BACKUP_FORMAT_VERSION = "replay-artifact-zip-v1"
 BACKUP_BUILD_CONFIRMATION_PREFIX = "BUILD BACKUP ARTIFACTS REQUEST"
@@ -54,6 +54,8 @@ _NORMALIZED_TABLES = {
     "player_weapon_match_stats",
     "player_item_events",
     "player_item_match_stats",
+    "player_activity_events",
+    "player_match_activity_summaries",
     "player_position_samples",
     "player_landing_events",
     "player_movement_summaries",
