@@ -291,10 +291,11 @@ Implemented behavior:
   preview, dry-run, and backup scope. Opponent account IDs are preserved references, while target-owned rows and
   target-owned fight loadout snapshots follow the existing match/account lifecycle. No raw or replay file is rewritten
   by fight-outcome parsing.
-- Current schema version 23 adds `player_telemetry_processing_states` and a unique API-job target index. Parser
-  completion is tracked per match, account, processor, and parser version, including zero-output results. Schema
-  version 22 added `operational_drill_runs`; reports contain bounded counts and safe metrics only, with no API key,
-  Discord token, nickname, account ID, or temporary drill target ID persisted.
+- Current schema version 28 has 52 tables. `player_discord_registrations` follows the registered-player lifecycle and
+  is included in deletion previews, dry-run ordering, and target backup artifacts before `registered_players`.
+  Removing one guild association is a soft unlink and preserves other guild associations, collection state, and all
+  match data. Global collection stop is independent from guild registration. The table stores no API key or Discord
+  token.
 - The earlier non-executing rehearsal still rechecks live deletion impact, evidence times, artifact metadata, bound
   planner-generated capacity evidence, and current quarantine free space without changing targets.
   `executor_not_implemented` remains even after every available rehearsal passes; production restore, actual

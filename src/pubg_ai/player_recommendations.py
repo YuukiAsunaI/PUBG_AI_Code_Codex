@@ -10,6 +10,7 @@ from pubg_ai.distance_buckets import WeaponFamily, distance_bucket
 from pubg_ai.map_regions import resolve_map_region
 from pubg_ai.map_snapshot_renderer import DEFAULT_WORLD_SIZE_CM, MAP_WORLD_SIZE_CM
 from pubg_ai.player_registry import RegisteredPlayer
+from pubg_ai.player_scope import PLAYER_GUILD_SCOPE_CONDITION
 from pubg_ai.weapon_accuracy import (
     WeaponAccuracyMetric,
     distance_weapon_family,
@@ -662,7 +663,7 @@ class PlayerRecommendationService:
         if not global_scope:
             if not guild_id:
                 return None
-            conditions.append("registered_guild_id = %s")
+            conditions.append(PLAYER_GUILD_SCOPE_CONDITION)
             params.append(guild_id)
 
         query = (

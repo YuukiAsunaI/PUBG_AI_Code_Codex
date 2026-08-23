@@ -5,6 +5,8 @@ from datetime import datetime
 import re
 from typing import Any
 
+from pubg_ai.player_scope import PLAYER_GUILD_SCOPE_CONDITION
+
 
 MIN_PLAYABLE_TIMELINE_VERSION = 13
 _TIMELINE_RENDERER_PATTERN = re.compile(r"^player-timeline-v(?P<version>\d+)$")
@@ -105,7 +107,7 @@ def list_replay_artifacts(
         where_sql.append("artifacts.account_id = %s")
         params.append(account_id)
     if registered_guild_id:
-        where_sql.append("registered_players.registered_guild_id = %s")
+        where_sql.append(PLAYER_GUILD_SCOPE_CONDITION)
         params.append(registered_guild_id)
 
     where_clause = f"WHERE {' AND '.join(where_sql)}" if where_sql else ""

@@ -65,7 +65,11 @@ _NORMALIZED_TABLES = {
     "player_fight_outcome_processing_states",
     "player_telemetry_processing_states",
 }
-_DATABASE_TABLES = _IDENTITY_TABLES | _NORMALIZED_TABLES | {"player_collection_states"}
+_REGISTERED_PLAYER_JOIN_TABLES = {
+    "player_collection_states",
+    "player_discord_registrations",
+}
+_DATABASE_TABLES = _IDENTITY_TABLES | _NORMALIZED_TABLES | _REGISTERED_PLAYER_JOIN_TABLES
 _COPY_CHUNK_BYTES = 1024 * 1024
 
 
@@ -675,17 +679,20 @@ def database_backup_select(
         or str(selector.get("shard") or "") != request.shard
     ):
         raise DataDeletionBackupBuilderError(f"database selector target mismatch for {table}.")
-    if table == "player_collection_states":
+    if table in _REGISTERED_PLAYER_JOIN_TABLES:
         if str(selector.get("kind") or "") != "registered_player_join":
-            raise DataDeletionBackupBuilderError("collection-state selector kind is invalid.")
+            raise DataDeletionBackupBuilderError(
+                f"registered-player selector kind is invalid for {table}."
+            )
+        order_column = "registered_player_id" if table == "player_collection_states" else "id"
         return (
-            """
+            f"""
             SELECT target_rows.*
-            FROM player_collection_states AS target_rows
+            FROM {table} AS target_rows
             INNER JOIN registered_players AS target_players
                 ON target_players.id = target_rows.registered_player_id
             WHERE target_players.account_id = %s AND target_players.shard = %s
-            ORDER BY target_rows.registered_player_id ASC
+            ORDER BY target_rows.{order_column} ASC
             """,
             (request.account_id, request.shard),
         )

@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from pubg_ai.player_registry import RegisteredPlayer
+from pubg_ai.player_scope import PLAYER_GUILD_SCOPE_CONDITION
 from pubg_ai.weapon_accuracy import AccuracyBreakdown, summarize_accuracy_rows
 
 
@@ -154,7 +155,7 @@ class PlayerRankingService:
         if not global_scope:
             if not guild_id:
                 return []
-            conditions.append("registered_players.registered_guild_id = %s")
+            conditions.append(PLAYER_GUILD_SCOPE_CONDITION)
             params.append(guild_id)
 
         params.append(min_matches)

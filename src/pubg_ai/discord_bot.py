@@ -1900,9 +1900,17 @@ def create_discord_bot(
             if not existing or not _player_visible_to_scope(existing, guild_id, global_scope):
                 player = None
             else:
-                player = registry.unregister_player(
-                    shard=shard,
-                    account_id=existing.account_id,
+                player = (
+                    registry.unregister_player(
+                        shard=shard,
+                        account_id=existing.account_id,
+                    )
+                    if global_scope
+                    else registry.unregister_player_from_guild(
+                        shard=shard,
+                        account_id=existing.account_id,
+                        guild_id=guild_id or "",
+                    )
                 )
         finally:
             connection.close()
@@ -1918,7 +1926,11 @@ def create_discord_bot(
         else:
             await ctx.reply(
                 format_registered_player_command_reply(
-                    f"수집 중지 완료: {player.current_name} ({player.shard})",
+                    (
+                        f"수집 중지 완료: {player.current_name} ({player.shard})"
+                        if global_scope
+                        else f"현재 Discord 서버 등록 해제 완료: {player.current_name} ({player.shard})"
+                    ),
                     player,
                     detail_base_url=config.app.local_web_base_url,
                 ),
@@ -3815,4 +3827,4 @@ def _player_visible_to_scope(
     guild_id: str | None,
     global_scope: bool,
 ) -> bool:
-    return global_scope or (guild_id is not None and player.registered_guild_id == guild_id)
+    return global_scope or player.is_registered_in_guild(guild_id)

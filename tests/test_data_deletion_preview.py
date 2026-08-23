@@ -34,6 +34,7 @@ class DataDeletionImpactPreviewServiceTests(unittest.TestCase):
                     "registered_players": 1,
                     "player_aliases": 2,
                     "player_collection_states": 1,
+                    "player_discord_registrations": 2,
                     "_matched_matches": 2,
                     "match_participants": 2,
                     "player_item_events": 3,
@@ -108,7 +109,14 @@ class DataDeletionImpactPreviewServiceTests(unittest.TestCase):
             record = preview.to_record()
 
             self.assertEqual(record["matched_match_count"], 2)
-            self.assertEqual(record["candidate_row_count"], 19)
+            self.assertEqual(record["candidate_row_count"], 21)
+            discord_impact = next(
+                impact
+                for impact in record["row_impacts"]
+                if impact["table"] == "player_discord_registrations"
+            )
+            self.assertEqual(discord_impact["row_count"], 2)
+            self.assertEqual(discord_impact["relationship"], "discord_registration")
             self.assertEqual(record["preserved_reference_row_count"], 14)
             self.assertEqual(record["raw_files"]["total_records"], 3)
             self.assertEqual(record["raw_files"]["deletion_candidate_records"], 0)
@@ -253,6 +261,7 @@ class PreviewCursor:
             "registered_players",
             "player_aliases",
             "player_collection_states",
+            "player_discord_registrations",
             *NORMALIZED_PLAYER_TABLES,
             "raw_player_snapshots",
         )

@@ -121,6 +121,42 @@ class PlayerTrendSummaryTests(unittest.TestCase):
         self.assertEqual([bucket.period_key for bucket in years.buckets], ["2026"])
         self.assertEqual([bucket.period_label for bucket in teams.buckets], ["듀오", "스쿼드"])
 
+    def test_groups_weapon_performance_with_weapon_specific_kda_and_fights(self) -> None:
+        rows = [
+            {
+                **self.rows[0],
+                "weapon_code": "WeapHK416_C",
+                "win_place": 1,
+                "kills": 3,
+                "assists": 1,
+                "deaths": 1,
+                "fight_count": 5,
+                "fight_wins": 4,
+                "fight_losses": 1,
+            },
+            {
+                **self.rows[1],
+                "weapon_code": "WeapAK47_C",
+                "win_place": 4,
+                "kills": 1,
+                "assists": 0,
+                "deaths": 1,
+                "fight_count": 3,
+                "fight_wins": 1,
+                "fight_losses": 2,
+            },
+        ]
+
+        report = summarize_player_trends(rows, granularity="무기별")
+        by_code = {bucket.period_key: bucket for bucket in report.buckets}
+
+        self.assertEqual(by_code["WeapHK416_C"].period_label, "M416")
+        self.assertEqual(by_code["WeapHK416_C"].metrics.match_count, 1)
+        self.assertEqual(by_code["WeapHK416_C"].metrics.win_rate, 1.0)
+        self.assertEqual(by_code["WeapHK416_C"].metrics.kda, 4.0)
+        self.assertEqual(by_code["WeapHK416_C"].metrics.fight_win_rate, 0.8)
+        self.assertAlmostEqual(by_code["WeapAK47_C"].metrics.fight_win_rate, 1 / 3)
+
     def test_returns_most_recent_buckets_when_limit_truncates(self) -> None:
         report = summarize_player_trends(self.rows, granularity="date", bucket_limit=2)
 
@@ -139,6 +175,7 @@ class PlayerTrendSummaryTests(unittest.TestCase):
 
     def test_normalizes_aliases_and_validates_filter_values(self) -> None:
         self.assertEqual(normalize_trend_granularity("월별"), "month")
+        self.assertEqual(normalize_trend_granularity("무기별"), "weapon")
         self.assertEqual(parse_trend_date("2026-08-02", "from"), date(2026, 8, 2))
         self.assertIsNone(parse_optional_bool("전체", "custom"))
         self.assertTrue(parse_optional_bool("custom", "custom"))
@@ -303,6 +340,99 @@ class PlayerTrendServiceTests(unittest.TestCase):
         fight_query, fight_params = connection.executions[3]
         self.assertIn("outcomes.is_friendly_fire = 0", fight_query)
         self.assertEqual(fight_params, ["account.test", "steam", "match-1"])
+
+    def test_weapon_dimension_keeps_global_totals_once_and_builds_weapon_buckets(self) -> None:
+        match_row = PlayerTrendSummaryTests.row(
+            created_at_kst=datetime(2026, 8, 1, 1, 20),
+            win_place=1,
+            kills=4,
+            assists=1,
+            deaths=1,
+        )
+        match_row["match_id"] = "match-1"
+        player_row = {
+            "id": 1,
+            "account_id": "account.test",
+            "shard": "steam",
+            "current_name": "Player",
+            "active": 1,
+            "public_profile": 1,
+            "registered_by_discord_user_id": None,
+            "registered_guild_id": "guild-1",
+            "registered_channel_id": None,
+        }
+        weapon_rows = [
+            {
+                "match_id": "match-1",
+                "weapon_code": "WeapHK416_C",
+                "shots_fired": 30,
+                "shots_hit": 10,
+                "hits_taken": 1,
+                "damage_dealt": 250,
+                "damage_taken": 20,
+                "kills": 3,
+                "assists": 1,
+                "deaths": 0,
+                "dbnos": 2,
+                "dbnos_taken": 0,
+                "headshot_hits": 2,
+                "headshot_hits_taken": 0,
+                "headshot_kills": 1,
+                "hit_parts": {"head": 2, "torso": 8},
+                "taken_hit_parts": {"torso": 1},
+            },
+            {
+                "match_id": "match-1",
+                "weapon_code": "WeapAK47_C",
+                "shots_fired": 10,
+                "shots_hit": 3,
+                "hits_taken": 2,
+                "damage_dealt": 80,
+                "damage_taken": 50,
+                "kills": 1,
+                "assists": 0,
+                "deaths": 1,
+                "dbnos": 1,
+                "dbnos_taken": 1,
+                "headshot_hits": 0,
+                "headshot_hits_taken": 1,
+                "headshot_kills": 0,
+                "hit_parts": {"torso": 3},
+                "taken_hit_parts": {"head": 1, "torso": 1},
+            },
+        ]
+        connection = FakeConnection(
+            [
+                player_row,
+                [match_row],
+                [],
+                [],
+                weapon_rows,
+                [
+                    {"match_id": "match-1", "weapon_code": "WeapHK416_C", "fight_count": 4, "fight_wins": 3, "fight_losses": 1, "deaths": 0, "dbnos_taken": 1},
+                    {"match_id": "match-1", "weapon_code": "WeapAK47_C", "fight_count": 2, "fight_wins": 1, "fight_losses": 1, "deaths": 1, "dbnos_taken": 0},
+                ],
+            ]
+        )
+
+        report = PlayerTrendService(connection).get_report(
+            shard="steam",
+            name="Player",
+            guild_id="guild-1",
+            granularity="weapon",
+        )
+
+        self.assertIsNotNone(report)
+        assert report is not None
+        self.assertEqual(report.totals.match_count, 1)
+        self.assertEqual(report.totals.kills, 4)
+        by_code = {bucket.period_key: bucket for bucket in report.buckets}
+        self.assertEqual(set(by_code), {"WeapHK416_C", "WeapAK47_C"})
+        self.assertEqual(by_code["WeapHK416_C"].metrics.wins, 1)
+        self.assertEqual(by_code["WeapHK416_C"].metrics.kda, 4.0)
+        self.assertEqual(by_code["WeapHK416_C"].metrics.deaths, 0)
+        self.assertEqual(by_code["WeapAK47_C"].metrics.deaths, 1)
+        self.assertEqual(by_code["WeapHK416_C"].metrics.fight_win_rate, 0.75)
 
 class FakeCursor:
     def __init__(self, connection: "FakeConnection") -> None:

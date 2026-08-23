@@ -626,6 +626,17 @@ Completed slices:
      suite, compile check, diff check, live official-CDN download, localhost HTTP checks, and Discord Gateway restart
      passed. Detailed evidence is in `docs/PROJECT_AUDIT_2026-08-10.md`.
 
+123. Schema version 28 makes `player_discord_registrations` authoritative for the many-to-many relationship between
+     one tracked PUBG account and Discord guilds. Collection and public-profile controls remain player-wide, while a
+     guild unlink preserves every other guild, all collected data, and collection state. Guild-scoped stats,
+     recommendations, rankings, fight outcomes, trends, and replay catalogs use one shared active-association
+     predicate. The localhost registry uses known-guild selectors and supports add/remove without memorizing IDs.
+     Query-time performance analysis now groups the same filtered corpus by map, weapon, or KST hour and returns
+     matches, chicken rate, KDA, damage, accuracy, headshot rates, fight win rate, DBNO balance, and survival. Weapon
+     deaths/DBNO losses come from the weapon held at the fight outcome, while received-hit metrics remain explicitly
+     labeled as the opponent weapon that caused them. Details and validation evidence are in
+     `docs/MULTI_DISCORD_AND_DIMENSION_ANALYTICS_2026-08-23.md`.
+
 Remaining external acceptance:
 
 1. Run a real read-only Discord command acceptance check in an explicitly selected guild/channel.

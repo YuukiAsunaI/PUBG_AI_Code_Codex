@@ -7,6 +7,7 @@ import json
 
 from pubg_ai.code_translator import translate_code
 from pubg_ai.player_registry import RegisteredPlayer
+from pubg_ai.player_scope import PLAYER_GUILD_SCOPE_CONDITION
 from pubg_ai.weapon_accuracy import AccuracyBreakdown, summarize_accuracy_rows
 
 
@@ -18,6 +19,7 @@ TrendGranularity = Literal[
     "quarter",
     "year",
     "map",
+    "weapon",
     "game_mode",
     "team_mode",
     "perspective",
@@ -221,15 +223,23 @@ class PlayerTrendService:
         rows = self._get_rows(player, normalized_filters)
         summary = summarize_player_trends(
             rows,
-            granularity=normalized_granularity,
+            granularity="month" if normalized_granularity == "weapon" else normalized_granularity,
             bucket_limit=bucket_limit,
         )
+        totals = summary.totals
+        if normalized_granularity == "weapon":
+            weapon_rows = self._get_weapon_dimension_rows(player, rows)
+            summary = summarize_player_trends(
+                weapon_rows,
+                granularity=normalized_granularity,
+                bucket_limit=bucket_limit,
+            )
         return PlayerTrendReport(
             player=player,
             granularity=normalized_granularity,
             timezone="Asia/Seoul",
             filters=normalized_filters,
-            totals=summary.totals,
+            totals=totals,
             buckets=summary.buckets,
             available_bucket_count=summary.available_bucket_count,
             truncated=summary.truncated,
@@ -259,7 +269,7 @@ class PlayerTrendService:
         if not global_scope:
             if not guild_id:
                 return None
-            conditions.append("registered_guild_id = %s")
+            conditions.append(PLAYER_GUILD_SCOPE_CONDITION)
             params.append(guild_id)
 
         with self.connection.cursor() as cursor:
@@ -447,6 +457,129 @@ class PlayerTrendService:
             row["fight_wins"] = _int(fight_row.get("fight_wins"))
             row["fight_losses"] = _int(fight_row.get("fight_losses"))
         return rows
+
+    def _get_weapon_dimension_rows(
+        self,
+        player: RegisteredPlayer,
+        match_rows: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        match_by_id = {str(row["match_id"]): row for row in match_rows}
+        if not match_by_id:
+            return []
+        match_ids = list(match_by_id)
+        placeholders = ", ".join(["%s"] * len(match_ids))
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    match_id,
+                    weapon_code,
+                    shots_fired,
+                    shots_hit,
+                    hits_taken,
+                    damage_dealt,
+                    damage_taken,
+                    kills,
+                    assists,
+                    deaths,
+                    dbnos,
+                    dbnos_taken,
+                    headshot_hits,
+                    headshot_hits_taken,
+                    headshot_kills,
+                    hit_parts,
+                    taken_hit_parts
+                FROM player_weapon_match_stats
+                WHERE account_id = %s
+                  AND match_id IN (
+                """
+                + placeholders
+                + """
+                  )
+                  AND (
+                    shots_fired > 0
+                    OR damage_dealt > 0
+                    OR kills > 0
+                    OR assists > 0
+                    OR dbnos > 0
+                  )
+                ORDER BY match_id ASC, weapon_code ASC
+                """,
+                [player.account_id, *match_ids],
+            )
+            weapon_rows = [dict(row) for row in cursor.fetchall()]
+
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    match_id,
+                    weapon_code,
+                    COUNT(*) AS fight_count,
+                    COALESCE(SUM(outcome_type = 'win'), 0) AS fight_wins,
+                    COALESCE(SUM(outcome_type = 'loss'), 0) AS fight_losses,
+                    COALESCE(SUM(outcome_reason = 'death'), 0) AS deaths,
+                    COALESCE(SUM(outcome_reason = 'dbno_taken'), 0) AS dbnos_taken
+                FROM player_fight_outcomes
+                WHERE account_id = %s
+                  AND is_friendly_fire = 0
+                  AND weapon_code IS NOT NULL
+                  AND match_id IN (
+                """
+                + placeholders
+                + """
+                  )
+                GROUP BY match_id, weapon_code
+                """,
+                [player.account_id, *match_ids],
+            )
+            fight_rows = cursor.fetchall()
+        fights_by_match_weapon = {
+            (str(row["match_id"]), str(row["weapon_code"])): row
+            for row in fight_rows
+        }
+
+        result: list[dict[str, Any]] = []
+        for weapon_row in weapon_rows:
+            match_id = str(weapon_row["match_id"])
+            weapon_code = str(weapon_row["weapon_code"])
+            base_row = match_by_id.get(match_id)
+            if base_row is None:
+                continue
+            fight_row = fights_by_match_weapon.get((match_id, weapon_code), {})
+            row = dict(base_row)
+            row.update(
+                {
+                    "weapon_code": weapon_code,
+                    "kills": _int(weapon_row.get("kills")),
+                    "assists": _int(weapon_row.get("assists")),
+                    "deaths": _int(fight_row.get("deaths")),
+                    "dbnos_caused": _int(weapon_row.get("dbnos")),
+                    "dbnos_taken": _int(fight_row.get("dbnos_taken")),
+                    "damage_dealt": _float(weapon_row.get("damage_dealt")),
+                    "damage_taken": _float(weapon_row.get("damage_taken")),
+                    "shots_fired": _int(weapon_row.get("shots_fired")),
+                    "shots_hit": _int(weapon_row.get("shots_hit")),
+                    "hits_taken": _int(weapon_row.get("hits_taken")),
+                    "headshot_hits": _int(weapon_row.get("headshot_hits")),
+                    "headshot_hits_taken": _int(weapon_row.get("headshot_hits_taken")),
+                    "headshot_kills": _int(weapon_row.get("headshot_kills")),
+                    "hit_parts": weapon_row.get("hit_parts"),
+                    "taken_hit_parts": weapon_row.get("taken_hit_parts"),
+                    "weapon_accuracy_rows": [
+                        {
+                            "weapon_code": weapon_code,
+                            "shots_fired": _int(weapon_row.get("shots_fired")),
+                            "shots_hit": _int(weapon_row.get("shots_hit")),
+                        }
+                    ],
+                    "fight_count": _int(fight_row.get("fight_count")),
+                    "fight_wins": _int(fight_row.get("fight_wins")),
+                    "fight_losses": _int(fight_row.get("fight_losses")),
+                }
+            )
+            result.append(row)
+        return result
 
 
 @dataclass(frozen=True)
@@ -653,6 +786,10 @@ def normalize_trend_granularity(value: str) -> TrendGranularity:
         "map": "map",
         "맵": "map",
         "맵별": "map",
+        "weapon": "weapon",
+        "weapons": "weapon",
+        "무기": "weapon",
+        "무기별": "weapon",
         "game_mode": "game_mode",
         "mode": "game_mode",
         "모드": "game_mode",
@@ -670,7 +807,7 @@ def normalize_trend_granularity(value: str) -> TrendGranularity:
     }
     if normalized not in aliases:
         raise ValueError(
-            "granularity must be a time period or one of map, game_mode, team_mode, "
+            "granularity must be a time period or one of map, weapon, game_mode, team_mode, "
             "perspective, match_type, season_state."
         )
     return aliases[normalized]
@@ -728,10 +865,14 @@ def _period(
         key = f"{created_at_kst.year:04d}"
         return key, f"{created_at_kst.year:04d}년", (created_at_kst.year,)
 
-    field_name = "map_name" if granularity == "map" else granularity
+    field_name = {
+        "map": "map_name",
+        "weapon": "weapon_code",
+    }.get(granularity, granularity)
     value = _optional_text(row.get(field_name)) or "unknown"
     category = {
         "map": "map",
+        "weapon": "damage_causer",
         "game_mode": "game_mode",
         "team_mode": "team_mode",
         "perspective": "perspective",

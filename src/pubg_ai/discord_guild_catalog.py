@@ -36,11 +36,10 @@ def list_discord_guild_catalog(
         stored_rows = list(cursor.fetchall())
         cursor.execute(
             """
-            SELECT registered_guild_id AS guild_id, COUNT(*) AS registered_player_count
-            FROM registered_players
-            WHERE registered_guild_id IS NOT NULL
-              AND registered_guild_id <> ''
-            GROUP BY registered_guild_id
+            SELECT guild_id, COUNT(DISTINCT registered_player_id) AS registered_player_count
+            FROM player_discord_registrations
+            WHERE active = 1
+            GROUP BY guild_id
             """,
             (),
         )

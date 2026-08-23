@@ -116,7 +116,7 @@ from pubg_ai.match_collection import RegisteredPlayerMatchCollector
 from pubg_ai.match_job_processor import MatchJobProcessor
 from pubg_ai.metric_catalog import metric_catalog_records
 from pubg_ai.player_intelligence import PlayerIntelligenceService
-from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry
+from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry, PlayerRegistryError
 from pubg_ai.player_rankings import PlayerRankingService
 from pubg_ai.post_processing_worker import (
     PostProcessingWorkerController,
@@ -167,6 +167,21 @@ class UnregisterPlayerRequest(BaseModel):
     shard: str = Field(default="steam", min_length=1)
     account_id: str | None = None
     name: str | None = None
+
+
+class UpdatePlayerManagementRequest(BaseModel):
+    shard: str = Field(default="steam", min_length=1)
+    account_id: str = Field(min_length=1)
+    active: bool | None = None
+    public_profile: bool | None = None
+
+
+class PlayerDiscordRegistrationRequest(BaseModel):
+    shard: str = Field(default="steam", min_length=1)
+    account_id: str = Field(min_length=1)
+    guild_id: str = Field(min_length=1, max_length=32)
+    channel_id: str | None = Field(default=None, max_length=32)
+    discord_user_id: str | None = Field(default=None, max_length=32)
 
 
 class CollectMatchesRequest(BaseModel):
@@ -2767,9 +2782,9 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
         connection = connect_mysql(config.database)
         try:
             context = DiscordCommandContext(
-                user_id=request.discord_user_id,
+                user_id=request.discord_user_id if request.guild_id else None,
                 guild_id=request.guild_id,
-                channel_id=request.channel_id,
+                channel_id=request.channel_id if request.guild_id else None,
             )
             registry = PlayerRegistry(connection)
             if request.account_id:
@@ -2812,6 +2827,84 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
             if player is None:
                 raise HTTPException(status_code=404, detail="player not found.")
             return {"player": player.to_record()}
+        finally:
+            connection.close()
+
+    @app.post("/players/manage")
+    def update_player_management(request: UpdatePlayerManagementRequest) -> dict[str, Any]:
+        if request.active is None and request.public_profile is None:
+            raise HTTPException(status_code=400, detail="active or public_profile is required.")
+        connection = connect_mysql(config.database)
+        try:
+            player = PlayerRegistry(connection).set_player_management(
+                shard=request.shard,
+                account_id=request.account_id,
+                active=request.active,
+                public_profile=request.public_profile,
+            )
+            if player is None:
+                raise HTTPException(status_code=404, detail="player not found.")
+            return {"player": player.to_record()}
+        finally:
+            connection.close()
+
+    @app.post("/players/discord-registrations")
+    def add_player_discord_registration(
+        request: PlayerDiscordRegistrationRequest,
+    ) -> dict[str, Any]:
+        connection = connect_mysql(config.database)
+        try:
+            registry = PlayerRegistry(connection)
+            player = registry.get_player(
+                shard=request.shard,
+                account_id=request.account_id,
+                include_inactive=True,
+            )
+            if player is None:
+                raise HTTPException(status_code=404, detail="player not found.")
+            try:
+                registry.add_discord_registration(
+                    registered_player_id=player.id,
+                    guild_id=request.guild_id,
+                    channel_id=request.channel_id,
+                    registered_by_discord_user_id=request.discord_user_id,
+                )
+            except PlayerRegistryError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            refreshed = registry.get_player(
+                shard=player.shard,
+                account_id=player.account_id,
+                include_inactive=True,
+            )
+            return {"player": refreshed.to_record() if refreshed else player.to_record()}
+        finally:
+            connection.close()
+
+    @app.post("/players/discord-registrations/remove")
+    def remove_player_discord_registration(
+        request: PlayerDiscordRegistrationRequest,
+    ) -> dict[str, Any]:
+        connection = connect_mysql(config.database)
+        try:
+            registry = PlayerRegistry(connection)
+            player = registry.get_player(
+                shard=request.shard,
+                account_id=request.account_id,
+                include_inactive=True,
+            )
+            if player is None:
+                raise HTTPException(status_code=404, detail="player not found.")
+            if not registry.remove_discord_registration(
+                registered_player_id=player.id,
+                guild_id=request.guild_id,
+            ):
+                raise HTTPException(status_code=404, detail="Discord registration not found.")
+            refreshed = registry.get_player(
+                shard=player.shard,
+                account_id=player.account_id,
+                include_inactive=True,
+            )
+            return {"player": refreshed.to_record() if refreshed else player.to_record()}
         finally:
             connection.close()
 
@@ -3623,6 +3716,40 @@ _INDEX_HTML = """<!doctype html>
       font-size: 10px;
       overflow-wrap: anywhere;
     }
+    .player-registry-table { min-width: 920px; table-layout: auto; }
+    .player-registry-table th:nth-child(1) { min-width: 210px; }
+    .player-registry-table th:nth-child(2),
+    .player-registry-table th:nth-child(3) { width: 112px; }
+    .player-registry-table th:nth-child(4) { min-width: 420px; }
+    .registry-player-name { display: block; color: var(--text); font-size: 12px; font-weight: 700; }
+    .registry-player-meta { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; overflow-wrap: anywhere; }
+    .registry-state-button { min-width: 88px; min-height: 30px; padding: 5px 8px; }
+    .discord-registration-list { display: flex; flex-wrap: wrap; gap: 5px; min-height: 25px; align-items: center; }
+    .discord-registration-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
+    .discord-registration-chip span { overflow-wrap: anywhere; }
+    .discord-registration-chip button {
+      width: 22px;
+      min-width: 22px;
+      min-height: 22px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--danger);
+      font-size: 16px;
+      line-height: 1;
+    }
+    .player-discord-editor { margin-top: 8px; }
+    .player-discord-editor summary { color: var(--accent); font-size: 10px; cursor: pointer; }
+    .player-discord-editor-grid {
+      display: grid;
+      grid-template-columns: minmax(170px, 1fr) minmax(150px, 0.75fr) auto;
+      gap: 7px;
+      align-items: end;
+      margin-top: 8px;
+    }
+    .player-discord-editor-grid label { min-width: 0; }
+    .player-discord-editor-grid select,
+    .player-discord-editor-grid input { min-width: 0; }
     .alert-settings-form { grid-template-columns: 160px 1fr 1fr auto; }
     .alert-channel-picker {
       grid-column: 1 / -1;
@@ -5120,6 +5247,27 @@ _INDEX_HTML = """<!doctype html>
       .comparison-bar-track { grid-column: 1 / -1; grid-row: 2; }
       .time-insight-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .time-hour-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .player-registry-table { min-width: 0; display: block; }
+      .player-registry-table thead { display: none; }
+      .player-registry-table tbody { display: block; }
+      .player-registry-table tr {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        padding: 12px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .player-registry-table tr:last-child { border-bottom: 0; }
+      .player-registry-table td {
+        display: block;
+        min-width: 0;
+        padding: 0;
+        border: 0;
+      }
+      .player-registry-table td:first-child,
+      .player-registry-table td:last-child { grid-column: 1 / -1; }
+      .player-registry-table .registry-state-button { width: 100%; }
+      .player-discord-editor-grid { grid-template-columns: 1fr; }
       .recommendation-chart-toolbar { justify-content: stretch; }
       .recommendation-chart-toolbar label { width: 100%; }
       .trend-control-cluster { width: 100%; }
@@ -5577,6 +5725,14 @@ _INDEX_HTML = """<!doctype html>
             <option value="false">비공개</option>
           </select>
         </label>
+        <label>Discord 서버
+          <select name="guild_id" class="discord-guild-select" data-empty-label="연결 안 함">
+            <option value="">연결 안 함</option>
+          </select>
+        </label>
+        <label>Discord 채널 ID
+          <input name="channel_id" autocomplete="off" inputmode="numeric" placeholder="선택 입력">
+        </label>
         <button type="submit">등록</button>
       </form>
     </section>
@@ -5586,18 +5742,19 @@ _INDEX_HTML = """<!doctype html>
         <button type="button" onclick="refreshCollection()">최근 매치 수집</button>
         <button class="secondary" type="button" onclick="loadPlayers()">새로고침</button>
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>플랫폼</th>
-            <th>닉네임</th>
-            <th>PUBG 계정 ID</th>
-            <th>상태</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="playersBody"></tbody>
-      </table>
+      <div class="table-scroll">
+        <table class="player-registry-table">
+          <thead>
+            <tr>
+              <th>플레이어</th>
+              <th>수집 관리</th>
+              <th>전적 공개</th>
+              <th>Discord 등록 서버</th>
+            </tr>
+          </thead>
+          <tbody id="playersBody"></tbody>
+        </table>
+      </div>
     </section>
     <section id="data-deletions" data-view="operations">
       <h2>데이터 삭제 검토</h2>
@@ -5767,7 +5924,7 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="profileBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
     <section id="trend-lookup" data-view="players">
-      <h2>KST 추세 조회</h2>
+      <h2>상세 성과 및 KST 추세</h2>
       <form id="trendForm" class="analysis-form">
         <div class="query-primary">
           <label>플랫폼
@@ -5779,7 +5936,7 @@ _INDEX_HTML = """<!doctype html>
               <option value="hour">시간대</option><option value="date" selected>일자</option>
               <option value="week">ISO 주차</option><option value="month">월</option>
               <option value="quarter">분기</option><option value="year">연도</option>
-              <option value="map">맵</option><option value="game_mode">게임 모드</option>
+              <option value="map">맵</option><option value="weapon">무기</option><option value="game_mode">게임 모드</option>
               <option value="team_mode">팀 모드</option><option value="perspective">시점</option>
               <option value="match_type">매치 유형</option><option value="season_state">시즌 상태</option>
             </select>
@@ -8419,6 +8576,7 @@ _INDEX_HTML = """<!doctype html>
       discordSettingsPrefill.permission_guild_id = "";
       discordSettingsPrefill.scope_guild_id = "";
       renderDiscordScopes();
+      if (registeredPlayers.length) renderPlayersTable();
     }
 
     function renderDiscordScopes() {
@@ -8802,12 +8960,19 @@ _INDEX_HTML = """<!doctype html>
       select.insertAdjacentHTML("beforeend", options);
     });
 
-    async function loadPlayers() {
-      const payload = await requestJson("/players?active_only=false", "GET");
-      registeredPlayers = payload.players || [];
-      playerCatalogCache.clear();
-      renderRegisteredPlayerOptions();
-      playersBody.innerHTML = payload.players.map((player) => {
+    function playerDiscordRegistrations(player) {
+      if (Array.isArray(player.discord_registrations)) return player.discord_registrations;
+      if (!player.registered_guild_id) return [];
+      return [{
+        guild_id: player.registered_guild_id,
+        channel_id: player.registered_channel_id || null,
+        registered_by_discord_user_id: player.registered_by_discord_user_id || null,
+        active: true,
+      }];
+    }
+
+    function renderPlayersTable() {
+      playersBody.innerHTML = registeredPlayers.map((player) => {
         const highlighted = Boolean(
           (registeredPlayerHighlight.account_id && player.account_id === registeredPlayerHighlight.account_id)
           || (
@@ -8816,21 +8981,50 @@ _INDEX_HTML = """<!doctype html>
             && (!registeredPlayerHighlight.shard || player.shard === registeredPlayerHighlight.shard)
           )
         );
+        const registrations = playerDiscordRegistrations(player);
+        const linkedGuilds = new Set(registrations.map((registration) => String(registration.guild_id)));
+        const registrationChips = registrations.map((registration) => {
+          const guildName = discordGuildName(registration.guild_id);
+          const channel = registration.channel_id ? ` · 채널 ${registration.channel_id}` : "";
+          return `<span class="result-chip discord-registration-chip">
+            <span>${escapeHtml(guildName + channel)}</span>
+            <button type="button" title="이 서버 등록 해제" aria-label="${attr(guildName)} 등록 해제" data-player-discord-remove data-shard="${attr(player.shard)}" data-account-id="${attr(player.account_id)}" data-guild-id="${attr(registration.guild_id)}">&times;</button>
+          </span>`;
+        }).join("") || '<span class="result-caption">Discord 미등록</span>';
+        const availableGuilds = activeDiscordGuilds.filter((guild) => !linkedGuilds.has(String(guild.guild_id)));
+        const guildOptions = availableGuilds.map((guild) => (
+          `<option value="${attr(guild.guild_id)}">${escapeHtml(discordGuildOptionLabel(guild))}</option>`
+        )).join("");
+        const editorDisabled = availableGuilds.length ? "" : " disabled";
         return `
         <tr${highlighted ? ' class="linked-row"' : ""}>
-          <td>${escapeHtml(player.shard)}</td>
-          <td>${escapeHtml(player.current_name)}</td>
-          <td>${escapeHtml(player.account_id)}</td>
-          <td>${player.active ? "수집중" : "중지"}</td>
           <td>
-            <div class="actions">
-              <button class="danger" type="button" onclick="unregisterPlayer('${attr(player.shard)}', '${attr(player.account_id)}')">
-                수집 중지
-              </button>
-            </div>
+            <span class="registry-player-name">${escapeHtml(player.current_name)}</span>
+            <span class="registry-player-meta">${escapeHtml(player.shard)} · ${escapeHtml(player.account_id)}</span>
+          </td>
+          <td><button class="${player.active ? "secondary" : ""} registry-state-button" type="button" data-player-management="active" data-next-value="${String(!player.active)}" data-shard="${attr(player.shard)}" data-account-id="${attr(player.account_id)}">${player.active ? "수집 중" : "수집 중지"}</button></td>
+          <td><button class="${player.public_profile ? "secondary" : ""} registry-state-button" type="button" data-player-management="public_profile" data-next-value="${String(!player.public_profile)}" data-shard="${attr(player.shard)}" data-account-id="${attr(player.account_id)}">${player.public_profile ? "공개" : "비공개"}</button></td>
+          <td>
+            <div class="discord-registration-list">${registrationChips}</div>
+            <details class="player-discord-editor">
+              <summary>Discord 서버 연결 관리 · ${formatInteger(registrations.length)}곳</summary>
+              <div class="player-discord-editor-grid">
+                <label>추가할 서버<select data-player-discord-guild${editorDisabled}><option value="">${availableGuilds.length ? "서버 선택" : "추가 가능한 서버 없음"}</option>${guildOptions}</select></label>
+                <label>채널 ID<input data-player-discord-channel autocomplete="off" inputmode="numeric" placeholder="선택 입력"${editorDisabled}></label>
+                <button type="button" data-player-discord-add data-shard="${attr(player.shard)}" data-account-id="${attr(player.account_id)}"${editorDisabled}>서버 추가</button>
+              </div>
+            </details>
           </td>
         </tr>`;
       }).join("");
+    }
+
+    async function loadPlayers() {
+      const payload = await requestJson("/players?active_only=false", "GET");
+      registeredPlayers = payload.players || [];
+      playerCatalogCache.clear();
+      renderRegisteredPlayerOptions();
+      renderPlayersTable();
       await initializeRegisteredPlayerForms();
       if (!activeAnalysisPlayer) renderComparisonPicker();
     }
@@ -10422,7 +10616,7 @@ _INDEX_HTML = """<!doctype html>
       const deletionRequestId = firstUrlParam(params, ["deletion_request_id"]);
       const trendGranularity = lookupUrlChoice(
         firstUrlParam(params, ["granularity"]),
-        ["hour", "date", "week", "month", "quarter", "year", "map", "game_mode", "team_mode", "perspective", "match_type", "season_state"],
+        ["hour", "date", "week", "month", "quarter", "year", "map", "weapon", "game_mode", "team_mode", "perspective", "match_type", "season_state"],
         "month",
       );
       const trendGameMode = firstUrlParam(params, ["game_mode"]);
@@ -10951,6 +11145,7 @@ _INDEX_HTML = """<!doctype html>
         quarter: "분기별",
         year: "연도별",
         map: "맵별",
+        weapon: "무기별",
         game_mode: "게임 모드별",
         team_mode: "팀 모드별",
         perspective: "시점별",
@@ -10994,8 +11189,15 @@ _INDEX_HTML = """<!doctype html>
       const bucketStatus = report.truncated
         ? `최근 ${formatInteger(report.returned_bucket_count)}/${formatInteger(report.available_bucket_count)}개 구간`
         : `${formatInteger(report.returned_bucket_count)}개 구간`;
+      const categoricalGranularities = new Set(["map", "weapon", "game_mode", "team_mode", "perspective", "match_type", "season_state"]);
+      const reportScopeLabel = categoricalGranularities.has(report.granularity)
+        ? granularityLabel
+        : `KST ${granularityLabel}`;
+      const calculationNote = report.granularity === "weapon"
+        ? "무기 경기 수는 해당 무기로 사격·피해·킬·어시스트·기절 기록이 있는 경기입니다. 치킨률은 그 경기 중 1위 비율이고, KDA 사망·피기절과 교전 승패는 당시 플레이어가 들고 있던 무기 기준입니다. 받은 피해·피격은 해당 상대 무기에 맞은 기록입니다."
+        : "치킨률은 각 구간의 완료 경기 중 1위 비율이며, 교전 승률은 아군 피해를 제외한 승리·패배 교전 기준입니다.";
       trendSummary.innerHTML = `<div class="result-shell">
-        ${resultHeading(report.player.current_name, `KST ${granularityLabel}`, bucketStatus)}
+        ${resultHeading(report.player.current_name, reportScopeLabel, bucketStatus)}
         ${resultMetricGrid([
           ["경기", `${formatInteger(totals.match_count)}전`],
           ["치킨", `${formatInteger(totals.wins)}회 · ${percent(totals.win_rate)}`],
@@ -11010,6 +11212,7 @@ _INDEX_HTML = """<!doctype html>
           ["경기당 킬 / 기절", `${formatNumber(totals.avg_kills, 2)} / ${formatNumber(totals.avg_dbnos_caused, 2)}`],
         ])}
         ${resultSection("적용 조건", resultChips(activeFilters, "전체 경기"))}
+        <p class="trend-chart-note">${escapeHtml(calculationNote)}</p>
       </div>`;
       trendBody.innerHTML = (report.buckets || []).map((bucket) => `
         <tr>
@@ -15494,6 +15697,51 @@ _INDEX_HTML = """<!doctype html>
       }
     }
 
+    async function updatePlayerManagement(button) {
+      const field = button.dataset.playerManagement;
+      if (!field) return;
+      const nextValue = button.dataset.nextValue === "true";
+      await postJson("/players/manage", {
+        shard: button.dataset.shard,
+        account_id: button.dataset.accountId,
+        [field]: nextValue,
+      });
+      await loadPlayers();
+      banner.textContent = field === "active"
+        ? `수집 관리를 ${nextValue ? "시작" : "중지"}했습니다.`
+        : `전적 공개 범위를 ${nextValue ? "공개" : "비공개"}로 변경했습니다.`;
+    }
+
+    async function addPlayerDiscordRegistration(button) {
+      const editor = button.closest(".player-discord-editor");
+      const guildSelect = editor?.querySelector("[data-player-discord-guild]");
+      const channelInput = editor?.querySelector("[data-player-discord-channel]");
+      const guildId = String(guildSelect?.value || "").trim();
+      if (!guildId) throw new Error("추가할 Discord 서버를 선택하세요.");
+      await postJson("/players/discord-registrations", {
+        shard: button.dataset.shard,
+        account_id: button.dataset.accountId,
+        guild_id: guildId,
+        channel_id: String(channelInput?.value || "").trim() || null,
+      });
+      await loadDiscordGuilds();
+      await loadPlayers();
+      banner.textContent = `${discordGuildName(guildId)} 등록을 추가했습니다.`;
+    }
+
+    async function removePlayerDiscordRegistration(button) {
+      const guildId = String(button.dataset.guildId || "");
+      const guildName = discordGuildName(guildId);
+      await postJson("/players/discord-registrations/remove", {
+        shard: button.dataset.shard,
+        account_id: button.dataset.accountId,
+        guild_id: guildId,
+      });
+      await loadDiscordGuilds();
+      await loadPlayers();
+      banner.textContent = `${guildName} 등록을 해제했습니다. 다른 서버 등록과 수집 데이터는 유지됩니다.`;
+    }
+
     async function requestJson(url, method, payload = null) {
       const options = { method, headers: {} };
       if (payload !== null) {
@@ -15762,6 +16010,28 @@ _INDEX_HTML = """<!doctype html>
       banner.textContent = "분석 대상을 해제했습니다.";
     });
 
+    playersBody.addEventListener("click", async (event) => {
+      const button = event.target instanceof Element ? event.target.closest("button") : null;
+      if (!button) return;
+      const isPlayerAction = button.dataset.playerManagement
+        || button.hasAttribute("data-player-discord-add")
+        || button.hasAttribute("data-player-discord-remove");
+      if (!isPlayerAction) return;
+      button.disabled = true;
+      try {
+        if (button.dataset.playerManagement) {
+          await updatePlayerManagement(button);
+        } else if (button.hasAttribute("data-player-discord-add")) {
+          await addPlayerDiscordRegistration(button);
+        } else {
+          await removePlayerDiscordRegistration(button);
+        }
+      } catch (error) {
+        banner.textContent = `유저 관리 오류: ${error.message}`;
+        if (button.isConnected) button.disabled = false;
+      }
+    });
+
     registerForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const formElement = event.currentTarget;
@@ -15772,6 +16042,8 @@ _INDEX_HTML = """<!doctype html>
           current_name: form.get("current_name"),
           account_id: form.get("account_id") || null,
           public_profile: form.get("public_profile") === "true",
+          guild_id: form.get("guild_id") || null,
+          channel_id: form.get("channel_id") || null,
         });
         formElement.reset();
         applyPublicProfileDefault();

@@ -213,6 +213,13 @@ class DataDeletionBackupBuilderTests(unittest.TestCase):
         self.assertIn("FROM player_activity_events AS target_rows", statement)
         self.assertEqual(parameters, (request.account_id, request.shard))
 
+        operation["table"] = "player_discord_registrations"
+        operation["selector"]["kind"] = "registered_player_join"
+        statement, parameters = database_backup_select(operation, request)
+        self.assertIn("FROM player_discord_registrations AS target_rows", statement)
+        self.assertIn("ORDER BY target_rows.id ASC", statement)
+        self.assertEqual(parameters, (request.account_id, request.shard))
+
         operation["table"] = "data_deletion_requests"
         with self.assertRaises(DataDeletionBackupBuilderError):
             database_backup_select(operation, request)

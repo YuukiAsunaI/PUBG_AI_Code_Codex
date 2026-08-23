@@ -9,7 +9,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 28
 
 
 class DatabaseError(RuntimeError):
@@ -82,6 +82,8 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 applied += 1
             if _ensure_player_activity_heal_columns(cursor, config.database):
                 applied += 1
+            if _backfill_player_discord_registrations(cursor):
+                applied += 1
             cursor.execute(
                 """
                 INSERT INTO schema_migrations (version, description, applied_at_kst)
@@ -90,7 +92,7 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 """,
                 (
                     SCHEMA_VERSION,
-                    "item and passive healing separation in player activity summaries",
+                    "many-to-many Discord guild registrations for tracked players",
                 ),
             )
             applied += 1
@@ -1141,6 +1143,24 @@ def schema_statements() -> list[str]:
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """,
         """
+        CREATE TABLE IF NOT EXISTS player_discord_registrations (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            registered_player_id BIGINT UNSIGNED NOT NULL,
+            guild_id VARCHAR(32) NOT NULL,
+            channel_id VARCHAR(32) NULL,
+            registered_by_discord_user_id VARCHAR(32) NULL,
+            active TINYINT(1) NOT NULL DEFAULT 1,
+            created_at_kst DATETIME(6) NOT NULL,
+            updated_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_player_discord_registration (registered_player_id, guild_id),
+            KEY idx_player_discord_registration_guild (guild_id, active),
+            KEY idx_player_discord_registration_player (registered_player_id, active),
+            CONSTRAINT fk_player_discord_registration_player
+                FOREIGN KEY (registered_player_id) REFERENCES registered_players(id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
         CREATE TABLE IF NOT EXISTS player_activity_events (
             id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
             match_id VARCHAR(191) NOT NULL,
@@ -1809,6 +1829,40 @@ def _ensure_player_activity_heal_columns(cursor: Any, database: str) -> bool:
     clauses = ", ".join(f"ADD COLUMN {name} {definition}" for name, definition in missing)
     cursor.execute(f"ALTER TABLE player_match_activity_summaries {clauses}")
     return True
+
+
+def _backfill_player_discord_registrations(cursor: Any) -> bool:
+    cursor.execute(
+        """
+        INSERT INTO player_discord_registrations (
+            registered_player_id,
+            guild_id,
+            channel_id,
+            registered_by_discord_user_id,
+            active,
+            created_at_kst,
+            updated_at_kst
+        )
+        SELECT
+            id,
+            registered_guild_id,
+            registered_channel_id,
+            registered_by_discord_user_id,
+            1,
+            created_at_kst,
+            updated_at_kst
+        FROM registered_players
+        WHERE registered_guild_id IS NOT NULL
+          AND registered_guild_id <> ''
+        ON DUPLICATE KEY UPDATE
+            channel_id = COALESCE(player_discord_registrations.channel_id, VALUES(channel_id)),
+            registered_by_discord_user_id = COALESCE(
+                player_discord_registrations.registered_by_discord_user_id,
+                VALUES(registered_by_discord_user_id)
+            )
+        """
+    )
+    return bool(getattr(cursor, "rowcount", 0))
 
 
 def count_tables(connection: Any) -> int:

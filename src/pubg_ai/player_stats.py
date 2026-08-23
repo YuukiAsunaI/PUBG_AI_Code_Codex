@@ -9,6 +9,7 @@ import json
 from pubg_ai.code_translator import translate_code
 from pubg_ai.distance_buckets import distance_bucket
 from pubg_ai.player_registry import RegisteredPlayer
+from pubg_ai.player_scope import PLAYER_GUILD_SCOPE_CONDITION
 from pubg_ai.player_trends import PlayerTrendFilters
 from pubg_ai.replay_artifact_catalog import ReplayArtifactRecord, list_replay_artifacts
 from pubg_ai.weapon_accuracy import (
@@ -771,7 +772,7 @@ class PlayerStatsService:
         if not global_scope:
             if not guild_id:
                 return None
-            conditions.append("registered_guild_id = %s")
+            conditions.append(PLAYER_GUILD_SCOPE_CONDITION)
             params.append(guild_id)
 
         query = (
@@ -802,7 +803,7 @@ class PlayerStatsService:
         if not global_scope:
             if not guild_id:
                 return None
-            conditions.append("registered_players.registered_guild_id = %s")
+            conditions.append(PLAYER_GUILD_SCOPE_CONDITION)
             params.append(guild_id)
 
         with self.connection.cursor() as cursor:

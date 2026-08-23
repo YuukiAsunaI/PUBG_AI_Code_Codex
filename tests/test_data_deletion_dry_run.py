@@ -87,6 +87,14 @@ class DataDeletionDryRunTests(unittest.TestCase):
         self.assertLess(tables.index("player_item_events"), tables.index("match_participants"))
         self.assertLess(tables.index("match_participants"), tables.index("replay_artifacts"))
         self.assertLess(tables.index("replay_artifacts"), tables.index("player_collection_states"))
+        self.assertLess(
+            tables.index("player_collection_states"),
+            tables.index("player_discord_registrations"),
+        )
+        self.assertLess(
+            tables.index("player_discord_registrations"),
+            tables.index("registered_players"),
+        )
         self.assertLess(tables.index("player_collection_states"), tables.index("registered_players"))
         phase_keys = [phase["key"] for phase in plan["phases"]]
         self.assertLess(
@@ -332,6 +340,7 @@ def _preview_record() -> dict[str, object]:
         _row("registered_players", "registration", 1, True),
         _row("player_aliases", "registration", 1, True),
         _row("player_collection_states", "registration", 1, True),
+        _row("player_discord_registrations", "registration", 2, True),
         _row("player_item_events", "normalized", 2, True),
         _row("match_participants", "normalized", 1, True),
         _row("raw_player_snapshots", "raw_database", 1, True),
@@ -355,7 +364,7 @@ def _preview_record() -> dict[str, object]:
             "replay": True,
         },
         "matched_match_count": 2,
-        "candidate_row_count": 9,
+        "candidate_row_count": 11,
         "preserved_reference_row_count": 3,
         "row_impacts": row_impacts,
         "preserved_references": [
@@ -433,7 +442,7 @@ def _snapshot(preview: dict[str, object]) -> DataDeletionPreviewSnapshot:
         manifest_json=manifest,
         catalog_complete=True,
         filesystem_issue_count=0,
-        candidate_row_count=9,
+        candidate_row_count=11,
         candidate_file_count=2,
         captured_by="local-owner",
         capture_note="impact reviewed",

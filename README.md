@@ -565,10 +565,12 @@ Packet text and comparison results remain in memory and are never persisted. No 
 evidence, production mutation, restore, quarantine, deletion, or execution capability is created. Version 22 adds no
 environment variable or table; at that feature slice, the schema remained version 20 with 44 tables.
 
-The current runtime schema is version 23 with 48 tables. Version 23 adds per-account, per-processor telemetry
-completion state and a unique API-job target index; rerun `python -m pubg_ai.cli init-db` after updating. Existing raw
-and replay artifacts are not rewritten by this migration. Schema version 22 introduced `operational_drill_runs`, and
-schema version 21 introduced the two durable fight-outcome tables. See
+The current runtime schema is version 28 with 52 tables. Version 28 adds authoritative many-to-many Discord guild
+registrations for tracked players; rerun `python -m pubg_ai.cli init-db` after updating. Existing legacy guild fields
+are backfilled idempotently, while raw and replay artifacts are not rewritten. The local player manager can change
+collection/public-profile state independently and connect one PUBG account to multiple known Discord guilds. See
+[`docs/MULTI_DISCORD_AND_DIMENSION_ANALYTICS_2026-08-23.md`](docs/MULTI_DISCORD_AND_DIMENSION_ANALYTICS_2026-08-23.md)
+for the data contract and live validation evidence. See also
 [`docs/PROJECT_AUDIT_2026-08-21.md`](docs/PROJECT_AUDIT_2026-08-21.md) for the latest full validation evidence. The
 previous 2026-08-14 baseline remains in [`docs/PROJECT_AUDIT_2026-08-14.md`](docs/PROJECT_AUDIT_2026-08-14.md).
 

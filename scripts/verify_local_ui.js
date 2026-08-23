@@ -71,7 +71,7 @@ async function runPlayerAnalysis(page) {
   const definitionCount = await page.locator("#intelligenceBody .intelligence-definition").count();
   return {
     quality,
-    hasPlayer: overview.includes("328") && overview.includes("명중률"),
+    hasPlayer: overview.includes("명중률") && overview.includes("교전"),
     chartCount,
     definitionCount,
   };
@@ -111,6 +111,66 @@ async function selectPlayerForForm(page, formSelector, playerName = "Yuuki_Asuna
 async function openWorkspaceSection(page, view, section) {
   await page.locator(`[data-view-target="${view}"]`).click();
   await page.locator(`[data-workspace-section="${section}"]`).click();
+}
+
+async function runRegistryAndDimensionChecks(page) {
+  await openWorkspaceSection(page, "players", "registry");
+  await page.locator("#playersBody tr").first().waitFor({ timeout: 30000 });
+  const registryRows = await page.locator("#playersBody tr").count();
+  const managementButtons = await page.locator("#playersBody [data-player-management]").count();
+  const discordEditors = await page.locator("#playersBody [data-player-discord-add]").count();
+  const discordChips = await page.locator("#playersBody [data-player-discord-remove]").count();
+  const registryScreenshot = path.join(outputDir, "player-registry-desktop.png");
+  await page.locator("#registered-players").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: registryScreenshot, fullPage: false });
+
+  await openWorkspaceSection(page, "players", "trends");
+  const selection = await selectPlayerForForm(page, "#trendForm");
+  const granularity = selection.form.locator('[name="granularity"]');
+  const submit = selection.form.locator('button[type="submit"]');
+  const rowsByDimension = {};
+  for (const [value, label] of [["weapon", "무기별"], ["map", "맵별"], ["hour", "시간대별"]]) {
+    await granularity.selectOption(value);
+    await submit.click();
+    await page.locator("#trendSummary").filter({ hasText: label }).waitFor({ timeout: 30000 });
+    rowsByDimension[value] = await page.locator("#trendBody tr").count();
+  }
+
+  await granularity.selectOption("weapon");
+  await submit.click();
+  await page.locator("#trendSummary").filter({ hasText: "무기별" }).waitFor({ timeout: 30000 });
+  const summary = await page.locator("#trendSummary").innerText();
+  await page.locator('[data-trend-view="chart"]').click();
+  await page.locator("#trendChartMetric").selectOption("kda");
+  await page.locator("#trendChartPanel .metric-chart-row").first().waitFor({ timeout: 10000 });
+  const weaponChartRows = await page.locator("#trendChartPanel .metric-chart-row").count();
+  const trendScreenshot = path.join(outputDir, "dimension-performance-desktop.png");
+  await page.locator("#trend-lookup").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: trendScreenshot, fullPage: false });
+
+  return {
+    registryRows,
+    managementButtons,
+    discordEditors,
+    discordChips,
+    rowsByDimension,
+    weaponChartRows,
+    hasDetailedMetrics: ["치킨", "KDA", "교전 승리 확률"].every((label) => summary.includes(label)),
+    screenshots: { registryScreenshot, trendScreenshot },
+  };
+}
+
+async function runMobileRegistryCheck(page) {
+  await openWorkspaceSection(page, "players", "registry");
+  await page.locator("#playersBody tr").first().waitFor({ timeout: 30000 });
+  const screenshot = path.join(outputDir, "player-registry-mobile.png");
+  await page.locator("#registered-players").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: screenshot, fullPage: false });
+  return {
+    rows: await page.locator("#playersBody tr").count(),
+    editors: await page.locator("#playersBody [data-player-discord-add]").count(),
+    screenshot,
+  };
 }
 
 async function runExpandedFeatureChecks(page) {
@@ -260,6 +320,7 @@ async function layoutDiagnostics(page) {
     const playerScreenshot = path.join(outputDir, "player-intelligence-desktop.png");
     await desktopPage.screenshot({ path: playerScreenshot, fullPage: false });
     const features = await runExpandedFeatureChecks(desktopPage);
+    const registryDimensions = await runRegistryAndDimensionChecks(desktopPage);
     const audit = await runDataQualityAudit(desktopPage);
     const auditScreenshot = path.join(outputDir, "data-quality-desktop.png");
     await desktopPage.screenshot({ path: auditScreenshot, fullPage: false });
@@ -278,6 +339,7 @@ async function layoutDiagnostics(page) {
     const mobilePlayer = await runPlayerAnalysis(mobilePage);
     const mobileScreenshot = path.join(outputDir, "player-intelligence-mobile.png");
     await mobilePage.screenshot({ path: mobileScreenshot, fullPage: false });
+    const mobileRegistry = await runMobileRegistryCheck(mobilePage);
     const mobileLayout = await layoutDiagnostics(mobilePage);
     await mobileContext.close();
 
@@ -287,6 +349,7 @@ async function layoutDiagnostics(page) {
         status: desktopResponse?.status(),
         player,
         features,
+        registryDimensions,
         audit,
         layout: desktopLayout,
         ...desktopMonitor,
@@ -294,10 +357,18 @@ async function layoutDiagnostics(page) {
       mobile: {
         status: mobileResponse?.status(),
         player: mobilePlayer,
+        registry: mobileRegistry,
         layout: mobileLayout,
         ...mobileMonitor,
       },
-      screenshots: { playerScreenshot, auditScreenshot, mobileScreenshot, ...features.screenshots },
+      screenshots: {
+        playerScreenshot,
+        auditScreenshot,
+        mobileScreenshot,
+        ...features.screenshots,
+        ...registryDimensions.screenshots,
+        mobileRegistry: mobileRegistry.screenshot,
+      },
     };
     console.log(JSON.stringify(result, null, 2));
     const failed = [
@@ -318,6 +389,17 @@ async function layoutDiagnostics(page) {
       result.desktop.features.comparison.selected < 2,
       result.desktop.features.comparison.bars < 2,
       result.desktop.features.comparison.trendSeries < 2,
+      result.desktop.registryDimensions.registryRows < 1,
+      result.desktop.registryDimensions.managementButtons < result.desktop.registryDimensions.registryRows * 2,
+      result.desktop.registryDimensions.discordEditors < result.desktop.registryDimensions.registryRows,
+      result.desktop.registryDimensions.discordChips < 1,
+      result.desktop.registryDimensions.rowsByDimension.weapon < 1,
+      result.desktop.registryDimensions.rowsByDimension.map < 1,
+      result.desktop.registryDimensions.rowsByDimension.hour < 1,
+      result.desktop.registryDimensions.weaponChartRows < 1,
+      !result.desktop.registryDimensions.hasDetailedMetrics,
+      result.mobile.registry.rows < 1,
+      result.mobile.registry.editors < result.mobile.registry.rows,
       result.desktop.audit.failedRows > 0,
       result.desktop.consoleErrors.length > 0,
       result.mobile.consoleErrors.length > 0,

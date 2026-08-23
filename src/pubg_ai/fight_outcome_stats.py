@@ -7,6 +7,7 @@ import json
 
 from pubg_ai.code_translator import translate_code
 from pubg_ai.player_registry import RegisteredPlayer
+from pubg_ai.player_scope import PLAYER_GUILD_SCOPE_CONDITION
 
 
 @dataclass(frozen=True)
@@ -181,7 +182,7 @@ class FightOutcomeStatsService:
         if not global_scope:
             if not guild_id:
                 return None
-            conditions.append("registered_guild_id = %s")
+            conditions.append(PLAYER_GUILD_SCOPE_CONDITION)
             params.append(guild_id)
 
         with self.connection.cursor() as cursor:

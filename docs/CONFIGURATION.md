@@ -163,10 +163,11 @@ default database option reuses one connection for two read-only current-chain ch
 include the complete count and at most 1,000 field rows. At that release, schema version 20 and all 44 tables were
 unchanged.
 
-The current runtime schema is version 23 with 48 tables. `player_telemetry_processing_states` records completion
-per match, tracked account, processor, and parser version; the API job target tuple is unique. `operational_drill_runs`
-adds no secret or environment variable and stores only bounded, secret-free drill reports. Durable fight outcomes
-remain in the two schema-version 21 tables. Every MySQL connection sets its session time zone to `+09:00`. The
+The current runtime schema is version 28 with 52 tables. `player_discord_registrations` stores an active association
+for each tracked-player/Discord-guild pair and optionally retains the registration channel and actor IDs. No token,
+API key, or additional environment variable is stored in that table. Existing legacy guild fields are migrated
+idempotently and retained only for compatibility; guild-scoped authorization and rankings use the association table.
+Every MySQL connection sets its session time zone to `+09:00`. The
 localhost manager stores the automatic worker's `fight_outcome_limit` beside the existing processing limits, and the
 manual parser reads immutable telemetry from the configured raw-data root.
 

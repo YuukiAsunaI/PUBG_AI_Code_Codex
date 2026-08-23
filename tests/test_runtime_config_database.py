@@ -72,6 +72,7 @@ class DatabaseSchemaTests(unittest.TestCase):
 
         for table_name in [
             "registered_players",
+            "player_discord_registrations",
             "player_aliases",
             "api_fetch_jobs",
             "worker_run_history",
@@ -117,7 +118,7 @@ class DatabaseSchemaTests(unittest.TestCase):
         ]:
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table_name}", schema)
 
-        self.assertEqual(SCHEMA_VERSION, 27)
+        self.assertEqual(SCHEMA_VERSION, 28)
         self.assertIn("vehicle_type VARCHAR(64)", schema)
         self.assertIn("vehicle_id VARCHAR(128)", schema)
         self.assertIn("vehicle_unique_id BIGINT", schema)

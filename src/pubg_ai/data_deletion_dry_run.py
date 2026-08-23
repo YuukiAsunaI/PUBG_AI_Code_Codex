@@ -32,8 +32,9 @@ EXECUTION_BLOCKERS = (
 
 _REGISTRATION_TABLE_ORDER = {
     "player_collection_states": 0,
-    "player_aliases": 1,
-    "registered_players": 2,
+    "player_discord_registrations": 1,
+    "player_aliases": 2,
+    "registered_players": 3,
 }
 _PLAYER_TABLE_ORDER = {
     "player_fight_outcomes": 0,
@@ -626,7 +627,7 @@ def _database_operations(
 
 def _selector_contract(table: str, request: DataDeletionRequest) -> dict[str, Any]:
     target = {"account_id": request.account_id, "shard": request.shard}
-    if table == "player_collection_states":
+    if table in {"player_collection_states", "player_discord_registrations"}:
         return {
             "kind": "registered_player_join",
             **target,

@@ -287,7 +287,7 @@ class DiscordAdminCommandTests(unittest.IsolatedAsyncioTestCase):
             connect_mysql.assert_not_called()
             self.assertEqual(ctx.replies, ["이 명령어를 사용할 권한이 없습니다."])
 
-    async def test_player_manage_can_stop_collection_without_admin_permission(self) -> None:
+    async def test_player_manage_unlinks_only_current_guild_without_admin_permission(self) -> None:
         with TemporaryDirectory() as temp_dir:
             base_dir = Path(temp_dir)
             _, checker, bot = _bot_fixture(
@@ -303,19 +303,19 @@ class DiscordAdminCommandTests(unittest.IsolatedAsyncioTestCase):
                 public_profile=True,
                 registered_guild_id="10",
             )
-            inactive_player = RegisteredPlayer(
+            remaining_player = RegisteredPlayer(
                 id=1,
                 account_id="account.test",
                 shard="steam",
                 current_name="Yuuki_Asuna---",
-                active=False,
+                active=True,
                 public_profile=True,
                 registered_guild_id="10",
             )
             connection = FakeDatabaseConnection()
             registry = MagicMock()
             registry.get_player.return_value = active_player
-            registry.unregister_player.return_value = inactive_player
+            registry.unregister_player_from_guild.return_value = remaining_player
             ctx = FakeContext(user_id=100, guild_id=10)
             identity = DiscordCommandIdentity(user_id="100", guild_id="10")
             try:
@@ -339,12 +339,14 @@ class DiscordAdminCommandTests(unittest.IsolatedAsyncioTestCase):
                 name="Yuuki_Asuna---",
                 include_inactive=True,
             )
-            registry.unregister_player.assert_called_once_with(
+            registry.unregister_player_from_guild.assert_called_once_with(
                 shard="steam",
                 account_id="account.test",
+                guild_id="10",
             )
+            registry.unregister_player.assert_not_called()
             self.assertTrue(connection.closed)
-            self.assertIn("수집 중지 완료", ctx.replies[-1])
+            self.assertIn("현재 Discord 서버 등록 해제 완료", ctx.replies[-1])
             self.assertIn("#registered-players", ctx.replies[-1])
 
 

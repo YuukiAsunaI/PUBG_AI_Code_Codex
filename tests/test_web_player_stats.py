@@ -5,11 +5,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
 from pubg_ai.web.app import create_app
+from pubg_ai.player_registry import PlayerDiscordRegistration, RegisteredPlayer
 
 
 class WebPlayerStatsTests(unittest.TestCase):
@@ -61,6 +62,10 @@ class WebPlayerStatsTests(unittest.TestCase):
         self.assertIn('data-catalog-facet="maps"', body)
         self.assertIn('<option value="quarter">분기</option>', body)
         self.assertIn('<option value="map">맵</option>', body)
+        self.assertIn('<option value="weapon">무기</option>', body)
+        self.assertIn('data-player-management="active"', body)
+        self.assertIn('data-player-discord-add', body)
+        self.assertIn('/players/discord-registrations', body)
         self.assertIn('name="exact_date_kst"', body)
         self.assertIn('match_limit: "5000"', body)
         self.assertIn('/players/catalog?', body)
@@ -68,6 +73,151 @@ class WebPlayerStatsTests(unittest.TestCase):
             body.count('data-reset-analysis-form="profileForm"'),
             1,
         )
+
+    def test_player_management_endpoint_returns_multiple_discord_registrations(self) -> None:
+        player = RegisteredPlayer(
+            id=1,
+            account_id="account.test",
+            shard="steam",
+            current_name="Yuuki_Asuna---",
+            active=False,
+            public_profile=True,
+            discord_registrations=(
+                PlayerDiscordRegistration(id=1, registered_player_id=1, guild_id="100"),
+                PlayerDiscordRegistration(id=2, registered_player_id=1, guild_id="200"),
+            ),
+        )
+        connection = FakeConnection([])
+        registry = MagicMock()
+        registry.set_player_management.return_value = player
+
+        with (
+            patch("pubg_ai.web.app.connect_mysql", return_value=connection),
+            patch("pubg_ai.web.app.PlayerRegistry", return_value=registry),
+        ):
+            response = TestClient(create_app()).post(
+                "/players/manage",
+                json={"shard": "steam", "account_id": "account.test", "active": False},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["player"]["active"])
+        self.assertEqual(
+            [item["guild_id"] for item in response.json()["player"]["discord_registrations"]],
+            ["100", "200"],
+        )
+        registry.set_player_management.assert_called_once_with(
+            shard="steam",
+            account_id="account.test",
+            active=False,
+            public_profile=None,
+        )
+        self.assertTrue(connection.closed)
+
+    def test_player_discord_registration_endpoint_adds_another_guild(self) -> None:
+        player = RegisteredPlayer(
+            id=1,
+            account_id="account.test",
+            shard="steam",
+            current_name="Yuuki_Asuna---",
+            active=True,
+            public_profile=True,
+            discord_registrations=(
+                PlayerDiscordRegistration(id=1, registered_player_id=1, guild_id="100"),
+            ),
+        )
+        refreshed = RegisteredPlayer(
+            **{
+                **player.__dict__,
+                "discord_registrations": (
+                    *player.discord_registrations,
+                    PlayerDiscordRegistration(
+                        id=2,
+                        registered_player_id=1,
+                        guild_id="200",
+                        channel_id="201",
+                    ),
+                ),
+            }
+        )
+        connection = FakeConnection([])
+        registry = MagicMock()
+        registry.get_player.side_effect = [player, refreshed]
+
+        with (
+            patch("pubg_ai.web.app.connect_mysql", return_value=connection),
+            patch("pubg_ai.web.app.PlayerRegistry", return_value=registry),
+        ):
+            response = TestClient(create_app()).post(
+                "/players/discord-registrations",
+                json={
+                    "shard": "steam",
+                    "account_id": "account.test",
+                    "guild_id": "200",
+                    "channel_id": "201",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [item["guild_id"] for item in response.json()["player"]["discord_registrations"]],
+            ["100", "200"],
+        )
+        registry.add_discord_registration.assert_called_once_with(
+            registered_player_id=1,
+            guild_id="200",
+            channel_id="201",
+            registered_by_discord_user_id=None,
+        )
+        self.assertTrue(connection.closed)
+
+    def test_player_discord_registration_remove_keeps_other_guilds(self) -> None:
+        player = RegisteredPlayer(
+            id=1,
+            account_id="account.test",
+            shard="steam",
+            current_name="Yuuki_Asuna---",
+            active=True,
+            public_profile=True,
+            discord_registrations=(
+                PlayerDiscordRegistration(id=1, registered_player_id=1, guild_id="100"),
+                PlayerDiscordRegistration(id=2, registered_player_id=1, guild_id="200"),
+            ),
+        )
+        refreshed = RegisteredPlayer(
+            **{
+                **player.__dict__,
+                "discord_registrations": (player.discord_registrations[1],),
+            }
+        )
+        connection = FakeConnection([])
+        registry = MagicMock()
+        registry.get_player.side_effect = [player, refreshed]
+        registry.remove_discord_registration.return_value = True
+
+        with (
+            patch("pubg_ai.web.app.connect_mysql", return_value=connection),
+            patch("pubg_ai.web.app.PlayerRegistry", return_value=registry),
+        ):
+            response = TestClient(create_app()).post(
+                "/players/discord-registrations/remove",
+                json={
+                    "shard": "steam",
+                    "account_id": "account.test",
+                    "guild_id": "100",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [item["guild_id"] for item in response.json()["player"]["discord_registrations"]],
+            ["200"],
+        )
+        registry.remove_discord_registration.assert_called_once_with(
+            registered_player_id=1,
+            guild_id="100",
+        )
+        self.assertTrue(connection.closed)
 
     def test_player_weapon_endpoint_returns_weapon_detail(self) -> None:
         connection = FakeConnection(

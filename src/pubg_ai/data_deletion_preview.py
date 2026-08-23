@@ -335,24 +335,28 @@ class DataDeletionImpactPreviewService:
             )
             for table in direct_tables
         ]
-        impacts.append(
-            DeletionRowImpact(
-                table="player_collection_states",
-                category="registration",
-                relationship="tracking_state",
-                row_count=self._count(
-                    """
-                    SELECT COUNT(*) AS row_count
-                    FROM player_collection_states AS states
-                    INNER JOIN registered_players AS players
-                        ON players.id = states.registered_player_id
-                    WHERE players.account_id = %s AND players.shard = %s
-                    """,
-                    (request.account_id, request.shard),
-                ),
-                deletion_candidate=True,
+        for table, relationship in (
+            ("player_collection_states", "tracking_state"),
+            ("player_discord_registrations", "discord_registration"),
+        ):
+            impacts.append(
+                DeletionRowImpact(
+                    table=table,
+                    category="registration",
+                    relationship=relationship,
+                    row_count=self._count(
+                        f"""
+                        SELECT COUNT(*) AS row_count
+                        FROM {table} AS target_rows
+                        INNER JOIN registered_players AS players
+                            ON players.id = target_rows.registered_player_id
+                        WHERE players.account_id = %s AND players.shard = %s
+                        """,
+                        (request.account_id, request.shard),
+                    ),
+                    deletion_candidate=True,
+                )
             )
-        )
         return impacts
 
     def _matched_match_count(self, request: DataDeletionRequest) -> int:
