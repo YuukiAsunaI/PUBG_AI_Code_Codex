@@ -92,6 +92,24 @@ class WebRecommendationTests(unittest.TestCase):
         self.assertIn("const sortedRegions = [...regions].sort", body)
         self.assertIn("const chartRegions = sortedRegions.slice(0, chartLimit)", body)
         self.assertIn("const regionRows = sortedRegions.map", body)
+        self.assertIn('name="map_filter"', body)
+        self.assertIn('name="region_search"', body)
+        self.assertIn('id="dropMapImage"', body)
+        self.assertIn('data-drop-region-map=', body)
+        self.assertIn("/replay/map-assets/", body)
+
+    def test_comparison_supports_detailed_dimensions_and_temporal_chart(self) -> None:
+        body = TestClient(create_app()).get("/").text
+
+        self.assertIn('<option value="game_mode">게임 모드 비교</option>', body)
+        self.assertIn('<option value="team_mode">팀 모드 비교</option>', body)
+        self.assertIn('<option value="perspective">시점 비교</option>', body)
+        self.assertIn('<option value="match_type">매치 유형 비교</option>', body)
+        self.assertIn('name="trend_granularity"', body)
+        self.assertIn('data-comparison-view="trend"', body)
+        self.assertIn("renderComparisonTrendChart", body)
+        self.assertIn("avg_damage_taken", body)
+        self.assertIn("damage_ratio", body)
 
     def test_player_recommendation_evidence_endpoint_returns_snapshots(self) -> None:
         connection = FakeConnection(

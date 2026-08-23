@@ -278,6 +278,9 @@ Parse raw telemetry into registered-player item events and item summary stats:
 python -m pubg_ai.cli parse-telemetry-items --limit 10
 ```
 
+`LogItemUse.item.stackCount` is treated as the held stack snapshot, not the amount consumed. Item use quantity is
+therefore one per use event; the local data-quality audit reports any current-parser row where those totals differ.
+
 Reparse existing item events after parser or translation changes:
 
 ```powershell

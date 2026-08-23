@@ -315,6 +315,12 @@ class PlayerStatsServiceTests(unittest.TestCase):
         self.assertEqual(monthly.available_point_count, 1)
         self.assertEqual(monthly.points[0].totals.match_count, detail.totals.match_count)
         self.assertEqual(monthly.points[0].totals.kills, detail.totals.kills)
+        weekly = detail.trend_series["week"]
+        self.assertEqual(weekly.available_point_count, 2)
+        self.assertEqual(
+            [point.period_key for point in weekly.points],
+            ["2026-W26", "2026-W27"],
+        )
         serialized = detail.to_record()
         self.assertAlmostEqual(serialized["totals"]["headshot_hit_rate"], 8 / 40)
         self.assertAlmostEqual(serialized["totals"]["avg_kills"], 2.0)
@@ -412,6 +418,10 @@ class PlayerStatsServiceTests(unittest.TestCase):
                     "map_name": "Erangel_Main",
                     "game_mode": "squad-fpp",
                     "match_type": "official",
+                    "team_mode": "squad",
+                    "perspective": "fpp",
+                    "is_custom_match": 0,
+                    "season_state": "progress",
                     "created_at_kst": datetime(2026, 6, 29, 1, 0, 0),
                     "duration_seconds": 1800,
                     "total_players": 100,
@@ -493,6 +503,48 @@ class PlayerStatsServiceTests(unittest.TestCase):
                         "shots_hit": 50,
                     }
                 ],
+                [
+                    {
+                        "item_code": "Item_Heal_FirstAid_C",
+                        "item_category": "Use",
+                        "item_sub_category": "Heal",
+                        "picked_up_events": 3,
+                        "picked_up_quantity": 3,
+                        "loot_box_pickup_events": 1,
+                        "carepackage_pickup_events": 0,
+                        "custom_package_pickup_events": 0,
+                        "vehicle_trunk_pickup_events": 0,
+                        "vehicle_trunk_put_events": 0,
+                        "dropped_events": 1,
+                        "dropped_quantity": 1,
+                        "used_events": 2,
+                        "used_quantity": 2,
+                        "equipped_events": 0,
+                        "unequipped_events": 0,
+                        "attached_events": 0,
+                        "detached_events": 0,
+                    }
+                ],
+                {
+                    "heal_events": 3,
+                    "heal_amount": 120.0,
+                    "throwable_uses": 2,
+                    "vehicle_rides": 1,
+                    "normalized_event_count": 8,
+                },
+                {
+                    "fight_count": 7,
+                    "wins": 5,
+                    "losses": 2,
+                    "kill_wins": 3,
+                    "dbno_wins": 2,
+                    "death_losses": 1,
+                    "dbno_losses": 1,
+                    "headshot_wins": 2,
+                    "human_opponent_fights": 6,
+                    "bot_opponent_fights": 1,
+                    "unknown_opponent_fights": 0,
+                },
             ]
         )
 
@@ -523,6 +575,12 @@ class PlayerStatsServiceTests(unittest.TestCase):
         self.assertEqual(detail.weapons[0].weapon_name, "M416")
         self.assertAlmostEqual(detail.weapons[0].accuracy, 0.3)
         self.assertEqual(detail.weapons[0].accuracy_metric.metric_kind, "estimated_hit_rate")
+        self.assertEqual(detail.team_mode, "squad")
+        self.assertEqual(detail.items[0].item_name, "구급상자")
+        self.assertEqual(detail.item_summary["picked_up_quantity"], 3)
+        self.assertEqual(detail.item_summary["used_quantity"], 2)
+        self.assertEqual(detail.activity_summary["heal_events"], 3)
+        self.assertAlmostEqual(detail.fight_summary["fight_win_rate"], 5 / 7)
         self.assertIsNotNone(detail.replay_artifact)
         assert detail.replay_artifact is not None
         self.assertEqual(detail.replay_artifact.view_url, "/replay/artifacts/10/file")
@@ -550,6 +608,10 @@ class PlayerStatsServiceTests(unittest.TestCase):
                     "map_name": "Erangel_Main",
                     "game_mode": "squad-fpp",
                     "match_type": "official",
+                    "team_mode": "squad",
+                    "perspective": "fpp",
+                    "is_custom_match": 0,
+                    "season_state": "progress",
                     "created_at_kst": datetime(2026, 6, 29, 1, 0, 0),
                     "duration_seconds": 1800,
                     "total_players": 100,
@@ -592,6 +654,21 @@ class PlayerStatsServiceTests(unittest.TestCase):
                         "shots_hit": 5,
                     }
                 ],
+                [],
+                None,
+                {
+                    "fight_count": 0,
+                    "wins": 0,
+                    "losses": 0,
+                    "kill_wins": 0,
+                    "dbno_wins": 0,
+                    "death_losses": 0,
+                    "dbno_losses": 0,
+                    "headshot_wins": 0,
+                    "human_opponent_fights": 0,
+                    "bot_opponent_fights": 0,
+                    "unknown_opponent_fights": 0,
+                },
             ]
         )
 

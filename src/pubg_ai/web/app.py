@@ -142,7 +142,7 @@ from pubg_ai.telemetry_event_catalog import telemetry_event_catalog_records
 from pubg_ai.telemetry_item_processor import TelemetryItemProcessor
 from pubg_ai.telemetry_job_processor import TelemetryJobProcessor
 from pubg_ai.telemetry_movement_processor import TelemetryMovementProcessor
-from pubg_ai.system_alerts import collect_system_alerts
+from pubg_ai.system_alerts import alert_display_message, alert_display_title, collect_system_alerts
 from pubg_ai.worker_run_history import (
     WORKER_RUN_EXPORT_LIMIT,
     WorkerRunHistoryError,
@@ -960,7 +960,7 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
         finally:
             connection.close()
         return {
-            "alert": record.to_record(),
+            "alert": _alert_record_with_display(record.to_record()),
             "notes": [note.to_record() for note in notes],
         }
 
@@ -3085,7 +3085,7 @@ def _ensure_configured_storage_directories(config: RuntimeConfig) -> None:
     ):
         try:
             path.mkdir(parents=True, exist_ok=True)
-        except OSError:
+        except OS오류:
             # The storage alert system reports the exact inaccessible path.
             continue
 
@@ -3202,7 +3202,7 @@ def _alerts_status_record(settings_store: LocalSettingsStore, config: RuntimeCon
     return {
         "alert_settings": alert_settings.to_record(),
         "alerts": [
-            record.to_record()
+            _alert_record_with_display(record.to_record())
             for record in visible_alert_records(active_records)
             if record.alert_key in current_alert_keys
         ],
@@ -3213,11 +3213,21 @@ def _alerts_status_record(settings_store: LocalSettingsStore, config: RuntimeCon
 
 def _alert_history_page_record(page: Any) -> dict[str, Any]:
     record = page.to_record()
-    records = record.pop("records")
+    records = [
+        _alert_record_with_display(item)
+        for item in record.pop("records")
+    ]
     return {
         "alert_history": records,
         "alert_history_page": record,
     }
+
+
+def _alert_record_with_display(record: dict[str, Any]) -> dict[str, Any]:
+    result = dict(record)
+    result["display_title"] = alert_display_title(result)
+    result["display_message"] = alert_display_message(result)
+    return result
 
 
 def _alert_history_csv_response(records: list[AlertHistoryRecord]) -> Response:
@@ -3414,6 +3424,7 @@ _INDEX_HTML = """<!doctype html>
     .trend-filter { grid-template-columns: repeat(5, minmax(0, 1fr)); }
     .trend-table { min-width: 840px; table-layout: auto; }
     label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
+    label.is-disabled { opacity: 0.45; }
     input, select, textarea {
       width: 100%;
       min-height: 38px;
@@ -3700,6 +3711,75 @@ _INDEX_HTML = """<!doctype html>
     .loadout-score { margin-top: 9px; color: var(--warning); font-size: 10px; font-weight: 700; }
     .result-disclosure { min-width: 0; border-top: 1px solid var(--line); padding-top: 10px; }
     .result-disclosure summary { width: max-content; cursor: pointer; }
+    .drop-analysis-layout {
+      display: grid;
+      grid-template-columns: minmax(300px, 0.72fr) minmax(0, 1.28fr);
+      gap: 18px;
+      align-items: start;
+      min-width: 0;
+    }
+    .drop-map-panel { min-width: 0; }
+    .drop-map-toolbar {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .drop-map-toolbar label { width: min(260px, 100%); }
+    .drop-map-stage {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 1;
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 5px;
+      background: #080b0d;
+    }
+    .drop-map-stage img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+    .drop-map-markers { position: absolute; inset: 0; }
+    .drop-map-marker {
+      position: absolute;
+      width: 24px;
+      min-height: 24px;
+      transform: translate(-50%, -50%);
+      border: 2px solid #08100d;
+      border-radius: 50%;
+      padding: 0;
+      background: #46d2aa;
+      color: #07110e;
+      font-size: 9px;
+      font-weight: 800;
+      box-shadow: 0 0 0 2px rgb(70 210 170 / 25%);
+    }
+    .drop-map-marker:hover,
+    .drop-map-marker.active {
+      z-index: 2;
+      background: #f0d479;
+      box-shadow: 0 0 0 4px rgb(240 212 121 / 28%);
+    }
+    .drop-map-info {
+      min-height: 58px;
+      margin-top: 8px;
+      border-left: 3px solid var(--accent);
+      padding: 7px 9px;
+      background: var(--panel-soft);
+      color: #cbd2d8;
+      font-size: 10px;
+      line-height: 1.55;
+    }
+    .drop-map-info strong { display: block; color: var(--text); font-size: 12px; }
+    .drop-region-table tr.active td { background: #14231e; }
+    .drop-region-map-button { min-height: 28px; padding: 4px 8px; }
+    .drop-view-controls { margin: 4px 0 12px; }
+    .drop-view-panel { min-width: 0; }
+    .drop-view-panel[hidden] { display: none !important; }
+    .drop-view-panel .drop-map-panel { width: min(760px, 100%); }
     .recommendation-view-switch {
       display: inline-flex;
       width: max-content;
@@ -4256,6 +4336,7 @@ _INDEX_HTML = """<!doctype html>
       .trend-filter { grid-template-columns: 1fr; }
       .query-primary, .filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .result-columns { grid-template-columns: 1fr; }
+      .drop-analysis-layout { grid-template-columns: 1fr; }
       .player-controls { grid-template-columns: 1fr; }
       .replay-explorer-bar { grid-template-columns: 1fr; }
       .timeline-event-count { text-align: left; }
@@ -5066,22 +5147,22 @@ _INDEX_HTML = """<!doctype html>
       <span class="brand-mark">PA</span>
       <div>
         <h1>PUBG AI</h1>
-        <span>LOCAL OPERATIONS</span>
+        <span>로컬 운영</span>
       </div>
     </div>
     <div class="command-strip">
-      <span class="live-indicator"><i></i> LOCAL ONLY</span>
+      <span class="live-indicator"><i></i> 로컬 전용</span>
       <span class="command-message" id="banner">localhost 전용 관리 화면</span>
     </div>
     <div class="header-meta">
-      <span id="runtimeMode">BROWSER</span>
+      <span id="runtimeMode">브라우저</span>
       <strong id="kstClock">--:--:--</strong>
     </div>
   </header>
   <div class="app-shell">
     <aside class="side-panel" aria-label="관리 화면 탐색">
       <div class="side-heading">
-        <span>CONTROL DECK</span>
+        <span>관리 메뉴</span>
         <strong>관리 콘솔</strong>
       </div>
       <nav class="side-nav" id="workspaceNav">
@@ -5101,7 +5182,7 @@ _INDEX_HTML = """<!doctype html>
     <main id="workspace">
       <div class="workspace-heading">
         <div>
-          <span id="workspaceEyebrow">SYSTEM OVERVIEW</span>
+          <span id="workspaceEyebrow">시스템 개요</span>
           <h2 id="workspaceTitle">운영 개요</h2>
           <p id="workspaceDescription">로컬 데이터 수집과 저장 상태를 한눈에 확인합니다.</p>
         </div>
@@ -5110,7 +5191,7 @@ _INDEX_HTML = """<!doctype html>
       <nav class="workspace-section-tabs" id="workspaceSections" aria-label="현재 화면 세부 메뉴" role="tablist"></nav>
       <div class="analysis-player-context" id="analysisPlayerContext" aria-live="polite">
         <div class="analysis-player-context-copy">
-          <span>ANALYSIS TARGET</span>
+          <span>분석 대상</span>
           <strong id="analysisPlayerContextName">분석 대상을 선택하세요</strong>
           <small id="analysisPlayerContextMeta">한 번 선택하면 전적·추세·무기·추천·낙하·매치 탭에서 유지됩니다.</small>
         </div>
@@ -5336,6 +5417,20 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="webSettingsStatus" style="margin-top: 12px;">로컬 링크 확인 중</div>
     </section>
+    <section id="display-settings" data-view="settings">
+      <h2>표시 설정</h2>
+      <form id="displaySettingsForm">
+        <label>숫자 표기
+          <select name="number_format">
+            <option value="grouped">콤마 구분 · 59,452</option>
+            <option value="korean_units">한국식 단위 · 5만 9,452</option>
+            <option value="plain">구분 없음 · 59452</option>
+          </select>
+        </label>
+        <button type="submit">적용</button>
+      </form>
+      <div class="status" id="displaySettingsStatus" style="margin-top: 12px;">현재 표기 예시: <strong id="displayNumberPreview">59,452</strong></div>
+    </section>
     <section id="discord-permissions" data-view="discord">
       <h2>Discord 권한</h2>
       <form id="discordGrantForm">
@@ -5362,7 +5457,7 @@ _INDEX_HTML = """<!doctype html>
         <thead>
           <tr>
             <th>범위</th>
-            <th>User ID</th>
+            <th>Discord 사용자 ID</th>
             <th>권한</th>
             <th></th>
           </tr>
@@ -5473,7 +5568,7 @@ _INDEX_HTML = """<!doctype html>
         <label>닉네임
           <input name="current_name" autocomplete="off" required>
         </label>
-        <label>Account ID
+        <label>PUBG 계정 ID
           <input name="account_id" autocomplete="off" placeholder="자동 조회">
         </label>
         <label>공개 프로필
@@ -5496,7 +5591,7 @@ _INDEX_HTML = """<!doctype html>
           <tr>
             <th>플랫폼</th>
             <th>닉네임</th>
-            <th>Account ID</th>
+            <th>PUBG 계정 ID</th>
             <th>상태</th>
             <th></th>
           </tr>
@@ -5505,62 +5600,62 @@ _INDEX_HTML = """<!doctype html>
       </table>
     </section>
     <section id="data-deletions" data-view="operations">
-      <h2>Data Deletion Review</h2>
+      <h2>데이터 삭제 검토</h2>
       <form id="dataDeletionFilterForm">
-        <label>Status
+        <label>상태
           <select name="status">
-            <option value="pending">pending</option>
-            <option value="approved">approved</option>
-            <option value="all">all</option>
-            <option value="rejected">rejected</option>
-            <option value="cancelled">cancelled</option>
-            <option value="expired">expired</option>
+            <option value="pending">대기</option>
+            <option value="approved">승인</option>
+            <option value="all">전체</option>
+            <option value="rejected">거절</option>
+            <option value="cancelled">취소</option>
+            <option value="expired">만료</option>
           </select>
         </label>
-        <label>Local reviewer
+        <label>로컬 검토자
           <input name="actor_id" autocomplete="off" value="local-manager" required>
         </label>
-        <label>Audit note
+        <label>감사 메모
           <input name="note" autocomplete="off" maxlength="1000">
         </label>
-        <button type="submit">Refresh</button>
+        <button type="submit">새로고침</button>
       </form>
       <div class="status" id="dataDeletionStatus" style="margin: 10px 0;">
-        Approval records authorization only. Deletion execution is disabled.
+        승인은 권한 기록만 남기며 실제 삭제 실행은 비활성화되어 있습니다.
       </div>
       <div class="backup-builder-contract" id="exportedReviewPacketVerifier">
-        <h3>Exported review packet verifier</h3>
-        <div class="status">Strict JSON and canonical hashes: checked / uploaded text persisted: no / authorization and execution: disabled</div>
+        <h3>내보낸 검토 패킷 검증</h3>
+        <div class="status">엄격한 JSON 및 정규 해시 검증 / 업로드 원문 미보존 / 권한 부여·실행 비활성</div>
         <form class="review-packet-verifier-form" id="exportedReviewPacketVerifierForm">
-          <label>Packet JSON
+          <label>패킷 JSON
             <input name="packet_file" type="file" accept="application/json,.json" required>
           </label>
           <label class="checkbox-field">
             <input name="cross_check_database" type="checkbox" checked>
-            Current MySQL chain
+            현재 MySQL 체인 대조
           </label>
-          <button class="secondary" type="submit">Verify packet</button>
+          <button class="secondary" type="submit">패킷 검증</button>
         </form>
-        <div class="status" id="exportedReviewPacketVerifierStatus">No packet selected.</div>
+        <div class="status" id="exportedReviewPacketVerifierStatus">선택한 패킷이 없습니다.</div>
         <div class="review-packet-verifier-result" id="exportedReviewPacketVerifierResult"></div>
       </div>
       <div class="backup-builder-contract" id="exportedReviewPacketComparer">
-        <h3>Review packet comparison</h3>
-        <div class="status">Direction: baseline to candidate / comparison persisted: no / authorization and execution: disabled</div>
+        <h3>검토 패킷 비교</h3>
+        <div class="status">비교 방향: 기준→후보 / 비교 결과 미보존 / 권한 부여·실행 비활성</div>
         <form class="review-packet-comparer-form" id="exportedReviewPacketComparerForm">
-          <label>Baseline JSON
+          <label>기준 JSON
             <input name="baseline_packet_file" type="file" accept="application/json,.json" required>
           </label>
-          <label>Candidate JSON
+          <label>후보 JSON
             <input name="candidate_packet_file" type="file" accept="application/json,.json" required>
           </label>
           <label class="checkbox-field">
             <input name="cross_check_database" type="checkbox" checked>
-            Current MySQL chain for both
+            두 패킷 모두 현재 MySQL 체인과 대조
           </label>
-          <button class="secondary" type="submit">Compare packets</button>
+          <button class="secondary" type="submit">패킷 비교</button>
         </form>
-        <div class="status" id="exportedReviewPacketComparerStatus">No packet pair selected.</div>
+        <div class="status" id="exportedReviewPacketComparerStatus">선택한 패킷 쌍이 없습니다.</div>
         <div class="review-packet-comparer-result" id="exportedReviewPacketComparerResult"></div>
       </div>
       <div class="table-scroll">
@@ -5568,19 +5663,19 @@ _INDEX_HTML = """<!doctype html>
         <thead>
           <tr>
             <th>ID</th>
-            <th>Target</th>
-            <th>Scope</th>
-            <th>Status</th>
-            <th>Requested KST</th>
-            <th>Expires KST</th>
-            <th>Action</th>
+            <th>대상</th>
+            <th>범위</th>
+            <th>상태</th>
+            <th>요청 시각 (KST)</th>
+            <th>만료 시각 (KST)</th>
+            <th>작업</th>
           </tr>
         </thead>
         <tbody id="dataDeletionBody"></tbody>
       </table>
       </div>
       <div class="detail-panel" id="dataDeletionDetail">
-        Select a request to inspect its audit history and read-only impact preview.
+        요청을 선택하면 감사 이력과 읽기 전용 영향 미리보기를 확인할 수 있습니다.
       </div>
     </section>
     <datalist id="registeredPlayerOptions"></datalist>
@@ -5821,6 +5916,10 @@ _INDEX_HTML = """<!doctype html>
               <option value="player">유저 비교</option>
               <option value="weapon">무기 비교</option>
               <option value="map">맵 비교</option>
+              <option value="game_mode">게임 모드 비교</option>
+              <option value="team_mode">팀 모드 비교</option>
+              <option value="perspective">시점 비교</option>
+              <option value="match_type">매치 유형 비교</option>
             </select>
           </label>
           <label>플랫폼<select name="shard"><option value="steam">steam</option><option value="kakao">kakao</option></select></label>
@@ -5830,14 +5929,24 @@ _INDEX_HTML = """<!doctype html>
               <option value="win_rate">승률</option>
               <option value="kda">KDA</option>
               <option value="avg_kills">경기당 킬</option>
+              <option value="avg_assists">경기당 어시스트</option>
               <option value="avg_dbnos_caused">경기당 기절</option>
+              <option value="avg_dbnos_taken">경기당 당한 기절</option>
+              <option value="avg_deaths">경기당 사망</option>
               <option value="avg_damage_dealt">평균 피해</option>
+              <option value="avg_damage_taken">평균 받은 피해</option>
+              <option value="damage_ratio">가한/받은 피해 비율</option>
               <option value="accuracy">명중률</option>
               <option value="headshot_hit_rate">헤드샷 명중률</option>
+              <option value="headshot_kill_rate">헤드샷 킬 비율</option>
               <option value="fight_win_rate">교전 승률</option>
               <option value="avg_fights_per_match">경기당 교전</option>
               <option value="avg_survival_seconds">평균 생존</option>
+              <option value="avg_movement_distance_m">평균 이동</option>
             </select>
+          </label>
+          <label>추세 집계
+            <select name="trend_granularity"><option value="date">일자</option><option value="week">주</option><option value="month" selected>월</option></select>
           </label>
           <button type="submit">비교</button>
           <button class="secondary" type="button" id="comparisonReset">초기화</button>
@@ -5849,10 +5958,12 @@ _INDEX_HTML = """<!doctype html>
         <details class="advanced-filters">
           <summary>공통 상세 필터</summary>
           <div class="filter-grid">
-            <label>팀 모드<select name="team_mode"><option value="">전체</option><option value="solo">솔로</option><option value="duo">듀오</option><option value="squad">스쿼드</option></select></label>
-            <label>시점<select name="perspective"><option value="">전체</option><option value="fpp">FPP</option><option value="tpp">TPP</option></select></label>
-            <label>매치 유형<input name="match_type" autocomplete="off" placeholder="전체"></label>
-            <label>시즌 상태<input name="season_state" autocomplete="off" placeholder="전체"></label>
+            <label>맵<select name="map_name" data-catalog-facet="maps"><option value="">전체</option></select></label>
+            <label>게임 모드<select name="game_mode" data-catalog-facet="game_modes"><option value="">전체</option></select></label>
+            <label>팀 모드<select name="team_mode" data-catalog-facet="team_modes"><option value="">전체</option></select></label>
+            <label>시점<select name="perspective" data-catalog-facet="perspectives"><option value="">전체</option></select></label>
+            <label>매치 유형<select name="match_type" data-catalog-facet="match_types"><option value="">전체</option></select></label>
+            <label>시즌 상태<select name="season_state" data-catalog-facet="season_states"><option value="">전체</option></select></label>
             <label>시작일 (KST)<input name="from_date_kst" type="date"></label>
             <label>종료일 (KST)<input name="to_date_kst" type="date"></label>
           </div>
@@ -5861,6 +5972,7 @@ _INDEX_HTML = """<!doctype html>
       <div class="segmented-control comparison-view-controls" id="comparisonViewControls" role="group" aria-label="비교 결과 보기">
         <button type="button" data-comparison-view="chart" class="active">그래프</button>
         <button type="button" data-comparison-view="table">표</button>
+        <button type="button" data-comparison-view="trend">일·주·월 추세</button>
       </div>
       <div class="status" id="comparisonBody" style="margin-top: 12px;">비교 대기 중</div>
     </section>
@@ -5918,35 +6030,48 @@ _INDEX_HTML = """<!doctype html>
     </section>
     <section id="landing-analysis" data-view="players">
       <h2>낙하 지역 분석</h2>
-      <form id="dropZoneForm" class="query-form">
-        <label>플랫폼
-          <select name="shard"><option value="steam">steam</option><option value="kakao">kakao</option></select>
-        </label>
-        <label>등록 유저
-          <input class="registered-player-input" name="target" list="registeredPlayerOptions" autocomplete="off" placeholder="닉네임 일부 입력" required>
-        </label>
-        <label>최소 착지 경기
-          <input name="min_matches" type="number" min="1" step="1" value="1" inputmode="numeric">
-        </label>
-        <label>지역 정렬
-          <select name="sort_metric">
-            <option value="landings" selected>착지 횟수</option>
-            <option value="win_rate">승률</option>
-            <option value="avg_kills">평균 킬</option>
-            <option value="avg_damage">평균 피해</option>
-          </select>
-        </label>
-        <label>그래프 지역 수
-          <select name="chart_limit">
-            <option value="10">10개</option>
-            <option value="20" selected>20개</option>
-            <option value="50">50개</option>
-            <option value="100">100개</option>
-            <option value="500">전체</option>
-          </select>
-        </label>
-        <button type="submit">조회</button>
-        <button class="secondary" type="button" data-reset-analysis-form="dropZoneForm">필터 초기화</button>
+      <form id="dropZoneForm" class="analysis-form">
+        <div class="query-primary">
+          <label>플랫폼
+            <select name="shard"><option value="steam">steam</option><option value="kakao">kakao</option></select>
+          </label>
+          <label>등록 유저
+            <input class="registered-player-input" name="target" list="registeredPlayerOptions" autocomplete="off" placeholder="닉네임 일부 입력" required>
+          </label>
+          <label>최소 착지 경기
+            <input name="min_matches" type="number" min="1" step="1" value="1" inputmode="numeric">
+          </label>
+          <label>맵
+            <select name="map_filter" data-catalog-facet="maps"><option value="">전체 맵</option></select>
+          </label>
+          <button type="submit">조회</button>
+          <button class="secondary" type="button" data-reset-analysis-form="dropZoneForm">필터 초기화</button>
+        </div>
+        <details class="advanced-filters">
+          <summary>표시 옵션</summary>
+          <div class="filter-grid">
+            <label>지역 검색
+              <input name="region_search" autocomplete="off" placeholder="지역명 일부 입력">
+            </label>
+            <label>지역 정렬
+              <select name="sort_metric">
+                <option value="landings" selected>착지 횟수</option>
+                <option value="win_rate">승률</option>
+                <option value="avg_kills">평균 킬</option>
+                <option value="avg_damage">평균 피해</option>
+              </select>
+            </label>
+            <label>그래프 지역 수
+              <select name="chart_limit">
+                <option value="10">10개</option>
+                <option value="20" selected>20개</option>
+                <option value="50">50개</option>
+                <option value="100">100개</option>
+                <option value="500">전체</option>
+              </select>
+            </label>
+          </div>
+        </details>
       </form>
       <div class="status" id="dropZoneBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
@@ -6009,16 +6134,40 @@ _INDEX_HTML = """<!doctype html>
         </label>
         <label>지표
           <select name="metric">
-            <option value="kda">KDA</option>
-            <option value="win_rate">승률</option>
-            <option value="avg_damage">평균 딜</option>
-            <option value="damage">총 딜</option>
-            <option value="kills">킬</option>
-            <option value="dbnos">기절</option>
-            <option value="accuracy">추정 명중률(일반 탄환)</option>
-            <option value="headshot_hit_rate">헤드샷 명중 확률</option>
-            <option value="headshot_rate">헤드샷 킬 비율</option>
-            <option value="matches">경기 수</option>
+            <optgroup label="종합 성과">
+              <option value="kda">KDA</option>
+              <option value="kd">KD</option>
+              <option value="win_rate">승률</option>
+              <option value="top10_rate">TOP10 진입률</option>
+              <option value="top10s">TOP10 횟수</option>
+              <option value="wins">치킨 수</option>
+              <option value="matches">경기 수</option>
+            </optgroup>
+            <optgroup label="전투">
+              <option value="avg_damage">평균 딜</option>
+              <option value="avg_damage_taken">평균 받은 피해</option>
+              <option value="damage_ratio">가한/받은 피해 비율</option>
+              <option value="damage">총 딜</option>
+              <option value="kills">킬</option>
+              <option value="avg_kills">경기당 킬</option>
+              <option value="assists">어시스트</option>
+              <option value="avg_assists">경기당 어시스트</option>
+              <option value="dbnos">기절</option>
+              <option value="avg_dbnos">경기당 가한 기절</option>
+              <option value="fight_win_rate">교전 승리 확률</option>
+              <option value="fight_wins">교전 승리 수</option>
+              <option value="avg_fights">경기당 교전 수</option>
+            </optgroup>
+            <optgroup label="사격·생존">
+              <option value="accuracy">추정 명중률(일반 탄환)</option>
+              <option value="shots_hit">총 명중 횟수</option>
+              <option value="headshot_hit_rate">헤드샷 명중 확률</option>
+              <option value="headshot_hits">헤드샷 명중 횟수</option>
+              <option value="headshot_rate">헤드샷 킬 비율</option>
+              <option value="headshot_kills">헤드샷 킬 수</option>
+              <option value="avg_survival">평균 생존 시간</option>
+              <option value="avg_movement">평균 이동 거리</option>
+            </optgroup>
           </select>
         </label>
         <label>서버 범위
@@ -6029,9 +6178,19 @@ _INDEX_HTML = """<!doctype html>
         <label>표시 인원
           <input name="limit" type="number" min="1" max="100" value="10">
         </label>
+        <label>최소 경기 수
+          <input name="min_matches" type="number" min="1" step="1" value="1">
+        </label>
+        <label>등록 상태
+          <select name="active_only"><option value="true" selected>수집 중인 유저</option><option value="false">중지 유저 포함</option></select>
+        </label>
         <button type="submit">조회</button>
         <button class="secondary" type="button" id="rankingGuildRefresh" title="Discord 서버 목록 새로고침">서버 새로고침</button>
       </form>
+      <div class="segmented-control" id="rankingViewControls" role="group" aria-label="랭킹 결과 보기" style="margin-top:10px;">
+        <button type="button" class="active" data-ranking-view="table">표</button>
+        <button type="button" data-ranking-view="chart">그래프</button>
+      </div>
       <div class="status" id="rankingBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
     <section id="match-job-queue" data-view="collection">
@@ -6464,7 +6623,7 @@ _INDEX_HTML = """<!doctype html>
     </main>
     <aside class="system-rail" aria-label="실시간 시스템 상태">
       <div class="rail-header">
-        <span>LIVE STATUS</span>
+        <span>실시간 상태</span>
         <strong>시스템</strong>
       </div>
       <div class="rail-group">
@@ -6473,7 +6632,7 @@ _INDEX_HTML = """<!doctype html>
         <div class="rail-row"><span>Discord</span><strong id="railDiscord">확인 중</strong></div>
       </div>
       <div class="rail-header">
-        <span>WORKERS</span>
+        <span>작업기</span>
         <strong>자동 처리</strong>
       </div>
       <div class="rail-group">
@@ -6481,7 +6640,7 @@ _INDEX_HTML = """<!doctype html>
         <div class="rail-row"><span>후처리</span><strong id="railPostProcessing">중지</strong></div>
       </div>
       <div class="rail-header">
-        <span>STORAGE</span>
+        <span>저장 공간</span>
         <strong>저장 공간</strong>
       </div>
       <div class="rail-storage">
@@ -6489,7 +6648,7 @@ _INDEX_HTML = """<!doctype html>
         <div><span>REPLAY</span><strong id="railReplayStorage">확인 중</strong></div>
       </div>
       <div class="rail-header">
-        <span>RECENT ACTIVITY</span>
+        <span>최근 상태</span>
         <strong>최근 상태</strong>
       </div>
       <p class="rail-activity" id="railActivity">관리 화면을 준비하고 있습니다.</p>
@@ -6529,6 +6688,7 @@ _INDEX_HTML = """<!doctype html>
     const rankingForm = document.querySelector("#rankingForm");
     const rankingGuildSelect = document.querySelector("#rankingGuildSelect");
     const rankingGuildRefresh = document.querySelector("#rankingGuildRefresh");
+    const rankingViewControls = document.querySelector("#rankingViewControls");
     const dataDeletionFilterForm = document.querySelector("#dataDeletionFilterForm");
     const dataDeletionBody = document.querySelector("#dataDeletionBody");
     const dataDeletionStatus = document.querySelector("#dataDeletionStatus");
@@ -6639,6 +6799,9 @@ _INDEX_HTML = """<!doctype html>
     const postProcessingWorkerStatus = document.querySelector("#postProcessingWorkerStatus");
     const webSettingsForm = document.querySelector("#webSettingsForm");
     const webSettingsStatus = document.querySelector("#webSettingsStatus");
+    const displaySettingsForm = document.querySelector("#displaySettingsForm");
+    const displaySettingsStatus = document.querySelector("#displaySettingsStatus");
+    const displayNumberPreview = document.querySelector("#displayNumberPreview");
     const banner = document.querySelector("#banner");
     const workspaceNav = document.querySelector("#workspaceNav");
     const workspaceSections = document.querySelector("#workspaceSections");
@@ -6728,6 +6891,16 @@ _INDEX_HTML = """<!doctype html>
     let activeRecommendationReport = null;
     let activeRecommendationView = "summary";
     let activeRecommendationChartMetric = "score";
+    let activeRankingReport = null;
+    let activeRankingView = "table";
+    let activeNumberFormat = (() => {
+      try {
+        const saved = window.localStorage.getItem("pubg-ai-number-format");
+        return ["grouped", "korean_units", "plain"].includes(saved) ? saved : "grouped";
+      } catch (_error) {
+        return "grouped";
+      }
+    })();
     let registeredPlayers = [];
     let activeDiscordGuilds = [];
     let activeDiscordPermissions = {
@@ -6795,39 +6968,39 @@ _INDEX_HTML = """<!doctype html>
 
     const workspaceViews = {
       overview: {
-        eyebrow: "SYSTEM OVERVIEW",
+        eyebrow: "시스템 개요",
         title: "운영 개요",
         description: "로컬 데이터 수집과 저장 상태를 한눈에 확인합니다.",
       },
       players: {
-        eyebrow: "PLAYER INTELLIGENCE",
+        eyebrow: "플레이어 분석",
         title: "플레이어 분석",
         description: "추적 대상 등록, 전적, 무기, 추세와 추천 정보를 조회합니다.",
       },
       replay: {
-        eyebrow: "TACTICAL REPLAY",
+        eyebrow: "전술 리플레이",
         title: "2D 리플레이",
         description: "비행 동선, 이동, 교전과 사망 위치를 타임라인으로 확인합니다.",
       },
       collection: {
-        eyebrow: "DATA PIPELINE",
+        eyebrow: "데이터 처리",
         title: "수집 및 처리",
         description: "매치 수집 큐와 텔레메트리 후처리 작업을 제어합니다.",
       },
       discord: {
-        eyebrow: "DISCORD CONTROL",
+        eyebrow: "DISCORD 관리",
         title: "Discord 권한",
         description: "서버별 명령 권한, 관리자와 랭킹 범위를 관리합니다.",
       },
       operations: {
-        eyebrow: "OPERATIONS CENTER",
+        eyebrow: "운영 센터",
         title: "운영 및 알림",
         description: "저장소 경고, 작업 이력, 운영 훈련과 삭제 검토를 확인합니다.",
       },
       settings: {
-        eyebrow: "LOCAL CONFIGURATION",
+        eyebrow: "로컬 설정",
         title: "로컬 설정",
-        description: "저장 경로와 로컬 상세 링크를 이 컴퓨터에만 저장합니다.",
+        description: "저장 경로, 로컬 상세 링크와 화면 표기를 이 컴퓨터에만 저장합니다.",
       },
     };
 
@@ -6886,6 +7059,7 @@ _INDEX_HTML = """<!doctype html>
       settings: [
         { key: "storage", label: "저장 경로", ids: ["storage-settings"] },
         { key: "web", label: "로컬 링크", ids: ["web-link-settings"] },
+        { key: "display", label: "화면 표시", ids: ["display-settings"] },
       ],
     };
     const activeWorkspaceSections = {};
@@ -6999,12 +7173,12 @@ _INDEX_HTML = """<!doctype html>
     async function enableDesktopFeatures() {
       if (!window.pywebview?.api) return false;
       document.body.classList.add("desktop-host");
-      runtimeMode.textContent = "DESKTOP";
+      runtimeMode.textContent = "데스크톱";
       try {
         const status = await window.pywebview.api.runtime_status();
         runtimeMode.title = status.base_url + " / " + status.project_dir;
       } catch (error) {
-        runtimeMode.title = "Desktop bridge error: " + error.message;
+        runtimeMode.title = "데스크톱 연결 오류: " + error.message;
       }
       return true;
     }
@@ -7153,13 +7327,13 @@ _INDEX_HTML = """<!doctype html>
       const total = Number(summary?.total ?? Object.values(byStatus).reduce((sum, value) => sum + Number(value || 0), 0));
       const count = (...keys) => keys.reduce((sum, key) => sum + Number(byStatus[key] || 0), 0);
       const parts = [
-        `전체 ${total}건`,
-        `처리 가능 ${Number(summary?.eligible_queued ?? count("queued", "pending"))}건`,
-        `재시도 예약 ${Number(summary?.scheduled_queued || 0)}건`,
-        `처리 중 ${count("running", "processing")}건`,
-        `실패 ${count("failed")}건`,
-        `최근 10분 완료 ${Number(summary?.recent_succeeded || 0)}건`,
-        `누적 완료 ${count("succeeded", "completed")}건`,
+        `전체 ${formatInteger(total)}건`,
+        `처리 가능 ${formatInteger(summary?.eligible_queued ?? count("queued", "pending"))}건`,
+        `재시도 예약 ${formatInteger(summary?.scheduled_queued || 0)}건`,
+        `처리 중 ${formatInteger(count("running", "processing"))}건`,
+        `실패 ${formatInteger(count("failed"))}건`,
+        `최근 10분 완료 ${formatInteger(summary?.recent_succeeded || 0)}건`,
+        `누적 완료 ${formatInteger(count("succeeded", "completed"))}건`,
       ];
       if (summary?.oldest_queued_at_kst) {
         parts.push(`최장 대기 ${formatKstShort(summary.oldest_queued_at_kst)}부터`);
@@ -7226,22 +7400,22 @@ _INDEX_HTML = """<!doctype html>
         replayStorage?.exists && replayStorage?.is_dir && replayStorage?.writable ? "ok" : "error",
       );
       statusGrid.innerHTML = [
-        cell("MySQL", escapeHtml(`${database.mysql_connection || "unknown"} / ${database.database || "-"}`)),
-        cell("추적 유저", `${Number(operations.active_players || 0)} / ${Number(operations.registered_players || 0)}명 활성`),
-        cell("저장 매치", `${Number(operations.matches || 0)}경기`),
-        cell("수집 대기", `매치 ${Number(operations.pending_match_jobs || 0)} · 텔레메트리 ${Number(operations.pending_telemetry_jobs || 0)}`),
-        cell("원본 데이터", `매치 ${Number(operations.raw_matches || 0)} · 텔레메트리 ${Number(operations.raw_telemetry || 0)}`),
-        cell("2D 결과", `스냅샷 ${Number(operations.map_snapshots || 0)} · 타임라인 ${Number(operations.timelines || 0)}`),
-        cell("실패 작업", `${Number(operations.failed_jobs || 0)}건`),
+        cell("MySQL", escapeHtml(`${databaseReady ? "연결됨" : "연결 오류"} / ${database.database || "-"}`)),
+        cell("추적 유저", `${formatInteger(operations.active_players || 0)} / ${formatInteger(operations.registered_players || 0)}명 활성`),
+        cell("저장 매치", `${formatInteger(operations.matches || 0)}경기`),
+        cell("수집 대기", `매치 ${formatInteger(operations.pending_match_jobs || 0)} · 텔레메트리 ${formatInteger(operations.pending_telemetry_jobs || 0)}`),
+        cell("원본 데이터", `매치 ${formatInteger(operations.raw_matches || 0)} · 텔레메트리 ${formatInteger(operations.raw_telemetry || 0)}`),
+        cell("2D 결과", `스냅샷 ${formatInteger(operations.map_snapshots || 0)} · 타임라인 ${formatInteger(operations.timelines || 0)}`),
+        cell("실패 작업", `${formatInteger(operations.failed_jobs || 0)}건`),
         cell("PUBG API Key", settings.secrets.PUBG_API_KEY.configured ? "설정됨" : "없음"),
         cell("Discord Token", settings.secrets.DISCORD_BOT_TOKEN.configured ? "설정됨" : "없음"),
         cell("원본 저장소", escapeHtml(storageRailText(settings.storage_status?.raw_data_dir))),
         cell("2D 저장소", escapeHtml(storageRailText(settings.storage_status?.replay_data_dir))),
         cell("백업 저장소", escapeHtml(storageRailText(settings.storage_status?.backup_data_dir))),
         cell("격리 저장소", escapeHtml(storageRailText(settings.storage_status?.quarantine_data_dir))),
-        cell("수집 주기", escapeHtml(`${settings.collector.poll_interval_seconds}초`)),
-        cell("주기당 대상", escapeHtml(`${settings.collector.cycle_player_limit}명`)),
-        cell("조회 chunk", escapeHtml(`${settings.collector.player_lookup_chunk_size}명`)),
+        cell("수집 주기", escapeHtml(`${formatInteger(settings.collector.poll_interval_seconds)}초`)),
+        cell("주기당 대상", escapeHtml(`${formatInteger(settings.collector.cycle_player_limit)}명`)),
+        cell("조회 묶음", escapeHtml(`${formatInteger(settings.collector.player_lookup_chunk_size)}명`)),
       ].join("");
       storageSettingsForm.elements.raw_data_dir.value = settings.raw_data_dir || "";
       storageSettingsForm.elements.replay_data_dir.value = settings.replay_data_dir || "";
@@ -7249,23 +7423,23 @@ _INDEX_HTML = """<!doctype html>
       storageSettingsForm.elements.quarantine_data_dir.value = settings.quarantine_data_dir || "";
       storageSettingsForm.elements.raw_compression.value = settings.raw_compression || "gzip";
       storageSettingsStatus.textContent = [
-        `Raw ${formatStoragePathStatus(settings.storage_status?.raw_data_dir)}`,
-        `Replay ${formatStoragePathStatus(settings.storage_status?.replay_data_dir)}`,
-        `Backup ${formatStoragePathStatus(settings.storage_status?.backup_data_dir)}`,
-        `Quarantine ${formatStoragePathStatus(settings.storage_status?.quarantine_data_dir)}`,
+        `원본 ${formatStoragePathStatus(settings.storage_status?.raw_data_dir)}`,
+        `리플레이 ${formatStoragePathStatus(settings.storage_status?.replay_data_dir)}`,
+        `백업 ${formatStoragePathStatus(settings.storage_status?.backup_data_dir)}`,
+        `격리 ${formatStoragePathStatus(settings.storage_status?.quarantine_data_dir)}`,
       ].join(" / ");
       collectorSettingsForm.elements.poll_interval_seconds.value = settings.collector.poll_interval_seconds || 180;
       collectorSettingsForm.elements.cycle_player_limit.value = settings.collector.cycle_player_limit || 100;
       collectorSettingsForm.elements.player_lookup_chunk_size.value = settings.collector.player_lookup_chunk_size || 10;
       collectorSettingsStatus.textContent = [
-        `${settings.collector.poll_interval_seconds}초`,
-        `${settings.collector.cycle_player_limit}명`,
-        `chunk ${settings.collector.player_lookup_chunk_size}`,
+        `${formatInteger(settings.collector.poll_interval_seconds)}초`,
+        `${formatInteger(settings.collector.cycle_player_limit)}명`,
+        `조회 묶음 ${formatInteger(settings.collector.player_lookup_chunk_size)}명`,
       ].join(" / ");
       webSettingsForm.elements.local_web_base_url.value = settings.local_web_base_url || "";
       webSettingsStatus.textContent = settings.local_web_base_url
-        ? `Enabled: ${settings.local_web_base_url}`
-        : "Disabled";
+        ? `사용 중: ${settings.local_web_base_url}`
+        : "사용 안 함";
       applyCollectorSettingsPrefill();
     }
 
@@ -7299,11 +7473,11 @@ _INDEX_HTML = """<!doctype html>
     }
 
     function formatStoragePathStatus(status) {
-      if (!status) return "unknown";
-      if (!status.exists) return "missing";
-      if (!status.is_dir) return "not directory";
-      if (!status.writable) return `not writable${status.error ? `: ${status.error}` : ""}`;
-      return `ok / free ${formatBytes(Number(status.free_bytes || 0))}`;
+      if (!status) return "상태 알 수 없음";
+      if (!status.exists) return "경로 없음";
+      if (!status.is_dir) return "폴더가 아님";
+      if (!status.writable) return `쓰기 불가${status.error ? `: ${status.error}` : ""}`;
+      return `정상 · ${formatBytes(Number(status.free_bytes || 0))} 여유`;
     }
 
     async function loadAlerts(options = {}) {
@@ -7311,10 +7485,10 @@ _INDEX_HTML = """<!doctype html>
         const payload = await requestJson("/alerts/status", "GET");
         renderAlertStatus(payload, options.renderHistory !== false);
       } catch (error) {
-        alertSettingsStatus.textContent = `Error: ${error.message}`;
-        alertsBody.innerHTML = `<tr><td colspan="5">Error: ${escapeHtml(error.message)}</td></tr>`;
-        alertHistoryBody.innerHTML = `<tr><td colspan="7">Error: ${escapeHtml(error.message)}</td></tr>`;
-        alertHistoryStatus.textContent = `Error: ${error.message}`;
+        alertSettingsStatus.textContent = `오류: ${error.message}`;
+        alertsBody.innerHTML = `<tr><td colspan="5">오류: ${escapeHtml(error.message)}</td></tr>`;
+        alertHistoryBody.innerHTML = `<tr><td colspan="7">오류: ${escapeHtml(error.message)}</td></tr>`;
+        alertHistoryStatus.textContent = `오류: ${error.message}`;
       }
     }
 
@@ -7396,7 +7570,7 @@ _INDEX_HTML = """<!doctype html>
         },
       };
       const filters = presets[preset];
-      if (!filters) throw new Error(`unknown alert history preset: ${preset}`);
+      if (!filters) throw new Error(`알 수 없는 알림 이력 필터: ${preset}`);
       alertHistoryFilterForm.elements.source.value = filters.source;
       alertHistoryFilterForm.elements.state.value = filters.state;
       alertHistoryFilterForm.elements.severity.value = filters.severity;
@@ -7477,8 +7651,20 @@ _INDEX_HTML = """<!doctype html>
         : '<option value="">전송 가능한 채널 없음</option>';
       alertDiscordChannelSelect.disabled = !channels.length;
       alertDiscordChannelAdd.disabled = true;
-      alertDiscordChannelsStatus.textContent = `${payload.guild?.guild_name || discordGuildName(guildId)} · 전송 가능 ${channels.length}개`;
+      alertDiscordChannelsStatus.textContent = `${payload.guild?.guild_name || discordGuildName(guildId)} · 전송 가능 ${formatInteger(channels.length)}개`;
       renderSelectedAlertChannels();
+    }
+
+    function alertDisplayTitle(alert) {
+      return String(alert?.display_title || alert?.title || "");
+    }
+
+    function alertDisplayMessage(alert) {
+      return String(alert?.display_message || alert?.message || "");
+    }
+
+    function alertNoteTypeLabel(value) {
+      return String(value || "") === "resolution" ? "해결 기록" : "메모";
     }
 
     function renderAlerts(alerts) {
@@ -7487,8 +7673,8 @@ _INDEX_HTML = """<!doctype html>
           <tr>
             <td>${escapeHtml(alertSourceLabel(alert.source))}</td>
             <td>${alertSeverityBadge(alert.severity)}</td>
-            <td>${escapeHtml(alert.title || "")}</td>
-            <td>${escapeHtml(alert.message || "")}</td>
+            <td>${escapeHtml(alertDisplayTitle(alert))}</td>
+            <td>${escapeHtml(alertDisplayMessage(alert))}</td>
             <td>
               <div class="actions">
                 ${alertWorkerRunButton(alert)}
@@ -7522,7 +7708,7 @@ _INDEX_HTML = """<!doctype html>
       const start = history.length ? alertHistoryPage.offset + 1 : 0;
       const end = history.length ? alertHistoryPage.offset + history.length : 0;
       alertHistoryStatus.textContent = [
-        `전체 ${alertHistoryPage.total}건 중 ${start}-${end}`,
+        `전체 ${formatInteger(alertHistoryPage.total)}건 중 ${formatInteger(start)}-${formatInteger(end)}`,
         `위치 ${alertHistoryPage.source === "all" ? "전체" : alertSourceLabel(alertHistoryPage.source)}`,
         `상태 ${alertHistoryPage.state === "all" ? "전체" : alertStateFilterLabel(alertHistoryPage.state)}`,
         `심각도 ${alertHistoryPage.severity === "all" ? "전체" : alertSeverityLabel(alertHistoryPage.severity)}`,
@@ -7543,7 +7729,7 @@ _INDEX_HTML = """<!doctype html>
                   : alertSeverityBadge(alert.severity)}
               </div>
             </td>
-            <td>${escapeHtml(alert.title || "")}</td>
+            <td>${escapeHtml(alertDisplayTitle(alert))}</td>
             <td>
               <div class="table-badge-stack">
                 ${alertStateBadge(alert)}
@@ -7551,7 +7737,7 @@ _INDEX_HTML = """<!doctype html>
               </div>
             </td>
             <td>${escapeHtml(alertHistoryNoteSummary(alert))}</td>
-            <td>${escapeHtml(alert.message || "")}</td>
+            <td>${escapeHtml(alertDisplayMessage(alert))}</td>
             <td>
               <div class="actions">
                 ${alertWorkerRunButton(alert)}
@@ -7567,12 +7753,12 @@ _INDEX_HTML = """<!doctype html>
         ? history.map((alert) => `
           <article class="dense-card">
             <div class="dense-card-head">
-              <strong>${escapeHtml(alert.title || "제목 없음")}</strong>
+              <strong>${escapeHtml(alertDisplayTitle(alert) || "제목 없음")}</strong>
               ${alertStateBadge(alert)}
             </div>
             <div class="dense-card-row"><span>최근 발생</span><strong>${escapeHtml(formatKstShort(alert.last_seen_at_kst))}</strong></div>
             <div class="dense-card-row"><span>위치 / 심각도</span><strong>${escapeHtml(alertSourceLabel(alert.source))} · ${escapeHtml(alertSeverityLabel(alert.severity))}</strong></div>
-            <div class="dense-card-row"><span>내용</span><strong>${escapeHtml(alert.message || "-")}</strong></div>
+            <div class="dense-card-row"><span>내용</span><strong>${escapeHtml(alertDisplayMessage(alert) || "-")}</strong></div>
             <div class="dense-card-actions">
               ${alertWorkerRunButton(alert)}
               <button class="secondary" type="button" data-alert-detail-id="${attr(alert.id)}">상세</button>
@@ -7674,7 +7860,7 @@ _INDEX_HTML = """<!doctype html>
       if (!count) return "-";
       const note = alert.latest_note ? `: ${alert.latest_note}` : "";
       const type = alert.latest_note_type === "resolution" ? "해결 기록" : "메모";
-      return `${count}개 ${type}${note}`;
+      return `${formatInteger(count)}개 ${type}${note}`;
     }
 
     function alertWorkerRunButton(alert) {
@@ -7709,7 +7895,7 @@ _INDEX_HTML = """<!doctype html>
       activeAlertHistoryDetailId = alert.id;
       activeAlertHistoryDetailAlert = alert;
       activeAlertHistoryNoteType = noteType === "resolution" ? "resolution" : "note";
-      alertHistoryDetail.innerHTML = `<div class="status">Loading alert #${escapeHtml(alert.id)} notes...</div>`;
+      alertHistoryDetail.innerHTML = `<div class="status">알림 #${escapeHtml(alert.id)}의 메모를 불러오는 중...</div>`;
       const payload = await requestJson(`/alerts/history/${encodeURIComponent(alert.id)}/notes`, "GET");
       if (payload.detail) throw new Error(payload.detail);
       renderAlertHistoryDetail(alert, payload.notes || []);
@@ -7722,11 +7908,11 @@ _INDEX_HTML = """<!doctype html>
     async function loadAlertHistoryDetailById(alertId, noteType = activeAlertHistoryNoteType, focusEditor = false) {
       activeAlertHistoryDetailId = alertId;
       activeAlertHistoryNoteType = noteType === "resolution" ? "resolution" : "note";
-      alertHistoryDetail.innerHTML = `<div class="status">Loading alert #${escapeHtml(alertId)} detail...</div>`;
+      alertHistoryDetail.innerHTML = `<div class="status">알림 #${escapeHtml(alertId)} 상세를 불러오는 중...</div>`;
       const payload = await requestJson(`/alerts/history/${encodeURIComponent(alertId)}`, "GET");
       if (payload.detail) throw new Error(payload.detail);
       const alert = payload.alert;
-      if (!alert) throw new Error("alert history row was not returned");
+      if (!alert) throw new Error("알림 이력 항목을 불러오지 못했습니다.");
       activeAlertHistoryDetailId = alert.id;
       activeAlertHistoryDetailAlert = alert;
       renderAlertHistoryDetail(alert, payload.notes || []);
@@ -7846,58 +8032,58 @@ _INDEX_HTML = """<!doctype html>
         ? notes.map((note) => `
           <tr>
             <td>${escapeHtml(note.created_at_kst || "")}</td>
-            <td>${escapeHtml(note.note_type || "")}</td>
+            <td>${escapeHtml(alertNoteTypeLabel(note.note_type))}</td>
             <td>${escapeHtml(note.created_by || "")}</td>
             <td>${escapeHtml(note.note_text || "")}</td>
           </tr>
         `).join("")
-        : `<tr><td colspan="4">No notes or resolution comments</td></tr>`;
+        : `<tr><td colspan="4">저장된 메모 또는 해결 기록이 없습니다.</td></tr>`;
       alertHistoryDetail.innerHTML = `
         <div class="recommendation-line">
-          <strong>Alert #${escapeHtml(alert.id)} detail</strong>
+          <strong>알림 #${escapeHtml(alert.id)} 상세</strong>
           <div class="actions">
             ${alertWorkerRunButton(alert)}
-            <button type="button" data-alert-detail-action="acknowledge" data-alert-id="${attr(alert.id)}">Acknowledge</button>
-            <button class="secondary" type="button" data-alert-detail-action="snooze" data-alert-id="${attr(alert.id)}">Snooze 1h</button>
+            <button type="button" data-alert-detail-action="acknowledge" data-alert-id="${attr(alert.id)}">확인</button>
+            <button class="secondary" type="button" data-alert-detail-action="snooze" data-alert-id="${attr(alert.id)}">1시간 숨김</button>
           </div>
         </div>
-        <div class="status" style="margin-top: 6px;">${notes.length} notes shown</div>
+        <div class="status" style="margin-top: 6px;">메모 ${formatInteger(notes.length)}개 표시</div>
         <div class="alert-state-row">
           ${alertStateBadge(alert)}
           <span class="status">${escapeHtml(state.timeLabel)}${state.timeValue ? `: ${escapeHtml(state.timeValue)}` : ""}</span>
         </div>
         <div class="status" style="margin-top: 4px;">${escapeHtml(state.helper)}</div>
         <div class="grid" style="margin-top: 10px;">
-          ${cell("Source", escapeHtml(alert.source || ""))}
-          ${cell("Severity", alertSeverityBadge(alert.severity))}
-          ${cell("Status", escapeHtml(state.label))}
-          ${cell("Last seen", escapeHtml(alert.last_seen_at_kst || ""))}
+          ${cell("발생 위치", escapeHtml(alertSourceLabel(alert.source)))}
+          ${cell("심각도", alertSeverityBadge(alert.severity))}
+          ${cell("상태", escapeHtml(state.label))}
+          ${cell("최근 발생", escapeHtml(alert.last_seen_at_kst || ""))}
         </div>
         <form class="detail-note-form" data-alert-note-form data-alert-id="${attr(alert.id)}">
-          <label>Type
+          <label>종류
             <select name="note_type">
-              <option value="note"${selectedNote === "note" ? " selected" : ""}>note</option>
-              <option value="resolution"${selectedNote === "resolution" ? " selected" : ""}>resolution</option>
+              <option value="note"${selectedNote === "note" ? " selected" : ""}>메모</option>
+              <option value="resolution"${selectedNote === "resolution" ? " selected" : ""}>해결 기록</option>
             </select>
           </label>
-          <label>Comment
-            <textarea name="note_text" required placeholder="Write an alert note or resolution comment"></textarea>
+          <label>내용
+            <textarea name="note_text" required placeholder="알림 메모 또는 해결 내용을 입력하세요"></textarea>
           </label>
-          <button type="submit">Save</button>
+          <button type="submit">저장</button>
         </form>
         <table class="detail-table">
           <tbody>
-            <tr><th>Title</th><td>${escapeHtml(alert.title || "")}</td></tr>
-            <tr><th>Message</th><td>${escapeHtml(alert.message || "")}</td></tr>
+            <tr><th>제목</th><td>${escapeHtml(alertDisplayTitle(alert))}</td></tr>
+            <tr><th>내용</th><td>${escapeHtml(alertDisplayMessage(alert))}</td></tr>
           </tbody>
         </table>
         <table class="detail-table">
           <thead>
             <tr>
-              <th>Created</th>
-              <th>Type</th>
-              <th>Created by</th>
-              <th>Text</th>
+              <th>작성 시각</th>
+              <th>종류</th>
+              <th>작성자</th>
+              <th>내용</th>
             </tr>
           </thead>
           <tbody>${noteRows}</tbody>
@@ -8320,7 +8506,7 @@ _INDEX_HTML = """<!doctype html>
         .slice()
         .sort((left, right) => String(left.current_name).localeCompare(String(right.current_name)))
         .map((player) => {
-          const label = player.shard + " · " + (player.active ? "수집중" : "수집중지") + " · " + String(player.account_id).slice(-8);
+          const label = displayCode(player.shard, "shard") + " · " + (player.active ? "수집중" : "수집중지") + " · " + String(player.account_id).slice(-8);
           return '<option value="' + attr(player.current_name) + '" label="' + attr(label) + '"></option>';
         })
         .join("");
@@ -8332,7 +8518,7 @@ _INDEX_HTML = """<!doctype html>
           .sort((left, right) => String(left.current_name).localeCompare(String(right.current_name)))
           .map((player) => {
             const state = player.active ? "수집 중" : "수집 중지";
-            return `<option value="${attr(player.account_id)}">${escapeHtml(player.current_name)} · ${escapeHtml(player.shard)} · ${state}</option>`;
+            return `<option value="${attr(player.account_id)}">${escapeHtml(player.current_name)} · ${escapeHtml(displayCode(player.shard, "shard"))} · ${state}</option>`;
           }),
       ].join("");
       if ([...replayArtifactPlayerSelect.options].some((option) => option.value === selectedAccountId)) {
@@ -8351,10 +8537,11 @@ _INDEX_HTML = """<!doctype html>
       }[facet];
       const match = (catalog.matches || []).find((item) => item[field] === value);
       if (facet === "maps") return match?.map_name_ko || value;
-      if (facet === "game_modes") return match?.game_mode_ko || value;
-      if (facet === "team_modes") return { solo: "솔로", duo: "듀오", squad: "스쿼드", unknown: "알 수 없음" }[value] || value;
-      if (facet === "perspectives") return { fpp: "1인칭", tpp: "3인칭", unknown: "알 수 없음" }[value] || value;
-      if (facet === "match_types") return { official: "일반", competitive: "경쟁전", custom: "커스텀" }[value] || value;
+      if (facet === "game_modes") return match?.game_mode_ko || displayCode(value, "game_mode");
+      if (facet === "team_modes") return displayCode(value, "team_mode");
+      if (facet === "perspectives") return displayCode(value, "perspective");
+      if (facet === "match_types") return displayCode(value, "match_type");
+      if (facet === "season_states") return displayCode(value, "season_state");
       return String(value);
     }
 
@@ -8372,10 +8559,10 @@ _INDEX_HTML = """<!doctype html>
       const result = Number(match.win_place) === 1 ? "치킨" : "#" + (match.win_place || "-");
       return [
         playedAt,
-        match.map_name_ko || match.map_name || "-",
-        match.game_mode_ko || match.game_mode || "-",
+        match.map_name_ko || displayCode(match.map_name, "map"),
+        match.game_mode_ko || displayCode(match.game_mode, "game_mode"),
         result,
-        String(match.kills || 0) + "킬",
+        formatInteger(match.kills) + "킬",
       ].join(" · ");
     }
 
@@ -8650,20 +8837,42 @@ _INDEX_HTML = """<!doctype html>
 
     function dataDeletionActionButtons(request) {
       const buttons = [
-        `<button class="secondary" type="button" data-deletion-action="detail" data-request-id="${attr(request.id)}">Detail</button>`,
+        `<button class="secondary" type="button" data-deletion-action="detail" data-request-id="${attr(request.id)}">상세</button>`,
       ];
       if (request.status === "pending") {
         buttons.push(
-          `<button type="button" data-deletion-action="approve" data-request-id="${attr(request.id)}">Approve</button>`,
-          `<button class="danger" type="button" data-deletion-action="reject" data-request-id="${attr(request.id)}">Reject</button>`,
-          `<button class="secondary" type="button" data-deletion-action="cancel" data-request-id="${attr(request.id)}">Cancel</button>`,
+          `<button type="button" data-deletion-action="approve" data-request-id="${attr(request.id)}">승인</button>`,
+          `<button class="danger" type="button" data-deletion-action="reject" data-request-id="${attr(request.id)}">거절</button>`,
+          `<button class="secondary" type="button" data-deletion-action="cancel" data-request-id="${attr(request.id)}">취소</button>`,
         );
       } else if (request.status === "approved") {
         buttons.push(
-          `<button class="secondary" type="button" data-deletion-action="cancel" data-request-id="${attr(request.id)}">Cancel approval</button>`,
+          `<button class="secondary" type="button" data-deletion-action="cancel" data-request-id="${attr(request.id)}">승인 취소</button>`,
         );
       }
       return buttons.join("");
+    }
+
+    function operationValueLabel(value) {
+      const text = String(value ?? "");
+      const labels = {
+        pending: "대기", approved: "승인", rejected: "거절", cancelled: "취소",
+        candidate: "삭제 후보", protected: "보호", preserved: "보존",
+        complete: "완전", truncated: "일부만 표시", required: "필수", "not required": "선택",
+        passed: "통과", pass: "통과", failed: "실패", fail: "실패", blocked: "차단",
+        selectable: "선택 가능", absent: "없음", conflict: "충돌", removed: "정리 완료",
+        "cleanup blocked": "정리 차단", none: "없음", unknown: "알 수 없음",
+        unavailable: "사용 불가", immutable: "변경 불가", bound: "연결됨",
+        matched: "일치", mismatch: "불일치", equivalent: "동일", different: "차이 있음",
+        current: "최신", stale: "오래됨", "both current": "둘 다 최신",
+        "not requested": "요청 안 함", yes: "예", no: "아니요",
+        database: "데이터베이스", file: "파일", raw: "원본", replay: "리플레이",
+      };
+      return labels[text.toLowerCase()] || text || "-";
+    }
+
+    function operationBooleanLabel(value) {
+      return value === true ? "예" : value === false ? "아니요" : "-";
     }
 
     function renderExportedReviewPacketVerification(verification) {
@@ -8673,31 +8882,31 @@ _INDEX_HTML = """<!doctype html>
           <td>${escapeHtml(check.key)}</td>
           <td>${escapeHtml(check.status)}</td>
           <td>${escapeHtml(check.message)}</td>
-        </tr>`).join("") || `<tr><td colspan="3">No verification checks returned.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="3">반환된 검증 항목이 없습니다.</td></tr>`;
       return `
         <div class="grid">
-          <div class="kv"><span>Verification</span><strong>${escapeHtml(verification?.verification_status || "-")}</strong></div>
-          <div class="kv"><span>Assessment</span><strong>${escapeHtml(verification?.review_status || "-")}</strong></div>
-          <div class="kv"><span>Request / plan / matrix</span><strong>#${escapeHtml(verification?.request_id || "-")} / #${escapeHtml(verification?.dry_run_plan_id || "-")} / #${escapeHtml(verification?.fault_matrix_run_id || "-")}</strong></div>
-          <div class="kv"><span>Local packet row</span><strong>${verification?.matched_packet_id ? `#${escapeHtml(verification.matched_packet_id)}` : "not matched"}</strong></div>
+          <div class="kv"><span>검증</span><strong>${escapeHtml(operationValueLabel(verification?.verification_status))}</strong></div>
+          <div class="kv"><span>판정</span><strong>${escapeHtml(operationValueLabel(verification?.review_status))}</strong></div>
+          <div class="kv"><span>요청 / 계획 / 장애 행렬</span><strong>#${escapeHtml(verification?.request_id || "-")} / #${escapeHtml(verification?.dry_run_plan_id || "-")} / #${escapeHtml(verification?.fault_matrix_run_id || "-")}</strong></div>
+          <div class="kv"><span>로컬 패킷 기록</span><strong>${verification?.matched_packet_id ? `#${escapeHtml(verification.matched_packet_id)}` : "일치 항목 없음"}</strong></div>
         </div>
-        <div class="status">Canonical bytes: ${formatBytes(Number(verification?.canonical_export_size_bytes || 0))} / SHA-256: <code>${escapeHtml(verification?.canonical_export_sha256 || "-")}</code> / DB current: ${verification?.database_cross_check_requested ? (verification.database_cross_check_passed ? "yes" : "no") : "not requested"} / records created: no</div>
+        <div class="status">정규화 크기: ${formatBytes(Number(verification?.canonical_export_size_bytes || 0))} / SHA-256: <code>${escapeHtml(verification?.canonical_export_sha256 || "-")}</code> / 현재 DB와 일치: ${verification?.database_cross_check_requested ? operationBooleanLabel(verification.database_cross_check_passed) : "검사 안 함"} / 새 기록 생성: 아니요</div>
         <div class="table-scroll">
           <table class="detail-table">
-            <thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>
+            <thead><tr><th>검사</th><th>상태</th><th>내용</th></tr></thead>
             <tbody>${checkRows}</tbody>
           </table>
         </div>`;
     }
 
     async function readExportedReviewPacketFile(file, label) {
-      if (!file) throw new Error(`${label} file is required.`);
+      if (!file) throw new Error(`${label} 파일이 필요합니다.`);
       if (file.size > 2097152) {
-        throw new Error(`${label} exceeds the 2 MiB verification limit.`);
+        throw new Error(`${label} 파일이 2 MiB 검증 제한을 초과했습니다.`);
       }
       const packetText = await file.text();
       if (new TextEncoder().encode(packetText).byteLength > 2097152) {
-        throw new Error(`${label} exceeds the 2 MiB verification limit.`);
+        throw new Error(`${label} 파일이 2 MiB 검증 제한을 초과했습니다.`);
       }
       return packetText;
     }
@@ -8706,11 +8915,11 @@ _INDEX_HTML = """<!doctype html>
       const values = new FormData(formElement);
       const fileInput = formElement.elements.packet_file;
       const file = fileInput?.files?.[0] || null;
-      const packetText = await readExportedReviewPacketFile(file, "Packet JSON");
+      const packetText = await readExportedReviewPacketFile(file, "패킷 JSON");
       const button = formElement.querySelector("button[type='submit']");
       if (button) button.disabled = true;
       exportedReviewPacketVerifierResult.innerHTML = "";
-      exportedReviewPacketVerifierStatus.textContent = "Verifying packet in memory...";
+      exportedReviewPacketVerifierStatus.textContent = "메모리에서 검토 패킷을 검증하는 중...";
       try {
         const payload = await postJson("/data-deletion-review-packets/verify", {
           packet_text: packetText,
@@ -8718,7 +8927,7 @@ _INDEX_HTML = """<!doctype html>
         });
         const verification = payload.verification || {};
         exportedReviewPacketVerifierResult.innerHTML = renderExportedReviewPacketVerification(verification);
-        exportedReviewPacketVerifierStatus.textContent = `${verification.verification_status || "unknown"}. Uploaded text was not persisted; authorization, readiness, and execution remain disabled.`;
+        exportedReviewPacketVerifierStatus.textContent = `${operationValueLabel(verification.verification_status)} · 업로드한 내용은 저장하지 않았으며 승인, 실행 준비 및 실제 실행은 계속 비활성 상태입니다.`;
       } finally {
         if (button) button.disabled = false;
       }
@@ -8741,12 +8950,12 @@ _INDEX_HTML = """<!doctype html>
       const baseline = comparison?.baseline_verification || {};
       const candidate = comparison?.candidate_verification || {};
       const databaseState = comparison?.database_cross_check_requested
-        ? (comparison?.database_cross_check_passed ? "both current" : "mismatch")
-        : "not requested";
+        ? (comparison?.database_cross_check_passed ? "둘 다 최신" : "불일치")
+        : "검사 안 함";
       const groupedDifferences = [
-        ["Input ID", differences.input_ids || []],
-        ["Fingerprint", differences.fingerprints || []],
-        ["Assessment", differences.assessment || []],
+        ["입력 ID", differences.input_ids || []],
+        ["지문값", differences.fingerprints || []],
+        ["판정", differences.assessment || []],
       ];
       const contractRows = groupedDifferences.flatMap(([category, items]) => items.map((item) => `
         <tr>
@@ -8754,7 +8963,7 @@ _INDEX_HTML = """<!doctype html>
           <td>${escapeHtml(item.field || "-")}</td>
           <td class="comparison-value">${escapeHtml(comparisonValueText(item.baseline_value))}</td>
           <td class="comparison-value">${escapeHtml(comparisonValueText(item.candidate_value))}</td>
-        </tr>`)).join("") || `<tr><td colspan="4">No input, fingerprint, or assessment differences.</td></tr>`;
+        </tr>`)).join("") || `<tr><td colspan="4">입력, 지문값 또는 판정 차이가 없습니다.</td></tr>`;
       const checkRows = (differences.review_checks || []).map((item) => `
         <tr>
           <td>${escapeHtml(item.key || "-")}</td>
@@ -8763,44 +8972,44 @@ _INDEX_HTML = """<!doctype html>
           <td>${escapeHtml(item.candidate_status || "-")}</td>
           <td class="comparison-value">${escapeHtml(item.baseline_message || "-")}</td>
           <td class="comparison-value">${escapeHtml(item.candidate_message || "-")}</td>
-        </tr>`).join("") || `<tr><td colspan="6">No review-check outcome differences.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="6">검토 항목 결과 차이가 없습니다.</td></tr>`;
       const canonicalRows = (differences.canonical_fields || []).map((item) => `
         <tr>
           <td><code>${escapeHtml(item.path || "-")}</code></td>
           <td>${escapeHtml(item.change_type || "-")}</td>
           <td class="comparison-value">${escapeHtml(comparisonValueText(item.baseline_value))}</td>
           <td class="comparison-value">${escapeHtml(comparisonValueText(item.candidate_value))}</td>
-        </tr>`).join("") || `<tr><td colspan="4">Canonical packet content is equivalent.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="4">정규화된 패킷 내용이 같습니다.</td></tr>`;
       const truncation = metrics.canonical_field_differences_truncated
-        ? ` / shown: ${escapeHtml(metrics.reported_canonical_field_difference_count || 0)} (truncated)`
+        ? ` / 표시: ${formatInteger(metrics.reported_canonical_field_difference_count || 0)}개(일부만 표시)`
         : "";
       return `
         <div class="grid">
-          <div class="kv"><span>Comparison</span><strong>${escapeHtml(comparison?.comparison_status || "-")}</strong></div>
-          <div class="kv"><span>Baseline verification</span><strong>${escapeHtml(baseline.verification_status || "-")}</strong></div>
-          <div class="kv"><span>Candidate verification</span><strong>${escapeHtml(candidate.verification_status || "-")}</strong></div>
-          <div class="kv"><span>Current MySQL</span><strong>${escapeHtml(databaseState)}</strong></div>
+          <div class="kv"><span>비교 결과</span><strong>${escapeHtml(operationValueLabel(comparison?.comparison_status))}</strong></div>
+          <div class="kv"><span>기준 패킷 검증</span><strong>${escapeHtml(operationValueLabel(baseline.verification_status))}</strong></div>
+          <div class="kv"><span>비교 패킷 검증</span><strong>${escapeHtml(operationValueLabel(candidate.verification_status))}</strong></div>
+          <div class="kv"><span>현재 MySQL</span><strong>${escapeHtml(databaseState)}</strong></div>
         </div>
-        <div class="status">Canonical changes: ${escapeHtml(metrics.canonical_field_difference_count || 0)}${truncation} / input IDs: ${escapeHtml(metrics.input_id_difference_count || 0)} / fingerprints: ${escapeHtml(metrics.fingerprint_difference_count || 0)} / assessment: ${escapeHtml(metrics.assessment_difference_count || 0)} / checks: ${escapeHtml(metrics.review_check_difference_count || 0)} / records created: no</div>
-        <div class="status">Comparison SHA-256: <code>${escapeHtml(comparison?.comparison_fingerprint_sha256 || "-")}</code></div>
-        <h4>Contract and assessment differences</h4>
+        <div class="status">정규화 필드 변경 ${formatInteger(metrics.canonical_field_difference_count || 0)}개${truncation} / 입력 ID ${formatInteger(metrics.input_id_difference_count || 0)}개 / 지문값 ${formatInteger(metrics.fingerprint_difference_count || 0)}개 / 판정 ${formatInteger(metrics.assessment_difference_count || 0)}개 / 검사 ${formatInteger(metrics.review_check_difference_count || 0)}개 / 새 기록 생성 없음</div>
+        <div class="status">비교 SHA-256: <code>${escapeHtml(comparison?.comparison_fingerprint_sha256 || "-")}</code></div>
+        <h4>계약 및 판정 차이</h4>
         <div class="table-scroll">
           <table class="detail-table comparison-table comparison-contract-table">
-            <thead><tr><th>Category</th><th>Field</th><th>Baseline</th><th>Candidate</th></tr></thead>
+            <thead><tr><th>분류</th><th>필드</th><th>기준</th><th>비교 대상</th></tr></thead>
             <tbody>${contractRows}</tbody>
           </table>
         </div>
-        <h4>Review-check outcome differences</h4>
+        <h4>검토 항목 결과 차이</h4>
         <div class="table-scroll">
           <table class="detail-table comparison-table comparison-check-table">
-            <thead><tr><th>Check</th><th>Changed</th><th>Baseline</th><th>Candidate</th><th>Baseline message</th><th>Candidate message</th></tr></thead>
+            <thead><tr><th>검사</th><th>변경 필드</th><th>기준</th><th>비교 대상</th><th>기준 내용</th><th>비교 대상 내용</th></tr></thead>
             <tbody>${checkRows}</tbody>
           </table>
         </div>
-        <h4>Canonical field differences</h4>
+        <h4>정규화 필드 차이</h4>
         <div class="table-scroll">
           <table class="detail-table comparison-table comparison-canonical-table">
-            <thead><tr><th>JSON path</th><th>Change</th><th>Baseline</th><th>Candidate</th></tr></thead>
+            <thead><tr><th>JSON 경로</th><th>변경</th><th>기준</th><th>비교 대상</th></tr></thead>
             <tbody>${canonicalRows}</tbody>
           </table>
         </div>`;
@@ -8811,13 +9020,13 @@ _INDEX_HTML = """<!doctype html>
       const baselineFile = formElement.elements.baseline_packet_file?.files?.[0] || null;
       const candidateFile = formElement.elements.candidate_packet_file?.files?.[0] || null;
       const [baselineText, candidateText] = await Promise.all([
-        readExportedReviewPacketFile(baselineFile, "Baseline JSON"),
-        readExportedReviewPacketFile(candidateFile, "Candidate JSON"),
+        readExportedReviewPacketFile(baselineFile, "기준 JSON"),
+        readExportedReviewPacketFile(candidateFile, "비교 대상 JSON"),
       ]);
       const button = formElement.querySelector("button[type='submit']");
       if (button) button.disabled = true;
       exportedReviewPacketComparerResult.innerHTML = "";
-      exportedReviewPacketComparerStatus.textContent = "Comparing verified packets in memory...";
+      exportedReviewPacketComparerStatus.textContent = "메모리에서 검증된 패킷을 비교하는 중...";
       try {
         const payload = await postJson("/data-deletion-review-packets/compare", {
           baseline_packet_text: baselineText,
@@ -8826,7 +9035,7 @@ _INDEX_HTML = """<!doctype html>
         });
         const comparison = payload.comparison || {};
         exportedReviewPacketComparerResult.innerHTML = renderExportedReviewPacketComparison(comparison);
-        exportedReviewPacketComparerStatus.textContent = `${comparison.comparison_status || "unknown"}. Uploaded text and comparison were not persisted; authorization, readiness, and execution remain disabled.`;
+        exportedReviewPacketComparerStatus.textContent = `${operationValueLabel(comparison.comparison_status)} · 업로드 내용과 비교 결과는 저장하지 않았으며 승인, 실행 준비 및 실제 실행은 계속 비활성 상태입니다.`;
       } finally {
         if (button) button.disabled = false;
       }
@@ -8847,14 +9056,14 @@ _INDEX_HTML = """<!doctype html>
           <tr${highlighted ? ' class="linked-row"' : ""}>
             <td>${escapeHtml(request.id)}</td>
             <td>${escapeHtml(request.player_name)}<br><small>${escapeHtml(request.shard)} / ${escapeHtml(request.account_id)}</small></td>
-            <td>${escapeHtml(request.deletion_scope)}</td>
-            <td>${escapeHtml(request.status)}</td>
+            <td>${escapeHtml(operationValueLabel(request.deletion_scope))}</td>
+            <td>${escapeHtml(operationValueLabel(request.status))}</td>
             <td>${escapeHtml(request.requested_at_kst)}</td>
             <td>${escapeHtml(request.expires_at_kst)}</td>
             <td><div class="actions">${dataDeletionActionButtons(request)}</div></td>
           </tr>`;
-      }).join("") || `<tr><td colspan="7">No deletion review requests.</td></tr>`;
-      dataDeletionStatus.textContent = `${(payload.requests || []).length} request(s). Approval does not execute deletion.`;
+      }).join("") || `<tr><td colspan="7">삭제 검토 요청이 없습니다.</td></tr>`;
+      dataDeletionStatus.textContent = `${formatInteger((payload.requests || []).length)}개 요청 · 승인은 실제 삭제를 실행하지 않습니다.`;
     }
 
     function dataDeletionPreviewRowRows(preview) {
@@ -8866,9 +9075,9 @@ _INDEX_HTML = """<!doctype html>
           <td>${escapeHtml(row.table)}</td>
           <td>${escapeHtml(row.category)}</td>
           <td>${escapeHtml(row.relationship)}</td>
-          <td>${escapeHtml(row.row_count)}</td>
-          <td>${escapeHtml(row.preview_state)}</td>
-        </tr>`).join("") || `<tr><td colspan="5">No database rows in this scope.</td></tr>`;
+          <td>${formatInteger(row.row_count)}</td>
+          <td>${escapeHtml(operationValueLabel(row.preview_state))}</td>
+        </tr>`).join("") || `<tr><td colspan="5">이 범위에 해당하는 데이터베이스 행이 없습니다.</td></tr>`;
     }
 
     function dataDeletionPreviewFileRows(preview) {
@@ -8878,12 +9087,12 @@ _INDEX_HTML = """<!doctype html>
       ];
       return files.map((file) => `
         <tr>
-          <td>${escapeHtml(file.catalog_category)} / ${escapeHtml(file.file_type)}</td>
+          <td>${escapeHtml(operationValueLabel(file.catalog_category))} / ${escapeHtml(file.file_type)}</td>
           <td>${escapeHtml(file.match_id)}</td>
-          <td>${escapeHtml(file.ownership)}<br><small>${file.deletion_candidate ? "candidate" : "protected"}</small></td>
-          <td>${escapeHtml(file.verification_status)}<br><small>${formatBytes(file.declared_size_bytes || 0)}</small></td>
+          <td>${escapeHtml(operationValueLabel(file.ownership))}<br><small>${file.deletion_candidate ? "삭제 후보" : "보호"}</small></td>
+          <td>${escapeHtml(operationValueLabel(file.verification_status))}<br><small>${formatBytes(file.declared_size_bytes || 0)}</small></td>
           <td>${escapeHtml(file.relative_path)}<br><small>${escapeHtml(file.resolved_path || "-")}</small></td>
-        </tr>`).join("") || `<tr><td colspan="5">No files in this scope.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="5">이 범위에 해당하는 파일이 없습니다.</td></tr>`;
     }
 
     function renderDataDeletionPreview(preview) {
@@ -8891,35 +9100,35 @@ _INDEX_HTML = """<!doctype html>
       const catalogs = [preview.raw_files, preview.replay_files].filter((catalog) => catalog?.included);
       const catalogSummary = catalogs.map((catalog) => `
         <tr>
-          <td>${escapeHtml(catalog.category)}</td>
-          <td>${escapeHtml(catalog.total_records)}</td>
+          <td>${escapeHtml(operationValueLabel(catalog.category))}</td>
+          <td>${formatInteger(catalog.total_records)}</td>
           <td>${formatBytes(catalog.total_declared_size_bytes || 0)}</td>
-          <td>${escapeHtml(catalog.listed_records)}</td>
-          <td>${catalog.truncated ? "yes" : "no"}</td>
-          <td>${escapeHtml(catalog.shared_match_records)}</td>
-        </tr>`).join("") || `<tr><td colspan="6">No file catalog in this scope.</td></tr>`;
+          <td>${formatInteger(catalog.listed_records)}</td>
+          <td>${operationBooleanLabel(catalog.truncated)}</td>
+          <td>${formatInteger(catalog.shared_match_records)}</td>
+        </tr>`).join("") || `<tr><td colspan="6">이 범위에 파일 카탈로그가 없습니다.</td></tr>`;
       return `
-        <h3>Read-only impact preview</h3>
+        <h3>읽기 전용 영향 미리보기</h3>
         <div class="status">
-          Generated ${escapeHtml(preview.generated_at_kst)} / matches ${escapeHtml(preview.matched_match_count)} /
-          candidate rows ${escapeHtml(preview.candidate_row_count)} / execution enabled: no
+          생성 ${escapeHtml(preview.generated_at_kst)} / 매치 ${formatInteger(preview.matched_match_count)}개 /
+          삭제 후보 행 ${formatInteger(preview.candidate_row_count)}개 / 실제 실행: 비활성
         </div>
         <table class="detail-table">
-          <thead><tr><th>Table</th><th>Category</th><th>Relationship</th><th>Rows</th><th>State</th></tr></thead>
+          <thead><tr><th>테이블</th><th>분류</th><th>관계</th><th>행</th><th>상태</th></tr></thead>
           <tbody>${dataDeletionPreviewRowRows(preview)}</tbody>
         </table>
-        <h3>File catalog summary</h3>
+        <h3>파일 카탈로그 요약</h3>
         <table class="detail-table">
-          <thead><tr><th>Storage</th><th>Total</th><th>Declared size</th><th>Listed</th><th>Truncated</th><th>Shared</th></tr></thead>
+          <thead><tr><th>저장소</th><th>전체</th><th>기록 크기</th><th>표시</th><th>일부만 표시</th><th>공유</th></tr></thead>
           <tbody>${catalogSummary}</tbody>
         </table>
         <div class="status">
-          Filesystem issues ${escapeHtml(verification.filesystem_issue_count || 0)} /
-          unsafe paths ${escapeHtml(verification.unsafe_path_count || 0)} /
-          checksum verification: not performed
+          파일 시스템 문제 ${formatInteger(verification.filesystem_issue_count || 0)}건 /
+          안전하지 않은 경로 ${formatInteger(verification.unsafe_path_count || 0)}건 /
+          체크섬 검증: 수행 안 함
         </div>
         <table class="detail-table">
-          <thead><tr><th>Type</th><th>Match</th><th>Ownership</th><th>Verification</th><th>Path</th></tr></thead>
+          <thead><tr><th>유형</th><th>매치</th><th>소유 관계</th><th>검증</th><th>경로</th></tr></thead>
           <tbody>${dataDeletionPreviewFileRows(preview)}</tbody>
         </table>
         <ul>${(preview.warnings || []).map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul>`;
@@ -8933,48 +9142,48 @@ _INDEX_HTML = """<!doctype html>
           <td>${escapeHtml(snapshot.id)}</td>
           <td>${escapeHtml(snapshot.captured_at_kst)}</td>
           <td>${escapeHtml(snapshot.fingerprint_sha256)}</td>
-          <td>${snapshot.catalog_complete ? "complete" : "truncated"} / issues ${escapeHtml(snapshot.filesystem_issue_count)}</td>
-        </tr>`).join("") || `<tr><td colspan="4">No immutable snapshots.</td></tr>`;
+          <td>${snapshot.catalog_complete ? "완전" : "일부만 표시"} / 문제 ${formatInteger(snapshot.filesystem_issue_count)}건</td>
+        </tr>`).join("") || `<tr><td colspan="4">변경 불가 스냅샷이 없습니다.</td></tr>`;
       const confirmationRows = (state.confirmations || []).map((confirmation) => `
         <tr>
           <td>${escapeHtml(confirmation.id)}</td>
           <td>${escapeHtml(confirmation.preview_snapshot_id)}</td>
           <td>${escapeHtml(confirmation.confirmed_by)}</td>
           <td>${escapeHtml(confirmation.confirmed_at_kst)}</td>
-        </tr>`).join("") || `<tr><td colspan="4">No confirmation records.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="4">확인 기록이 없습니다.</td></tr>`;
       const captureButton = state.snapshot_capture_enabled
-        ? `<button type="button" data-deletion-contract-action="capture" data-request-id="${escapeHtml(state.request_id)}">Capture immutable snapshot</button>`
+        ? `<button type="button" data-deletion-contract-action="capture" data-request-id="${escapeHtml(state.request_id)}">변경 불가 스냅샷 저장</button>`
         : "";
       const confirmationControl = state.confirmation_allowed && latest
         ? `
-          <div>Expected confirmation text:</div>
+          <div>필요한 확인 문구:</div>
           <code>${escapeHtml(state.expected_confirmation_text)}</code>
           <div class="confirmation-input-row">
-            <label>Confirmation text
+            <label>확인 문구
               <input id="dataDeletionConfirmationText-${escapeHtml(latest.id)}" autocomplete="off">
             </label>
             <button class="danger" type="button"
               data-deletion-contract-action="confirm"
               data-request-id="${escapeHtml(state.request_id)}"
               data-snapshot-id="${escapeHtml(latest.id)}"
-              data-fingerprint="${escapeHtml(latest.fingerprint_sha256)}">Record confirmation</button>
+              data-fingerprint="${escapeHtml(latest.fingerprint_sha256)}">확인 기록 저장</button>
           </div>`
         : "";
       return `
         <div class="confirmation-contract">
-          <h3>Immutable confirmation contract</h3>
-          <div class="status">Request ${escapeHtml(state.request_status)} / execution enabled: no</div>
+          <h3>변경 불가 확인 계약</h3>
+          <div class="status">요청 ${escapeHtml(operationValueLabel(state.request_status))} / 실제 실행: 비활성</div>
           <div class="actions">${captureButton}</div>
           ${blockers.length ? `<ul>${blockers.map((blocker) => `<li>${escapeHtml(blocker)}</li>`).join("")}</ul>` : ""}
           ${confirmationControl}
-          <h3>Snapshot history</h3>
+          <h3>스냅샷 이력</h3>
           <table class="detail-table">
-            <thead><tr><th>ID</th><th>Captured KST</th><th>SHA-256 fingerprint</th><th>Verification</th></tr></thead>
+            <thead><tr><th>ID</th><th>저장 시각(KST)</th><th>SHA-256 지문값</th><th>검증</th></tr></thead>
             <tbody>${snapshotRows}</tbody>
           </table>
-          <h3>Confirmation history</h3>
+          <h3>확인 이력</h3>
           <table class="detail-table">
-            <thead><tr><th>ID</th><th>Snapshot</th><th>Actor</th><th>Confirmed KST</th></tr></thead>
+            <thead><tr><th>ID</th><th>스냅샷</th><th>처리자</th><th>확인 시각(KST)</th></tr></thead>
             <tbody>${confirmationRows}</tbody>
           </table>
         </div>`;
@@ -8991,7 +9200,7 @@ _INDEX_HTML = """<!doctype html>
           <td>${escapeHtml(operation.table)}</td>
           <td>${escapeHtml(operation.estimated_rows)}</td>
           <td>${escapeHtml(JSON.stringify(operation.selector || {}))}</td>
-        </tr>`).join("") || `<tr><td colspan="5">No planned database operations.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="5">예정된 데이터베이스 작업이 없습니다.</td></tr>`;
       const fileRows = (plan.file_operations || []).map((operation) => `
         <tr>
           <td>${escapeHtml(operation.sequence)}</td>
@@ -8999,23 +9208,23 @@ _INDEX_HTML = """<!doctype html>
           <td>${escapeHtml(operation.match_id)}</td>
           <td>${formatBytes(operation.declared_size_bytes || 0)}</td>
           <td>${escapeHtml(operation.relative_path)}</td>
-        </tr>`).join("") || `<tr><td colspan="5">No planned player-owned file operations.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="5">예정된 플레이어 소유 파일 작업이 없습니다.</td></tr>`;
       const backupRows = (plan.backup_prerequisites || []).map((item) => `
         <tr>
           <td>${escapeHtml(item.key)}</td>
-          <td>${item.required ? "required" : "not required"}</td>
-          <td>${escapeHtml(item.evidence_status)}</td>
+          <td>${item.required ? "필수" : "선택"}</td>
+          <td>${escapeHtml(operationValueLabel(item.evidence_status))}</td>
           <td>${escapeHtml(item.description)}</td>
-        </tr>`).join("") || `<tr><td colspan="4">No backup prerequisites recorded.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="4">기록된 백업 선행 조건이 없습니다.</td></tr>`;
       const exclusionRows = (plan.row_exclusions || []).map((item) => `
         <tr>
-          <td>database</td>
+          <td>데이터베이스</td>
           <td>${escapeHtml(item.table)}</td>
           <td>${escapeHtml(item.row_count)}</td>
           <td>${escapeHtml(item.reason)}</td>
         </tr>`).join("") + (plan.file_exclusions || []).map((item) => `
         <tr>
-          <td>file</td>
+          <td>파일</td>
           <td>${escapeHtml(item.category)}</td>
           <td>${escapeHtml(item.file_count)}</td>
           <td>${escapeHtml(item.reason)}</td>
@@ -9026,57 +9235,57 @@ _INDEX_HTML = """<!doctype html>
           <td>${escapeHtml(item.preview_snapshot_id)} / ${escapeHtml(item.confirmation_id)}</td>
           <td>${escapeHtml(item.plan_fingerprint_sha256)}</td>
           <td>${escapeHtml(item.generated_by)} / ${escapeHtml(item.generated_at_kst)}</td>
-        </tr>`).join("") || `<tr><td colspan="4">No dry-run plan records.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="4">사전 점검 계획 기록이 없습니다.</td></tr>`;
       const generationButton = state.generation_allowed
-        ? `<button type="button" data-deletion-contract-action="dry-run" data-request-id="${escapeHtml(state.request_id)}">Generate read-only dry-run plan</button>`
+        ? `<button type="button" data-deletion-contract-action="dry-run" data-request-id="${escapeHtml(state.request_id)}">읽기 전용 사전 점검 계획 생성</button>`
         : "";
       const planDetail = latest ? `
         <div class="status">
-          Plan #${escapeHtml(latest.id)} / operations ${escapeHtml(latest.operation_count)} /
-          candidate rows ${escapeHtml(metrics.candidate_row_count || 0)} / files ${escapeHtml(metrics.candidate_file_count || 0)} /
+          계획 #${escapeHtml(latest.id)} / 작업 ${formatInteger(latest.operation_count)}개 /
+          삭제 후보 행 ${formatInteger(metrics.candidate_row_count || 0)}개 / 파일 ${formatInteger(metrics.candidate_file_count || 0)}개 /
           ${formatBytes(metrics.candidate_file_bytes || 0)}
         </div>
-        <code>Plan SHA-256: ${escapeHtml(latest.plan_fingerprint_sha256)}</code>
-        <h3>Backup prerequisites</h3>
+        <code>계획 SHA-256: ${escapeHtml(latest.plan_fingerprint_sha256)}</code>
+        <h3>백업 선행 조건</h3>
         <div class="table-scroll">
           <table class="detail-table">
-            <thead><tr><th>Key</th><th>Required</th><th>Evidence</th><th>Condition</th></tr></thead>
+            <thead><tr><th>키</th><th>필수 여부</th><th>증거</th><th>조건</th></tr></thead>
             <tbody>${backupRows}</tbody>
           </table>
         </div>
-        <h3>Ordered database operations</h3>
+        <h3>데이터베이스 작업 순서</h3>
         <div class="table-scroll">
           <table class="detail-table">
-            <thead><tr><th>Seq</th><th>Phase</th><th>Table</th><th>Rows</th><th>Selector contract</th></tr></thead>
+            <thead><tr><th>순서</th><th>단계</th><th>테이블</th><th>행</th><th>선택 조건</th></tr></thead>
             <tbody>${databaseRows}</tbody>
           </table>
         </div>
-        <h3>Player-owned replay file operations</h3>
+        <h3>플레이어 소유 리플레이 파일 작업</h3>
         <div class="table-scroll">
           <table class="detail-table">
-            <thead><tr><th>Seq</th><th>Type</th><th>Match</th><th>Size</th><th>Path</th></tr></thead>
+            <thead><tr><th>순서</th><th>유형</th><th>매치</th><th>크기</th><th>경로</th></tr></thead>
             <tbody>${fileRows}</tbody>
           </table>
         </div>
-        <h3>Protected exclusions</h3>
+        <h3>보호 제외 항목</h3>
         <div class="table-scroll">
           <table class="detail-table">
-            <thead><tr><th>Type</th><th>Target</th><th>Count</th><th>Reason</th></tr></thead>
-            <tbody>${exclusionRows || `<tr><td colspan="4">No protected exclusions.</td></tr>`}</tbody>
+            <thead><tr><th>유형</th><th>대상</th><th>수량</th><th>이유</th></tr></thead>
+            <tbody>${exclusionRows || `<tr><td colspan="4">보호 제외 항목이 없습니다.</td></tr>`}</tbody>
           </table>
-        </div>` : `<div class="status">No dry-run plan recorded.</div>`;
+        </div>` : `<div class="status">기록된 사전 점검 계획이 없습니다.</div>`;
       return `
         <div class="dry-run-contract">
-          <h3>Confirmed deletion dry-run</h3>
-          <div class="status">Request ${escapeHtml(state.request_status)} / execution enabled: no / execution ready: no</div>
+          <h3>확인된 삭제 사전 점검</h3>
+          <div class="status">요청 ${escapeHtml(operationValueLabel(state.request_status))} / 실제 실행: 비활성 / 실행 준비: 안 됨</div>
           <div class="actions">${generationButton}</div>
           ${(state.generation_blockers || []).length ? `<ul>${state.generation_blockers.map((blocker) => `<li>${escapeHtml(blocker)}</li>`).join("")}</ul>` : ""}
           <ul>${(state.execution_blockers || []).map((blocker) => `<li>${escapeHtml(blocker)}</li>`).join("")}</ul>
           ${planDetail}
-          <h3>Dry-run history</h3>
+          <h3>사전 점검 이력</h3>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>ID</th><th>Snapshot / Confirmation</th><th>Plan SHA-256</th><th>Generated</th></tr></thead>
+              <thead><tr><th>ID</th><th>스냅샷 / 확인</th><th>계획 SHA-256</th><th>생성 정보</th></tr></thead>
               <tbody>${historyRows}</tbody>
             </table>
           </div>
@@ -9098,14 +9307,14 @@ _INDEX_HTML = """<!doctype html>
       const form = new FormData(dataDeletionFilterForm);
       const actorId = String(form.get("actor_id") || "").trim();
       const note = String(form.get("note") || "").trim();
-      if (!actorId) throw new Error("Local reviewer is required.");
-      if (!window.confirm("Generate an immutable read-only dry-run plan? No rows or files will be changed.")) return;
+      if (!actorId) throw new Error("로컬 검토자 ID가 필요합니다.");
+      if (!window.confirm("변경 불가 읽기 전용 사전 점검 계획을 생성할까요? 데이터 행과 파일은 변경하지 않습니다.")) return;
       await postJson(`/data-deletions/${encodeURIComponent(requestId)}/dry-run-plans`, {
         actor_id: actorId,
         note: note || null,
       });
       await loadDataDeletionRequestDetail(requestId);
-      dataDeletionStatus.textContent = "Read-only dry-run plan recorded. Deletion execution remains disabled.";
+      dataDeletionStatus.textContent = "읽기 전용 사전 점검 계획을 기록했습니다. 실제 삭제는 계속 비활성 상태입니다.";
     }
 
     function renderDataDeletionBackupReadiness(state, builderState, verifierState, restoreState, plannerState, quarantineRehearsalState, combinedRehearsalState, faultMatrixState, reviewPacketState) {
@@ -9115,20 +9324,20 @@ _INDEX_HTML = """<!doctype html>
         .join("");
       const builderForm = builderState?.confirmation_text ? `
         <div class="backup-builder-contract">
-          <h3>Opt-in backup artifact builder</h3>
-          <div class="status">Root: ${escapeHtml(builderState.backup_root || "-")} / checksum calculation: yes / restore: no / quarantine: no / deletion: no</div>
+          <h3>선택 실행 백업 결과 생성기</h3>
+          <div class="status">기준 폴더: ${escapeHtml(builderState.backup_root || "-")} / 체크섬 계산: 예 / 복원·격리·삭제: 아니요</div>
           <ul>${builderBlockers}</ul>
           <code>${escapeHtml(builderState.confirmation_text)}</code>
           <form class="confirmation-input-row backup-builder-form" data-backup-build-form data-request-id="${attr(state.request_id)}" data-plan-id="${attr(builderState.latest_plan_id || "")}">
-            <label>Exact build confirmation
+            <label>정확한 생성 확인 문구
               <input name="confirmation_text" autocomplete="off" required>
             </label>
-            <button type="submit" ${builderState.build_allowed ? "" : "disabled"}>Build backup artifacts</button>
+            <button type="submit" ${builderState.build_allowed ? "" : "disabled"}>백업 결과 생성</button>
           </form>
         </div>` : `
         <div class="backup-builder-contract">
-          <h3>Opt-in backup artifact builder</h3>
-          <div class="status">Root: ${escapeHtml(builderState?.backup_root || "-")} / unavailable</div>
+          <h3>선택 실행 백업 결과 생성기</h3>
+          <div class="status">기준 폴더: ${escapeHtml(builderState?.backup_root || "-")} / 사용 불가</div>
           <ul>${builderBlockers}</ul>
         </div>`;
       const verifierBlockers = (verifierState?.verification_blockers || [])
@@ -9136,53 +9345,53 @@ _INDEX_HTML = """<!doctype html>
         .join("");
       const candidateRows = (verifierState?.candidates || []).map((candidate) => {
         const action = candidate.selectable && verifierState.verification_allowed
-          ? `<button class="secondary" type="button" data-deletion-contract-action="verify-backup" data-request-id="${attr(state.request_id)}" data-plan-id="${attr(verifierState.latest_plan_id || "")}" data-manifest-path="${attr(candidate.manifest_path || "")}" data-manifest-sha256="${attr(candidate.manifest_sha256 || "")}">Verify</button>`
+          ? `<button class="secondary" type="button" data-deletion-contract-action="verify-backup" data-request-id="${attr(state.request_id)}" data-plan-id="${attr(verifierState.latest_plan_id || "")}" data-manifest-path="${attr(candidate.manifest_path || "")}" data-manifest-sha256="${attr(candidate.manifest_sha256 || "")}">검증</button>`
           : "-";
         return `<tr>
           <td>${escapeHtml(candidate.build_id || "-")}<br>${escapeHtml(candidate.built_at_kst || "-")}</td>
           <td><code>${escapeHtml(candidate.manifest_path || "-")}</code></td>
           <td><code>${escapeHtml(candidate.manifest_sha256 || "-")}</code></td>
-          <td>${candidate.selectable ? "selectable" : escapeHtml(candidate.inspection_error || "blocked")}</td>
+          <td>${candidate.selectable ? "선택 가능" : escapeHtml(candidate.inspection_error || "차단")}</td>
           <td>${action}</td>
         </tr>`;
-      }).join("") || `<tr><td colspan="5">No fingerprint-bound backup builds.</td></tr>`;
+      }).join("") || `<tr><td colspan="5">지문값에 연결된 백업 생성 기록이 없습니다.</td></tr>`;
       const latestVerification = verifierState?.latest_verification || null;
       const verificationCheckRows = (latestVerification?.result_json?.checks || []).map((check) => `
         <tr>
           <td>${escapeHtml(check.key)}</td>
           <td>${escapeHtml(check.status)}</td>
           <td>${escapeHtml(check.message)}</td>
-        </tr>`).join("") || `<tr><td colspan="3">No artifact verification checks recorded.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="3">기록된 결과 파일 검증 항목이 없습니다.</td></tr>`;
       const verificationHistoryRows = (verifierState?.verification_history || []).map((item) => `
         <tr>
           <td>${escapeHtml(item.id)}</td>
-          <td>${escapeHtml(item.result_status)}</td>
-          <td>${escapeHtml(item.verified_artifact_count)} / ${escapeHtml(item.artifact_count)}</td>
-          <td>${escapeHtml(item.passed_check_count)} / ${escapeHtml(item.check_count)}</td>
+          <td>${escapeHtml(operationValueLabel(item.result_status))}</td>
+          <td>${formatInteger(item.verified_artifact_count)} / ${formatInteger(item.artifact_count)}</td>
+          <td>${formatInteger(item.passed_check_count)} / ${formatInteger(item.check_count)}</td>
           <td>${escapeHtml(item.verified_by)} / ${escapeHtml(item.verified_at_kst)}</td>
-        </tr>`).join("") || `<tr><td colspan="5">No immutable artifact verification records.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="5">변경 불가 결과 파일 검증 기록이 없습니다.</td></tr>`;
       const verifierPanel = `
         <div class="backup-builder-contract">
-          <h3>Read-only backup artifact verification</h3>
-          <div class="status">Root: ${escapeHtml(verifierState?.backup_root || "-")} / ZIP and JSONL checksums: yes / restore: no / quarantine: no / deletion: no</div>
+          <h3>읽기 전용 백업 결과 검증</h3>
+          <div class="status">기준 폴더: ${escapeHtml(verifierState?.backup_root || "-")} / ZIP·JSONL 체크섬: 예 / 복원·격리·삭제: 아니요</div>
           <ul>${verifierBlockers}</ul>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>Build</th><th>Manifest</th><th>Selected SHA-256</th><th>State</th><th>Action</th></tr></thead>
+              <thead><tr><th>생성 기록</th><th>명세서</th><th>선택한 SHA-256</th><th>상태</th><th>동작</th></tr></thead>
               <tbody>${candidateRows}</tbody>
             </table>
           </div>
-          <h3>Latest artifact verification checks</h3>
+          <h3>최근 결과 파일 검증 항목</h3>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>
+              <thead><tr><th>검사</th><th>상태</th><th>내용</th></tr></thead>
               <tbody>${verificationCheckRows}</tbody>
             </table>
           </div>
-          <h3>Artifact verification history</h3>
+          <h3>결과 파일 검증 이력</h3>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>ID</th><th>Status</th><th>Artifacts</th><th>Checks</th><th>Verified</th></tr></thead>
+              <thead><tr><th>ID</th><th>상태</th><th>결과 파일</th><th>검사</th><th>검증 정보</th></tr></thead>
               <tbody>${verificationHistoryRows}</tbody>
             </table>
           </div>
@@ -9197,51 +9406,51 @@ _INDEX_HTML = """<!doctype html>
           <td><code>${escapeHtml(candidate.confirmation_text || "-")}</code></td>
           <td>
             <form class="confirmation-input-row restore-rehearsal-form" data-restore-rehearsal-form data-request-id="${attr(state.request_id)}" data-verification-id="${attr(candidate.id)}">
-              <label>Exact rehearsal confirmation
+              <label>정확한 모의 복원 확인 문구
                 <input name="confirmation_text" autocomplete="off" required>
               </label>
-              <button class="secondary" type="submit" ${restoreState?.restore_rehearsal_allowed ? "" : "disabled"}>Run</button>
+              <button class="secondary" type="submit" ${restoreState?.restore_rehearsal_allowed ? "" : "disabled"}>실행</button>
             </form>
           </td>
-        </tr>`).join("") || `<tr><td colspan="4">No passed backup verification is available.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="4">통과한 백업 검증 기록이 없습니다.</td></tr>`;
       const latestRestore = restoreState?.latest_restore_rehearsal || null;
       const restoreCheckRows = (latestRestore?.result_json?.checks || []).map((check) => `
         <tr>
           <td>${escapeHtml(check.key)}</td>
           <td>${escapeHtml(check.status)}</td>
           <td>${escapeHtml(check.message)}</td>
-        </tr>`).join("") || `<tr><td colspan="3">No isolated restore checks recorded.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="3">격리된 복원 검사 기록이 없습니다.</td></tr>`;
       const restoreHistoryRows = (restoreState?.restore_rehearsal_history || []).map((item) => `
         <tr>
           <td>${escapeHtml(item.id)}</td>
-          <td>${escapeHtml(item.result_status)}</td>
-          <td>${escapeHtml(item.mysql_restored_row_count)} / ${escapeHtml(item.mysql_row_count)}</td>
-          <td>${escapeHtml(item.replay_restored_file_count)} / ${escapeHtml(item.replay_file_count)}</td>
+          <td>${escapeHtml(operationValueLabel(item.result_status))}</td>
+          <td>${formatInteger(item.mysql_restored_row_count)} / ${formatInteger(item.mysql_row_count)}</td>
+          <td>${formatInteger(item.replay_restored_file_count)} / ${formatInteger(item.replay_file_count)}</td>
           <td>${item.backup_integrity_evidence_id ? `#${escapeHtml(item.backup_integrity_evidence_id)}` : "-"}</td>
           <td>${escapeHtml(item.run_by)} / ${escapeHtml(item.run_at_kst)}</td>
-        </tr>`).join("") || `<tr><td colspan="6">No isolated restore rehearsal records.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="6">격리된 모의 복원 기록이 없습니다.</td></tr>`;
       const restorePanel = `
         <div class="backup-builder-contract">
-          <h3>Isolated backup restore rehearsal</h3>
-          <div class="status">MySQL: dedicated temporary tables / replay: temporary backup-volume directory / production restore: no / quarantine: no / deletion: no</div>
+          <h3>격리된 백업 복원 모의 실행</h3>
+          <div class="status">MySQL: 전용 임시 테이블 / 리플레이: 백업 볼륨의 임시 폴더 / 운영 데이터 복원·격리·삭제: 아니요</div>
           <ul>${restoreBlockers}</ul>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>Verification</th><th>Verified</th><th>Required text</th><th>Action</th></tr></thead>
+              <thead><tr><th>검증</th><th>검증 정보</th><th>필요 문구</th><th>동작</th></tr></thead>
               <tbody>${restoreCandidateRows}</tbody>
             </table>
           </div>
-          <h3>Latest isolated restore checks</h3>
+          <h3>최근 격리 복원 검사</h3>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>
+              <thead><tr><th>검사</th><th>상태</th><th>내용</th></tr></thead>
               <tbody>${restoreCheckRows}</tbody>
             </table>
           </div>
-          <h3>Isolated restore history</h3>
+          <h3>격리 복원 이력</h3>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>ID</th><th>Status</th><th>MySQL rows</th><th>Replay files</th><th>Integrity evidence</th><th>Run</th></tr></thead>
+              <thead><tr><th>ID</th><th>상태</th><th>MySQL 행</th><th>리플레이 파일</th><th>무결성 증거</th><th>실행 정보</th></tr></thead>
               <tbody>${restoreHistoryRows}</tbody>
             </table>
           </div>
@@ -9256,61 +9465,61 @@ _INDEX_HTML = """<!doctype html>
           <td>${escapeHtml(check.key)}</td>
           <td>${escapeHtml(check.status)}</td>
           <td>${escapeHtml(check.message)}</td>
-        </tr>`).join("") || `<tr><td colspan="3">No read-only quarantine checks recorded.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="3">읽기 전용 격리 검사 기록이 없습니다.</td></tr>`;
       const planningOperationRows = (planningResult.file_operations || []).map((item) => `
         <tr>
           <td>${escapeHtml(item.sequence)} / #${escapeHtml(item.record_id)}</td>
           <td><code>${escapeHtml(item.source_relative_path || "-")}</code></td>
           <td><code>${escapeHtml(item.target_relative_path || "-")}</code></td>
           <td>${formatBytes(Number(item.declared_size_bytes || 0))}<br><code>${escapeHtml(item.sha256 || "-")}</code></td>
-          <td>${item.target_exists ? "conflict" : "absent"}</td>
-        </tr>`).join("") || `<tr><td colspan="5">No file operations were inspected.</td></tr>`;
+          <td>${item.target_exists ? "충돌" : "없음"}</td>
+        </tr>`).join("") || `<tr><td colspan="5">검사한 파일 작업이 없습니다.</td></tr>`;
       const planningHistoryRows = (plannerState?.planning_history || []).map((item) => `
         <tr>
           <td>${escapeHtml(item.id)}</td>
-          <td>${escapeHtml(item.result_status)}</td>
-          <td>${escapeHtml(item.source_verified_file_count)} / ${formatBytes(Number(item.source_verified_bytes || 0))}</td>
+          <td>${escapeHtml(operationValueLabel(item.result_status))}</td>
+          <td>${formatInteger(item.source_verified_file_count)} / ${formatBytes(Number(item.source_verified_bytes || 0))}</td>
           <td>${formatBytes(Number(item.observed_free_bytes || 0))} / ${formatBytes(Number(item.required_free_bytes || 0))}</td>
           <td>${item.capacity_evidence_id ? `#${escapeHtml(item.capacity_evidence_id)}` : "-"}</td>
           <td>${escapeHtml(item.planned_by)} / ${escapeHtml(item.planned_at_kst)}</td>
-        </tr>`).join("") || `<tr><td colspan="6">No immutable quarantine planning records.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="6">변경 불가 격리 계획 기록이 없습니다.</td></tr>`;
       const postcondition = planningResult.postcondition_contract || {};
       const rollback = planningResult.rollback_contract || {};
       const crashRecovery = planningResult.crash_recovery_contract || {};
       const plannerForm = plannerState?.confirmation_text ? `
         <code>${escapeHtml(plannerState.confirmation_text)}</code>
         <form class="confirmation-input-row quarantine-planner-form" data-quarantine-planner-form data-request-id="${attr(state.request_id)}" data-plan-id="${attr(plannerState.latest_plan_id || "")}">
-          <label>Exact read-only planning confirmation
+          <label>정확한 읽기 전용 계획 확인 문구
             <input name="confirmation_text" autocomplete="off" required>
           </label>
-          <button class="secondary" type="submit" ${plannerState.planning_allowed ? "" : "disabled"}>Run read-only plan</button>
+          <button class="secondary" type="submit" ${plannerState.planning_allowed ? "" : "disabled"}>읽기 전용 계획 실행</button>
         </form>` : "";
       const plannerPanel = `
         <div class="backup-builder-contract">
-          <h3>Read-only quarantine planning</h3>
-          <div class="status">Root: ${escapeHtml(plannerState?.quarantine_root || "-")} / source hashing: yes / capacity check: yes / directories and files created: no / database source mutation: no</div>
+          <h3>읽기 전용 격리 계획</h3>
+          <div class="status">기준 폴더: ${escapeHtml(plannerState?.quarantine_root || "-")} / 원본 해시·용량 검사: 예 / 폴더·파일 생성 및 DB 원본 변경: 아니요</div>
           <ul>${plannerBlockers}</ul>
           ${plannerForm}
-          <div class="status">Latest: ${escapeHtml(latestPlanning?.result_status || "none")} / candidate ${escapeHtml(latestPlanning?.candidate_file_count || 0)} files, ${formatBytes(Number(latestPlanning?.candidate_file_bytes || 0))} / bound capacity evidence ${latestPlanning?.capacity_evidence_id ? `#${escapeHtml(latestPlanning.capacity_evidence_id)}` : "none"}</div>
-          <h3>Latest read-only checks</h3>
+          <div class="status">최근 결과: ${escapeHtml(operationValueLabel(latestPlanning?.result_status || "none"))} / 후보 파일 ${formatInteger(latestPlanning?.candidate_file_count || 0)}개, ${formatBytes(Number(latestPlanning?.candidate_file_bytes || 0))} / 연결된 용량 증거 ${latestPlanning?.capacity_evidence_id ? `#${escapeHtml(latestPlanning.capacity_evidence_id)}` : "없음"}</div>
+          <h3>최근 읽기 전용 검사</h3>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>
+              <thead><tr><th>검사</th><th>상태</th><th>내용</th></tr></thead>
               <tbody>${planningCheckRows}</tbody>
             </table>
           </div>
-          <h3>Deterministic future operations</h3>
+          <h3>결정된 향후 작업</h3>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>Item</th><th>Source</th><th>Target</th><th>Bytes / SHA-256</th><th>Target state</th></tr></thead>
+              <thead><tr><th>항목</th><th>원본</th><th>대상</th><th>크기 / SHA-256</th><th>대상 상태</th></tr></thead>
               <tbody>${planningOperationRows}</tbody>
             </table>
           </div>
-          <div class="status">Postconditions: ${(postcondition.item_checks || []).length} item checks / rollback: ${(rollback.item_actions || []).length} reverse actions, independently rehearsed ${rollback.independently_rehearsed === true ? "yes" : "no"} / crash journal: ${escapeHtml(crashRecovery.journal_relative_path || "-")}, independently rehearsed ${crashRecovery.independently_rehearsed === true ? "yes" : "no"}</div>
-          <h3>Quarantine planning history</h3>
+          <div class="status">사후 조건: ${formatInteger((postcondition.item_checks || []).length)}개 항목 검사 / 되돌리기: ${formatInteger((rollback.item_actions || []).length)}개 역작업, 독립 모의 실행 ${operationBooleanLabel(rollback.independently_rehearsed)} / 장애 복구 일지: ${escapeHtml(crashRecovery.journal_relative_path || "-")}, 독립 모의 실행 ${operationBooleanLabel(crashRecovery.independently_rehearsed)}</div>
+          <h3>격리 계획 이력</h3>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>ID</th><th>Status</th><th>Verified source</th><th>Free / required</th><th>Capacity evidence</th><th>Run</th></tr></thead>
+              <thead><tr><th>ID</th><th>상태</th><th>검증한 원본</th><th>여유 / 필요</th><th>용량 증거</th><th>실행 정보</th></tr></thead>
               <tbody>${planningHistoryRows}</tbody>
             </table>
           </div>
@@ -9322,10 +9531,10 @@ _INDEX_HTML = """<!doctype html>
       const quarantineRehearsalForm = quarantineRehearsalCandidate?.confirmation_text ? `
         <code>${escapeHtml(quarantineRehearsalCandidate.confirmation_text)}</code>
         <form class="confirmation-input-row quarantine-rehearsal-form" data-quarantine-rehearsal-form data-request-id="${attr(state.request_id)}" data-planning-run-id="${attr(quarantineRehearsalCandidate.id || "")}">
-          <label>Exact isolated rehearsal confirmation
+          <label>정확한 격리 모의 실행 확인 문구
             <input name="confirmation_text" autocomplete="off" required>
           </label>
-          <button class="secondary" type="submit" ${quarantineRehearsalState?.rehearsal_allowed ? "" : "disabled"}>Run isolated rehearsal</button>
+          <button class="secondary" type="submit" ${quarantineRehearsalState?.rehearsal_allowed ? "" : "disabled"}>격리 모의 실행</button>
         </form>` : "";
       const latestQuarantineRehearsal = quarantineRehearsalState?.latest_quarantine_rehearsal || null;
       const quarantineRehearsalCheckRows = (latestQuarantineRehearsal?.result_json?.checks || []).map((check) => `
@@ -9333,34 +9542,34 @@ _INDEX_HTML = """<!doctype html>
           <td>${escapeHtml(check.key)}</td>
           <td>${escapeHtml(check.status)}</td>
           <td>${escapeHtml(check.message)}</td>
-        </tr>`).join("") || `<tr><td colspan="3">No isolated quarantine rehearsal checks recorded.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="3">격리된 격리 모의 실행 검사 기록이 없습니다.</td></tr>`;
       const quarantineRehearsalHistoryRows = (quarantineRehearsalState?.quarantine_rehearsal_history || []).map((item) => `
         <tr>
           <td>${escapeHtml(item.id)}</td>
-          <td>${escapeHtml(item.result_status)}</td>
-          <td>${escapeHtml(item.normal_rolled_back_count)} / ${escapeHtml(item.fixture_file_count)}</td>
-          <td>${escapeHtml(item.recovered_case_count)} + ambiguous ${escapeHtml(item.ambiguous_case_blocked_count)} / ${escapeHtml(item.recovery_case_count)}</td>
-          <td>${item.scratch_directory_removed ? "removed" : "cleanup blocked"}</td>
+          <td>${escapeHtml(operationValueLabel(item.result_status))}</td>
+          <td>${formatInteger(item.normal_rolled_back_count)} / ${formatInteger(item.fixture_file_count)}</td>
+          <td>${formatInteger(item.recovered_case_count)} + 모호함 ${formatInteger(item.ambiguous_case_blocked_count)} / ${formatInteger(item.recovery_case_count)}</td>
+          <td>${item.scratch_directory_removed ? "정리 완료" : "정리 차단"}</td>
           <td>${escapeHtml(item.run_by)} / ${escapeHtml(item.run_at_kst)}</td>
-        </tr>`).join("") || `<tr><td colspan="6">No isolated quarantine rehearsal records.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="6">격리된 격리 모의 실행 기록이 없습니다.</td></tr>`;
       const quarantineRehearsalPanel = `
         <div class="backup-builder-contract">
-          <h3>Isolated quarantine rehearsal</h3>
-          <div class="status">Root: ${escapeHtml(quarantineRehearsalState?.quarantine_root || "-")} / synthetic fixtures only: yes / production source access: no / production quarantine: no / deletion: no</div>
+          <h3>격리된 격리 모의 실행</h3>
+          <div class="status">기준 폴더: ${escapeHtml(quarantineRehearsalState?.quarantine_root || "-")} / 합성 시험 자료만 사용: 예 / 운영 원본 접근·격리·삭제: 아니요</div>
           <ul>${quarantineRehearsalBlockers}</ul>
           ${quarantineRehearsalForm}
-          <div class="status">Latest: ${escapeHtml(latestQuarantineRehearsal?.result_status || "none")} / scratch cleanup: ${latestQuarantineRehearsal ? (latestQuarantineRehearsal.scratch_directory_removed ? "removed" : "blocked") : "not run"} / journal transitions: ${escapeHtml(latestQuarantineRehearsal?.journal_transition_count || 0)}</div>
-          <h3>Latest isolated quarantine checks</h3>
+          <div class="status">최근 결과: ${escapeHtml(operationValueLabel(latestQuarantineRehearsal?.result_status || "none"))} / 임시 공간 정리: ${latestQuarantineRehearsal ? (latestQuarantineRehearsal.scratch_directory_removed ? "완료" : "차단") : "실행 안 함"} / 일지 상태 전환: ${formatInteger(latestQuarantineRehearsal?.journal_transition_count || 0)}회</div>
+          <h3>최근 격리 모의 실행 검사</h3>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>
+              <thead><tr><th>검사</th><th>상태</th><th>내용</th></tr></thead>
               <tbody>${quarantineRehearsalCheckRows}</tbody>
             </table>
           </div>
-          <h3>Isolated quarantine history</h3>
+          <h3>격리 모의 실행 이력</h3>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>ID</th><th>Status</th><th>Rollback fixtures</th><th>Recovery cases</th><th>Scratch</th><th>Run</th></tr></thead>
+              <thead><tr><th>ID</th><th>상태</th><th>되돌리기 시험 자료</th><th>복구 사례</th><th>임시 공간</th><th>실행 정보</th></tr></thead>
               <tbody>${quarantineRehearsalHistoryRows}</tbody>
             </table>
           </div>
@@ -9372,10 +9581,10 @@ _INDEX_HTML = """<!doctype html>
       const combinedForm = combinedCandidate?.confirmation_text ? `
         <code>${escapeHtml(combinedCandidate.confirmation_text)}</code>
         <form class="confirmation-input-row combined-rehearsal-form" data-combined-rehearsal-form data-request-id="${attr(state.request_id)}" data-verification-run-id="${attr(combinedCandidate.backup_verification?.id || "")}" data-planning-run-id="${attr(combinedCandidate.quarantine_planning?.id || "")}">
-          <label>Exact combined rehearsal confirmation
+          <label>정확한 통합 모의 실행 확인 문구
             <input name="confirmation_text" autocomplete="off" required>
           </label>
-          <button class="secondary" type="submit" ${combinedRehearsalState?.combined_rehearsal_allowed ? "" : "disabled"}>Run combined rehearsal</button>
+          <button class="secondary" type="submit" ${combinedRehearsalState?.combined_rehearsal_allowed ? "" : "disabled"}>통합 모의 실행</button>
         </form>` : "";
       const latestCombined = combinedRehearsalState?.latest_combined_rehearsal || null;
       const combinedCheckRows = (latestCombined?.result_json?.checks || []).map((check) => `
@@ -9383,34 +9592,34 @@ _INDEX_HTML = """<!doctype html>
           <td>${escapeHtml(check.key)}</td>
           <td>${escapeHtml(check.status)}</td>
           <td>${escapeHtml(check.message)}</td>
-        </tr>`).join("") || `<tr><td colspan="3">No combined rehearsal checks recorded.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="3">통합 모의 실행 검사 기록이 없습니다.</td></tr>`;
       const combinedHistoryRows = (combinedRehearsalState?.combined_rehearsal_history || []).map((item) => `
         <tr>
           <td>${escapeHtml(item.id)}</td>
-          <td>${escapeHtml(item.result_status)}</td>
-          <td>${escapeHtml(item.mysql_deleted_row_count)} / ${escapeHtml(item.mysql_rolled_back_row_count)}</td>
-          <td>${escapeHtml(item.quarantine_recovered_case_count)} / ${escapeHtml(item.quarantine_recovery_case_count)}</td>
-          <td>${item.scratch_resources_removed ? "removed" : "cleanup blocked"}</td>
+          <td>${escapeHtml(operationValueLabel(item.result_status))}</td>
+          <td>${formatInteger(item.mysql_deleted_row_count)} / ${formatInteger(item.mysql_rolled_back_row_count)}</td>
+          <td>${formatInteger(item.quarantine_recovered_case_count)} / ${formatInteger(item.quarantine_recovery_case_count)}</td>
+          <td>${item.scratch_resources_removed ? "정리 완료" : "정리 차단"}</td>
           <td>${escapeHtml(item.run_by)} / ${escapeHtml(item.run_at_kst)}</td>
-        </tr>`).join("") || `<tr><td colspan="6">No combined rehearsal records.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="6">통합 모의 실행 기록이 없습니다.</td></tr>`;
       const combinedRehearsalPanel = `
         <div class="backup-builder-contract">
-          <h3>Isolated combined deletion rehearsal</h3>
-          <div class="status">MySQL: connection-scoped temporary tables + DELETE + ROLLBACK / files: synthetic quarantine state machine / production rows and files: unchanged / execution: disabled</div>
+          <h3>격리된 통합 삭제 모의 실행</h3>
+          <div class="status">MySQL: 연결 전용 임시 테이블에서 DELETE 후 ROLLBACK / 파일: 합성 격리 상태 전이 / 운영 행·파일: 변경 없음 / 실제 실행: 비활성</div>
           <ul>${combinedBlockers}</ul>
           ${combinedForm}
-          <div class="status">Latest: ${escapeHtml(latestCombined?.result_status || "none")} / MySQL deleted and rolled back: ${escapeHtml(latestCombined?.mysql_deleted_row_count || 0)} / ${escapeHtml(latestCombined?.mysql_rolled_back_row_count || 0)} / scratch cleanup: ${latestCombined ? (latestCombined.scratch_resources_removed ? "removed" : "blocked") : "not run"}</div>
-          <h3>Latest combined checks</h3>
+          <div class="status">최근 결과: ${escapeHtml(operationValueLabel(latestCombined?.result_status || "none"))} / MySQL 삭제·되돌림: ${formatInteger(latestCombined?.mysql_deleted_row_count || 0)} / ${formatInteger(latestCombined?.mysql_rolled_back_row_count || 0)} / 임시 공간 정리: ${latestCombined ? (latestCombined.scratch_resources_removed ? "완료" : "차단") : "실행 안 함"}</div>
+          <h3>최근 통합 검사</h3>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>
+              <thead><tr><th>검사</th><th>상태</th><th>내용</th></tr></thead>
               <tbody>${combinedCheckRows}</tbody>
             </table>
           </div>
-          <h3>Combined rehearsal history</h3>
+          <h3>통합 모의 실행 이력</h3>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>ID</th><th>Status</th><th>DB delete / rollback</th><th>File recovery</th><th>Scratch</th><th>Run</th></tr></thead>
+              <thead><tr><th>ID</th><th>상태</th><th>DB 삭제 / 되돌림</th><th>파일 복구</th><th>임시 공간</th><th>실행 정보</th></tr></thead>
               <tbody>${combinedHistoryRows}</tbody>
             </table>
           </div>
@@ -9422,10 +9631,10 @@ _INDEX_HTML = """<!doctype html>
       const faultMatrixForm = faultMatrixCandidate?.confirmation_text ? `
         <code>${escapeHtml(faultMatrixCandidate.confirmation_text)}</code>
         <form class="confirmation-input-row fault-matrix-form" data-fault-matrix-form data-request-id="${attr(state.request_id)}" data-combined-run-id="${attr(faultMatrixCandidate.combined_rehearsal?.id || "")}">
-          <label>Exact fault matrix confirmation
+          <label>정확한 장애 행렬 확인 문구
             <input name="confirmation_text" autocomplete="off" required>
           </label>
-          <button class="secondary" type="submit" ${faultMatrixState?.fault_matrix_allowed ? "" : "disabled"}>Run fault matrix</button>
+          <button class="secondary" type="submit" ${faultMatrixState?.fault_matrix_allowed ? "" : "disabled"}>장애 행렬 실행</button>
         </form>` : "";
       const latestFaultMatrix = faultMatrixState?.latest_fault_matrix_run || null;
       const faultMatrixChecks = latestFaultMatrix?.result_json?.checks || [];
@@ -9434,7 +9643,7 @@ _INDEX_HTML = """<!doctype html>
           <td>${escapeHtml(check.key)}</td>
           <td>${escapeHtml(check.status)}</td>
           <td>${escapeHtml(check.message)}</td>
-        </tr>`).join("") || `<tr><td colspan="3">No fault matrix checks recorded.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="3">장애 행렬 검사 기록이 없습니다.</td></tr>`;
       const displayedFaultScenarios = latestFaultMatrix?.result_json?.scenarios
         || faultMatrixCandidate?.scenario_contract
         || [];
@@ -9443,45 +9652,45 @@ _INDEX_HTML = """<!doctype html>
           <td>${escapeHtml(scenario.key)}</td>
           <td>${escapeHtml(scenario.category)}</td>
           <td>${escapeHtml(scenario.fault_point)}</td>
-          <td>${escapeHtml(scenario.status || "not run")}</td>
-          <td>${scenario.fault_observed === true ? "yes" : "-"}</td>
-          <td>${scenario.fault_contained === true ? "yes" : "-"}</td>
-          <td>${scenario.scratch_removed === true ? "removed" : (scenario.status ? "blocked" : "-")}</td>
-        </tr>`).join("") || `<tr><td colspan="7">No declared fault scenarios.</td></tr>`;
+          <td>${escapeHtml(operationValueLabel(scenario.status || "실행 안 함"))}</td>
+          <td>${scenario.fault_observed === true ? "예" : "-"}</td>
+          <td>${scenario.fault_contained === true ? "예" : "-"}</td>
+          <td>${scenario.scratch_removed === true ? "정리 완료" : (scenario.status ? "차단" : "-")}</td>
+        </tr>`).join("") || `<tr><td colspan="7">정의된 장애 시나리오가 없습니다.</td></tr>`;
       const faultMatrixHistoryRows = (faultMatrixState?.fault_matrix_history || []).map((item) => `
         <tr>
           <td>${escapeHtml(item.id)}</td>
-          <td>${escapeHtml(item.result_status)}</td>
-          <td>${escapeHtml(item.passed_scenario_count)} / ${escapeHtml(item.scenario_count)}</td>
-          <td>${escapeHtml(item.contained_fault_count)} / ${escapeHtml(item.scenario_count)}</td>
-          <td>${item.scratch_resources_removed ? "removed" : "cleanup blocked"}</td>
+          <td>${escapeHtml(operationValueLabel(item.result_status))}</td>
+          <td>${formatInteger(item.passed_scenario_count)} / ${formatInteger(item.scenario_count)}</td>
+          <td>${formatInteger(item.contained_fault_count)} / ${formatInteger(item.scenario_count)}</td>
+          <td>${item.scratch_resources_removed ? "정리 완료" : "정리 차단"}</td>
           <td>${escapeHtml(item.run_by)} / ${escapeHtml(item.run_at_kst)}</td>
-        </tr>`).join("") || `<tr><td colspan="6">No fault matrix records.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="6">장애 행렬 기록이 없습니다.</td></tr>`;
       const faultMatrixPanel = `
         <div class="backup-builder-contract">
-          <h3>Isolated combined fault matrix</h3>
-          <div class="status">1 MySQL temporary-table fault + 3 synthetic quarantine faults / production rows and files: unchanged / execution: disabled</div>
+          <h3>격리된 통합 장애 행렬</h3>
+          <div class="status">MySQL 임시 테이블 장애 1개 + 합성 격리 장애 3개 / 운영 행·파일: 변경 없음 / 실제 실행: 비활성</div>
           <ul>${faultMatrixBlockers}</ul>
           ${faultMatrixForm}
-          <div class="status">Latest: ${escapeHtml(latestFaultMatrix?.result_status || "none")} / passed scenarios: ${escapeHtml(latestFaultMatrix?.passed_scenario_count || 0)} / ${escapeHtml(latestFaultMatrix?.scenario_count || faultMatrixState?.scenario_count || 4)} / contained faults: ${escapeHtml(latestFaultMatrix?.contained_fault_count || 0)} / scratch cleanup: ${latestFaultMatrix ? (latestFaultMatrix.scratch_resources_removed ? "removed" : "blocked") : "not run"}</div>
-          <h3>Declared fault scenarios</h3>
+          <div class="status">최근 결과: ${escapeHtml(operationValueLabel(latestFaultMatrix?.result_status || "none"))} / 통과 시나리오: ${formatInteger(latestFaultMatrix?.passed_scenario_count || 0)} / ${formatInteger(latestFaultMatrix?.scenario_count || faultMatrixState?.scenario_count || 4)} / 격리된 장애: ${formatInteger(latestFaultMatrix?.contained_fault_count || 0)} / 임시 공간 정리: ${latestFaultMatrix ? (latestFaultMatrix.scratch_resources_removed ? "완료" : "차단") : "실행 안 함"}</div>
+          <h3>정의된 장애 시나리오</h3>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>Scenario</th><th>Scope</th><th>Fault point</th><th>Status</th><th>Observed</th><th>Contained</th><th>Scratch</th></tr></thead>
+              <thead><tr><th>시나리오</th><th>범위</th><th>장애 지점</th><th>상태</th><th>관측</th><th>격리</th><th>임시 공간</th></tr></thead>
               <tbody>${faultScenarioRows}</tbody>
             </table>
           </div>
-          <h3>Latest fault matrix checks</h3>
+          <h3>최근 장애 행렬 검사</h3>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>
+              <thead><tr><th>검사</th><th>상태</th><th>내용</th></tr></thead>
               <tbody>${faultMatrixCheckRows}</tbody>
             </table>
           </div>
-          <h3>Fault matrix history</h3>
+          <h3>장애 행렬 이력</h3>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>ID</th><th>Status</th><th>Passed</th><th>Contained</th><th>Scratch</th><th>Run</th></tr></thead>
+              <thead><tr><th>ID</th><th>상태</th><th>통과</th><th>격리</th><th>임시 공간</th><th>실행 정보</th></tr></thead>
               <tbody>${faultMatrixHistoryRows}</tbody>
             </table>
           </div>
@@ -9493,68 +9702,68 @@ _INDEX_HTML = """<!doctype html>
       const reviewPacketForm = reviewPacketCandidate?.confirmation_text ? `
         <code>${escapeHtml(reviewPacketCandidate.confirmation_text)}</code>
         <form class="confirmation-input-row review-packet-form" data-review-packet-form data-request-id="${attr(state.request_id)}" data-fault-matrix-run-id="${attr(reviewPacketCandidate.fault_matrix?.id || "")}">
-          <label>Exact advisory packet confirmation
+          <label>정확한 검토 패킷 확인 문구
             <input name="confirmation_text" autocomplete="off" required>
           </label>
-          <button class="secondary" type="submit" ${reviewPacketState?.review_packet_allowed ? "" : "disabled"}>Generate advisory packet</button>
+          <button class="secondary" type="submit" ${reviewPacketState?.review_packet_allowed ? "" : "disabled"}>검토 패킷 생성</button>
         </form>` : "";
       const reviewInputRows = reviewPacketCandidate ? [
-        ["Deletion request", { id: state.request_id, result_status: reviewPacketState?.request_status || "bound" }, null],
-        ["Dry-run plan", reviewPacketCandidate.dry_run_plan, "plan_fingerprint_sha256"],
-        ["Backup verification", reviewPacketCandidate.backup_verification, "result_fingerprint_sha256"],
-        ["Quarantine planning", reviewPacketCandidate.quarantine_planning, "result_fingerprint_sha256"],
-        ["Combined rehearsal", reviewPacketCandidate.combined_rehearsal, "result_fingerprint_sha256"],
-        ["Fault matrix", reviewPacketCandidate.fault_matrix, "result_fingerprint_sha256"],
+        ["삭제 요청", { id: state.request_id, result_status: reviewPacketState?.request_status || "bound" }, null],
+        ["사전 점검 계획", reviewPacketCandidate.dry_run_plan, "plan_fingerprint_sha256"],
+        ["백업 검증", reviewPacketCandidate.backup_verification, "result_fingerprint_sha256"],
+        ["격리 계획", reviewPacketCandidate.quarantine_planning, "result_fingerprint_sha256"],
+        ["통합 모의 실행", reviewPacketCandidate.combined_rehearsal, "result_fingerprint_sha256"],
+        ["장애 행렬", reviewPacketCandidate.fault_matrix, "result_fingerprint_sha256"],
       ].map(([label, input, fingerprintKey]) => `
         <tr>
           <td>${escapeHtml(label)}</td>
           <td>#${escapeHtml(input?.id || "-")}</td>
-          <td>${escapeHtml(input?.result_status || "immutable")}</td>
+          <td>${escapeHtml(operationValueLabel(input?.result_status || "immutable"))}</td>
           <td><code>${escapeHtml(fingerprintKey ? (input?.[fingerprintKey] || "-") : reviewPacketCandidate.input_contract_fingerprint_sha256)}</code></td>
-        </tr>`).join("") : `<tr><td colspan="4">No current six-input review contract is available.</td></tr>`;
+        </tr>`).join("") : `<tr><td colspan="4">현재 사용할 수 있는 6개 입력 검토 계약이 없습니다.</td></tr>`;
       const latestReviewPacket = reviewPacketState?.latest_review_packet || null;
       const reviewPacketCheckRows = (latestReviewPacket?.packet_json?.checks || []).map((check) => `
         <tr>
           <td>${escapeHtml(check.key)}</td>
           <td>${escapeHtml(check.status)}</td>
           <td>${escapeHtml(check.message)}</td>
-        </tr>`).join("") || `<tr><td colspan="3">No immutable review packet checks recorded.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="3">변경 불가 검토 패킷 검사 기록이 없습니다.</td></tr>`;
       const reviewPacketHistoryRows = (reviewPacketState?.review_packet_history || []).map((item) => `
         <tr>
           <td>#${escapeHtml(item.id)}</td>
-          <td>${escapeHtml(item.review_status)}</td>
-          <td>${escapeHtml(item.passed_input_count)} / ${escapeHtml(item.input_count)}</td>
-          <td>${escapeHtml(item.passed_check_count)} / ${escapeHtml(item.check_count)}</td>
-          <td>${escapeHtml(item.passed_fault_scenario_count)} / ${escapeHtml(item.fault_scenario_count)}</td>
-          <td>${item.scratch_resources_removed ? "removed" : "blocked"}</td>
+          <td>${escapeHtml(operationValueLabel(item.review_status))}</td>
+          <td>${formatInteger(item.passed_input_count)} / ${formatInteger(item.input_count)}</td>
+          <td>${formatInteger(item.passed_check_count)} / ${formatInteger(item.check_count)}</td>
+          <td>${formatInteger(item.passed_fault_scenario_count)} / ${formatInteger(item.fault_scenario_count)}</td>
+          <td>${item.scratch_resources_removed ? "정리 완료" : "차단"}</td>
           <td>${escapeHtml(item.generated_by)} / ${escapeHtml(item.generated_at_kst)}</td>
           <td><a href="/data-deletions/${attr(state.request_id)}/review-packets/${attr(item.id)}/export.json" download>JSON</a></td>
-        </tr>`).join("") || `<tr><td colspan="8">No immutable advisory review packets.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="8">변경 불가 검토 패킷이 없습니다.</td></tr>`;
       const reviewPacketPanel = `
         <div class="backup-builder-contract">
-          <h3>Advisory deletion review packet</h3>
-          <div class="status">Immutable JSON audit packet: yes / authorization granted: no / readiness promoted: no / execution: disabled</div>
+          <h3>삭제 검토 패킷</h3>
+          <div class="status">변경 불가 JSON 감사 패킷: 예 / 승인 부여·실행 준비 승격: 아니요 / 실제 실행: 비활성</div>
           <ul>${reviewPacketBlockers}</ul>
           ${reviewPacketForm}
-          <div class="status">Candidate assessment: ${escapeHtml(reviewPacketCandidate?.predicted_review_status || "unavailable")} / latest packet: ${escapeHtml(latestReviewPacket?.review_status || "none")} / input fingerprint: <code>${escapeHtml(reviewPacketCandidate?.input_contract_fingerprint_sha256 || "-")}</code></div>
-          <h3>Canonical input chain</h3>
+          <div class="status">후보 판정: ${escapeHtml(operationValueLabel(reviewPacketCandidate?.predicted_review_status || "unavailable"))} / 최근 패킷: ${escapeHtml(operationValueLabel(latestReviewPacket?.review_status || "none"))} / 입력 지문값: <code>${escapeHtml(reviewPacketCandidate?.input_contract_fingerprint_sha256 || "-")}</code></div>
+          <h3>정규화 입력 연결</h3>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>Input</th><th>ID</th><th>Status</th><th>Fingerprint</th></tr></thead>
+              <thead><tr><th>입력</th><th>ID</th><th>상태</th><th>지문값</th></tr></thead>
               <tbody>${reviewInputRows}</tbody>
             </table>
           </div>
-          <h3>Latest packet assessment checks</h3>
+          <h3>최근 패킷 판정 검사</h3>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>
+              <thead><tr><th>검사</th><th>상태</th><th>내용</th></tr></thead>
               <tbody>${reviewPacketCheckRows}</tbody>
             </table>
           </div>
-          <h3>Advisory packet history</h3>
+          <h3>검토 패킷 이력</h3>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>ID</th><th>Assessment</th><th>Inputs</th><th>Checks</th><th>Faults</th><th>Scratch</th><th>Generated</th><th>Export</th></tr></thead>
+              <thead><tr><th>ID</th><th>판정</th><th>입력</th><th>검사</th><th>장애</th><th>임시 공간</th><th>생성 정보</th><th>내보내기</th></tr></thead>
               <tbody>${reviewPacketHistoryRows}</tbody>
             </table>
           </div>
@@ -9562,70 +9771,70 @@ _INDEX_HTML = """<!doctype html>
       const prerequisiteRows = (state.prerequisites || []).map((item) => `
         <tr>
           <td>${escapeHtml(item.key)}</td>
-          <td>${item.required ? "required" : "not required"}</td>
-          <td>${escapeHtml(item.evidence_status)}</td>
+          <td>${item.required ? "필수" : "선택"}</td>
+          <td>${escapeHtml(operationValueLabel(item.evidence_status))}</td>
           <td>${item.latest_evidence ? `#${escapeHtml(item.latest_evidence.id)} / ${escapeHtml(item.latest_evidence.recorded_at_kst)}` : "-"}</td>
-        </tr>`).join("") || `<tr><td colspan="4">No dry-run backup prerequisites.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="4">사전 점검용 백업 선행 조건이 없습니다.</td></tr>`;
       const evidenceRows = (state.evidence_history || []).map((item) => `
         <tr>
           <td>${escapeHtml(item.id)}</td>
           <td>${escapeHtml(item.prerequisite_key)}</td>
           <td>${escapeHtml(item.recorded_by)} / ${escapeHtml(item.recorded_at_kst)}</td>
           <td>${escapeHtml(JSON.stringify(item.evidence_json || {}))}</td>
-        </tr>`).join("") || `<tr><td colspan="4">No immutable backup evidence.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="4">변경 불가 백업 증거가 없습니다.</td></tr>`;
       const latestResult = state.latest_rehearsal?.result_json || {};
       const checkRows = (latestResult.checks || []).map((check) => `
         <tr>
           <td>${escapeHtml(check.key)}</td>
           <td>${escapeHtml(check.status)}</td>
           <td>${escapeHtml(check.message)}</td>
-        </tr>`).join("") || `<tr><td colspan="3">No rehearsal checks recorded.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="3">모의 실행 검사 기록이 없습니다.</td></tr>`;
       const rehearsalRows = (state.rehearsals || []).map((item) => `
         <tr>
           <td>${escapeHtml(item.id)}</td>
-          <td>${escapeHtml(item.result_status)}</td>
-          <td>${escapeHtml(item.passed_check_count)} / ${escapeHtml(item.check_count)}</td>
+          <td>${escapeHtml(operationValueLabel(item.result_status))}</td>
+          <td>${formatInteger(item.passed_check_count)} / ${formatInteger(item.check_count)}</td>
           <td>${escapeHtml(item.run_by)} / ${escapeHtml(item.run_at_kst)}</td>
-        </tr>`).join("") || `<tr><td colspan="4">No non-executing rehearsal records.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="4">실제 실행 없는 모의 기록이 없습니다.</td></tr>`;
       const evidenceOptions = (state.prerequisites || [])
         .filter((item) => item.required && !["quarantine_capacity_check", "backup_integrity_verification"].includes(item.key))
         .map((item) => `<option value="${attr(item.key)}">${escapeHtml(item.key)}</option>`)
         .join("");
       const evidenceForm = plan && state.evidence_recording_allowed && evidenceOptions ? `
         <form class="backup-evidence-form" data-backup-evidence-form data-request-id="${attr(state.request_id)}" data-plan-id="${attr(plan.id)}">
-          <label>Prerequisite
+          <label>선행 조건
             <select name="prerequisite_key">${evidenceOptions}</select>
           </label>
-          <label data-evidence-field="artifact_path">Backup artifact path
+          <label data-evidence-field="artifact_path">백업 결과 경로
             <input name="artifact_path" autocomplete="off">
           </label>
-          <label data-evidence-field="artifact_sha256">Artifact SHA-256
+          <label data-evidence-field="artifact_sha256">결과 파일 SHA-256
             <input name="artifact_sha256" autocomplete="off" minlength="64" maxlength="64">
           </label>
-          <label data-evidence-field="artifact_size_bytes">Artifact bytes
+          <label data-evidence-field="artifact_size_bytes">결과 파일 크기(바이트)
             <input name="artifact_size_bytes" type="number" min="1" step="1">
           </label>
-          <label data-evidence-field="covered_row_count">Covered rows
+          <label data-evidence-field="covered_row_count">포함된 행 수
             <input name="covered_row_count" type="number" min="0" step="1">
           </label>
-          <label data-evidence-field="covered_file_count">Covered files
+          <label data-evidence-field="covered_file_count">포함된 파일 수
             <input name="covered_file_count" type="number" min="0" step="1">
           </label>
-          <label data-evidence-field="covered_file_bytes">Covered source bytes
+          <label data-evidence-field="covered_file_bytes">포함된 원본 크기(바이트)
             <input name="covered_file_bytes" type="number" min="0" step="1">
           </label>
-          <label data-evidence-field="backup_created_at_kst">Backup created KST
+          <label data-evidence-field="backup_created_at_kst">백업 생성 시각(KST)
             <input name="backup_created_at_kst" type="datetime-local">
           </label>
-          <button type="submit">Record immutable evidence</button>
+          <button type="submit">변경 불가 증거 기록</button>
         </form>` : "";
       const rehearsalButton = plan && state.rehearsal_allowed
-        ? `<button class="secondary" type="button" data-deletion-contract-action="rehearsal" data-request-id="${attr(state.request_id)}" data-plan-id="${attr(plan.id)}">Run non-executing rehearsal</button>`
+        ? `<button class="secondary" type="button" data-deletion-contract-action="rehearsal" data-request-id="${attr(state.request_id)}" data-plan-id="${attr(plan.id)}">실제 실행 없는 모의 절차</button>`
         : "";
       return `
         <div class="backup-readiness-contract">
-          <h3>Backup evidence and rehearsal</h3>
-          <div class="status">Execution enabled: no / execution ready: no / rehearsal checksum recalculation: no / restore operation: no</div>
+          <h3>백업 증거 및 모의 실행</h3>
+          <div class="status">실제 실행: 비활성 / 실행 준비: 안 됨 / 모의 체크섬 재계산·복원 작업: 아니요</div>
           <ul>${(state.execution_blockers || []).map((blocker) => `<li>${escapeHtml(blocker)}</li>`).join("")}</ul>
           <div class="actions">${rehearsalButton}</div>
           ${builderForm}
@@ -9636,32 +9845,32 @@ _INDEX_HTML = """<!doctype html>
           ${combinedRehearsalPanel}
           ${faultMatrixPanel}
           ${reviewPacketPanel}
-          <h3>Prerequisite evidence</h3>
+          <h3>선행 조건 증거</h3>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>Key</th><th>Required</th><th>Status</th><th>Latest evidence</th></tr></thead>
+              <thead><tr><th>키</th><th>필수 여부</th><th>상태</th><th>최근 증거</th></tr></thead>
               <tbody>${prerequisiteRows}</tbody>
             </table>
           </div>
           ${evidenceForm}
-          <h3>Latest rehearsal checks</h3>
+          <h3>최근 모의 실행 검사</h3>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>Check</th><th>Status</th><th>Message</th></tr></thead>
+              <thead><tr><th>검사</th><th>상태</th><th>내용</th></tr></thead>
               <tbody>${checkRows}</tbody>
             </table>
           </div>
-          <h3>Evidence history</h3>
+          <h3>증거 이력</h3>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>ID</th><th>Prerequisite</th><th>Recorded</th><th>Evidence</th></tr></thead>
+              <thead><tr><th>ID</th><th>선행 조건</th><th>기록 정보</th><th>증거</th></tr></thead>
               <tbody>${evidenceRows}</tbody>
             </table>
           </div>
-          <h3>Rehearsal history</h3>
+          <h3>모의 실행 이력</h3>
           <div class="table-scroll">
             <table class="detail-table">
-              <thead><tr><th>ID</th><th>Status</th><th>Passed checks</th><th>Run</th></tr></thead>
+              <thead><tr><th>ID</th><th>상태</th><th>통과 검사</th><th>실행 정보</th></tr></thead>
               <tbody>${rehearsalRows}</tbody>
             </table>
           </div>
@@ -9721,8 +9930,8 @@ _INDEX_HTML = """<!doctype html>
       const actorId = String(reviewer.get("actor_id") || "").trim();
       const note = String(reviewer.get("note") || "").trim();
       const confirmationText = String(values.get("confirmation_text") || "").trim();
-      if (!actorId) throw new Error("Local reviewer is required.");
-      if (!confirmationText) throw new Error("Exact build confirmation is required.");
+      if (!actorId) throw new Error("로컬 검토자 ID가 필요합니다.");
+      if (!confirmationText) throw new Error("정확한 생성 확인 문구가 필요합니다.");
       const button = formElement.querySelector("button[type='submit']");
       if (button) button.disabled = true;
       try {
@@ -9733,7 +9942,7 @@ _INDEX_HTML = """<!doctype html>
           note: note || null,
         });
         await loadDataDeletionRequestDetail(requestId);
-        dataDeletionStatus.textContent = "Backup artifacts and immutable evidence recorded. No restore, quarantine, or deletion operation was run.";
+        dataDeletionStatus.textContent = "백업 파일과 변경 불가 증거를 기록했습니다. 복원·격리·삭제 작업은 실행하지 않았습니다.";
       } finally {
         if (button) button.disabled = false;
       }
@@ -9744,8 +9953,8 @@ _INDEX_HTML = """<!doctype html>
       const requestId = button.dataset.requestId || "";
       const actorId = String(reviewer.get("actor_id") || "").trim();
       const note = String(reviewer.get("note") || "").trim();
-      if (!actorId) throw new Error("Local reviewer is required.");
-      if (!window.confirm("Reopen and verify this backup build read-only? One immutable audit row will be appended; no restore or deletion will run.")) return;
+      if (!actorId) throw new Error("로컬 검토자 ID가 필요합니다.");
+      if (!window.confirm("이 백업 생성 결과를 다시 열어 읽기 전용으로 검증할까요? 변경 불가 감사 기록 1개만 추가하며 복원이나 삭제는 실행하지 않습니다.")) return;
       button.disabled = true;
       try {
         const payload = await postJson(`/data-deletions/${encodeURIComponent(requestId)}/backup-verifications`, {
@@ -9757,7 +9966,7 @@ _INDEX_HTML = """<!doctype html>
         });
         const status = payload.backup_verification?.result_status || "unknown";
         await loadDataDeletionRequestDetail(requestId);
-        dataDeletionStatus.textContent = `Backup artifact verification ${status}. No restore, quarantine, or deletion operation was run.`;
+        dataDeletionStatus.textContent = `백업 결과 검증 ${operationValueLabel(status)} · 복원, 격리 또는 삭제 작업은 실행하지 않았습니다.`;
       } finally {
         button.disabled = false;
       }
@@ -9770,9 +9979,9 @@ _INDEX_HTML = """<!doctype html>
       const actorId = String(reviewer.get("actor_id") || "").trim();
       const note = String(reviewer.get("note") || "").trim();
       const confirmationText = String(values.get("confirmation_text") || "").trim();
-      if (!actorId) throw new Error("Local reviewer is required.");
-      if (!confirmationText) throw new Error("Exact restore rehearsal confirmation is required.");
-      if (!window.confirm("Run an isolated restore rehearsal using connection-scoped MySQL tables and temporary replay files? Production restore, quarantine, and deletion remain disabled.")) return;
+      if (!actorId) throw new Error("로컬 검토자 ID가 필요합니다.");
+      if (!confirmationText) throw new Error("정확한 복원 모의 실행 확인 문구가 필요합니다.");
+      if (!window.confirm("연결 전용 MySQL 테이블과 임시 리플레이 파일로 격리된 복원 모의 실행을 진행할까요? 운영 데이터 복원, 격리 및 삭제는 계속 비활성 상태입니다.")) return;
       const button = formElement.querySelector("button[type='submit']");
       if (button) button.disabled = true;
       try {
@@ -9784,7 +9993,7 @@ _INDEX_HTML = """<!doctype html>
         });
         const run = payload.backup_restore_rehearsal || {};
         await loadDataDeletionRequestDetail(requestId);
-        dataDeletionStatus.textContent = `Isolated restore rehearsal ${run.result_status || "unknown"}. Integrity evidence: ${run.backup_integrity_evidence_id || "not recorded"}. Production restore and deletion remain disabled.`;
+        dataDeletionStatus.textContent = `격리 복원 모의 실행 ${operationValueLabel(run.result_status || "unknown")} · 무결성 증거: ${run.backup_integrity_evidence_id ? `#${run.backup_integrity_evidence_id}` : "기록 없음"} · 운영 데이터 복원과 삭제는 계속 비활성 상태입니다.`;
       } finally {
         if (button) button.disabled = false;
       }
@@ -9797,9 +10006,9 @@ _INDEX_HTML = """<!doctype html>
       const actorId = String(reviewer.get("actor_id") || "").trim();
       const note = String(reviewer.get("note") || "").trim();
       const confirmationText = String(values.get("confirmation_text") || "").trim();
-      if (!actorId) throw new Error("Local reviewer is required.");
-      if (!confirmationText) throw new Error("Exact read-only planning confirmation is required.");
-      if (!window.confirm("Run a read-only quarantine plan? Source files are opened only for identity, size, and SHA-256 verification. Target absence and free space are checked. No directory, journal, copy, move, source removal, restore, quarantine, or deletion operation will run.")) return;
+      if (!actorId) throw new Error("로컬 검토자 ID가 필요합니다.");
+      if (!confirmationText) throw new Error("정확한 읽기 전용 계획 확인 문구가 필요합니다.");
+      if (!window.confirm("읽기 전용 격리 계획을 실행할까요? 원본 파일은 식별 정보, 크기, SHA-256 검증에만 열고 대상 경로 및 여유 공간만 확인합니다. 폴더·일지 생성, 복사, 이동, 원본 제거, 복원, 격리 또는 삭제는 실행하지 않습니다.")) return;
       const button = formElement.querySelector("button[type='submit']");
       if (button) button.disabled = true;
       try {
@@ -9811,7 +10020,7 @@ _INDEX_HTML = """<!doctype html>
         });
         const run = payload.quarantine_planning || {};
         await loadDataDeletionRequestDetail(requestId);
-        dataDeletionStatus.textContent = `Read-only quarantine planning ${run.result_status || "unknown"}. Capacity evidence: ${run.capacity_evidence_id || "not recorded"}. No directory, file, source row, quarantine, or deletion mutation was performed.`;
+        dataDeletionStatus.textContent = `읽기 전용 격리 계획 ${operationValueLabel(run.result_status || "unknown")} · 용량 증거: ${run.capacity_evidence_id ? `#${run.capacity_evidence_id}` : "기록 없음"} · 폴더, 파일, 원본 행, 격리 및 삭제 데이터는 변경하지 않았습니다.`;
       } finally {
         if (button) button.disabled = false;
       }
@@ -9824,9 +10033,9 @@ _INDEX_HTML = """<!doctype html>
       const actorId = String(reviewer.get("actor_id") || "").trim();
       const note = String(reviewer.get("note") || "").trim();
       const confirmationText = String(values.get("confirmation_text") || "").trim();
-      if (!actorId) throw new Error("Local reviewer is required.");
-      if (!confirmationText) throw new Error("Exact isolated quarantine rehearsal confirmation is required.");
-      if (!window.confirm("Run an isolated quarantine rehearsal? Small deterministic synthetic fixtures and journals are created only inside a random owned scratch directory under the quarantine root, then removed. Production replay files are not opened or changed. No production quarantine, database deletion, or restore operation will run.")) return;
+      if (!actorId) throw new Error("로컬 검토자 ID가 필요합니다.");
+      if (!confirmationText) throw new Error("정확한 격리 모의 실행 확인 문구가 필요합니다.");
+      if (!window.confirm("격리된 격리 모의 실행을 진행할까요? 작은 합성 시험 자료와 일지를 격리 저장소 아래의 임의 전용 임시 폴더에만 만들고 제거합니다. 운영 리플레이 파일은 열거나 변경하지 않으며 운영 격리, DB 삭제 또는 복원은 실행하지 않습니다.")) return;
       const button = formElement.querySelector("button[type='submit']");
       if (button) button.disabled = true;
       try {
@@ -9838,7 +10047,7 @@ _INDEX_HTML = """<!doctype html>
         });
         const run = payload.quarantine_rehearsal || {};
         await loadDataDeletionRequestDetail(requestId);
-        dataDeletionStatus.textContent = `Isolated quarantine rehearsal ${run.result_status || "unknown"}. Scratch cleanup: ${run.scratch_directory_removed ? "removed" : "blocked"}. Production source access, quarantine, and deletion remained disabled.`;
+        dataDeletionStatus.textContent = `격리된 격리 모의 실행 ${operationValueLabel(run.result_status || "unknown")} · 임시 공간 정리: ${run.scratch_directory_removed ? "완료" : "차단"} · 운영 원본 접근, 격리 및 삭제는 비활성 상태를 유지했습니다.`;
       } finally {
         if (button) button.disabled = false;
       }
@@ -9851,9 +10060,9 @@ _INDEX_HTML = """<!doctype html>
       const actorId = String(reviewer.get("actor_id") || "").trim();
       const note = String(reviewer.get("note") || "").trim();
       const confirmationText = String(values.get("confirmation_text") || "").trim();
-      if (!actorId) throw new Error("Local reviewer is required.");
-      if (!confirmationText) throw new Error("Exact isolated combined rehearsal confirmation is required.");
-      if (!window.confirm("Run an isolated combined deletion rehearsal? Verified backup rows are loaded only into connection-scoped MySQL temporary tables, deleted there, and rolled back. File behavior uses deterministic synthetic fixtures only. Production rows and files are not changed, and execution remains disabled.")) return;
+      if (!actorId) throw new Error("로컬 검토자 ID가 필요합니다.");
+      if (!confirmationText) throw new Error("정확한 격리 통합 모의 실행 확인 문구가 필요합니다.");
+      if (!window.confirm("격리된 통합 삭제 모의 실행을 진행할까요? 검증된 백업 행은 연결 전용 MySQL 임시 테이블에서만 삭제 후 되돌리고, 파일 동작은 합성 시험 자료만 사용합니다. 운영 행과 파일은 변경하지 않으며 실제 실행은 계속 비활성 상태입니다.")) return;
       const button = formElement.querySelector("button[type='submit']");
       if (button) button.disabled = true;
       try {
@@ -9866,7 +10075,7 @@ _INDEX_HTML = """<!doctype html>
         });
         const run = payload.combined_rehearsal || {};
         await loadDataDeletionRequestDetail(requestId);
-        dataDeletionStatus.textContent = `Combined rehearsal ${run.result_status || "unknown"}. MySQL delete / rollback: ${run.mysql_deleted_row_count || 0} / ${run.mysql_rolled_back_row_count || 0}. Scratch cleanup: ${run.scratch_resources_removed ? "removed" : "blocked"}. Production rows, files, quarantine, and deletion remained disabled.`;
+        dataDeletionStatus.textContent = `통합 모의 실행 ${operationValueLabel(run.result_status || "unknown")} · MySQL 삭제 / 되돌림: ${formatInteger(run.mysql_deleted_row_count || 0)} / ${formatInteger(run.mysql_rolled_back_row_count || 0)} · 임시 공간 정리: ${run.scratch_resources_removed ? "완료" : "차단"} · 운영 행·파일, 격리 및 삭제는 비활성 상태를 유지했습니다.`;
       } finally {
         if (button) button.disabled = false;
       }
@@ -9879,9 +10088,9 @@ _INDEX_HTML = """<!doctype html>
       const actorId = String(reviewer.get("actor_id") || "").trim();
       const note = String(reviewer.get("note") || "").trim();
       const confirmationText = String(values.get("confirmation_text") || "").trim();
-      if (!actorId) throw new Error("Local reviewer is required.");
-      if (!confirmationText) throw new Error("Exact isolated fault matrix confirmation is required.");
-      if (!window.confirm("Run the isolated fault matrix? One failure is injected only after a temporary-table DELETE, and three failures use synthetic quarantine fixtures. Production rows and files remain unchanged, and deletion execution remains disabled.")) return;
+      if (!actorId) throw new Error("로컬 검토자 ID가 필요합니다.");
+      if (!confirmationText) throw new Error("정확한 격리 장애 행렬 확인 문구가 필요합니다.");
+      if (!window.confirm("격리된 장애 행렬을 실행할까요? 임시 테이블 DELETE 이후 장애 1개와 합성 격리 시험 자료 장애 3개만 주입합니다. 운영 행과 파일은 변경하지 않으며 실제 삭제는 계속 비활성 상태입니다.")) return;
       const button = formElement.querySelector("button[type='submit']");
       if (button) button.disabled = true;
       try {
@@ -9893,7 +10102,7 @@ _INDEX_HTML = """<!doctype html>
         });
         const run = payload.fault_matrix_run || {};
         await loadDataDeletionRequestDetail(requestId);
-        dataDeletionStatus.textContent = `Fault matrix ${run.result_status || "unknown"}. Passed and contained: ${run.passed_scenario_count || 0} / ${run.scenario_count || 0}. Scratch cleanup: ${run.scratch_resources_removed ? "removed" : "blocked"}. Production rows, files, quarantine, restore, and deletion remained disabled.`;
+        dataDeletionStatus.textContent = `장애 행렬 ${operationValueLabel(run.result_status || "unknown")} · 통과 및 격리: ${formatInteger(run.passed_scenario_count || 0)} / ${formatInteger(run.scenario_count || 0)} · 임시 공간 정리: ${run.scratch_resources_removed ? "완료" : "차단"} · 운영 행·파일, 격리, 복원 및 삭제는 비활성 상태를 유지했습니다.`;
       } finally {
         if (button) button.disabled = false;
       }
@@ -9906,9 +10115,9 @@ _INDEX_HTML = """<!doctype html>
       const actorId = String(reviewer.get("actor_id") || "").trim();
       const note = String(reviewer.get("note") || "").trim();
       const confirmationText = String(values.get("confirmation_text") || "").trim();
-      if (!actorId) throw new Error("Local reviewer is required.");
-      if (!confirmationText) throw new Error("Exact advisory review packet confirmation is required.");
-      if (!window.confirm("Generate one immutable advisory review packet? This records one audit row and JSON export only. It grants no authorization, promotes no readiness, and cannot execute deletion.")) return;
+      if (!actorId) throw new Error("로컬 검토자 ID가 필요합니다.");
+      if (!confirmationText) throw new Error("정확한 검토 패킷 확인 문구가 필요합니다.");
+      if (!window.confirm("변경 불가 검토 패킷을 생성할까요? 감사 행 1개와 JSON 내보내기만 기록하며 승인이나 실행 준비를 부여하지 않고 삭제를 실행할 수도 없습니다.")) return;
       const button = formElement.querySelector("button[type='submit']");
       if (button) button.disabled = true;
       try {
@@ -9920,7 +10129,7 @@ _INDEX_HTML = """<!doctype html>
         });
         const packet = payload.review_packet || {};
         await loadDataDeletionRequestDetail(requestId);
-        dataDeletionStatus.textContent = `Advisory review packet #${packet.id || "?"} recorded as ${packet.review_status || "unknown"}. JSON: ${payload.export_url || "unavailable"}. Authorization, readiness promotion, and deletion execution remain disabled.`;
+        dataDeletionStatus.textContent = `검토 패킷 #${packet.id || "?"}을 ${operationValueLabel(packet.review_status || "unknown")} 상태로 기록했습니다. JSON: ${payload.export_url || "사용 불가"} · 승인, 실행 준비 승격 및 실제 삭제는 계속 비활성 상태입니다.`;
       } finally {
         if (button) button.disabled = false;
       }
@@ -9932,8 +10141,8 @@ _INDEX_HTML = """<!doctype html>
       const requestId = formElement.dataset.requestId || "";
       const actorId = String(reviewer.get("actor_id") || "").trim();
       const note = String(reviewer.get("note") || "").trim();
-      if (!actorId) throw new Error("Local reviewer is required.");
-      if (!window.confirm("Record immutable backup evidence? This does not create or verify backup contents.")) return;
+      if (!actorId) throw new Error("로컬 검토자 ID가 필요합니다.");
+      if (!window.confirm("변경 불가 백업 증거를 기록할까요? 백업 내용 자체를 만들거나 검증하지는 않습니다.")) return;
       await postJson(`/data-deletions/${encodeURIComponent(requestId)}/backup-evidence`, {
         dry_run_plan_id: Number(formElement.dataset.planId),
         prerequisite_key: String(values.get("prerequisite_key") || ""),
@@ -9954,22 +10163,22 @@ _INDEX_HTML = """<!doctype html>
         note: note || null,
       });
       await loadDataDeletionRequestDetail(requestId);
-      dataDeletionStatus.textContent = "Immutable backup evidence recorded. No backup or deletion operation was run.";
+      dataDeletionStatus.textContent = "변경 불가 백업 증거를 기록했습니다. 실제 백업·삭제 작업은 실행하지 않았습니다.";
     }
 
     async function runDataDeletionRehearsal(requestId, planId) {
       const reviewer = new FormData(dataDeletionFilterForm);
       const actorId = String(reviewer.get("actor_id") || "").trim();
       const note = String(reviewer.get("note") || "").trim();
-      if (!actorId) throw new Error("Local reviewer is required.");
-      if (!window.confirm("Run a metadata-only rehearsal? No backup, checksum, restore, or deletion operation will run.")) return;
+      if (!actorId) throw new Error("로컬 검토자 ID가 필요합니다.");
+      if (!window.confirm("메타데이터만 사용하는 모의 절차를 실행할까요? 백업, 체크섬, 복원 또는 삭제 작업은 실행하지 않습니다.")) return;
       await postJson(`/data-deletions/${encodeURIComponent(requestId)}/rehearsals`, {
         dry_run_plan_id: Number(planId),
         actor_id: actorId,
         note: note || null,
       });
       await loadDataDeletionRequestDetail(requestId);
-      dataDeletionStatus.textContent = "Non-executing rehearsal recorded. Deletion execution remains disabled.";
+      dataDeletionStatus.textContent = "실행 없는 모의 절차를 기록했습니다. 실제 삭제는 계속 비활성 상태입니다.";
     }
 
     async function loadDataDeletionConfirmationState(requestId) {
@@ -9987,13 +10196,13 @@ _INDEX_HTML = """<!doctype html>
       const form = new FormData(dataDeletionFilterForm);
       const actorId = String(form.get("actor_id") || "").trim();
       const note = String(form.get("note") || "").trim();
-      if (!actorId) throw new Error("Local reviewer is required.");
+      if (!actorId) throw new Error("로컬 검토자 ID가 필요합니다.");
       await postJson(`/data-deletions/${encodeURIComponent(requestId)}/preview-snapshots`, {
         actor_id: actorId,
         note: note || null,
       });
       await loadDataDeletionRequestDetail(requestId);
-      dataDeletionStatus.textContent = "Immutable preview snapshot captured. Deletion execution remains disabled.";
+      dataDeletionStatus.textContent = "변경 불가 미리보기 스냅샷을 저장했습니다. 실제 삭제는 계속 비활성 상태입니다.";
     }
 
     async function confirmDataDeletionSnapshot(requestId, snapshotId, fingerprint) {
@@ -10002,9 +10211,9 @@ _INDEX_HTML = """<!doctype html>
       const note = String(form.get("note") || "").trim();
       const input = document.querySelector(`#dataDeletionConfirmationText-${CSS.escape(String(snapshotId))}`);
       const confirmationText = String(input?.value || "").trim();
-      if (!actorId) throw new Error("Local reviewer is required.");
-      if (!confirmationText) throw new Error("Full confirmation text is required.");
-      if (!window.confirm("Record this fingerprint-bound confirmation? This still does not delete data.")) return;
+      if (!actorId) throw new Error("로컬 검토자 ID가 필요합니다.");
+      if (!confirmationText) throw new Error("전체 확인 문구가 필요합니다.");
+      if (!window.confirm("이 지문값에 연결된 확인 기록을 저장할까요? 이 작업도 데이터를 삭제하지 않습니다.")) return;
       await postJson(`/data-deletions/${encodeURIComponent(requestId)}/confirmations`, {
         snapshot_id: Number(snapshotId),
         fingerprint_sha256: fingerprint,
@@ -10013,7 +10222,7 @@ _INDEX_HTML = """<!doctype html>
         note: note || null,
       });
       await loadDataDeletionRequestDetail(requestId);
-      dataDeletionStatus.textContent = "Fingerprint-bound confirmation recorded. Deletion execution remains disabled.";
+      dataDeletionStatus.textContent = "지문값에 연결된 확인 기록을 저장했습니다. 실제 삭제는 계속 비활성 상태입니다.";
     }
 
     async function loadDataDeletionRequestDetail(requestId) {
@@ -10026,18 +10235,18 @@ _INDEX_HTML = """<!doctype html>
       const request = payload.request;
       const events = payload.events || [];
       dataDeletionDetail.innerHTML = `
-        <strong>Request #${escapeHtml(request.id)} / ${escapeHtml(request.status)}</strong>
-        <div>${escapeHtml(request.player_name)} / ${escapeHtml(request.shard)} / ${escapeHtml(request.deletion_scope)}</div>
-        <div>Reason: ${escapeHtml(request.reason || "-")}</div>
-        <div>Reviewer: ${escapeHtml(request.reviewed_by || "-")} / ${escapeHtml(request.review_note || "-")}</div>
-        <div>Execution enabled: ${payload.execution_enabled ? "yes" : "no"}</div>
+        <strong>요청 #${escapeHtml(request.id)} / ${escapeHtml(operationValueLabel(request.status))}</strong>
+        <div>${escapeHtml(request.player_name)} / ${escapeHtml(displayCode(request.shard, "shard"))} / ${escapeHtml(operationValueLabel(request.deletion_scope))}</div>
+        <div>요청 사유: ${escapeHtml(request.reason || "-")}</div>
+        <div>검토자: ${escapeHtml(request.reviewed_by || "-")} / ${escapeHtml(request.review_note || "-")}</div>
+        <div>실제 실행: ${payload.execution_enabled ? "활성" : "비활성"}</div>
         <ul>
           ${events.map((event) => `<li>${escapeHtml(event.created_at_kst)} / ${escapeHtml(event.event_type)} / ${escapeHtml(event.actor_type)}:${escapeHtml(event.actor_id)} / ${escapeHtml(event.note || "-")}</li>`).join("")}
         </ul>
-        <div id="dataDeletionPreview" class="status">Loading read-only impact preview...</div>
-        <div id="dataDeletionConfirmation" class="status">Loading immutable confirmation state...</div>
-        <div id="dataDeletionDryRun" class="status">Loading confirmed deletion dry-run state...</div>
-        <div id="dataDeletionBackupReadiness" class="status">Loading backup evidence and rehearsal state...</div>`;
+        <div id="dataDeletionPreview" class="status">읽기 전용 영향 미리보기를 불러오는 중...</div>
+        <div id="dataDeletionConfirmation" class="status">변경 불가 확인 상태를 불러오는 중...</div>
+        <div id="dataDeletionDryRun" class="status">확인된 삭제 사전 점검 상태를 불러오는 중...</div>
+        <div id="dataDeletionBackupReadiness" class="status">백업 증거와 모의 실행 상태를 불러오는 중...</div>`;
       const previewHost = document.querySelector("#dataDeletionPreview");
       try {
         const previewUrl = payload.preview_url || `/data-deletions/${encodeURIComponent(requestId)}/preview`;
@@ -10049,25 +10258,25 @@ _INDEX_HTML = """<!doctype html>
         const previewPayload = await previewResponse.json();
         previewHost.innerHTML = renderDataDeletionPreview(previewPayload.preview);
       } catch (error) {
-        previewHost.textContent = `Preview error: ${error.message}`;
+        previewHost.textContent = `미리보기 오류: ${error.message}`;
       }
       try {
         await loadDataDeletionConfirmationState(requestId);
       } catch (error) {
         const confirmationHost = document.querySelector("#dataDeletionConfirmation");
-        confirmationHost.textContent = `Confirmation state error: ${error.message}`;
+        confirmationHost.textContent = `확인 상태 오류: ${error.message}`;
       }
       try {
         await loadDataDeletionDryRunState(requestId);
       } catch (error) {
         const dryRunHost = document.querySelector("#dataDeletionDryRun");
-        dryRunHost.textContent = `Dry-run state error: ${error.message}`;
+        dryRunHost.textContent = `사전 점검 상태 오류: ${error.message}`;
       }
       try {
         await loadDataDeletionBackupReadiness(requestId);
       } catch (error) {
         const backupHost = document.querySelector("#dataDeletionBackupReadiness");
-        backupHost.textContent = `Backup readiness error: ${error.message}`;
+        backupHost.textContent = `백업 준비 상태 오류: ${error.message}`;
       }
     }
 
@@ -10075,10 +10284,10 @@ _INDEX_HTML = """<!doctype html>
       const form = new FormData(dataDeletionFilterForm);
       const actorId = String(form.get("actor_id") || "").trim();
       const note = String(form.get("note") || "").trim();
-      if (!actorId) throw new Error("Local reviewer is required.");
+      if (!actorId) throw new Error("로컬 검토자 ID가 필요합니다.");
       const warning = action === "approve"
-        ? "Approve this request? This records authorization only and does not delete data."
-        : `${action} this deletion review request?`;
+        ? "이 요청을 승인할까요? 승인 기록만 남기며 데이터를 삭제하지 않습니다."
+        : `${{ reject: "거절", cancel: "취소" }[action] || action} 처리를 기록할까요?`;
       if (!window.confirm(warning)) return;
       await postJson(`/data-deletions/${encodeURIComponent(requestId)}/${action}`, {
         actor_id: actorId,
@@ -10089,7 +10298,7 @@ _INDEX_HTML = """<!doctype html>
       dataDeletionFilterForm.elements.status.value = "all";
       await loadDataDeletionRequests();
       await loadDataDeletionRequestDetail(requestId);
-      dataDeletionStatus.textContent = `${action} recorded. Deletion execution remains disabled.`;
+      dataDeletionStatus.textContent = `${{ approve: "승인", reject: "거절", cancel: "취소" }[action] || action} 처리를 기록했습니다. 실제 삭제는 계속 비활성 상태입니다.`;
     }
 
     function firstUrlParam(params, keys) {
@@ -10328,9 +10537,9 @@ _INDEX_HTML = """<!doctype html>
       if (key.endsWith("distance_m") || key.endsWith("distance_meters")) return distanceKm(value);
       if (key === "longest_kill_m" || key === "avg_landing_distance_m") return distanceM(value);
       if (key === "kda" || key.startsWith("avg_") || key === "heal_amount" || key === "vehicle_damage") {
-        return Number(value || 0).toLocaleString("ko-KR", { maximumFractionDigits: 2 });
+        return formatNumber(value, 2);
       }
-      return Number(value || 0).toLocaleString("ko-KR", { maximumFractionDigits: 1 });
+      return formatNumber(value, 1);
     }
 
     function intelligenceQuality(report) {
@@ -10348,7 +10557,7 @@ _INDEX_HTML = """<!doctype html>
         : "";
       return `<div class="intelligence-quality-strip ${tone}">
         <div><strong>${escapeHtml(labels[coverage.status] || "수집 상태 확인 필요")}</strong>
-          <small>${coverage.eligible_processed_matches || 0}/${coverage.telemetry_matches || 0}경기${escapeHtml(last)} · 미처리 ${coverage.missing_match_count || 0}경기 · 활동 평균 분모 ${activityMatches}경기</small>
+          <small>${formatInteger(coverage.eligible_processed_matches)}/${formatInteger(coverage.telemetry_matches)}경기${escapeHtml(last)} · 미처리 ${formatInteger(coverage.missing_match_count)}경기 · 활동 평균 분모 ${formatInteger(activityMatches)}경기</small>
         </div>
         <output>${escapeHtml(percent(coverage.coverage_rate || 0))}</output>
       </div>`;
@@ -10380,7 +10589,7 @@ _INDEX_HTML = """<!doctype html>
       const loot = report.loot || {};
       const topItems = (loot.top_picked_items || []).slice(0, 8);
       const itemList = topItems.length
-        ? `<div class="intelligence-list">${topItems.map((item) => `<div class="intelligence-list-row"><span>${escapeHtml(item.item_name_ko || item.item_code || "-")}<small>${escapeHtml(item.item_category || "분류 없음")}</small></span><strong>${Number(item.picked_up_events || 0).toLocaleString("ko-KR")}회</strong></div>`).join("")}</div>`
+        ? `<div class="intelligence-list">${topItems.map((item) => `<div class="intelligence-list-row"><span>${escapeHtml(item.item_name_ko || item.item_code || "-")}<small>${escapeHtml(displayCode(item.item_category, "item_category") || "분류 없음")}</small></span><strong>${formatInteger(item.picked_up_events)}회</strong></div>`).join("")}</div>`
         : '<div class="intelligence-empty">현재 조건에서 정규화된 아이템 기록이 없습니다.</div>';
       return intelligenceQuality(report) + intelligenceKpis([
         ["경기", "matches", overview.matches], ["치킨율", "win_rate", overview.win_rate],
@@ -10391,15 +10600,15 @@ _INDEX_HTML = """<!doctype html>
         ["총 체력 회복량", "heal_amount", support.heal_amount], ["팀원 부활", "revives_caused", support.revives_caused],
       ])
       + intelligenceMetricSection(report, "전투와 교전", [
-        ["킬 / 어시스트 / 사망", "kills", `${combat.kills || 0} / ${combat.assists || 0} / ${combat.deaths || 0}`],
-        ["가한 / 당한 기절", "dbnos_caused", `${combat.dbnos_caused || 0} / ${combat.dbnos_taken || 0}`],
-        ["준 / 받은 피해", "damage_dealt", `${Number(combat.damage_dealt || 0).toFixed(1)} / ${Number(combat.damage_taken || 0).toFixed(1)}`],
-        ["발사 / 명중", "shots_fired", `${combat.shots_fired || 0} / ${combat.shots_hit || 0}`],
-        ["헤드샷 명중 / 피격", "headshot_hits", `${combat.headshot_hits || 0} / ${combat.headshot_hits_taken || 0}`],
-        ["교전 승 / 패", "fight_count", `${combat.fight_wins || 0} / ${combat.fight_losses || 0}`],
+        ["킬 / 어시스트 / 사망", "kills", `${formatInteger(combat.kills)} / ${formatInteger(combat.assists)} / ${formatInteger(combat.deaths)}`],
+        ["가한 / 당한 기절", "dbnos_caused", `${formatInteger(combat.dbnos_caused)} / ${formatInteger(combat.dbnos_taken)}`],
+        ["준 / 받은 피해", "damage_dealt", `${formatNumber(combat.damage_dealt, 1)} / ${formatNumber(combat.damage_taken, 1)}`],
+        ["발사 / 명중", "shots_fired", `${formatInteger(combat.shots_fired)} / ${formatInteger(combat.shots_hit)}`],
+        ["헤드샷 명중 / 피격", "headshot_hits", `${formatInteger(combat.headshot_hits)} / ${formatInteger(combat.headshot_hits_taken)}`],
+        ["교전 승 / 패", "fight_count", `${formatInteger(combat.fight_wins)} / ${formatInteger(combat.fight_losses)}`],
       ].map(([label, key, value]) => [label, key, value]))
       + intelligenceMetricSection(report, "생존과 지원", [
-        ["활동 지표 처리 경기", "activity_covered_matches", `${support.activity_covered_matches || 0} / ${overview.matches || 0}`],
+        ["활동 지표 처리 경기", "activity_covered_matches", `${formatInteger(support.activity_covered_matches)} / ${formatInteger(overview.matches)}`],
         ["TOP 10 비율", "top10_rate", survival.top10_rate], ["평균 등수", "avg_placement", survival.avg_placement],
         ["최장 킬 거리", "longest_kill_m", survival.longest_kill_m], ["최대 연속 킬", "max_kill_streak", survival.max_kill_streak],
         ["회복 아이템 이벤트", "item_heal_events", support.item_heal_events], ["아이템 회복량", "item_heal_amount", support.item_heal_amount],
@@ -10408,9 +10617,9 @@ _INDEX_HTML = """<!doctype html>
       ])
       + intelligenceMetricSection(report, "이동과 차량", [
         ["보행 거리", "walk_distance_m", mobility.walk_distance_m], ["차량 거리", "ride_distance_m", mobility.ride_distance_m],
-        ["수영 거리", "swim_distance_m", mobility.swim_distance_m], ["파쿠르 / 렛지", "vaults", `${mobility.vaults || 0} / ${mobility.ledge_grabs || 0}`],
-        ["차량 탑승 / 하차", "vehicle_rides", `${vehicle.rides || 0} / ${vehicle.leaves || 0}`], ["차량 피해", "vehicle_damage", vehicle.damage],
-        ["차량 / 바퀴 파괴", "vehicle_destroys", `${vehicle.destroys || 0} / ${vehicle.wheel_destroys || 0}`], ["비상 호출 / 재배치", "redeploys", `${mobility.emergency_pickup_calls || 0} / ${mobility.redeploys || 0}`],
+        ["수영 거리", "swim_distance_m", mobility.swim_distance_m], ["파쿠르 / 렛지", "vaults", `${formatInteger(mobility.vaults)} / ${formatInteger(mobility.ledge_grabs)}`],
+        ["차량 탑승 / 하차", "vehicle_rides", `${formatInteger(vehicle.rides)} / ${formatInteger(vehicle.leaves)}`], ["차량 피해", "vehicle_damage", vehicle.damage],
+        ["차량 / 바퀴 파괴", "vehicle_destroys", `${formatInteger(vehicle.destroys)} / ${formatInteger(vehicle.wheel_destroys)}`], ["비상 호출 / 재배치", "redeploys", `${formatInteger(mobility.emergency_pickup_calls)} / ${formatInteger(mobility.redeploys)}`],
       ])
       + intelligenceMetricSection(report, "방어구와 환경", [
         ["방어구 파괴", "armor_destroys_caused", environment.armor_destroys_caused], ["방어구 파괴당함", "armor_destroys_taken", environment.armor_destroys_taken],
@@ -10425,19 +10634,19 @@ _INDEX_HTML = """<!doctype html>
         avg_heal_amount: {
           label: "경기당 총 체력 회복량",
           value: (row) => Number(row.avg_heal_amount || 0),
-          format: (value) => `${Number(value).toFixed(1)}`,
+          format: (value) => formatNumber(value, 1),
           basis: "LogHeal.healAmount 합계 ÷ 행동 파서 처리 경기 수",
         },
         avg_revives_caused: {
           label: "경기당 팀원 부활",
           value: (row) => Number(row.avg_revives_caused || 0),
-          format: (value) => `${Number(value).toFixed(2)}회`,
+          format: (value) => `${formatNumber(value, 2)}회`,
           basis: "부활 실행 횟수 ÷ 행동 파서 처리 경기 수",
         },
         avg_throwable_uses: {
           label: "경기당 투척물 사용",
           value: (row) => Number(row.avg_throwable_uses || 0),
-          format: (value) => `${Number(value).toFixed(2)}회`,
+          format: (value) => `${formatNumber(value, 2)}회`,
           basis: "투척물 사용 횟수 ÷ 행동 파서 처리 경기 수",
         },
       };
@@ -10482,21 +10691,24 @@ _INDEX_HTML = """<!doctype html>
       const dimension = intelligenceBreakdownDimension.value || "maps";
       const metric = intelligenceTrendMetric.value || "win_rate";
       const activityMetric = ["avg_heal_amount", "avg_revives_caused", "avg_throwable_uses"].includes(metric);
+      const breakdownCategories = { game_modes: "game_mode", team_modes: "team_mode", perspectives: "perspective", match_types: "match_type", season_states: "season_state" };
       const rows = (report.breakdowns?.[dimension] || []).filter((row) => (
         !activityMetric || Number(row.activity_covered_matches || 0) > 0
       )).map((row) => ({
         ...row,
-        period_label: row.label,
+        period_label: breakdownCategories[dimension]
+          ? displayCode(row.key || row.label, breakdownCategories[dimension])
+          : row.label,
         match_count: row.matches,
       }));
       const definition = intelligenceChartDefinition(metric);
       if (!rows.length) return intelligenceQuality(report) + '<div class="intelligence-empty">현재 조건에 비교할 항목이 없습니다.</div>';
       const tableRows = rows.map((row) => `<tr>
-        <td>${escapeHtml(row.label || row.key || "-")}</td><td>${Number(row.matches || 0).toLocaleString("ko-KR")}</td>
-        <td>${percent(row.win_rate)}</td><td>${Number(row.kda || 0).toFixed(2)}</td>
-        <td>${Number(row.avg_damage_dealt || 0).toFixed(1)}</td><td>${percent(row.accuracy)}</td>
+        <td>${escapeHtml(breakdownCategories[dimension] ? displayCode(row.key || row.label, breakdownCategories[dimension]) : (row.label || row.key || "-"))}</td><td>${formatInteger(row.matches)}</td>
+        <td>${percent(row.win_rate)}</td><td>${formatNumber(row.kda, 2)}</td>
+        <td>${formatNumber(row.avg_damage_dealt, 1)}</td><td>${percent(row.accuracy)}</td>
         <td>${percent(row.headshot_hit_rate)}</td><td>${percent(row.fight_win_rate)}</td>
-        <td>${Number(row.avg_fights_per_match || 0).toFixed(2)}</td><td>${minutes(row.avg_survival_seconds)}</td>
+        <td>${formatNumber(row.avg_fights_per_match, 2)}</td><td>${minutes(row.avg_survival_seconds)}</td>
       </tr>`).join("");
       return intelligenceQuality(report)
         + `<div class="metric-chart">${renderTrendComparisonChart(definition, rows)}</div>`
@@ -10506,11 +10718,11 @@ _INDEX_HTML = """<!doctype html>
     function intelligenceDetailRows(rows, kind) {
       if (!rows?.length) return '<div class="intelligence-empty">기록 없음</div>';
       return `<div class="intelligence-list">${rows.slice(0, 16).map((row) => {
-        const label = row.item_name_ko || row.item_code || row.vehicle_type || row.object_type || row.action || "분류 없음";
+        const label = row.item_name_ko || row.vehicle_type_ko || row.object_type || row.action_ko || row.item_code || "분류 없음";
         const detail = kind === "vehicle"
-          ? `${Number(row.distance_m || 0).toFixed(0)}m · 피해 ${Number(row.damage || 0).toFixed(1)}`
-          : `${escapeHtml(row.action || "이벤트")} · ${Number(row.amount || 0).toFixed(1)}`;
-        return `<div class="intelligence-list-row"><span>${escapeHtml(label)}<small>${detail}</small></span><strong>${Number(row.event_count || 0).toLocaleString("ko-KR")}회</strong></div>`;
+          ? `${formatNumber(row.distance_m, 0)}m · 피해 ${formatNumber(row.damage, 1)}`
+          : `${escapeHtml(row.action_ko || row.action || "이벤트")} · ${formatNumber(row.amount, 1)}`;
+        return `<div class="intelligence-list-row"><span>${escapeHtml(label)}<small>${detail}</small></span><strong>${formatInteger(row.event_count)}회</strong></div>`;
       }).join("")}</div>`;
     }
 
@@ -10521,8 +10733,8 @@ _INDEX_HTML = """<!doctype html>
       const definitions = report.metric_definitions || [];
       const rawRows = rawOnly.length ? rawOnly.map((row) => `<tr>
         <td>${escapeHtml(row.label_ko || row.event_type)}</td><td class="identifier">${escapeHtml(row.event_type)}</td>
-        <td>${escapeHtml(row.domain || "-")}</td><td>${Number(row.event_count || 0).toLocaleString("ko-KR")}</td>
-        <td>${Number(row.tracked_event_count || 0).toLocaleString("ko-KR")}</td><td>${escapeHtml(row.note || "-")}</td>
+        <td>${escapeHtml(row.domain || "-")}</td><td>${formatInteger(row.event_count)}</td>
+        <td>${formatInteger(row.tracked_event_count)}</td><td>${escapeHtml(row.note || "-")}</td>
       </tr>`).join("") : '<tr><td colspan="6">원본 전용 이벤트가 없습니다.</td></tr>';
       const definitionRows = definitions.map((definition) => `<div class="intelligence-definition">
         <strong>${escapeHtml(definition.label_ko)}</strong>
@@ -10615,56 +10827,56 @@ _INDEX_HTML = """<!doctype html>
         excluded_non_firearm_contexts: 0,
       };
       const metricCells = [
-        ["경기", String(totals.match_count) + "전"],
-        ["치킨", String(totals.wins) + "회 · " + percent(totals.win_rate)],
-        ["KDA", Number(totals.kda).toFixed(2)],
-        ["킬 / 사망 / 어시", totals.kills + " / " + totals.deaths + " / " + totals.assists],
-        ["기절시킴 / 당함", totals.dbnos_caused + " / " + totals.dbnos_taken],
-        ["평균 딜 / 받은 딜", Number(totals.avg_damage_dealt).toFixed(1) + " / " + Number(totals.avg_damage_taken).toFixed(1)],
+        ["경기", formatInteger(totals.match_count) + "전"],
+        ["치킨", formatInteger(totals.wins) + "회 · " + percent(totals.win_rate)],
+        ["KDA", formatNumber(totals.kda, 2)],
+        ["킬 / 사망 / 어시", formatInteger(totals.kills) + " / " + formatInteger(totals.deaths) + " / " + formatInteger(totals.assists)],
+        ["기절시킴 / 당함", formatInteger(totals.dbnos_caused) + " / " + formatInteger(totals.dbnos_taken)],
+        ["평균 딜 / 받은 딜", formatNumber(totals.avg_damage_dealt, 1) + " / " + formatNumber(totals.avg_damage_taken, 1)],
         ["평균 생존", minutes(totals.avg_survival_seconds)],
         ["평균 이동", distanceKm(totals.avg_movement_distance_m)],
         ["명중 확률", accuracyBreakdownText(totals.accuracy, totals.accuracy_breakdown)],
-        ["헤드샷 명중 확률", `${percent(totals.headshot_hit_rate)} · ${totals.headshot_hits || 0}/${totals.shots_hit || 0}명중`],
-        ["헤드샷 킬 비율", `${percent(totals.headshot_kill_rate)} · ${totals.headshot_kills || 0}/${totals.kills || 0}킬`],
+        ["헤드샷 명중 확률", `${percent(totals.headshot_hit_rate)} · ${formatInteger(totals.headshot_hits)}/${formatInteger(totals.shots_hit)}명중`],
+        ["헤드샷 킬 비율", `${percent(totals.headshot_kill_rate)} · ${formatInteger(totals.headshot_kills)}/${formatInteger(totals.kills)}킬`],
         ["교전 승리 확률", fightMetricsAvailable
-          ? `${percent(fightTotals.fight_win_rate)} · ${fightTotals.wins}/${fightTotals.fight_count || 0}교전`
+          ? `${percent(fightTotals.fight_win_rate)} · ${formatInteger(fightTotals.wins)}/${formatInteger(fightTotals.fight_count)}교전`
           : "불러오기 실패"],
         ["경기당 평균 교전", fightMetricsAvailable
-          ? `${Number((fightTotals.fight_count || 0) / Math.max(1, totals.match_count || 0)).toFixed(2)}회`
+          ? `${formatNumber((fightTotals.fight_count || 0) / Math.max(1, totals.match_count || 0), 2)}회`
           : "불러오기 실패"],
       ];
       const topWeaponRows = (profile.top_weapons || []).slice(0, 5).map((weapon, index) => `
         <div class="result-row">
           <span>${index + 1}위</span>
           <strong>${escapeHtml(weapon.weapon_name)}</strong>
-          <p>${weapon.kills}킬 · ${Number(weapon.damage_dealt).toFixed(0)}딜 · 명중 ${percent(weapon.accuracy)} · 헤드샷 명중 ${percent(weapon.headshot_hit_rate)}</p>
+          <p>${formatInteger(weapon.kills)}킬 · ${formatNumber(weapon.damage_dealt, 0)}딜 · 명중 ${percent(weapon.accuracy)} · 헤드샷 명중 ${percent(weapon.headshot_hit_rate)}</p>
         </div>`).join("") || '<span class="result-caption">무기 기록 없음</span>';
       const fightUnavailable = '<span class="result-caption">교전 데이터를 불러오지 못했습니다.</span>';
       const fightWeaponRows = fightMetricsAvailable ? ((fights?.weapons || []).map((weapon) => `
         <div class="result-row">
-          <span>교전 ${weapon.fight_count}회</span>
+          <span>교전 ${formatInteger(weapon.fight_count)}회</span>
           <strong>${escapeHtml(weapon.weapon_name)}</strong>
-          <p>${weapon.wins}승 ${weapon.losses}패 · ${percent(weapon.fight_win_rate)}</p>
+          <p>${formatInteger(weapon.wins)}승 ${formatInteger(weapon.losses)}패 · ${percent(weapon.fight_win_rate)}</p>
         </div>`).join("") || '<span class="result-caption">총기 교전 기록 없음</span>') : fightUnavailable;
       const fightLoadoutRows = fightMetricsAvailable ? ((fights?.loadouts || []).map((loadout) => `
         <div class="result-row">
           <span>${escapeHtml(loadout.weapon_name)}</span>
           <strong>${escapeHtml((loadout.attachment_names || []).join(" · ") || "파츠 없음")}</strong>
-          <p>${loadout.wins}승 ${loadout.losses}패 · ${percent(loadout.fight_win_rate)}</p>
+          <p>${formatInteger(loadout.wins)}승 ${formatInteger(loadout.losses)}패 · ${percent(loadout.fight_win_rate)}</p>
         </div>`).join("") || '<span class="result-caption">교전 조합 기록 없음</span>') : fightUnavailable;
       const recentRows = (profile.recent_matches || []).map((match) => (
         '<tr><td>' + escapeHtml(String(match.created_at_kst || "-").replace("T", " ").slice(0, 16)) + '</td>'
         + '<td>' + escapeHtml(match.map_name_ko || match.map_name || "-") + '</td>'
-        + '<td>' + escapeHtml(match.game_mode_ko || match.game_mode || "-") + '</td>'
+        + '<td>' + escapeHtml(match.game_mode_ko || displayCode(match.game_mode, "game_mode")) + '</td>'
         + '<td>' + (Number(match.win_place) === 1 ? "치킨" : "#" + (match.win_place || "-")) + '</td>'
-        + '<td>' + match.kills + ' / ' + match.assists + ' / ' + match.dbnos_caused + '</td>'
-        + '<td>' + Number(match.damage_dealt).toFixed(0) + '</td>'
+        + '<td>' + formatInteger(match.kills) + ' / ' + formatInteger(match.assists) + ' / ' + formatInteger(match.dbnos_caused) + '</td>'
+        + '<td>' + formatNumber(match.damage_dealt, 0) + '</td>'
         + '<td><button class="secondary" type="button" data-profile-match-id="' + attr(match.match_id) + '">상세</button></td></tr>'
       )).join("");
       profileBody.innerHTML = `<div class="result-shell">
         ${resultHeading(
           profile.player.current_name,
-          `${profile.player.shard} · 완료된 매치 기준`,
+          `${displayCode(profile.player.shard, "shard")} · 완료된 매치 기준`,
           profile.player.active ? "수집 중" : "수집 중지",
           profile.player.active ? "success" : "",
         )}
@@ -10675,9 +10887,9 @@ _INDEX_HTML = """<!doctype html>
         <div class="result-columns">
           ${resultSection("주요 무기", `<div class="result-list">${topWeaponRows}</div>`)}
           ${resultSection("교전 요약", fightMetricsAvailable ? resultTextRows([
-            ["교전 승/패", `${fightTotals.wins} / ${fightTotals.losses} · ${percent(fightTotals.fight_win_rate)}`],
-            ["승리 원인", `킬 ${fightTotals.kill_wins} · 기절 ${fightTotals.dbno_wins}`],
-            ["패배 원인", `사망 ${fightTotals.death_losses} · 기절 ${fightTotals.dbno_losses}`],
+            ["교전 승/패", `${formatInteger(fightTotals.wins)} / ${formatInteger(fightTotals.losses)} · ${percent(fightTotals.fight_win_rate)}`],
+            ["승리 원인", `킬 ${formatInteger(fightTotals.kill_wins)} · 기절 ${formatInteger(fightTotals.dbno_wins)}`],
+            ["패배 원인", `사망 ${formatInteger(fightTotals.death_losses)} · 기절 ${formatInteger(fightTotals.dbno_losses)}`],
             ["명중 지표", accuracyBreakdownText(totals.accuracy, totals.accuracy_breakdown)],
           ]) : fightUnavailable)}
         </div>
@@ -10688,7 +10900,7 @@ _INDEX_HTML = """<!doctype html>
         ${resultSection("교전 무기", `<div class="result-list">${fightWeaponRows}</div>`)}
         ${resultSection("교전 조합", `<div class="result-list">${fightLoadoutRows}</div>`)}
         ${fightTotals.excluded_non_firearm_contexts
-          ? `<span class="result-caption">총기 순위 제외: 비총기 장비 ${fightTotals.excluded_non_firearm_contexts}건</span>`
+          ? `<span class="result-caption">총기 순위 제외: 비총기 장비 ${formatInteger(fightTotals.excluded_non_firearm_contexts)}건</span>`
           : ""}
         ${resultSection("최근 경기", `<div class="table-scroll"><table><thead><tr><th>KST</th><th>맵</th><th>모드</th><th>결과</th><th>킬/어시/기절</th><th>딜</th><th></th></tr></thead><tbody>${recentRows || '<tr><td colspan="7">완료 경기 데이터가 없습니다.</td></tr>'}</tbody></table></div>`)}
       </div>`;
@@ -10761,41 +10973,56 @@ _INDEX_HTML = """<!doctype html>
         from_date_kst: "시작일",
         to_date_kst: "종료일",
       };
+      const filterCategories = {
+        game_mode: "game_mode",
+        team_mode: "team_mode",
+        perspective: "perspective",
+        match_type: "match_type",
+        map_name: "map",
+        season_state: "season_state",
+      };
       const activeFilters = Object.entries(report.filters || {})
         .filter(([, value]) => value !== null && value !== "")
-        .map(([key, value]) => `${filterLabels[key] || key}: ${value}`);
+        .map(([key, value]) => {
+          let displayValue = filterCategories[key] ? displayCode(value, filterCategories[key]) : String(value);
+          if (key === "is_custom_match") displayValue = value ? "커스텀" : "일반";
+          if (key === "quarter") displayValue = `${formatInteger(value)}분기`;
+          if (key === "month") displayValue = `${formatInteger(value)}월`;
+          if (key === "hour") displayValue = `${String(value).padStart(2, "0")}시`;
+          return `${filterLabels[key] || key}: ${displayValue}`;
+        });
       const bucketStatus = report.truncated
-        ? `최근 ${report.returned_bucket_count}/${report.available_bucket_count}개 구간`
-        : `${report.returned_bucket_count}개 구간`;
+        ? `최근 ${formatInteger(report.returned_bucket_count)}/${formatInteger(report.available_bucket_count)}개 구간`
+        : `${formatInteger(report.returned_bucket_count)}개 구간`;
       trendSummary.innerHTML = `<div class="result-shell">
         ${resultHeading(report.player.current_name, `KST ${granularityLabel}`, bucketStatus)}
         ${resultMetricGrid([
-          ["경기", `${totals.match_count}전`],
-          ["치킨", `${totals.wins}회 · ${percent(totals.win_rate)}`],
-          ["비치킨", `${totals.non_wins}회`],
-          ["KDA", Number(totals.kda).toFixed(2)],
-          ["평균 딜", Number(totals.avg_damage_dealt).toFixed(1)],
+          ["경기", `${formatInteger(totals.match_count)}전`],
+          ["치킨", `${formatInteger(totals.wins)}회 · ${percent(totals.win_rate)}`],
+          ["비치킨", `${formatInteger(totals.non_wins)}회`],
+          ["KDA", formatNumber(totals.kda, 2)],
+          ["평균 딜", formatNumber(totals.avg_damage_dealt, 1)],
           ["명중 지표", accuracyBreakdownText(totals.accuracy, totals.accuracy_breakdown)],
-          ["헤드샷 명중 확률", `${percent(totals.headshot_hit_rate)} · ${totals.headshot_hits}/${totals.shots_hit}명중`],
-          ["헤드샷 킬 비율", `${percent(totals.headshot_kill_rate)} · ${totals.headshot_kills}/${totals.kills}킬`],
-          ["교전 승리 확률", `${percent(totals.fight_win_rate)} · ${totals.fight_wins}/${totals.fight_count}교전`],
-          ["경기당 평균 교전", `${Number(totals.avg_fights_per_match).toFixed(2)}회`],
-          ["경기당 킬 / 기절", `${Number(totals.avg_kills).toFixed(2)} / ${Number(totals.avg_dbnos_caused).toFixed(2)}`],
+          ["헤드샷 명중 확률", `${percent(totals.headshot_hit_rate)} · ${formatInteger(totals.headshot_hits)}/${formatInteger(totals.shots_hit)}명중`],
+          ["헤드샷 킬 비율", `${percent(totals.headshot_kill_rate)} · ${formatInteger(totals.headshot_kills)}/${formatInteger(totals.kills)}킬`],
+          ["교전 승리 확률", `${percent(totals.fight_win_rate)} · ${formatInteger(totals.fight_wins)}/${formatInteger(totals.fight_count)}교전`],
+          ["경기당 평균 교전", `${formatNumber(totals.avg_fights_per_match, 2)}회`],
+          ["경기당 킬 / 기절", `${formatNumber(totals.avg_kills, 2)} / ${formatNumber(totals.avg_dbnos_caused, 2)}`],
         ])}
         ${resultSection("적용 조건", resultChips(activeFilters, "전체 경기"))}
       </div>`;
       trendBody.innerHTML = (report.buckets || []).map((bucket) => `
         <tr>
           <td>${escapeHtml(bucket.period_label)}</td>
-          <td>${bucket.match_count}전 · ${bucket.wins}치킨</td>
+          <td>${formatInteger(bucket.match_count)}전 · ${formatInteger(bucket.wins)}치킨</td>
           <td>${percent(bucket.win_rate)}</td>
-          <td>${bucket.kills}/${bucket.deaths}/${bucket.assists}<br>KDA ${Number(bucket.kda).toFixed(2)}</td>
-          <td>${Number(bucket.avg_kills).toFixed(2)} / ${Number(bucket.avg_dbnos_caused).toFixed(2)}</td>
-          <td>${Number(bucket.avg_damage_dealt).toFixed(1)} / ${Number(bucket.avg_damage_taken).toFixed(1)}</td>
+          <td>${formatInteger(bucket.kills)}/${formatInteger(bucket.deaths)}/${formatInteger(bucket.assists)}<br>KDA ${formatNumber(bucket.kda, 2)}</td>
+          <td>${formatNumber(bucket.avg_kills, 2)} / ${formatNumber(bucket.avg_dbnos_caused, 2)}</td>
+          <td>${formatNumber(bucket.avg_damage_dealt, 1)} / ${formatNumber(bucket.avg_damage_taken, 1)}</td>
           <td>${accuracyBreakdownText(bucket.accuracy, bucket.accuracy_breakdown)}</td>
-          <td>${percent(bucket.headshot_hit_rate)}<br><span class="status">${bucket.headshot_hits}/${bucket.shots_hit}명중</span></td>
-          <td>${percent(bucket.fight_win_rate)}<br><span class="status">${bucket.fight_wins}/${bucket.fight_count} · 경기당 ${Number(bucket.avg_fights_per_match).toFixed(2)}회</span></td>
-          <td>${bucket.dbnos_caused} / ${bucket.dbnos_taken}</td>
+          <td>${percent(bucket.headshot_hit_rate)}<br><span class="status">${formatInteger(bucket.headshot_hits)}/${formatInteger(bucket.shots_hit)}명중</span></td>
+          <td>${percent(bucket.fight_win_rate)}<br><span class="status">${formatInteger(bucket.fight_wins)}/${formatInteger(bucket.fight_count)} · 경기당 ${formatNumber(bucket.avg_fights_per_match, 2)}회</span></td>
+          <td>${formatInteger(bucket.dbnos_caused)} / ${formatInteger(bucket.dbnos_taken)}</td>
           <td>${minutes(bucket.avg_survival_seconds)}</td>
         </tr>
       `).join("") || `<tr><td colspan="11">조건에 맞는 완료 경기 데이터가 없습니다.</td></tr>`;
@@ -10803,15 +11030,15 @@ _INDEX_HTML = """<!doctype html>
         <article class="trend-card">
           <strong>${escapeHtml(bucket.period_label)}</strong>
           <dl>
-            <div><dt>경기 / 치킨</dt><dd>${bucket.match_count}전 / ${bucket.wins}회</dd></div>
+            <div><dt>경기 / 치킨</dt><dd>${formatInteger(bucket.match_count)}전 / ${formatInteger(bucket.wins)}회</dd></div>
             <div><dt>승률</dt><dd>${percent(bucket.win_rate)}</dd></div>
-            <div><dt>K/D/A · KDA</dt><dd>${bucket.kills}/${bucket.deaths}/${bucket.assists} · ${Number(bucket.kda).toFixed(2)}</dd></div>
-            <div><dt>경기당 킬 / 기절</dt><dd>${Number(bucket.avg_kills).toFixed(2)} / ${Number(bucket.avg_dbnos_caused).toFixed(2)}</dd></div>
-            <div><dt>평균 딜 / 받은 딜</dt><dd>${Number(bucket.avg_damage_dealt).toFixed(1)} / ${Number(bucket.avg_damage_taken).toFixed(1)}</dd></div>
-            <div><dt>헤드샷 명중 확률</dt><dd>${percent(bucket.headshot_hit_rate)} · ${bucket.headshot_hits}/${bucket.shots_hit}</dd></div>
-            <div><dt>교전 승리 확률</dt><dd>${percent(bucket.fight_win_rate)} · ${bucket.fight_wins}/${bucket.fight_count}</dd></div>
-            <div><dt>경기당 교전</dt><dd>${Number(bucket.avg_fights_per_match).toFixed(2)}회</dd></div>
-            <div><dt>기절 +/-</dt><dd>${bucket.dbnos_caused} / ${bucket.dbnos_taken}</dd></div>
+            <div><dt>K/D/A · KDA</dt><dd>${formatInteger(bucket.kills)}/${formatInteger(bucket.deaths)}/${formatInteger(bucket.assists)} · ${formatNumber(bucket.kda, 2)}</dd></div>
+            <div><dt>경기당 킬 / 기절</dt><dd>${formatNumber(bucket.avg_kills, 2)} / ${formatNumber(bucket.avg_dbnos_caused, 2)}</dd></div>
+            <div><dt>평균 딜 / 받은 딜</dt><dd>${formatNumber(bucket.avg_damage_dealt, 1)} / ${formatNumber(bucket.avg_damage_taken, 1)}</dd></div>
+            <div><dt>헤드샷 명중 확률</dt><dd>${percent(bucket.headshot_hit_rate)} · ${formatInteger(bucket.headshot_hits)}/${formatInteger(bucket.shots_hit)}</dd></div>
+            <div><dt>교전 승리 확률</dt><dd>${percent(bucket.fight_win_rate)} · ${formatInteger(bucket.fight_wins)}/${formatInteger(bucket.fight_count)}</dd></div>
+            <div><dt>경기당 교전</dt><dd>${formatNumber(bucket.avg_fights_per_match, 2)}회</dd></div>
+            <div><dt>기절 +/-</dt><dd>${formatInteger(bucket.dbnos_caused)} / ${formatInteger(bucket.dbnos_taken)}</dd></div>
             <div><dt>평균 생존</dt><dd>${minutes(bucket.avg_survival_seconds)}</dd></div>
           </dl>
           <div class="result-caption" style="margin-top:8px">${escapeHtml(accuracyBreakdownText(bucket.accuracy, bucket.accuracy_breakdown))}</div>
@@ -10857,15 +11084,15 @@ _INDEX_HTML = """<!doctype html>
           percentage: true,
           basis: "헤드샷 킬 수 ÷ 전체 킬 수",
         },
-        kda: { label: "KDA", value: (bucket) => bucket.kda, format: (value) => Number(value).toFixed(2) },
-        avg_kills: { label: "경기당 평균 킬", value: (bucket) => bucket.avg_kills, format: (value) => Number(value).toFixed(2) },
-        avg_assists: { label: "경기당 평균 어시스트", value: (bucket) => bucket.avg_assists, format: (value) => Number(value).toFixed(2) },
-        avg_deaths: { label: "경기당 평균 사망", value: (bucket) => bucket.avg_deaths, format: (value) => Number(value).toFixed(2) },
-        avg_dbnos_caused: { label: "경기당 평균 기절", value: (bucket) => bucket.avg_dbnos_caused, format: (value) => Number(value).toFixed(2) },
-        avg_dbnos_taken: { label: "경기당 당한 기절", value: (bucket) => bucket.avg_dbnos_taken, format: (value) => Number(value).toFixed(2) },
-        avg_fights_per_match: { label: "경기당 평균 교전", value: (bucket) => bucket.avg_fights_per_match, format: (value) => `${Number(value).toFixed(2)}회` },
-        avg_damage_dealt: { label: "평균 준 피해", value: (bucket) => bucket.avg_damage_dealt, format: (value) => Number(value).toFixed(1) },
-        avg_damage_taken: { label: "평균 받은 피해", value: (bucket) => bucket.avg_damage_taken, format: (value) => Number(value).toFixed(1) },
+        kda: { label: "KDA", value: (bucket) => bucket.kda, format: (value) => formatNumber(value, 2) },
+        avg_kills: { label: "경기당 평균 킬", value: (bucket) => bucket.avg_kills, format: (value) => formatNumber(value, 2) },
+        avg_assists: { label: "경기당 평균 어시스트", value: (bucket) => bucket.avg_assists, format: (value) => formatNumber(value, 2) },
+        avg_deaths: { label: "경기당 평균 사망", value: (bucket) => bucket.avg_deaths, format: (value) => formatNumber(value, 2) },
+        avg_dbnos_caused: { label: "경기당 평균 기절", value: (bucket) => bucket.avg_dbnos_caused, format: (value) => formatNumber(value, 2) },
+        avg_dbnos_taken: { label: "경기당 당한 기절", value: (bucket) => bucket.avg_dbnos_taken, format: (value) => formatNumber(value, 2) },
+        avg_fights_per_match: { label: "경기당 평균 교전", value: (bucket) => bucket.avg_fights_per_match, format: (value) => `${formatNumber(value, 2)}회` },
+        avg_damage_dealt: { label: "평균 준 피해", value: (bucket) => bucket.avg_damage_dealt, format: (value) => formatNumber(value, 1) },
+        avg_damage_taken: { label: "평균 받은 피해", value: (bucket) => bucket.avg_damage_taken, format: (value) => formatNumber(value, 1) },
         avg_survival_seconds: { label: "평균 생존시간", value: (bucket) => bucket.avg_survival_seconds, format: minutes },
         avg_movement_distance_m: { label: "평균 이동거리", value: (bucket) => bucket.avg_movement_distance_m, format: distanceKm },
         hit_head: { label: "머리 명중 비율", value: (bucket) => bucket.hit_part_rates?.head || 0, format: percent, percentage: true },
@@ -10913,7 +11140,7 @@ _INDEX_HTML = """<!doctype html>
         const value = values[index];
         const width = Math.max(0, Math.min(100, value / maximum * 100));
         return `<div class="metric-chart-row">
-          <strong class="metric-chart-label">${escapeHtml(bucket.period_label)}<small>${bucket.match_count}경기</small></strong>
+          <strong class="metric-chart-label">${escapeHtml(bucket.period_label)}<small>${formatInteger(bucket.match_count)}경기</small></strong>
           <span class="metric-chart-track"><span class="metric-chart-fill" style="width:${width.toFixed(2)}%"></span></span>
           <span class="metric-chart-value">${escapeHtml(definition.format(value))}</span>
         </div>`;
@@ -10969,7 +11196,7 @@ _INDEX_HTML = """<!doctype html>
           cx="${point[0].toFixed(2)}"
           cy="${point[1].toFixed(2)}"
           r="${radius.toFixed(2)}"
-        ><title>${escapeHtml(bucket.period_label)} · ${escapeHtml(definition.format(values[index]))} · ${bucket.match_count}경기</title></circle>`;
+        ><title>${escapeHtml(bucket.period_label)} · ${escapeHtml(definition.format(values[index]))} · ${formatInteger(bucket.match_count)}경기</title></circle>`;
       }).join("");
       const latestIndex = values.length - 1;
       const latest = values[latestIndex];
@@ -10978,15 +11205,15 @@ _INDEX_HTML = """<!doctype html>
       const overall = Math.max(0, Number(definition.value(totals) || 0));
       const availablePointCount = Number(options.availablePointCount || buckets.length);
       const note = options.truncated
-        ? `전체 ${availablePointCount}개 중 최근 ${buckets.length}개 구간을 표시합니다.`
-        : `전체 ${buckets.length}개 구간을 표시합니다.`;
+        ? `전체 ${formatInteger(availablePointCount)}개 중 최근 ${formatInteger(buckets.length)}개 구간을 표시합니다.`
+        : `전체 ${formatInteger(buckets.length)}개 구간을 표시합니다.`;
       return `
         <h3>${escapeHtml(options.title || definition.label + " KST 시계열")}</h3>
         <div class="trend-chart-overview">
           <div class="trend-chart-stat">
             <span>최근 · ${escapeHtml(buckets[latestIndex].period_label)}</span>
             <strong>${escapeHtml(definition.format(latest))}</strong>
-            <small>${buckets[latestIndex].match_count}경기 표본</small>
+            <small>${formatInteger(buckets[latestIndex].match_count)}경기 표본</small>
           </div>
           <div class="trend-chart-stat">
             <span>직전 구간 대비 증감</span>
@@ -10996,7 +11223,7 @@ _INDEX_HTML = """<!doctype html>
           <div class="trend-chart-stat">
             <span>현재 조회 조건 전체</span>
             <strong>${escapeHtml(definition.format(overall))}</strong>
-            <small>${totals.match_count || 0}경기 집계</small>
+            <small>${formatInteger(totals.match_count)}경기 집계</small>
           </div>
         </div>
         <div class="trend-line-frame">
@@ -11090,13 +11317,13 @@ _INDEX_HTML = """<!doctype html>
 
     function timeMetricDefinition(metric) {
       const definitions = {
-        match_count: { label: "플레이 경기", value: (item) => item.match_count, format: (value) => `${Number(value)}전`, basis: "해당 KST 시간에 시작한 완료 경기" },
-        wins: { label: "치킨 횟수", value: (item) => item.wins, format: (value) => `${Number(value)}회`, basis: "해당 KST 시간에 시작한 치킨 경기" },
+        match_count: { label: "플레이 경기", value: (item) => item.match_count, format: (value) => `${formatInteger(value)}전`, basis: "해당 KST 시간에 시작한 완료 경기" },
+        wins: { label: "치킨 횟수", value: (item) => item.wins, format: (value) => `${formatInteger(value)}회`, basis: "해당 KST 시간에 시작한 치킨 경기" },
         win_rate: { label: "치킨 승률", value: (item) => item.win_rate, format: percent, percentage: true, basis: "치킨 경기 ÷ 완료 경기" },
         fight_win_rate: { label: "교전 승률", value: (item) => item.fight_win_rate, format: percent, percentage: true, basis: "교전 승리 ÷ 승리·패배 교전" },
         accuracy: { label: "명중률", value: (item) => item.accuracy, format: percent, percentage: true, basis: "일반 탄환 명중 이벤트 ÷ 발사 이벤트" },
         headshot_hit_rate: { label: "헤드샷 명중률", value: (item) => item.headshot_hit_rate, format: percent, percentage: true, basis: "머리 명중 ÷ 전체 명중; 빗나간 탄 제외" },
-        avg_damage_dealt: { label: "평균 피해", value: (item) => item.avg_damage_dealt, format: (value) => Number(value).toFixed(1), basis: "준 피해 합계 ÷ 완료 경기" },
+        avg_damage_dealt: { label: "평균 피해", value: (item) => item.avg_damage_dealt, format: (value) => formatNumber(value, 1), basis: "준 피해 합계 ÷ 완료 경기" },
       };
       return definitions[metric] || definitions.match_count;
     }
@@ -11139,7 +11366,7 @@ _INDEX_HTML = """<!doctype html>
         const value = values[index];
         const ratio = Math.max(0, Math.min(1, value / maximum));
         const detail = definition.percentage
-          ? `${definition.format(value)} · ${bucket.match_count}전`
+          ? `${definition.format(value)} · ${formatInteger(bucket.match_count)}전`
           : definition.format(value);
         return `<div class="time-hour-cell" title="${attr(`${bucket.period_label} · ${detail}`)}">
           <i style="height:${(6 + ratio * 42).toFixed(1)}px;opacity:${(0.2 + ratio * 0.8).toFixed(2)}"></i>
@@ -11148,24 +11375,37 @@ _INDEX_HTML = """<!doctype html>
         </div>`;
       }).join("");
       const tableRows = buckets.filter((bucket) => bucket.match_count > 0).map((bucket) => `
-        <tr><td>${escapeHtml(bucket.period_label)}</td><td>${bucket.match_count}</td><td>${bucket.wins} · ${percent(bucket.win_rate)}</td><td>${Number(bucket.avg_damage_dealt || 0).toFixed(1)}</td><td>${percent(bucket.accuracy)} · ${bucket.shots_hit || 0}/${bucket.shots_fired || 0}</td><td>${percent(bucket.headshot_hit_rate)} · ${bucket.headshot_hits || 0}/${bucket.shots_hit || 0}</td><td>${percent(bucket.fight_win_rate)} · ${bucket.fight_wins || 0}/${bucket.fight_count || 0}</td></tr>
+        <tr><td>${escapeHtml(bucket.period_label)}</td><td>${formatInteger(bucket.match_count)}</td><td>${formatInteger(bucket.wins)} · ${percent(bucket.win_rate)}</td><td>${formatNumber(bucket.avg_damage_dealt, 1)}</td><td>${percent(bucket.accuracy)} · ${formatInteger(bucket.shots_hit)}/${formatInteger(bucket.shots_fired)}</td><td>${percent(bucket.headshot_hit_rate)} · ${formatInteger(bucket.headshot_hits)}/${formatInteger(bucket.shots_hit)}</td><td>${percent(bucket.fight_win_rate)} · ${formatInteger(bucket.fight_wins)}/${formatInteger(bucket.fight_count)}</td></tr>
       `).join("") || '<tr><td colspan="7">조건에 맞는 완료 경기가 없습니다.</td></tr>';
       timeInsightBody.innerHTML = `<div class="result-shell">
-        ${resultHeading(activeTimeInsightReport.player.current_name, `Asia/Seoul · ${definition.label}`, `${activeTimeInsightReport.totals.match_count}경기`)}
+        ${resultHeading(activeTimeInsightReport.player.current_name, `KST · ${definition.label}`, `${formatInteger(activeTimeInsightReport.totals.match_count)}경기`)}
         <div class="time-insight-grid">
-          <div class="time-insight-kpi"><span>주 플레이 시간</span><strong>${escapeHtml(busiest?.period_label || "-")}</strong><small>${busiest?.match_count || 0}경기</small></div>
-          <div class="time-insight-kpi"><span>치킨 최다 시간</span><strong>${escapeHtml(mostWins?.period_label || "-")}</strong><small>${mostWins?.wins || 0}치킨 · ${percent(mostWins?.win_rate)}</small></div>
+          <div class="time-insight-kpi"><span>주 플레이 시간</span><strong>${escapeHtml(busiest?.period_label || "-")}</strong><small>${formatInteger(busiest?.match_count)}경기</small></div>
+          <div class="time-insight-kpi"><span>치킨 최다 시간</span><strong>${escapeHtml(mostWins?.period_label || "-")}</strong><small>${formatInteger(mostWins?.wins)}치킨 · ${percent(mostWins?.win_rate)}</small></div>
           <div class="time-insight-kpi"><span>승률 우수 시간</span><strong>${escapeHtml(bestWinRate?.period_label || "표본 부족")}</strong><small>최소 5경기 · ${bestWinRate ? percent(bestWinRate.win_rate) : "-"}</small></div>
           <div class="time-insight-kpi"><span>교전 우수 시간</span><strong>${escapeHtml(bestFight?.period_label || "표본 부족")}</strong><small>최소 10교전 · ${bestFight ? percent(bestFight.fight_win_rate) : "-"}</small></div>
         </div>
         <div class="metric-chart"><h3>24시간 ${escapeHtml(definition.label)} 분포</h3><div class="time-hour-grid">${cells}</div><p class="trend-chart-note">산식: ${escapeHtml(definition.basis)}. 시간은 경기 시작 시각 KST 기준이며 표본 수를 함께 표시합니다.</p></div>
-        <details class="result-disclosure"><summary>시간대별 상세 · 플레이 기록 ${buckets.filter((item) => item.match_count > 0).length}개 시간대</summary><div class="table-scroll"><table><thead><tr><th>KST</th><th>경기</th><th>치킨·승률</th><th>평균 피해</th><th>명중</th><th>헤드샷 명중</th><th>교전 승률</th></tr></thead><tbody>${tableRows}</tbody></table></div></details>
+        <details class="result-disclosure"><summary>시간대별 상세 · 플레이 기록 ${formatInteger(buckets.filter((item) => item.match_count > 0).length)}개 시간대</summary><div class="table-scroll"><table><thead><tr><th>KST</th><th>경기</th><th>치킨·승률</th><th>평균 피해</th><th>명중</th><th>헤드샷 명중</th><th>교전 승률</th></tr></thead><tbody>${tableRows}</tbody></table></div></details>
       </div>`;
     }
 
     function renderComparisonPicker(catalog = catalogByForm.get(comparisonForm)) {
       const type = String(comparisonForm.elements.comparison_type.value || "player");
       const shard = String(comparisonForm.elements.shard.value || activeAnalysisPlayer?.shard || "steam");
+      const targetField = comparisonForm.querySelector("[data-comparison-player-field]");
+      const targetInput = comparisonForm.elements.target;
+      if (targetField) targetField.hidden = type === "player";
+      if (targetInput) targetInput.required = type !== "player";
+      const comparedField = { map: "map_name", game_mode: "game_mode", team_mode: "team_mode", perspective: "perspective", match_type: "match_type" }[type] || "";
+      for (const fieldName of ["map_name", "game_mode", "team_mode", "perspective", "match_type"]) {
+        const control = comparisonForm.elements[fieldName];
+        if (!control) continue;
+        const compared = fieldName === comparedField;
+        control.disabled = compared;
+        if (compared) control.value = "";
+        control.closest("label")?.classList.toggle("is-disabled", compared);
+      }
       const selected = new Set([...comparisonItemPicker.querySelectorAll("input:checked")].map((input) => input.value));
       let items = [];
       if (type === "player") {
@@ -11179,13 +11419,28 @@ _INDEX_HTML = """<!doctype html>
         items = (catalog?.weapons || []).map((weapon) => ({
           value: weapon.weapon_code,
           label: weapon.weapon_name,
-          note: `${weapon.weapon_family} · ${weapon.match_count}경기`,
+          note: `${weapon.weapon_family || "무기"} · ${formatInteger(weapon.match_count)}경기`,
         }));
       } else {
-        items = (catalog?.facets?.maps || []).map((mapName) => ({
-          value: mapName,
-          label: catalogOptionLabel("maps", mapName, catalog),
-          note: mapName,
+        const facetByType = {
+          map: "maps",
+          game_mode: "game_modes",
+          team_mode: "team_modes",
+          perspective: "perspectives",
+          match_type: "match_types",
+        };
+        const facet = facetByType[type] || "maps";
+        const typeLabels = {
+          map: "맵",
+          game_mode: "게임 모드",
+          team_mode: "팀 모드",
+          perspective: "시점",
+          match_type: "매치 유형",
+        };
+        items = (catalog?.facets?.[facet] || []).map((value) => ({
+          value,
+          label: catalogOptionLabel(facet, value, catalog),
+          note: typeLabels[type] || "비교 항목",
         }));
       }
       comparisonItemPicker.innerHTML = items.map((item) => `
@@ -11205,28 +11460,48 @@ _INDEX_HTML = """<!doctype html>
     function comparisonMetricDefinition(metric) {
       const definitions = {
         win_rate: { label: "승률", value: (row) => row.metrics.win_rate, format: percent, percentage: true, basis: "치킨 경기 ÷ 완료 경기" },
-        kda: { label: "KDA", value: (row) => row.metrics.kda, format: (value) => Number(value).toFixed(2), basis: "(킬 + 어시스트) ÷ 사망" },
-        avg_kills: { label: "경기당 킬", value: (row) => row.metrics.avg_kills, format: (value) => Number(value).toFixed(2), basis: "킬 ÷ 완료 경기" },
-        avg_dbnos_caused: { label: "경기당 기절", value: (row) => row.metrics.avg_dbnos_caused, format: (value) => Number(value).toFixed(2), basis: "가한 기절 ÷ 완료 경기" },
-        avg_damage_dealt: { label: "평균 피해", value: (row) => row.metrics.avg_damage_dealt, format: (value) => Number(value).toFixed(1), basis: "준 피해 ÷ 완료 경기" },
+        kda: { label: "KDA", value: (row) => row.metrics.kda, format: (value) => formatNumber(value, 2), basis: "(킬 + 어시스트) ÷ 사망" },
+        avg_kills: { label: "경기당 킬", value: (row) => row.metrics.avg_kills, format: (value) => formatNumber(value, 2), basis: "킬 ÷ 완료 경기" },
+        avg_assists: { label: "경기당 어시스트", value: (row) => row.metrics.avg_assists, format: (value) => formatNumber(value, 2), basis: "어시스트 ÷ 완료 경기" },
+        avg_dbnos_caused: { label: "경기당 기절", value: (row) => row.metrics.avg_dbnos_caused, format: (value) => formatNumber(value, 2), basis: "가한 기절 ÷ 완료 경기" },
+        avg_dbnos_taken: { label: "경기당 당한 기절", value: (row) => row.metrics.avg_dbnos_taken, format: (value) => formatNumber(value, 2), basis: "당한 기절 ÷ 완료 경기" },
+        avg_deaths: { label: "경기당 사망", value: (row) => row.metrics.avg_deaths, format: (value) => formatNumber(value, 2), basis: "사망 ÷ 완료 경기" },
+        avg_damage_dealt: { label: "평균 피해", value: (row) => row.metrics.avg_damage_dealt, format: (value) => formatNumber(value, 1), basis: "준 피해 ÷ 완료 경기" },
+        avg_damage_taken: { label: "평균 받은 피해", value: (row) => row.metrics.avg_damage_taken, format: (value) => formatNumber(value, 1), basis: "받은 피해 ÷ 완료 경기" },
+        damage_ratio: { label: "가한/받은 피해 비율", value: (row) => row.metrics.damage_ratio, format: (value) => formatNumber(value, 2), basis: "준 피해 ÷ 받은 피해" },
         accuracy: { label: "명중률", value: (row) => row.metrics.accuracy, format: percent, percentage: true, basis: "일반 탄환 명중 이벤트 ÷ 발사 이벤트" },
         headshot_hit_rate: { label: "헤드샷 명중률", value: (row) => row.metrics.headshot_hit_rate, format: percent, percentage: true, basis: "머리 명중 ÷ 전체 명중; 빗나간 탄 제외" },
+        headshot_kill_rate: { label: "헤드샷 킬 비율", value: (row) => row.metrics.headshot_kill_rate, format: percent, percentage: true, basis: "헤드샷 킬 ÷ 전체 킬" },
         fight_win_rate: { label: "교전 승률", value: (row) => row.metrics.fight_win_rate, format: percent, percentage: true, basis: "교전 승리 ÷ 승리·패배 교전" },
-        avg_fights_per_match: { label: "경기당 교전", value: (row) => row.metrics.avg_fights_per_match, format: (value) => Number(value).toFixed(2), basis: "교전 수 ÷ 완료 경기" },
+        avg_fights_per_match: { label: "경기당 교전", value: (row) => row.metrics.avg_fights_per_match, format: (value) => formatNumber(value, 2), basis: "교전 수 ÷ 완료 경기" },
         avg_survival_seconds: { label: "평균 생존", value: (row) => row.metrics.avg_survival_seconds, format: minutes, basis: "생존 시간 합계 ÷ 완료 경기" },
+        avg_movement_distance_m: { label: "평균 이동", value: (row) => row.metrics.avg_movement_distance_m, format: distanceKm, basis: "도보·차량·수영 이동 거리 합계 ÷ 완료 경기" },
       };
       return definitions[metric] || definitions.win_rate;
     }
 
     function normalizeComparisonMetrics(metrics, type) {
-      if (type !== "weapon") return metrics;
-      const deaths = Number(metrics.deaths_taken || 0);
+      const matchCount = Number(metrics.match_count || 0);
+      const deaths = Number(metrics.deaths ?? metrics.deaths_taken ?? 0);
+      const kills = Number(metrics.kills || 0);
+      const assists = Number(metrics.assists || 0);
+      const damageDealt = Number(metrics.damage_dealt || 0);
+      const damageTaken = Number(metrics.damage_taken || 0);
       return {
         ...metrics,
         deaths,
-        kda: (Number(metrics.kills || 0) + Number(metrics.assists || 0)) / Math.max(1, deaths),
-        avg_dbnos_caused: Number(metrics.avg_dbnos || 0),
-        avg_survival_seconds: null,
+        kda: Number(metrics.kda ?? ((kills + assists) / Math.max(1, deaths))),
+        avg_kills: Number(metrics.avg_kills ?? (kills / Math.max(1, matchCount))),
+        avg_assists: Number(metrics.avg_assists ?? (assists / Math.max(1, matchCount))),
+        avg_deaths: Number(metrics.avg_deaths ?? (deaths / Math.max(1, matchCount))),
+        avg_dbnos_caused: Number(metrics.avg_dbnos_caused ?? metrics.avg_dbnos ?? 0),
+        avg_dbnos_taken: Number(metrics.avg_dbnos_taken ?? 0),
+        avg_damage_dealt: Number(metrics.avg_damage_dealt ?? (damageDealt / Math.max(1, matchCount))),
+        avg_damage_taken: Number(metrics.avg_damage_taken ?? (damageTaken / Math.max(1, matchCount))),
+        damage_ratio: damageDealt / Math.max(1, damageTaken),
+        headshot_kill_rate: Number(metrics.headshot_kill_rate ?? (Number(metrics.headshot_kills || 0) / Math.max(1, kills))),
+        avg_survival_seconds: type === "weapon" ? null : metrics.avg_survival_seconds,
+        avg_movement_distance_m: type === "weapon" ? null : metrics.avg_movement_distance_m,
       };
     }
 
@@ -11240,6 +11515,16 @@ _INDEX_HTML = """<!doctype html>
       if (selected.length < 2) throw new Error("비교 대상을 2개 이상 선택하세요.");
       if (selected.length > 5) throw new Error("한 번에 최대 5개까지 비교할 수 있습니다.");
       const basePlayer = type === "player" ? null : selectedRegisteredPlayer(formElement);
+      const granularity = String(form.get("trend_granularity") || "month");
+      const dimensionParam = {
+        map: "map_name",
+        game_mode: "game_mode",
+        team_mode: "team_mode",
+        perspective: "perspective",
+        match_type: "match_type",
+      }[type];
+      const commonFilterFields = ["map_name", "game_mode", "team_mode", "perspective", "match_type", "season_state", "from_date_kst", "to_date_kst"]
+        .filter((field) => field !== dimensionParam);
       const requests = selected.map(async (item) => {
         const params = new URLSearchParams();
         if (type === "player") {
@@ -11247,25 +11532,31 @@ _INDEX_HTML = """<!doctype html>
           if (!player) throw new Error(`${item.label} 유저 정보를 찾을 수 없습니다.`);
           params.set("shard", player.shard);
           params.set("account_id", player.account_id);
-          params.set("granularity", "month");
-          params.set("bucket_limit", "1");
-          appendAnalysisFilters(form, params, ["team_mode", "perspective", "match_type", "season_state", "from_date_kst", "to_date_kst"]);
+          params.set("granularity", granularity);
+          params.set("bucket_limit", "500");
+          appendAnalysisFilters(form, params, commonFilterFields);
           const report = (await fetchAnalysisJson(`/players/trends?${params.toString()}`)).trends;
-          return { key: item.value, label: player.current_name, type, metrics: report.totals };
+          return { key: item.value, label: player.current_name, type, metrics: normalizeComparisonMetrics(report.totals, type), trend: report.buckets || [] };
         }
         params.set("shard", basePlayer.shard);
         params.set("account_id", basePlayer.account_id);
-        appendAnalysisFilters(form, params, ["team_mode", "perspective", "match_type", "season_state", "from_date_kst", "to_date_kst"]);
-        if (type === "map") {
-          params.set("granularity", "month");
-          params.set("bucket_limit", "1");
-          params.set("map_name", item.value);
+        appendAnalysisFilters(form, params, commonFilterFields);
+        if (type !== "weapon") {
+          params.set("granularity", granularity);
+          params.set("bucket_limit", "500");
+          params.set(dimensionParam || "map_name", item.value);
           const report = (await fetchAnalysisJson(`/players/trends?${params.toString()}`)).trends;
-          return { key: item.value, label: item.label, type, metrics: report.totals };
+          return { key: item.value, label: item.label, type, metrics: normalizeComparisonMetrics(report.totals, type), trend: report.buckets || [] };
         }
         params.set("weapon", item.value);
         const detail = (await fetchAnalysisJson(`/players/weapon?${params.toString()}`)).weapon;
-        return { key: item.value, label: detail.weapon_name || item.label, type, metrics: normalizeComparisonMetrics(detail.totals, type) };
+        return {
+          key: item.value,
+          label: detail.weapon_name || item.label,
+          type,
+          metrics: normalizeComparisonMetrics(detail.totals, type),
+          trend: detail.trend_series?.[granularity]?.points || [],
+        };
       });
       activeComparisonRows = await Promise.all(requests);
       renderComparisonResult();
@@ -11273,7 +11564,56 @@ _INDEX_HTML = """<!doctype html>
 
     function comparisonSampleNote(row) {
       const metrics = row.metrics || {};
-      return `${Number(metrics.match_count || 0).toLocaleString("ko-KR")}경기 · ${Number(metrics.shots_hit || 0).toLocaleString("ko-KR")}명중 · ${Number(metrics.fight_count || 0).toLocaleString("ko-KR")}교전`;
+      return `${formatInteger(metrics.match_count)}경기 · ${formatInteger(metrics.shots_hit)}명중 · ${formatInteger(metrics.fight_count)}교전`;
+    }
+
+    function renderComparisonTrendChart(definition) {
+      const colors = ["#45d6b0", "#67b7dc", "#f0c75e", "#ef7f6d", "#b49ddd"];
+      const periodLabels = new Map();
+      for (const row of activeComparisonRows) {
+        for (const point of row.trend || []) {
+          const key = String(point.period_key || point.period_label || "");
+          if (key) periodLabels.set(key, String(point.period_label || key));
+        }
+      }
+      const periodKeys = [...periodLabels.keys()].sort((left, right) => left.localeCompare(right));
+      if (!periodKeys.length) return '<span class="result-caption">선택 조건에 표시할 시간 구간이 없습니다.</span>';
+      const normalizedSeries = activeComparisonRows.map((row) => {
+        const points = new Map((row.trend || []).map((point) => {
+          const key = String(point.period_key || point.period_label || "");
+          const metrics = normalizeComparisonMetrics(point, row.type);
+          return [key, Math.max(0, Number(definition.value({ ...row, metrics }) || 0))];
+        }));
+        return { row, points };
+      });
+      const allValues = normalizedSeries.flatMap((series) => [...series.points.values()]);
+      const highest = Math.max(0, ...allValues);
+      const maximum = definition.percentage ? Math.min(1, Math.max(0.05, highest * 1.15)) : Math.max(1, highest * 1.12);
+      const width = 920;
+      const height = 360;
+      const plot = { left: 68, right: 24, top: 28, bottom: 66 };
+      const plotWidth = width - plot.left - plot.right;
+      const plotHeight = height - plot.top - plot.bottom;
+      const x = (index) => periodKeys.length === 1 ? plot.left + plotWidth / 2 : plot.left + index / (periodKeys.length - 1) * plotWidth;
+      const y = (value) => plot.top + (1 - value / maximum) * plotHeight;
+      const gridLines = Array.from({ length: 5 }, (_, index) => {
+        const ratio = index / 4;
+        const gridY = plot.top + ratio * plotHeight;
+        return `<line class="trend-line-grid" x1="${plot.left}" y1="${gridY.toFixed(2)}" x2="${width - plot.right}" y2="${gridY.toFixed(2)}"></line><text x="${plot.left - 10}" y="${(gridY + 4).toFixed(2)}" text-anchor="end">${escapeHtml(trendAxisText(definition, maximum * (1 - ratio)))}</text>`;
+      }).join("");
+      const labelCount = Math.min(7, periodKeys.length);
+      const labelIndexes = new Set(Array.from({ length: labelCount }, (_, index) => labelCount === 1 ? 0 : Math.round(index * (periodKeys.length - 1) / (labelCount - 1))));
+      const xLabels = [...labelIndexes].map((index) => `<text x="${x(index).toFixed(2)}" y="${height - 25}" text-anchor="middle">${escapeHtml(periodLabels.get(periodKeys[index]) || periodKeys[index])}</text>`).join("");
+      const seriesSvg = normalizedSeries.map((series, seriesIndex) => {
+        const color = colors[seriesIndex % colors.length];
+        const points = periodKeys.map((key, index) => series.points.has(key) ? { key, index, value: series.points.get(key) } : null).filter(Boolean);
+        const path = points.map((point, index) => `${index ? "L" : "M"}${x(point.index).toFixed(2)} ${y(point.value).toFixed(2)}`).join(" ");
+        const circles = points.map((point) => `<circle cx="${x(point.index).toFixed(2)}" cy="${y(point.value).toFixed(2)}" r="4" fill="${color}" stroke="#08100d" stroke-width="2"><title>${escapeHtml(series.row.label)} · ${escapeHtml(periodLabels.get(point.key) || point.key)} · ${escapeHtml(definition.format(point.value))}</title></circle>`).join("");
+        return `<path d="${attr(path)}" fill="none" stroke="${color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>${circles}`;
+      }).join("");
+      const legend = normalizedSeries.map((series, index) => `<span class="result-chip"><i style="width:9px;height:9px;background:${colors[index % colors.length]};display:inline-block;margin-right:5px"></i>${escapeHtml(series.row.label)}</span>`).join("");
+      const granularityLabel = { date: "일자별", week: "주별", month: "월별" }[comparisonForm.elements.trend_granularity.value] || "기간별";
+      return `<div class="metric-chart"><h3>${escapeHtml(definition.label)} · ${granularityLabel} 변화</h3><div class="result-chip-list">${legend}</div><div class="trend-line-frame"><svg class="trend-line-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${attr(definition.label)} 대상별 시간 변화 선 그래프">${gridLines}<line class="trend-line-axis" x1="${plot.left}" y1="${height - plot.bottom}" x2="${width - plot.right}" y2="${height - plot.bottom}"></line>${seriesSvg}${xLabels}</svg></div><p class="trend-chart-note">같은 KST 구간과 조회 조건으로 비교합니다. 선 위의 점에 마우스를 올리면 대상·구간·값을 확인할 수 있습니다. 산식: ${escapeHtml(definition.basis)}.</p></div>`;
     }
 
     function renderComparisonResult() {
@@ -11293,17 +11633,22 @@ _INDEX_HTML = """<!doctype html>
       }).join("");
       const tableRows = activeComparisonRows.map((row) => {
         const item = row.metrics || {};
-        return `<tr><td><strong>${escapeHtml(row.label)}</strong></td><td>${Number(item.match_count || 0).toLocaleString("ko-KR")}</td><td>${Number(item.wins || 0)} · ${percent(item.win_rate)}</td><td>${Number(item.kda || 0).toFixed(2)}</td><td>${Number(item.avg_kills || 0).toFixed(2)} / ${Number(item.avg_dbnos_caused || 0).toFixed(2)}</td><td>${Number(item.avg_damage_dealt || 0).toFixed(1)}</td><td>${percent(item.accuracy)}<br><span class="status">${item.shots_hit || 0}/${item.shots_fired || 0}</span></td><td>${percent(item.headshot_hit_rate)}<br><span class="status">${item.headshot_hits || 0}/${item.shots_hit || 0}명중</span></td><td>${percent(item.fight_win_rate)}<br><span class="status">${item.fight_wins || 0}/${item.fight_count || 0}교전</span></td><td>${item.avg_survival_seconds === null || item.avg_survival_seconds === undefined ? "-" : minutes(item.avg_survival_seconds)}</td></tr>`;
+        return `<tr><td><strong>${escapeHtml(row.label)}</strong></td><td>${formatInteger(item.match_count)}</td><td>${formatInteger(item.wins)} · ${percent(item.win_rate)}</td><td>${formatNumber(item.kda, 2)}</td><td>${formatNumber(item.avg_kills, 2)} / ${formatNumber(item.avg_assists, 2)} / ${formatNumber(item.avg_dbnos_caused, 2)} / ${formatNumber(item.avg_deaths, 2)}</td><td>${formatNumber(item.avg_damage_dealt, 1)} / ${formatNumber(item.avg_damage_taken, 1)}<br><span class="result-caption">교환 ${formatNumber(item.damage_ratio, 2)}</span></td><td>${percent(item.accuracy)}<br><span class="result-caption">${formatInteger(item.shots_hit)}/${formatInteger(item.shots_fired)}</span></td><td>${percent(item.headshot_hit_rate)} / ${percent(item.headshot_kill_rate)}<br><span class="result-caption">명중 / 킬</span></td><td>${percent(item.fight_win_rate)}<br><span class="result-caption">${formatInteger(item.fight_wins)}/${formatInteger(item.fight_count)}교전 · 경기당 ${formatNumber(item.avg_fights_per_match, 2)}</span></td><td>${item.avg_survival_seconds === null || item.avg_survival_seconds === undefined ? "-" : minutes(item.avg_survival_seconds)}<br><span class="result-caption">${item.avg_movement_distance_m === null || item.avg_movement_distance_m === undefined ? "-" : distanceKm(item.avg_movement_distance_m)}</span></td></tr>`;
       }).join("");
-      const typeLabel = { player: "유저", weapon: "무기", map: "맵" }[activeComparisonRows[0].type] || "상세";
-      const result = activeComparisonView === "chart"
-        ? `<div class="metric-chart"><h3>${escapeHtml(definition.label)}</h3><div class="comparison-bars">${bars}</div><p class="trend-chart-note">산식: ${escapeHtml(definition.basis)}. 각 대상의 경기·명중·교전 표본을 함께 표시합니다.</p></div>`
-        : `<div class="table-scroll"><table><thead><tr><th>${typeLabel}</th><th>경기</th><th>치킨·승률</th><th>KDA</th><th>경기당 킬/기절</th><th>평균 피해</th><th>명중</th><th>헤드샷 명중</th><th>교전 승률</th><th>평균 생존</th></tr></thead><tbody>${tableRows}</tbody></table></div>`;
-      comparisonBody.innerHTML = `<div class="result-shell">${resultHeading(`${typeLabel} 비교`, definition.label, `${activeComparisonRows.length}개 대상`)}${result}</div>`;
+      const typeLabel = { player: "유저", weapon: "무기", map: "맵", game_mode: "게임 모드", team_mode: "팀 모드", perspective: "시점", match_type: "매치 유형" }[activeComparisonRows[0].type] || "상세";
+      let result;
+      if (activeComparisonView === "trend") {
+        result = renderComparisonTrendChart(definition);
+      } else if (activeComparisonView === "chart") {
+        result = `<div class="metric-chart"><h3>${escapeHtml(definition.label)}</h3><div class="comparison-bars">${bars}</div><p class="trend-chart-note">산식: ${escapeHtml(definition.basis)}. 각 대상의 경기·명중·교전 표본을 함께 표시합니다.</p></div>`;
+      } else {
+        result = `<div class="table-scroll"><table><thead><tr><th>${typeLabel}</th><th>경기</th><th>치킨·승률</th><th>KDA</th><th>경기당 킬/어시/기절/사망</th><th>평균 준/받은 피해</th><th>명중</th><th>헤드샷 명중/킬</th><th>교전 승률</th><th>생존/이동</th></tr></thead><tbody>${tableRows}</tbody></table></div>`;
+      }
+      comparisonBody.innerHTML = `<div class="result-shell">${resultHeading(`${typeLabel} 비교`, definition.label, `${formatInteger(activeComparisonRows.length)}개 대상`)}${result}</div>`;
     }
 
     function setComparisonView(view) {
-      activeComparisonView = view === "table" ? "table" : "chart";
+      activeComparisonView = ["table", "chart", "trend"].includes(view) ? view : "chart";
       for (const button of comparisonViewControls.querySelectorAll("[data-comparison-view]")) {
         button.classList.toggle("active", button.dataset.comparisonView === activeComparisonView);
       }
@@ -11338,7 +11683,7 @@ _INDEX_HTML = """<!doctype html>
           value: (point) => point.accuracy_metric?.metric_value ?? point.accuracy ?? 0,
           format: accuracyIsPercentage
             ? percent
-            : (value) => Number(value).toFixed(2) + "회",
+            : (value) => formatNumber(value, 2) + "회",
           percentage: accuracyIsPercentage,
           basis: accuracyIsPercentage
             ? "이 무기의 명중 이벤트 ÷ 발사 이벤트"
@@ -11354,32 +11699,32 @@ _INDEX_HTML = """<!doctype html>
         avg_damage_dealt: {
           label: "경기당 준 피해",
           value: (point) => point.avg_damage_dealt,
-          format: (value) => Number(value).toFixed(1),
+          format: (value) => formatNumber(value, 1),
         },
         avg_damage_taken: {
           label: "경기당 받은 피해",
           value: (point) => point.avg_damage_taken,
-          format: (value) => Number(value).toFixed(1),
+          format: (value) => formatNumber(value, 1),
         },
         avg_kills: {
           label: "경기당 킬",
           value: (point) => point.avg_kills,
-          format: (value) => Number(value).toFixed(2),
+          format: (value) => formatNumber(value, 2),
         },
         avg_dbnos: {
           label: "경기당 가한 기절",
           value: (point) => point.avg_dbnos,
-          format: (value) => Number(value).toFixed(2),
+          format: (value) => formatNumber(value, 2),
         },
         avg_deaths_taken: {
           label: "경기당 사망",
           value: (point) => point.avg_deaths_taken,
-          format: (value) => Number(value).toFixed(2),
+          format: (value) => formatNumber(value, 2),
         },
         match_count: {
           label: "사용 경기 수",
           value: (point) => point.match_count,
-          format: (value) => Math.round(Number(value)) + "경기",
+          format: (value) => formatInteger(value) + "경기",
         },
       };
       return definitions[metric] || definitions.fight_win_rate;
@@ -11447,29 +11792,29 @@ _INDEX_HTML = """<!doctype html>
         <div class="result-row">
           <span>${index === 0 ? "최우선" : `#${index + 1}`} · ${item.reliable_sample ? "표본 확보" : "표본 부족"}</span>
           <strong>${escapeHtml(item.bucket_label)} · 교전 승리 ${percent(item.observed_win_rate)}</strong>
-          <p>${item.wins}승 / ${item.losses}패 · ${item.fight_count}교전 · 평균 ${Number(item.avg_distance_m).toFixed(0)}m · 신뢰 보정 ${percent(item.confidence_adjusted_win_rate)} · 효율 ${Number(item.efficiency_score).toFixed(1)}</p>
+          <p>${formatInteger(item.wins)}승 / ${formatInteger(item.losses)}패 · ${formatInteger(item.fight_count)}교전 · 평균 ${formatNumber(item.avg_distance_m, 0)}m · 신뢰 보정 ${percent(item.confidence_adjusted_win_rate)} · 효율 ${formatNumber(item.efficiency_score, 1)}</p>
         </div>`).join("") || '<span class="result-caption">거리 정보가 있는 교전 기록이 없습니다.</span>';
       const recentRows = (detail.recent_matches || []).slice(0, 5).map((match) => `
         <div class="result-row">
           <span>${escapeHtml(String(match.created_at_kst || "-").replace("T", " ").slice(0, 16))}</span>
-          <strong>${escapeHtml(match.map_name_ko || match.map_name || "-")} · ${escapeHtml(match.game_mode_ko || match.game_mode || "-")}</strong>
-          <p>${match.kills}킬 · ${match.dbnos}기절 · ${Number(match.damage_dealt).toFixed(0)}딜</p>
+          <strong>${escapeHtml(match.map_name_ko || displayCode(match.map_name, "map"))} · ${escapeHtml(match.game_mode_ko || displayCode(match.game_mode, "game_mode"))}</strong>
+          <p>${formatInteger(match.kills)}킬 · ${formatInteger(match.dbnos)}기절 · ${formatNumber(match.damage_dealt, 0)}딜</p>
         </div>`).join("") || '<span class="result-caption">최근 사용 경기 없음</span>';
       weaponBody.innerHTML = `<div class="result-shell">
-        ${resultHeading(detail.weapon_name, `${detail.player.current_name} · 조건에 맞는 완료 경기`, `${totals.match_count}경기`)}
+        ${resultHeading(detail.weapon_name, `${detail.player.current_name} · 조건에 맞는 완료 경기`, `${formatInteger(totals.match_count)}경기`)}
         ${resultMetricGrid([
-          ["사용 경기 / 치킨", `${totals.match_count}전 / ${totals.wins}회 · ${percent(totals.win_rate)}`],
-          ["킬 / 어시 / 기절", `${totals.kills} / ${totals.assists} / ${totals.dbnos}`],
-          ["사망 / 당한 기절", `${totals.deaths_taken} / ${totals.dbnos_taken}`],
-          ["피니시 / 당한 피니시", `${totals.finishes} / ${totals.finishes_taken}`],
-          ["준 딜 / 받은 딜", `${Number(totals.damage_dealt).toFixed(0)} / ${Number(totals.damage_taken).toFixed(0)}`],
-          ["경기당 평균 딜", Number(totals.avg_damage_dealt).toFixed(1)],
-          ["명중 지표", `${accuracyMetricText(totals.accuracy, totals.accuracy_metric)} · ${totals.shots_hit}/${totals.shots_fired}`],
-          ["헤드샷 명중 확률", `${percent(totals.headshot_hit_rate)} · ${totals.headshot_hits}/${totals.shots_hit}명중`],
-          ["헤드샷 킬 비율", `${percent(totals.headshot_kill_rate)} · ${totals.headshot_kills}/${totals.kills}킬`],
-          ["받은 헤드샷 비율", `${percent(totals.headshot_hit_taken_rate)} · ${totals.taken_hit_parts?.head || 0}/${totals.hits_taken}피격`],
-          ["교전 승리 확률", `${percent(totals.fight_win_rate)} · ${totals.fight_wins}/${totals.fight_count}교전`],
-          ["경기당 평균 교전", `${Number(totals.avg_fights_per_match).toFixed(2)}회`],
+          ["사용 경기 / 치킨", `${formatInteger(totals.match_count)}전 / ${formatInteger(totals.wins)}회 · ${percent(totals.win_rate)}`],
+          ["킬 / 어시 / 기절", `${formatInteger(totals.kills)} / ${formatInteger(totals.assists)} / ${formatInteger(totals.dbnos)}`],
+          ["사망 / 당한 기절", `${formatInteger(totals.deaths_taken)} / ${formatInteger(totals.dbnos_taken)}`],
+          ["피니시 / 당한 피니시", `${formatInteger(totals.finishes)} / ${formatInteger(totals.finishes_taken)}`],
+          ["준 딜 / 받은 딜", `${formatNumber(totals.damage_dealt, 0)} / ${formatNumber(totals.damage_taken, 0)}`],
+          ["경기당 평균 딜", formatNumber(totals.avg_damage_dealt, 1)],
+          ["명중 지표", `${accuracyMetricText(totals.accuracy, totals.accuracy_metric)} · ${formatInteger(totals.shots_hit)}/${formatInteger(totals.shots_fired)}`],
+          ["헤드샷 명중 확률", `${percent(totals.headshot_hit_rate)} · ${formatInteger(totals.headshot_hits)}/${formatInteger(totals.shots_hit)}명중`],
+          ["헤드샷 킬 비율", `${percent(totals.headshot_kill_rate)} · ${formatInteger(totals.headshot_kills)}/${formatInteger(totals.kills)}킬`],
+          ["받은 헤드샷 비율", `${percent(totals.headshot_hit_taken_rate)} · ${formatInteger(totals.taken_hit_parts?.head)}/${formatInteger(totals.hits_taken)}피격`],
+          ["교전 승리 확률", `${percent(totals.fight_win_rate)} · ${formatInteger(totals.fight_wins)}/${formatInteger(totals.fight_count)}교전`],
+          ["경기당 평균 교전", `${formatNumber(totals.avg_fights_per_match, 2)}회`],
         ])}
         <div class="result-columns">
           ${resultSection("부위별 명중 확률", resultChips(hitPartEntries(totals.hit_parts, totals.hit_part_rates)))}
@@ -11506,8 +11851,8 @@ _INDEX_HTML = """<!doctype html>
 
     function dropZoneLocation(item) {
       if (item.region_display_name_ko) return item.region_display_name_ko;
-      if (item.region_status === "dynamic_map") return `동적 맵 grid ${item.grid_x},${item.grid_y}`;
-      return `grid ${item.grid_x},${item.grid_y}`;
+      if (item.region_status === "dynamic_map") return `동적 맵 격자 ${item.grid_x},${item.grid_y}`;
+      return `격자 ${item.grid_x},${item.grid_y}`;
     }
 
     async function loadDropZoneAnalysis(formElement) {
@@ -11525,8 +11870,20 @@ _INDEX_HTML = """<!doctype html>
         throw new Error(error.detail || response.statusText);
       }
       const report = (await response.json()).drop_zones;
-      const regions = report.regions || [];
-      const zones = report.zones || [];
+      const allRegions = report.regions || [];
+      const allZones = report.zones || [];
+      const mapFilter = String(form.get("map_filter") || "");
+      const regionSearch = String(form.get("region_search") || "").trim().toLocaleLowerCase("ko-KR");
+      const regions = allRegions.filter((item) => {
+        if (mapFilter && item.map_name !== mapFilter) return false;
+        const searchable = `${item.map_name_ko || ""} ${item.map_name || ""} ${item.region_name_ko || ""}`.toLocaleLowerCase("ko-KR");
+        return !regionSearch || searchable.includes(regionSearch);
+      });
+      const zones = allZones.filter((item) => {
+        if (mapFilter && item.map_name !== mapFilter) return false;
+        const searchable = `${item.map_name_ko || ""} ${item.map_name || ""} ${dropZoneLocation(item)}`.toLocaleLowerCase("ko-KR");
+        return !regionSearch || searchable.includes(regionSearch);
+      });
       const sortMetric = String(form.get("sort_metric") || "landings");
       const chartLimit = Math.max(1, Math.min(500, Number(form.get("chart_limit") || 20)));
       const sortValues = {
@@ -11552,45 +11909,138 @@ _INDEX_HTML = """<!doctype html>
         avg_kills: "평균 킬",
         avg_damage: "평균 피해",
       };
+      const allLandings = allRegions.reduce((sum, item) => sum + Number(item.match_count || 0), 0);
       const totalLandings = regions.reduce((sum, item) => sum + Number(item.match_count || 0), 0);
       const totalWins = regions.reduce((sum, item) => sum + Number(item.wins || 0), 0);
+      const regionKey = (item) => `${item.map_name}::${item.region_id}`;
       const regionRows = sortedRegions.map((item) => `
-        <tr>
-          <td>${escapeHtml(item.map_name_ko || item.map_name)}</td>
+        <tr data-drop-region-row="${attr(regionKey(item))}">
+          <td>${escapeHtml(item.map_name_ko || displayCode(item.map_name, "map"))}</td>
           <td><strong>${escapeHtml(item.region_name_ko)}</strong></td>
-          <td>${item.match_count}</td>
-          <td>${item.wins} · ${percent(item.win_rate)}</td>
-          <td>${Number(item.avg_kills).toFixed(2)} / ${Number(item.avg_assists).toFixed(2)} / ${Number(item.avg_dbnos).toFixed(2)} / ${Number(item.avg_deaths).toFixed(2)}</td>
-          <td>${Number(item.avg_damage_dealt).toFixed(1)}</td>
+          <td>${formatInteger(item.match_count)}</td>
+          <td>${formatInteger(item.wins)} · ${percent(item.win_rate)}</td>
+          <td>${formatNumber(item.avg_kills, 2)} / ${formatNumber(item.avg_assists, 2)} / ${formatNumber(item.avg_dbnos, 2)} / ${formatNumber(item.avg_deaths, 2)}</td>
+          <td>${formatNumber(item.avg_damage_dealt, 1)}</td>
           <td>${minutes(item.avg_survival_seconds)}</td>
+          <td><button class="secondary drop-region-map-button" type="button" data-drop-region-map="${attr(item.map_name)}" data-drop-region-key="${attr(regionKey(item))}">지도에서 보기</button></td>
         </tr>
       `).join("");
+      const chartDefinitions = {
+        landings: {
+          value: (item) => Number(item.match_count || 0),
+          display: (item) => `${formatInteger(item.match_count)}회`,
+        },
+        win_rate: {
+          value: (item) => Number(item.win_rate || 0) * 100,
+          display: (item) => percent(item.win_rate),
+          maximum: 100,
+        },
+        avg_kills: {
+          value: (item) => Number(item.avg_kills || 0),
+          display: (item) => formatNumber(item.avg_kills, 2),
+        },
+        avg_damage: {
+          value: (item) => Number(item.avg_damage_dealt || 0),
+          display: (item) => formatNumber(item.avg_damage_dealt, 1),
+        },
+      };
+      const chartDefinition = chartDefinitions[sortMetric] || chartDefinitions.landings;
       const regionChart = recommendationChartRows(chartRegions, {
         label: (item) => `${item.map_name_ko || item.map_name} · ${item.region_name_ko}`,
-        note: (item) => `${item.match_count}회 착지 · ${item.wins}치킨`,
-        value: (item) => Number(item.win_rate) * 100,
-        display: (item) => percent(item.win_rate),
-        maximum: 100,
+        note: (item) => `${formatInteger(item.match_count)}회 착지 · ${formatInteger(item.wins)}치킨`,
+        ...chartDefinition,
       });
       const zoneRows = sortedZones.map((item) => `
         <div class="result-row">
-          <span>${escapeHtml(item.map_name_ko)} · 격자 ${item.grid_x},${item.grid_y}</span>
+          <span>${escapeHtml(item.map_name_ko || displayCode(item.map_name, "map"))} · 격자 ${item.grid_x},${item.grid_y}</span>
           <strong>${escapeHtml(dropZoneLocation(item))}</strong>
-          <p>${item.match_count}회 · 승률 ${percent(item.win_rate)} · 평균 킬 ${Number(item.avg_kills).toFixed(2)} · 기절 ${Number(item.avg_dbnos).toFixed(2)} · 피해 ${Number(item.avg_damage_dealt).toFixed(1)}</p>
+          <p>${formatInteger(item.match_count)}회 · 승률 ${percent(item.win_rate)} · 평균 킬 ${formatNumber(item.avg_kills, 2)} · 기절 ${formatNumber(item.avg_dbnos, 2)} · 피해 ${formatNumber(item.avg_damage_dealt, 1)}</p>
         </div>
       `).join("") || '<span class="result-caption">조건을 충족한 세부 격자가 없습니다.</span>';
+      const availableMaps = [...new Map(sortedRegions.map((item) => [item.map_name, item.map_name_ko || item.map_name])).entries()];
+      const initialMap = mapFilter || availableMaps[0]?.[0] || "";
+      const mapOptions = availableMaps.map(([name, label]) => `<option value="${attr(name)}"${name === initialMap ? " selected" : ""}>${escapeHtml(label)}</option>`).join("");
       dropZoneBody.innerHTML = `<div class="result-shell">
-        ${resultHeading(report.player.current_name, `지역명 우선 · 최소 ${report.min_matches}회 착지`, `${regions.length}개 지역`)}
+        ${resultHeading(report.player.current_name, `지역명 우선 · 최소 ${formatInteger(report.min_matches)}회 착지`, `${formatInteger(regions.length)}개 지역`)}
         ${resultMetricGrid([
-          ["기록된 착지", `${totalLandings}회`],
-          ["착지 경기 치킨", `${totalWins}회 · ${percent(totalWins / Math.max(1, totalLandings))}`],
-          ["지역명 집계", `${regions.length}개`],
-          ["세부 격자", `${zones.length}개`],
+          ["전체 기록 착지", `${formatInteger(allLandings)}회`],
+          ["현재 조건 착지", `${formatInteger(totalLandings)}회`],
+          ["착지 경기 치킨", `${formatInteger(totalWins)}회 · ${percent(totalWins / Math.max(1, totalLandings))}`],
+          ["지역명 집계", `${formatInteger(regions.length)}개`],
+          ["세부 격자", `${formatInteger(zones.length)}개`],
         ])}
-        <div class="metric-chart"><h3>지역별 승률 · ${escapeHtml(sortLabels[sortMetric] || sortLabels.landings)}순 상위 ${chartRegions.length}개</h3>${regionChart}</div>
-        ${resultSection("지역별 상세", `<div class="table-scroll"><table><thead><tr><th>맵</th><th>지역</th><th>착지</th><th>치킨·승률</th><th>평균 킬/어시/기절/사망</th><th>평균 피해</th><th>평균 생존</th></tr></thead><tbody>${regionRows || '<tr><td colspan="7">조건을 충족한 지역이 없습니다.</td></tr>'}</tbody></table></div>`)}
-        <details class="result-disclosure"><summary>세부 10×10 격자 · ${zones.length}개</summary><div class="result-list">${zoneRows}</div></details>
+        <div class="segmented-control drop-view-controls" id="dropAnalysisViewControls" role="group" aria-label="낙하 분석 보기">
+          <button type="button" class="active" data-drop-analysis-view-button="map">지도</button>
+          <button type="button" data-drop-analysis-view-button="chart">성과 그래프</button>
+          <button type="button" data-drop-analysis-view-button="table">지역 상세</button>
+          <button type="button" data-drop-analysis-view-button="grid">세부 격자</button>
+        </div>
+        <div class="drop-view-panel" data-drop-analysis-view="map">
+          <div class="drop-map-panel" id="dropMapPanel">
+            <div class="drop-map-toolbar"><h3>지역 위치</h3><label>표시할 맵<select id="dropMapSelect"${mapOptions ? "" : " disabled"}>${mapOptions || '<option value="">표시할 지역 없음</option>'}</select></label></div>
+            <div class="drop-map-stage"><img id="dropMapImage" alt="낙하 지역 지도"><div class="drop-map-markers" id="dropMapMarkers"></div></div>
+            <div class="drop-map-info" id="dropMapInfo">지역 행의 지도 버튼이나 지도 표식을 선택하세요.</div>
+          </div>
+        </div>
+        <div class="drop-view-panel" data-drop-analysis-view="chart" hidden>
+          <div class="metric-chart"><h3>지역별 ${escapeHtml(sortLabels[sortMetric] || sortLabels.landings)} · 상위 ${formatInteger(chartRegions.length)}개</h3>${regionChart}</div>
+        </div>
+        <div class="drop-view-panel" data-drop-analysis-view="table" hidden>
+          ${resultSection("지역별 상세", `<div class="table-scroll"><table class="drop-region-table"><thead><tr><th>맵</th><th>지역</th><th>착지</th><th>치킨·승률</th><th>평균 킬/어시/기절/사망</th><th>평균 피해</th><th>평균 생존</th><th>위치</th></tr></thead><tbody>${regionRows || '<tr><td colspan="8">조건을 충족한 지역이 없습니다.</td></tr>'}</tbody></table></div>`)}
+        </div>
+        <div class="drop-view-panel" data-drop-analysis-view="grid" hidden>
+          ${resultSection("세부 10×10 격자", `<div class="result-list">${zoneRows}</div>`)}
+        </div>
       </div>`;
+
+      const mapSelect = dropZoneBody.querySelector("#dropMapSelect");
+      const mapImage = dropZoneBody.querySelector("#dropMapImage");
+      const mapMarkers = dropZoneBody.querySelector("#dropMapMarkers");
+      const mapInfo = dropZoneBody.querySelector("#dropMapInfo");
+      const mapPanel = dropZoneBody.querySelector("#dropMapPanel");
+      const setDropView = (view) => {
+        const selectedView = ["map", "chart", "table", "grid"].includes(view) ? view : "map";
+        dropZoneBody.querySelectorAll("[data-drop-analysis-view]").forEach((panel) => {
+          panel.hidden = panel.dataset.dropAnalysisView !== selectedView;
+        });
+        dropZoneBody.querySelectorAll("[data-drop-analysis-view-button]").forEach((button) => {
+          button.classList.toggle("active", button.dataset.dropAnalysisViewButton === selectedView);
+        });
+      };
+      dropZoneBody.querySelectorAll("[data-drop-analysis-view-button]").forEach((button) => {
+        button.addEventListener("click", () => setDropView(button.dataset.dropAnalysisViewButton || "map"));
+      });
+      const selectRegion = (selectedKey) => {
+        const selected = sortedRegions.find((item) => regionKey(item) === selectedKey);
+        dropZoneBody.querySelectorAll("[data-drop-region-row]").forEach((row) => row.classList.toggle("active", row.dataset.dropRegionRow === selectedKey));
+        dropZoneBody.querySelectorAll("[data-drop-map-marker]").forEach((marker) => marker.classList.toggle("active", marker.dataset.dropMapMarker === selectedKey));
+        if (!mapInfo) return;
+        mapInfo.innerHTML = selected
+          ? `<strong>${escapeHtml(selected.map_name_ko || selected.map_name)} · ${escapeHtml(selected.region_name_ko)}</strong>${formatInteger(selected.match_count)}회 착지 · ${formatInteger(selected.wins)}치킨 (${percent(selected.win_rate)}) · 평균 킬 ${formatNumber(selected.avg_kills, 2)} · 평균 피해 ${formatNumber(selected.avg_damage_dealt, 1)}<br>대표 좌표 X ${formatInteger(selected.centroid_x_cm)}cm · Y ${formatInteger(selected.centroid_y_cm)}cm`
+          : "지도 표식을 선택하면 해당 지역의 성과가 표시됩니다.";
+      };
+      const renderMap = (mapName, selectedRegionKey = "") => {
+        if (!mapImage || !mapMarkers) return;
+        mapImage.src = mapName ? `/replay/map-assets/${encodeURIComponent(mapName)}` : "";
+        mapImage.alt = `${availableMaps.find(([name]) => name === mapName)?.[1] || "맵"} 낙하 지역 지도`;
+        const mapRegions = sortedRegions.filter((item) => item.map_name === mapName);
+        mapMarkers.innerHTML = mapRegions.map((item, index) => {
+          const x = Math.max(0, Math.min(100, Number(item.x_pct || 0) * 100));
+          const y = Math.max(0, Math.min(100, Number(item.y_pct || 0) * 100));
+          return `<button class="drop-map-marker" type="button" style="left:${x.toFixed(3)}%;top:${y.toFixed(3)}%" data-drop-map-marker="${attr(regionKey(item))}" title="${attr(item.region_name_ko)} · ${formatInteger(item.match_count)}회">${formatInteger(index + 1)}</button>`;
+        }).join("");
+        mapMarkers.querySelectorAll("[data-drop-map-marker]").forEach((marker) => marker.addEventListener("click", () => selectRegion(marker.dataset.dropMapMarker || "")));
+        selectRegion(selectedRegionKey || (mapRegions[0] ? regionKey(mapRegions[0]) : ""));
+      };
+      mapSelect?.addEventListener("change", () => renderMap(mapSelect.value));
+      dropZoneBody.querySelectorAll("[data-drop-region-map]").forEach((button) => button.addEventListener("click", () => {
+        if (mapSelect) mapSelect.value = button.dataset.dropRegionMap || "";
+        setDropView("map");
+        renderMap(button.dataset.dropRegionMap || "", button.dataset.dropRegionKey || "");
+        mapPanel?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }));
+      setDropView("map");
+      renderMap(initialMap);
     }
 
     async function loadMapRegion(formElement) {
@@ -11612,17 +12062,18 @@ _INDEX_HTML = """<!doctype html>
         unsupported_map: "미지원 맵",
         invalid_coordinate: "좌표 범위 밖",
       };
-      const location = region.region_display_name_ko || fallbackLabels[region.status] || region.status;
+      const statusLabel = fallbackLabels[region.status] || "확인됨";
+      const location = region.region_display_name_ko || statusLabel;
       const normalized = region.x_pct === null || region.y_pct === null
         ? "-"
         : `${percent(region.x_pct)} / ${percent(region.y_pct)}`;
       const distance = region.distance_to_center_m === null
         ? "-"
-        : `${Number(region.distance_to_center_m).toFixed(1)} m`;
+        : `${formatNumber(region.distance_to_center_m, 1)}m`;
       mapRegionBody.innerHTML = [
         `<strong>${escapeHtml(region.map_name_ko)} · ${escapeHtml(location)}</strong>`,
-        `원본 좌표: ${Number(region.x_cm).toFixed(1)}, ${Number(region.y_cm).toFixed(1)} cm · 정규화: ${normalized}`,
-        `상태: ${escapeHtml(region.status)} · 지역 ID: ${escapeHtml(region.region_id || "-")} · 중심 거리: ${distance}`,
+        `원본 좌표: ${formatNumber(region.x_cm, 1)}, ${formatNumber(region.y_cm, 1)}cm · 정규화: ${normalized}`,
+        `상태: ${escapeHtml(statusLabel)} · 지역 ID: ${escapeHtml(region.region_id || "-")} · 중심 거리: ${distance}`,
         `사전: ${escapeHtml(region.catalog_version)} · 출처: ${escapeHtml(String(region.source_commit || "-").slice(0, 7))}`,
       ].join("<br>");
     }
@@ -11655,11 +12106,11 @@ _INDEX_HTML = """<!doctype html>
         const burden = item.inventory_burden || {};
         const score = item.score_components || {};
         const ammoProfiles = (burden.weapon_profiles || []).map((profile) => (
-          `${profile.weapon_name} · ${profile.ammo_type} ${profile.recommended_reserve_rounds}발 · ` +
-          `인벤토리 ${Number(profile.reserve_inventory_weight || 0).toFixed(1)}단위 · 경기당 발사 ${Number(profile.observed_shots_per_match || 0).toFixed(1)}발`
+          `${profile.weapon_name} · ${profile.ammo_type} ${formatInteger(profile.recommended_reserve_rounds)}발 · ` +
+          `인벤토리 ${formatNumber(profile.reserve_inventory_weight, 1)}단위 · 경기당 발사 ${formatNumber(profile.observed_shots_per_match, 1)}발`
         ));
         const carriedAmmo = Object.entries(burden.carried_rounds_by_ammo || {}).map(([ammo, rounds]) => (
-          `${ammo} ${Number(rounds).toLocaleString("ko-KR")}발 · 인벤토리 ${Number(burden.inventory_weight_by_ammo?.[ammo] || 0).toFixed(1)}단위`
+          `${ammo} ${formatInteger(rounds)}발 · 인벤토리 ${formatNumber(burden.inventory_weight_by_ammo?.[ammo], 1)}단위`
         ));
         return `<article class="loadout-card">
           <div class="loadout-weapons">
@@ -11668,25 +12119,25 @@ _INDEX_HTML = """<!doctype html>
             <div><span class="loadout-role">중·장거리</span><strong>${escapeHtml(item.secondary.weapon_name)}</strong></div>
           </div>
           <div class="loadout-parts">
-            <div><span class="loadout-role">${escapeHtml(item.primary.weapon_name)} ${primaryCombo ? "실전 관측 파츠 조합" : "슬롯별 추천 파츠"}</span>${resultChips(primaryParts, "추천 표본 부족")}${primaryCombo ? `<span class="result-caption">${primaryCombo.match_count}경기 · ${primaryCombo.event_count}교전 · 승률 ${percent(primaryCombo.win_rate)} · 평균 딜 ${Number(primaryCombo.avg_damage_dealt).toFixed(1)}</span>` : ""}</div>
-            <div><span class="loadout-role">${escapeHtml(item.secondary.weapon_name)} ${secondaryCombo ? "실전 관측 파츠 조합" : "슬롯별 추천 파츠"}</span>${resultChips(secondaryParts, "추천 표본 부족")}${secondaryCombo ? `<span class="result-caption">${secondaryCombo.match_count}경기 · ${secondaryCombo.event_count}교전 · 승률 ${percent(secondaryCombo.win_rate)} · 평균 딜 ${Number(secondaryCombo.avg_damage_dealt).toFixed(1)}</span>` : ""}</div>
+            <div><span class="loadout-role">${escapeHtml(item.primary.weapon_name)} ${primaryCombo ? "실전 관측 파츠 조합" : "슬롯별 추천 파츠"}</span>${resultChips(primaryParts, "추천 표본 부족")}${primaryCombo ? `<span class="result-caption">${formatInteger(primaryCombo.match_count)}경기 · ${formatInteger(primaryCombo.event_count)}교전 · 승률 ${percent(primaryCombo.win_rate)} · 평균 딜 ${formatNumber(primaryCombo.avg_damage_dealt, 1)}</span>` : ""}</div>
+            <div><span class="loadout-role">${escapeHtml(item.secondary.weapon_name)} ${secondaryCombo ? "실전 관측 파츠 조합" : "슬롯별 추천 파츠"}</span>${resultChips(secondaryParts, "추천 표본 부족")}${secondaryCombo ? `<span class="result-caption">${formatInteger(secondaryCombo.match_count)}경기 · ${formatInteger(secondaryCombo.event_count)}교전 · 승률 ${percent(secondaryCombo.win_rate)} · 평균 딜 ${formatNumber(secondaryCombo.avg_damage_dealt, 1)}</span>` : ""}</div>
             <div><span class="loadout-role">무기별 예비탄 기준</span>${resultChips(ammoProfiles, "탄종 확인 불가")}</div>
             <div><span class="loadout-role">실제 휴대 계산</span>${resultChips(carriedAmmo, "탄종 확인 불가")}</div>
             <div><span class="loadout-role">인벤토리 고려사항</span>${resultChips(burden.tradeoffs || [], "추가 고려사항 없음")}</div>
           </div>
-          <div class="loadout-score">조합 점수 ${Number(item.score).toFixed(1)} · 예상 탄약 인벤토리 ${Number(burden.estimated_inventory_weight || 0).toFixed(1)}단위 · 부담 ${escapeHtml(burden.pressure_level || "-")} · 조정 ${Number(score.inventory_adjustment || 0).toFixed(1)}</div>
+          <div class="loadout-score">조합 점수 ${formatNumber(item.score, 1)} · 예상 탄약 인벤토리 ${formatNumber(burden.estimated_inventory_weight, 1)}단위 · 부담 ${escapeHtml(burden.pressure_level || "-")} · 조정 ${formatNumber(score.inventory_adjustment, 1)}</div>
           <details class="result-disclosure">
             <summary>점수 계산</summary>
             ${resultTextRows([
-              ["근·중거리 성과 55%", Number(score.primary_performance_55pct || 0).toFixed(1)],
-              ["중·장거리 성과 45%", Number(score.secondary_performance_45pct || 0).toFixed(1)],
-              ["혼합 탄종 확보 부담", `-${Number(burden.mixed_ammo_penalty || 0).toFixed(1)}`],
-              ["동일 탄종 공유 이점", `+${Number(burden.shared_ammo_bonus || 0).toFixed(1)}`],
-              ["탄약 인벤토리 부담", `-${Number(burden.reserve_pressure_penalty || 0).toFixed(1)}`],
-              ["LMG 초과 예비탄 인벤토리", `${Number(burden.lmg_extra_reserve_inventory_weight || 0).toFixed(1)}단위`],
-              ["전체 부담 중 LMG 영향", `-${Number(burden.lmg_reserve_penalty || 0).toFixed(1)}`],
-              ["탄약·인벤토리 조정", Number(score.inventory_adjustment || 0).toFixed(1)],
-              ["예상 총 탄약 인벤토리", `${Number(burden.estimated_inventory_weight || 0).toFixed(1)}단위`],
+              ["근·중거리 성과 55%", formatNumber(score.primary_performance_55pct, 1)],
+              ["중·장거리 성과 45%", formatNumber(score.secondary_performance_45pct, 1)],
+              ["혼합 탄종 확보 부담", `-${formatNumber(burden.mixed_ammo_penalty, 1)}`],
+              ["동일 탄종 공유 이점", `+${formatNumber(burden.shared_ammo_bonus, 1)}`],
+              ["탄약 인벤토리 부담", `-${formatNumber(burden.reserve_pressure_penalty, 1)}`],
+              ["LMG 초과 예비탄 인벤토리", `${formatNumber(burden.lmg_extra_reserve_inventory_weight, 1)}단위`],
+              ["전체 부담 중 LMG 영향", `-${formatNumber(burden.lmg_reserve_penalty, 1)}`],
+              ["탄약·인벤토리 조정", formatNumber(score.inventory_adjustment, 1)],
+              ["예상 총 탄약 인벤토리", `${formatNumber(burden.estimated_inventory_weight, 1)}단위`],
               ["모델 기준", burden.basis || "-"],
             ])}
           </details>
@@ -11695,78 +12146,78 @@ _INDEX_HTML = """<!doctype html>
       const weapons = recommendationRows(report.weapons, (item, index) => {
         const score = item.score_components || {};
         return `<div class="result-row">
-          <span>${index + 1}위 · ${item.match_count}경기</span>
+          <span>${formatInteger(index + 1)}위 · ${formatInteger(item.match_count)}경기</span>
           <strong>${escapeHtml(item.weapon_name)}</strong>
-          <p>점수 ${Number(item.score).toFixed(1)} · 평균 딜 ${Number(item.avg_damage_dealt).toFixed(1)} · 승률 ${percent(item.win_rate)} · ${escapeHtml(accuracyMetricText(item.accuracy, item.accuracy_metric))}<br>
-          헤드샷 명중 ${percent(item.headshot_hit_rate)} (${item.headshot_hits || 0}/${item.shots_hit || 0}명중) · 교전 승률 ${percent(item.fight_win_rate)} (${item.fight_wins || 0}승/${item.fight_losses || 0}패)<br>${escapeHtml(item.reason || "")}</p>
+          <p>점수 ${formatNumber(item.score, 1)} · 평균 딜 ${formatNumber(item.avg_damage_dealt, 1)} · 승률 ${percent(item.win_rate)} · ${escapeHtml(accuracyMetricText(item.accuracy, item.accuracy_metric))}<br>
+          헤드샷 명중 ${percent(item.headshot_hit_rate)} (${formatInteger(item.headshot_hits)}/${formatInteger(item.shots_hit)}명중) · 교전 승률 ${percent(item.fight_win_rate)} (${formatInteger(item.fight_wins)}승/${formatInteger(item.fight_losses)}패)<br>${escapeHtml(item.reason || "")}</p>
           <details class="result-disclosure">
             <summary>무기 점수 계산</summary>
             ${resultTextRows([
-              ["평균 피해", Number(score.average_damage || 0).toFixed(1)],
-              ["킬 기여", Number(score.kills || 0).toFixed(1)],
-              ["기절 기여", Number(score.dbnos || 0).toFixed(1)],
-              ["어시스트 기여", Number(score.assists || 0).toFixed(1)],
-              ["치킨 기여", Number(score.wins || 0).toFixed(1)],
-              ["명중 기여", Number(score.accuracy || 0).toFixed(1)],
-              ["사망 감점", Number(score.deaths_penalty || 0).toFixed(1)],
+              ["평균 피해", formatNumber(score.average_damage, 1)],
+              ["킬 기여", formatNumber(score.kills, 1)],
+              ["기절 기여", formatNumber(score.dbnos, 1)],
+              ["어시스트 기여", formatNumber(score.assists, 1)],
+              ["치킨 기여", formatNumber(score.wins, 1)],
+              ["명중 기여", formatNumber(score.accuracy, 1)],
+              ["사망 감점", formatNumber(score.deaths_penalty, 1)],
               ["표본 신뢰도", percent(score.confidence_factor || 0)],
-              ["거리 표본 보너스", `${Number(score.range_bonus || 0).toFixed(1)} / 상한 ${Number(score.range_bonus_cap || 12).toFixed(0)}`],
-              ["거리 성과 이벤트 표본", `${Number(score.range_evidence_events || 0).toLocaleString("ko-KR")}건`],
-              ["교전 승률 조정", Number(score.fight_adjustment || 0).toFixed(1)],
+              ["거리 표본 보너스", `${formatNumber(score.range_bonus, 1)} / 상한 ${formatNumber(score.range_bonus_cap || 12, 0)}`],
+              ["거리 성과 이벤트 표본", `${formatInteger(score.range_evidence_events)}건`],
+              ["교전 승률 조정", formatNumber(score.fight_adjustment, 1)],
             ])}
           </details>
         </div>`;
       });
       const weaponParts = groupedWeaponRecommendationRows(report.weapon_attachments, (item) => `
         <div class="result-row">
-          <span>${item.match_count}경기 · ${item.event_count || item.attached_events}교전</span>
+          <span>${formatInteger(item.match_count)}경기 · ${formatInteger(item.event_count || item.attached_events)}교전</span>
           <strong>${escapeHtml(item.attachment_name)}</strong>
           <div class="result-row-tail">
-            <p>점수 ${Number(item.score).toFixed(1)} · ${item.event_count || item.attached_events}회 · ${distanceM(item.avg_distance_m)}</p>
+            <p>점수 ${formatNumber(item.score, 1)} · ${formatInteger(item.event_count || item.attached_events)}회 · ${distanceM(item.avg_distance_m)}</p>
             <button class="secondary" type="button" data-evidence="weapon-attachment" data-weapon-code="${attr(item.weapon_code)}" data-attachment-code="${attr(item.attachment_code)}">근거</button>
           </div>
         </div>`);
       const attachmentCombinations = groupedWeaponRecommendationRows(report.attachment_combinations, (item) => `
         <div class="result-row">
-          <span>${item.match_count}경기 · ${item.event_count}교전</span>
+          <span>${formatInteger(item.match_count)}경기 · ${formatInteger(item.event_count)}교전</span>
           <strong>${escapeHtml((item.attachment_names || []).join(" + "))}</strong>
-          <p>조합 점수 ${Number(item.score).toFixed(1)} · 승률 ${percent(item.win_rate)} · ${item.kills}킬 · ${item.dbnos}기절 · 평균 딜 ${Number(item.avg_damage_dealt).toFixed(1)} · 평균 ${distanceM(item.avg_distance_m)}</p>
+          <p>조합 점수 ${formatNumber(item.score, 1)} · 승률 ${percent(item.win_rate)} · ${formatInteger(item.kills)}킬 · ${formatInteger(item.dbnos)}기절 · 평균 딜 ${formatNumber(item.avg_damage_dealt, 1)} · 평균 ${distanceM(item.avg_distance_m)}</p>
           <details class="result-disclosure">
             <summary>조합 점수 계산</summary>
             ${resultTextRows([
-              ["킬 기여", Number(item.score_components?.kills || 0).toFixed(1)],
-              ["기절 기여", Number(item.score_components?.dbnos || 0).toFixed(1)],
-              ["피니시 기여", Number(item.score_components?.finishes || 0).toFixed(1)],
-              ["헤드샷 기여", Number(item.score_components?.headshots || 0).toFixed(1)],
-              ["교전 표본 기여", Number(item.score_components?.events || 0).toFixed(1)],
-              ["치킨 기여", Number(item.score_components?.wins || 0).toFixed(1)],
-              ["평균 피해 기여", Number(item.score_components?.average_damage || 0).toFixed(1)],
+              ["킬 기여", formatNumber(item.score_components?.kills, 1)],
+              ["기절 기여", formatNumber(item.score_components?.dbnos, 1)],
+              ["피니시 기여", formatNumber(item.score_components?.finishes, 1)],
+              ["헤드샷 기여", formatNumber(item.score_components?.headshots, 1)],
+              ["교전 표본 기여", formatNumber(item.score_components?.events, 1)],
+              ["치킨 기여", formatNumber(item.score_components?.wins, 1)],
+              ["평균 피해 기여", formatNumber(item.score_components?.average_damage, 1)],
             ])}
           </details>
         </div>`);
       const weaponRanges = groupedWeaponRecommendationRows(report.weapon_ranges, (item) => `
-        <div class="result-row"><span>${item.event_count}교전</span><strong>${escapeHtml(item.bucket_label)}</strong><p>${item.kills}킬 · ${item.dbnos}기절 · 평균 ${distanceM(item.avg_distance_m)}</p></div>`);
+        <div class="result-row"><span>${formatInteger(item.event_count)}교전</span><strong>${escapeHtml(item.bucket_label)}</strong><p>${formatInteger(item.kills)}킬 · ${formatInteger(item.dbnos)}기절 · 평균 ${distanceM(item.avg_distance_m)}</p></div>`);
       const attachments = recommendationRows(report.attachments, (item) => `
-        <div class="result-row"><span>${item.attached_events}회 장착</span><strong>${escapeHtml(item.item_name)}</strong><p>점수 ${Number(item.score).toFixed(1)} · 평균 딜 ${Number(item.avg_damage_dealt).toFixed(1)}</p></div>`);
+        <div class="result-row"><span>${formatInteger(item.attached_events)}회 장착</span><strong>${escapeHtml(item.item_name)}</strong><p>점수 ${formatNumber(item.score, 1)} · 평균 딜 ${formatNumber(item.avg_damage_dealt, 1)}</p></div>`);
       const maps = recommendationRows(report.maps, (item) => `
-        <div class="result-row"><span>${item.match_count}경기 · ${item.wins}치킨</span><strong>${escapeHtml(item.map_name_ko)}</strong><p>점수 ${Number(item.score).toFixed(1)} · 승률 ${percent(item.win_rate)} · 경기당 킬 ${Number(item.kills / Math.max(1, item.match_count)).toFixed(2)} · 기절 ${Number(item.dbnos / Math.max(1, item.match_count)).toFixed(2)} · 어시 ${Number(item.assists / Math.max(1, item.match_count)).toFixed(2)} · 사망 ${Number(item.deaths / Math.max(1, item.match_count)).toFixed(2)} · 평균 딜 ${Number(item.avg_damage_dealt).toFixed(1)} · 생존 ${minutes(item.avg_survival_seconds)}</p></div>`);
+        <div class="result-row"><span>${formatInteger(item.match_count)}경기 · ${formatInteger(item.wins)}치킨</span><strong>${escapeHtml(item.map_name_ko)}</strong><p>점수 ${formatNumber(item.score, 1)} · 승률 ${percent(item.win_rate)} · 경기당 킬 ${formatNumber(item.kills / Math.max(1, item.match_count), 2)} · 기절 ${formatNumber(item.dbnos / Math.max(1, item.match_count), 2)} · 어시 ${formatNumber(item.assists / Math.max(1, item.match_count), 2)} · 사망 ${formatNumber(item.deaths / Math.max(1, item.match_count), 2)} · 평균 딜 ${formatNumber(item.avg_damage_dealt, 1)} · 생존 ${minutes(item.avg_survival_seconds)}</p></div>`);
       const teammates = recommendationRows(report.teammates, (item) => `
-        <div class="result-row"><span>${item.registered ? "등록 유저" : `${item.match_count}경기`}</span><strong>${escapeHtml(item.name)}</strong><p>점수 ${Number(item.score).toFixed(1)} · 승률 ${percent(item.win_rate)}</p></div>`);
+        <div class="result-row"><span>${item.registered ? "등록 유저" : `${formatInteger(item.match_count)}경기`}</span><strong>${escapeHtml(item.name)}</strong><p>점수 ${formatNumber(item.score, 1)} · 승률 ${percent(item.win_rate)}</p></div>`);
       recommendationBody.innerHTML = `<div class="result-shell">
-        ${resultHeading(report.player.current_name, `추천 채택 기준 · 최소 ${(report.min_matches || minMatches || 1).toLocaleString("ko-KR")}경기`, "추천 분석")}
+        ${resultHeading(report.player.current_name, `추천 채택 기준 · 최소 ${formatInteger(report.min_matches || minMatches || 1)}경기`, "추천 분석")}
         <div class="recommendation-view-switch" role="tablist" aria-label="추천 결과 보기">
           <button type="button" role="tab" data-recommendation-view="summary">요약</button>
           <button type="button" role="tab" data-recommendation-view="chart">그래프</button>
         </div>
         <div class="recommendation-panel" data-recommendation-panel="summary">
           ${resultSection("추천 2주무기 조합", `<div class="loadout-grid">${loadouts}</div>`)}
-          <details class="result-disclosure"><summary>무기별 상세 · ${(report.weapons || []).length}개</summary><div class="result-list">${weapons}</div></details>
-          <details class="result-disclosure"><summary>실전 파츠 전체 조합 · ${(report.attachment_combinations || []).length}개</summary><div class="result-list">${attachmentCombinations}</div></details>
-          <details class="result-disclosure"><summary>파츠별 개별 성과 · ${(report.weapon_attachments || []).length}개</summary><div class="result-list">${weaponParts}</div></details>
-          <details class="result-disclosure"><summary>성과 발생 거리 · ${(report.weapon_ranges || []).length}개</summary><div class="result-list">${weaponRanges}</div></details>
-          <details class="result-disclosure"><summary>전체 파츠 성과 · ${(report.attachments || []).length}개</summary><div class="result-list">${attachments}</div></details>
-          <details class="result-disclosure"><summary>맵 · ${(report.maps || []).length}개</summary><div class="result-list">${maps}</div></details>
-          <details class="result-disclosure"><summary>팀원 · ${(report.teammates || []).length}명</summary><div class="result-list">${teammates}</div></details>
+          <details class="result-disclosure"><summary>무기별 상세 · ${formatInteger((report.weapons || []).length)}개</summary><div class="result-list">${weapons}</div></details>
+          <details class="result-disclosure"><summary>실전 파츠 전체 조합 · ${formatInteger((report.attachment_combinations || []).length)}개</summary><div class="result-list">${attachmentCombinations}</div></details>
+          <details class="result-disclosure"><summary>파츠별 개별 성과 · ${formatInteger((report.weapon_attachments || []).length)}개</summary><div class="result-list">${weaponParts}</div></details>
+          <details class="result-disclosure"><summary>성과 발생 거리 · ${formatInteger((report.weapon_ranges || []).length)}개</summary><div class="result-list">${weaponRanges}</div></details>
+          <details class="result-disclosure"><summary>전체 파츠 성과 · ${formatInteger((report.attachments || []).length)}개</summary><div class="result-list">${attachments}</div></details>
+          <details class="result-disclosure"><summary>맵 · ${formatInteger((report.maps || []).length)}개</summary><div class="result-list">${maps}</div></details>
+          <details class="result-disclosure"><summary>팀원 · ${formatInteger((report.teammates || []).length)}명</summary><div class="result-list">${teammates}</div></details>
           <div class="detail-panel status" id="recommendationEvidence">추천 근거 대기 중</div>
         </div>
         <div class="recommendation-panel" data-recommendation-panel="chart" hidden></div>
@@ -11790,7 +12241,7 @@ _INDEX_HTML = """<!doctype html>
       }
       return Array.from(groups.values()).map((group) => `
         <div class="result-section">
-          <h3>${escapeHtml(group.name)} · ${group.items.length}개</h3>
+          <h3>${escapeHtml(group.name)} · ${formatInteger(group.items.length)}개</h3>
           <div class="result-list">${group.items.map(formatter).join("")}</div>
         </div>
       `).join("");
@@ -11838,17 +12289,17 @@ _INDEX_HTML = """<!doctype html>
         score: {
           label: "종합 점수",
           value: (item) => item.score,
-          display: (item) => Number(item.score).toFixed(1),
+          display: (item) => formatNumber(item.score, 1),
         },
         matches: {
           label: "사용 경기",
           value: (item) => item.match_count,
-          display: (item) => `${Number(item.match_count).toLocaleString("ko-KR")}경기`,
+          display: (item) => `${formatInteger(item.match_count)}경기`,
         },
         damage: {
           label: "경기당 평균 딜",
           value: (item) => item.avg_damage_dealt,
-          display: (item) => Number(item.avg_damage_dealt).toFixed(1),
+          display: (item) => formatNumber(item.avg_damage_dealt, 1),
         },
         win_rate: {
           label: "승률",
@@ -11877,12 +12328,12 @@ _INDEX_HTML = """<!doctype html>
         kills: {
           label: "경기당 평균 킬",
           value: (item) => item.kills_per_match,
-          display: (item) => Number(item.kills_per_match).toFixed(2),
+          display: (item) => formatNumber(item.kills_per_match, 2),
         },
         dbnos: {
           label: "경기당 평균 기절",
           value: (item) => item.dbnos_per_match,
-          display: (item) => Number(item.dbnos_per_match).toFixed(2),
+          display: (item) => formatNumber(item.dbnos_per_match, 2),
         },
       };
       return definitions[metric] || definitions.score;
@@ -11905,7 +12356,7 @@ _INDEX_HTML = """<!doctype html>
       ].map(([value, label]) => `<option value="${value}"${value === metric ? " selected" : ""}>${label}</option>`).join("");
       const weaponChart = recommendationChartRows(report.weapons, {
         label: (item) => item.weapon_name,
-        note: (item) => `${Number(item.match_count).toLocaleString("ko-KR")}경기 표본`,
+        note: (item) => `${formatInteger(item.match_count)}경기 표본`,
         value: definition.value,
         display: definition.display,
         maximum: definition.maximum,
@@ -11913,26 +12364,26 @@ _INDEX_HTML = """<!doctype html>
       const loadoutChart = recommendationChartRows(report.loadouts, {
         label: (item) => `${item.primary.weapon_name} + ${item.secondary.weapon_name}`,
         value: (item) => item.score,
-        display: (item) => Number(item.score).toFixed(1),
+        display: (item) => formatNumber(item.score, 1),
         tone: "warning",
       });
       const attachmentChart = recommendationChartRows(report.weapon_attachments, {
         label: (item) => `${item.weapon_name} · ${item.attachment_name}`,
-        note: (item) => `${Number(item.match_count || 0).toLocaleString("ko-KR")}경기 · ${Number(item.event_count || item.attached_events || 0).toLocaleString("ko-KR")}회`,
+        note: (item) => `${formatInteger(item.match_count)}경기 · ${formatInteger(item.event_count || item.attached_events)}회`,
         value: (item) => item.score,
-        display: (item) => Number(item.score).toFixed(1),
+        display: (item) => formatNumber(item.score, 1),
         tone: "info",
       });
       const combinationChart = recommendationChartRows(report.attachment_combinations, {
         label: (item) => `${item.weapon_name} · ${(item.attachment_names || []).join(" + ")}`,
-        note: (item) => `${Number(item.match_count || 0).toLocaleString("ko-KR")}경기 · ${Number(item.event_count || 0).toLocaleString("ko-KR")}교전`,
+        note: (item) => `${formatInteger(item.match_count)}경기 · ${formatInteger(item.event_count)}교전`,
         value: (item) => item.score,
-        display: (item) => Number(item.score).toFixed(1),
+        display: (item) => formatNumber(item.score, 1),
         tone: "info",
       });
       const mapChart = recommendationChartRows(report.maps, {
         label: (item) => item.map_name_ko,
-        note: (item) => `${Number(item.match_count).toLocaleString("ko-KR")}경기 표본`,
+        note: (item) => `${formatInteger(item.match_count)}경기 표본`,
         value: (item) => Number(item.win_rate) * 100,
         display: (item) => percent(item.win_rate),
         maximum: 100,
@@ -11981,11 +12432,11 @@ _INDEX_HTML = """<!doctype html>
       const payload = await response.json();
       const report = payload.evidence;
       const totals = report.totals || {};
-      const actionLabels = { kill: "킬", dbno: "기절", finish: "피니시", damage: "피해" };
+      const actionLabels = { kill: "킬", dbno: "기절", dbno_caused: "기절시킴", finish: "피니시", damage: "피해", hit_caused: "명중", shot: "발사" };
       const rows = (report.snapshots || []).map((snapshot) => `
         <tr>
           <td>${escapeHtml(snapshot.combat_event_at_kst || "-")}</td>
-          <td>${escapeHtml(snapshot.map_name_ko || snapshot.map_name || "-")}<br>${escapeHtml(snapshot.game_mode || "-")}</td>
+          <td>${escapeHtml(snapshot.map_name_ko || displayCode(snapshot.map_name, "map"))}<br>${escapeHtml(snapshot.game_mode_ko || displayCode(snapshot.game_mode, "game_mode"))}</td>
           <td>${escapeHtml(actionLabels[snapshot.combat_action] || snapshot.combat_action)}${snapshot.is_headshot ? " · 헤드샷" : ""}</td>
           <td>${distanceM(snapshot.distance_m)}</td>
           <td>${escapeHtml((snapshot.equipped_attachment_names || []).join(", ") || "-")}</td>
@@ -11994,13 +12445,13 @@ _INDEX_HTML = """<!doctype html>
       `).join("");
 
       panel.innerHTML = `<div class="result-shell">
-        ${resultHeading(`${report.weapon_name} + ${report.attachment_name}`, "추천 산정 근거", `${totals.match_count || 0}경기`)}
+        ${resultHeading(`${report.weapon_name} + ${report.attachment_name}`, "추천 산정 근거", `${formatInteger(totals.match_count)}경기`)}
         ${resultMetricGrid([
-          ["교전", `${totals.event_count || 0}회`],
-          ["킬", `${totals.kills || 0}회`],
-          ["기절", `${totals.dbnos || 0}회`],
-          ["피니시", `${totals.finishes || 0}회`],
-          ["헤드샷", `${totals.headshots || 0}회`],
+          ["교전", `${formatInteger(totals.event_count)}회`],
+          ["킬", `${formatInteger(totals.kills)}회`],
+          ["기절", `${formatInteger(totals.dbnos)}회`],
+          ["피니시", `${formatInteger(totals.finishes)}회`],
+          ["헤드샷", `${formatInteger(totals.headshots)}회`],
           ["평균 거리", distanceM(totals.avg_distance_m)],
         ])}
         ${rows
@@ -12027,39 +12478,89 @@ _INDEX_HTML = """<!doctype html>
       const detail = payload.match;
       const weapons = (detail.weapons || []).slice(0, 6).map((weapon) => `
         <div class="result-row">
-          <span>${weapon.shots_hit}/${weapon.shots_fired} 명중</span>
+          <span>${formatInteger(weapon.shots_hit)}/${formatInteger(weapon.shots_fired)} 명중</span>
           <strong>${escapeHtml(weapon.weapon_name)}</strong>
-          <p>${weapon.kills}킬 · ${weapon.dbnos}기절 · ${Number(weapon.damage_dealt).toFixed(0)}딜 · ${escapeHtml(accuracyMetricText(weapon.accuracy, weapon.accuracy_metric))}</p>
+          <p>${formatInteger(weapon.kills)}킬 · ${formatInteger(weapon.dbnos)}기절 · 준/받은 피해 ${formatNumber(weapon.damage_dealt, 1)}/${formatNumber(weapon.damage_taken, 1)} · ${escapeHtml(accuracyMetricText(weapon.accuracy, weapon.accuracy_metric))}<br>헤드샷 명중 ${percent(weapon.headshot_hit_rate)} · 헤드샷 킬 ${percent(weapon.headshot_kill_rate)}</p>
         </div>`).join("") || '<span class="result-caption">무기별 기록 없음</span>';
+      const itemSummary = detail.item_summary || {};
+      const itemRows = (detail.items || []).map((item) => `
+        <tr>
+          <td><strong>${escapeHtml(item.item_name || item.item_code || "-")}</strong><br><span class="result-caption">${escapeHtml(item.item_category_ko || "기타")} · ${escapeHtml(item.item_sub_category_ko || "기타")}</span></td>
+          <td>${formatInteger(item.picked_up_quantity)}개<br><span class="result-caption">${formatInteger(item.picked_up_events)}회</span></td>
+          <td>${formatInteger(item.used_quantity)}개<br><span class="result-caption">${formatInteger(item.used_events)}회</span></td>
+          <td>${formatInteger(item.dropped_quantity)}개<br><span class="result-caption">${formatInteger(item.dropped_events)}회</span></td>
+          <td>${formatInteger(item.equipped_events)} / ${formatInteger(item.unequipped_events)}</td>
+          <td>${formatInteger(item.attached_events)} / ${formatInteger(item.detached_events)}</td>
+        </tr>`).join("");
+      const itemDetail = itemRows
+        ? `<details class="result-disclosure"><summary>아이템별 상세 · ${formatInteger((detail.items || []).length)}종</summary>
+            <div class="table-scroll"><table class="detail-table"><thead><tr><th>아이템</th><th>획득</th><th>사용</th><th>버림</th><th>장착 / 해제</th><th>부착 / 해제</th></tr></thead><tbody>${itemRows}</tbody></table></div>
+          </details>`
+        : '<span class="result-caption">수집된 아이템 기록이 없습니다.</span>';
+      const activity = detail.activity_summary || {};
+      const activityContent = activity.available
+        ? resultTextRows([
+            ["회복", `${formatInteger(activity.heal_events)}회 · ${formatNumber(activity.heal_amount, 1)} 회복`],
+            ["투척물 / 플레어", `${formatInteger(activity.throwable_uses)} / ${formatInteger(activity.flare_uses)}회`],
+            ["팀원 부활 / 부활 받음", `${formatInteger(activity.revives_caused)} / ${formatInteger(activity.revives_received)}회`],
+            ["차량 탑승 / 하차", `${formatInteger(activity.vehicle_rides)} / ${formatInteger(activity.vehicle_leaves)}회`],
+            ["차량 이동 / 최고 속도", `${distanceKm(activity.vehicle_distance_m)} / ${formatNumber(activity.vehicle_max_speed, 1)}`],
+            ["차량 피해 / 파괴", `${formatNumber(activity.vehicle_damage, 1)} / ${formatInteger(activity.vehicle_destroys)}회`],
+            ["볼팅 / 수영", `${formatInteger(activity.vaults)} / ${formatInteger(activity.swim_sessions)}회`],
+            ["기절 플레이어 운반", `${formatInteger(activity.carry_events)}회`],
+            ["상대 / 내 방어구 파괴", `${formatInteger(activity.armor_destroys_caused)} / ${formatInteger(activity.armor_destroys_taken)}회`],
+            ["오브젝트 상호작용 / 파괴", `${formatInteger(activity.object_interactions)} / ${formatInteger(activity.object_destroys)}회`],
+            ["긴급 수송 호출 / 탑승", `${formatInteger(activity.emergency_pickup_calls)} / ${formatInteger(activity.emergency_pickup_rides)}회`],
+            ["복귀", `${formatInteger(activity.redeploys)}회`],
+            ["기타 정규화 사건", `${formatInteger(activity.normalized_event_count)}건`],
+          ])
+        : '<span class="result-caption">활동 집계가 아직 생성되지 않았습니다.</span>';
+      const fights = detail.fight_summary || {};
+      const fightContent = resultTextRows([
+        ["전체 교전", `${formatInteger(fights.fight_count)}회`],
+        ["교전 승리 / 패배", `${formatInteger(fights.wins)} / ${formatInteger(fights.losses)}회 · 승리 ${percent(fights.fight_win_rate)}`],
+        ["킬 / 기절시킴 승리", `${formatInteger(fights.kill_wins)} / ${formatInteger(fights.dbno_wins)}회`],
+        ["사망 / 기절당함 패배", `${formatInteger(fights.death_losses)} / ${formatInteger(fights.dbno_losses)}회`],
+        ["사람 / 봇 상대", `${formatInteger(fights.human_opponent_fights)} / ${formatInteger(fights.bot_opponent_fights)}회`],
+        ["헤드샷 교전 승리", `${formatInteger(fights.headshot_wins)}회`],
+      ]) + `<p class="result-caption">${escapeHtml(fights.definition || "교전 결과 데이터 기준으로 계산합니다.")}</p>`;
       const snapshot = detail.replay_artifact
         ? `<a class="result-badge success" href="${attr(detail.replay_artifact.view_url)}" target="_blank" rel="noreferrer">2D 스냅샷 열기</a>`
         : '<span class="result-caption">생성된 2D 스냅샷 없음</span>';
       const playedAt = String(detail.created_at_kst || "-").replace("T", " ").slice(0, 16) + " KST";
-      const mapAndMode = `${detail.map_name_ko || detail.map_name || "-"} · ${detail.game_mode_ko || detail.game_mode || "-"} · ${detail.match_type || "-"}`;
+      const mapAndMode = [
+        detail.map_name_ko || displayCode(detail.map_name, "map"),
+        detail.game_mode_ko || displayCode(detail.game_mode, "game_mode"),
+        detail.match_type_ko || displayCode(detail.match_type, "match_type"),
+        detail.season_state_ko,
+      ].filter(Boolean).join(" · ");
       matchBody.innerHTML = `<div class="result-shell">
         ${resultHeading(
           detail.player.current_name,
           `${playedAt} · ${mapAndMode}`,
-          detail.is_chicken ? "치킨" : (detail.win_place ? `#${detail.win_place}` : "결과 없음"),
+          detail.is_chicken ? "치킨" : (detail.win_place ? `${formatInteger(detail.win_place)}위` : "결과 없음"),
           detail.is_chicken ? "success" : "",
         )}
         ${resultMetricGrid([
-          ["전체 / 사람 / 봇", `${detail.total_players ?? "-"} / ${detail.human_players ?? "-"} / ${detail.bot_players ?? "-"}`],
-          ["킬 / 사망 / 어시", `${detail.kills} / ${detail.deaths} / ${detail.assists}`],
-          ["기절시킴 / 당함", `${detail.dbnos_caused} / ${detail.dbnos_taken}`],
-          ["준 딜 / 받은 딜", `${Number(detail.damage_dealt).toFixed(1)} / ${Number(detail.damage_taken).toFixed(1)}`],
-          ["공격 / 명중", `${detail.shots_fired} / ${detail.shots_hit}`],
+          ["경기 분류", `${detail.team_mode_ko || "-"} · ${detail.perspective_ko || "-"}${detail.is_custom_match ? " · 사용자 지정" : ""}`],
+          ["전체 / 사람 / 봇", `${formatInteger(detail.total_players)} / ${formatInteger(detail.human_players)} / ${formatInteger(detail.bot_players)}`],
+          ["킬 / 사망 / 어시", `${formatInteger(detail.kills)} / ${formatInteger(detail.deaths)} / ${formatInteger(detail.assists)}`],
+          ["기절시킴 / 당함", `${formatInteger(detail.dbnos_caused)} / ${formatInteger(detail.dbnos_taken)}`],
+          ["준 딜 / 받은 딜", `${formatNumber(detail.damage_dealt, 1)} / ${formatNumber(detail.damage_taken, 1)}`],
+          ["공격 / 명중", `${formatInteger(detail.shots_fired)} / ${formatInteger(detail.shots_hit)}`],
           ["명중 지표", accuracyBreakdownText(detail.accuracy, detail.accuracy_breakdown)],
-          ["헤드샷 명중 확률", `${percent(detail.headshot_hit_rate)} · ${detail.headshot_hits}/${detail.shots_hit}명중`],
-          ["받은 헤드샷 비율", `${percent(detail.headshot_hit_taken_rate)} · ${detail.headshot_hits_taken}/${detail.hits_taken}피격`],
-          ["헤드샷 킬 비율", `${percent(detail.headshot_kill_rate)} · ${detail.headshot_kills}/${detail.kills}킬`],
+          ["헤드샷 명중 확률", `${percent(detail.headshot_hit_rate)} · ${formatInteger(detail.headshot_hits)}/${formatInteger(detail.shots_hit)}명중`],
+          ["받은 헤드샷 비율", `${percent(detail.headshot_hit_taken_rate)} · ${formatInteger(detail.headshot_hits_taken)}/${formatInteger(detail.hits_taken)}피격`],
+          ["헤드샷 킬 비율", `${percent(detail.headshot_kill_rate)} · ${formatInteger(detail.headshot_kills)}/${formatInteger(detail.kills)}킬`],
+          ["교전 / 승리 확률", `${formatInteger(fights.fight_count)}회 · ${percent(fights.fight_win_rate)}`],
+          ["아이템 획득 / 사용", `${formatInteger(itemSummary.picked_up_quantity)}개 / ${formatInteger(itemSummary.used_quantity)}개`],
           ["생존 / 이동", `${minutes(detail.survival_seconds)} / ${distanceKm(detail.movement_distance_m)}`],
           ["낙하 이동", distanceM(detail.landing_distance_m)],
         ])}
         <div class="result-columns">
           ${resultSection("헤드샷", resultTextRows([
-            ["가한 기록", `명중 ${detail.headshot_hits} · 킬 ${detail.headshot_kills} · 기절 ${detail.headshot_dbnos_caused}`],
-            ["받은 기록", `명중 ${detail.headshot_hits_taken} · 사망 ${detail.headshot_deaths} · 기절 ${detail.headshot_dbnos_taken}`],
+            ["가한 기록", `명중 ${formatInteger(detail.headshot_hits)} · 킬 ${formatInteger(detail.headshot_kills)} · 기절 ${formatInteger(detail.headshot_dbnos_caused)}`],
+            ["받은 기록", `명중 ${formatInteger(detail.headshot_hits_taken)} · 사망 ${formatInteger(detail.headshot_deaths)} · 기절 ${formatInteger(detail.headshot_dbnos_taken)}`],
           ]))}
           ${resultSection("2D 리플레이", snapshot)}
         </div>
@@ -12067,15 +12568,33 @@ _INDEX_HTML = """<!doctype html>
           ${resultSection("부위별 명중 확률", resultChips(hitPartEntries(detail.hit_parts, detail.hit_part_rates)))}
           ${resultSection("부위별 피격 확률", resultChips(hitPartEntries(detail.taken_hit_parts, detail.taken_hit_part_rates)))}
         </div>
+        <div class="result-columns">
+          ${resultSection("교전 종합", fightContent)}
+          ${resultSection("활동 종합", activityContent)}
+        </div>
         ${resultSection("사용 무기", `<div class="result-list">${weapons}</div>`)}
+        ${resultSection("아이템 종합", `${resultMetricGrid([
+          ["아이템 종류", `${formatInteger(itemSummary.unique_item_types)}종`],
+          ["사용 아이템 종류", `${formatInteger(itemSummary.used_item_types)}종`],
+          ["획득", `${formatInteger(itemSummary.picked_up_quantity)}개 · ${formatInteger(itemSummary.picked_up_events)}회`],
+          ["사용", `${formatInteger(itemSummary.used_quantity)}개 · ${formatInteger(itemSummary.used_events)}회`],
+          ["버림", `${formatInteger(itemSummary.dropped_quantity)}개 · ${formatInteger(itemSummary.dropped_events)}회`],
+          ["루트박스 / 보급", `${formatInteger(itemSummary.loot_box_pickup_events)} / ${formatInteger(itemSummary.carepackage_pickup_events)}회`],
+          ["커스텀 패키지", `${formatInteger(itemSummary.custom_package_pickup_events)}회`],
+          ["차량 트렁크 획득 / 보관", `${formatInteger(itemSummary.vehicle_trunk_pickup_events)} / ${formatInteger(itemSummary.vehicle_trunk_put_events)}회`],
+          ["장착 / 해제", `${formatInteger(itemSummary.equipped_events)} / ${formatInteger(itemSummary.unequipped_events)}회`],
+          ["파츠 부착 / 해제", `${formatInteger(itemSummary.attached_events)} / ${formatInteger(itemSummary.detached_events)}회`],
+        ])}${itemDetail}`)}
       </div>`;
     }
 
-    async function loadPlayerRanking(metric, shard, guildId, limit) {
+    async function loadPlayerRanking(metric, shard, guildId, limit, minMatches = 1, activeOnly = true) {
       const params = new URLSearchParams({
         metric,
         shard,
         limit: String(limit || 10),
+        min_matches: String(minMatches || 1),
+        active_only: String(Boolean(activeOnly)),
       });
       if (guildId) {
         params.set("guild_id", guildId);
@@ -12087,36 +12606,59 @@ _INDEX_HTML = """<!doctype html>
       }
       const payload = await response.json();
       const ranking = payload.ranking;
-      const rows = (ranking.rows || []).map((row) => `
-        <tr${row.rank <= 3 ? ' class="linked-row"' : ""}>
-          <td><strong>#${row.rank}</strong></td>
-          <td><strong>${escapeHtml(row.player.current_name)}</strong></td>
-          <td>${rankingScore(ranking.metric, row.score)}</td>
-          <td>${row.match_count}</td>
-          <td>${row.wins}</td>
-          <td>${row.kills}/${row.deaths}/${row.assists}</td>
-          <td>${Number(row.avg_damage_dealt).toFixed(1)}</td>
-        </tr>
-      `).join("");
       const selectedScope = ranking.global_scope
         ? (guildId ? `${discordGuildName(guildId)} · 전체 범위 설정` : "전체 서버")
         : discordGuildName(ranking.guild_id || guildId);
+      activeRankingReport = { ...ranking, selected_scope: selectedScope };
+      renderPlayerRanking();
+    }
+
+    function renderPlayerRanking() {
+      const ranking = activeRankingReport;
+      if (!ranking) {
+        rankingBody.textContent = "조회 대기 중";
+        return;
+      }
+      rankingViewControls?.querySelectorAll("[data-ranking-view]").forEach((button) => {
+        button.classList.toggle("active", button.dataset.rankingView === activeRankingView);
+      });
+      const rows = (ranking.rows || []).map((row) => `
+        <tr${row.rank <= 3 ? ' class="linked-row"' : ""}>
+          <td><strong>${formatInteger(row.rank)}위</strong></td>
+          <td><strong>${escapeHtml(row.player.current_name)}</strong></td>
+          <td>${rankingScore(ranking.metric, row.score)}</td>
+          <td>${formatInteger(row.match_count)}</td>
+          <td>${formatInteger(row.wins)} · ${percent(row.win_rate)}<br><span class="result-caption">TOP10 ${percent(row.top10_rate)}</span></td>
+          <td>${formatNumber(row.kd, 2)} / ${formatNumber(row.kda, 2)}</td>
+          <td>${formatNumber(row.avg_kills, 2)} / ${formatNumber(row.avg_assists, 2)} / ${formatNumber(row.avg_dbnos_caused, 2)}</td>
+          <td>${formatNumber(row.avg_damage_dealt, 1)} / ${formatNumber(row.avg_damage_taken, 1)}<br><span class="result-caption">교환 ${formatNumber(row.damage_ratio, 2)}</span></td>
+          <td>${percent(row.accuracy)} / ${percent(row.headshot_hit_rate)}</td>
+          <td>${percent(row.fight_win_rate)}<br><span class="result-caption">경기당 ${formatNumber(row.avg_fights_per_match, 2)}회</span></td>
+          <td>${minutes(row.avg_survival_seconds)} / ${distanceKm(row.avg_movement_distance_m)}</td>
+        </tr>
+      `).join("");
+      const chart = recommendationChartRows(ranking.rows || [], {
+        label: (row) => `${formatInteger(row.rank)}위 ${row.player.current_name}`,
+        note: (row) => `${formatInteger(row.match_count)}경기 · ${formatInteger(row.wins)}치킨`,
+        value: (row) => Number(row.score || 0),
+        display: (row) => rankingScore(ranking.metric, row.score),
+      });
+      const content = activeRankingView === "chart"
+        ? `<div class="metric-chart"><h3>${escapeHtml(ranking.metric_label)} 비교</h3>${chart}</div>`
+        : `<div class="table-scroll"><table class="detail-table">
+          <thead><tr><th>순위</th><th>닉네임</th><th>선택 점수</th><th>경기</th><th>치킨·승률</th><th>KD / KDA</th><th>경기당 킬/어시/기절</th><th>평균 준/받은 피해</th><th>명중/헤드샷</th><th>교전 승률</th><th>생존/이동</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="11">조건을 충족한 랭킹 데이터가 없습니다.</td></tr>`}</tbody>
+        </table></div>`;
       rankingBody.innerHTML = `<div class="result-shell">
-        ${resultHeading(`${ranking.metric_label} 랭킹`, `${ranking.shard} · ${selectedScope}`, `${(ranking.rows || []).length}명`)}
-        <div class="table-scroll"><table>
-          <thead>
-            <tr>
-              <th>순위</th>
-              <th>닉네임</th>
-              <th>점수</th>
-              <th>경기</th>
-              <th>치킨</th>
-              <th>K/D/A</th>
-              <th>평딜</th>
-            </tr>
-          </thead>
-          <tbody>${rows || `<tr><td colspan="7">랭킹 데이터가 없습니다.</td></tr>`}</tbody>
-        </table></div>
+        ${resultHeading(`${ranking.metric_label} 랭킹`, `${ranking.shard === "steam" ? "스팀" : ranking.shard === "kakao" ? "카카오" : ranking.shard} · ${ranking.selected_scope}`, `${formatInteger((ranking.rows || []).length)}명`)}
+        ${resultMetricGrid([
+          ["선택 지표", ranking.metric_label],
+          ["최소 경기", `${formatInteger(ranking.min_matches)}경기`],
+          ["등록 상태", ranking.active_only ? "수집 중인 유저" : "중지 유저 포함"],
+          ["표시 인원", `${formatInteger((ranking.rows || []).length)}명`],
+        ])}
+        ${content}
+        <p class="result-caption">헤드샷 명중 확률은 헤드샷 명중 ÷ 전체 명중, 교전 승리 확률은 아군 피해를 제외한 킬·가한 기절 승리 ÷ 전체 교전 결과입니다.</p>
       </div>`;
     }
 
@@ -12134,7 +12676,7 @@ _INDEX_HTML = """<!doctype html>
       const total = entries.reduce((sum, entry) => sum + Number(entry[1] || 0), 0);
       return entries.map((entry) => {
         const rate = rates?.[entry[0]] ?? (total > 0 ? Number(entry[1]) / total : 0);
-        return (labels[entry[0]] || entry[0]) + " " + entry[1] + "회 · " + percent(rate);
+        return (labels[entry[0]] || entry[0]) + " " + formatInteger(entry[1]) + "회 · " + percent(rate);
       });
     }
 
@@ -12149,10 +12691,10 @@ _INDEX_HTML = """<!doctype html>
         return `추정 ${percent(metricValue)}`;
       }
       if (metric.metric_kind === "pellet_hits_per_shell" && metricValue !== null && metricValue !== undefined) {
-        return `셸당 펠릿 ${Number(metricValue).toFixed(2)}회`;
+        return `셸당 펠릿 ${formatNumber(metricValue, 2)}회`;
       }
       if (metric.metric_kind === "hit_events_per_attack" && metricValue !== null && metricValue !== undefined) {
-        return `공격당 피격 ${Number(metricValue).toFixed(2)}회`;
+        return `공격당 피격 ${formatNumber(metricValue, 2)}회`;
       }
       return "측정 불가";
     }
@@ -12166,10 +12708,10 @@ _INDEX_HTML = """<!doctype html>
         parts.push("일반 탄환 측정 불가");
       }
       if (Number(breakdown.pellet_shells || 0) > 0 && breakdown.pellet_hits_per_shell !== null && breakdown.pellet_hits_per_shell !== undefined) {
-        parts.push(`산탄 셸당 ${Number(breakdown.pellet_hits_per_shell).toFixed(2)}회`);
+        parts.push(`산탄 셸당 ${formatNumber(breakdown.pellet_hits_per_shell, 2)}회`);
       }
       if (Number(breakdown.unclassified_attacks || 0) > 0) {
-        parts.push(`분류 제외 ${Number(breakdown.unclassified_attacks)}회`);
+        parts.push(`분류 제외 ${formatInteger(breakdown.unclassified_attacks)}회`);
       }
       return parts.join(" · ") || "측정 불가";
     }
@@ -12177,14 +12719,168 @@ _INDEX_HTML = """<!doctype html>
       return `${(Number(value || 0) * 100).toFixed(1)}%`;
     }
 
+    function formatNumber(value, maximumFractionDigits = 0) {
+      if (value === null || value === undefined || value === "") return "-";
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return "-";
+      if (activeNumberFormat === "plain") {
+        return numeric.toLocaleString("ko-KR", {
+          useGrouping: false,
+          minimumFractionDigits: maximumFractionDigits,
+          maximumFractionDigits,
+        });
+      }
+      if (activeNumberFormat === "korean_units" && maximumFractionDigits === 0) {
+        return formatKoreanInteger(Math.round(numeric));
+      }
+      return numeric.toLocaleString("ko-KR", {
+        minimumFractionDigits: maximumFractionDigits,
+        maximumFractionDigits,
+      });
+    }
+
+    function formatInteger(value) {
+      return formatNumber(value, 0);
+    }
+
+    function formatKoreanInteger(value) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return "-";
+      const sign = numeric < 0 ? "-" : "";
+      let remaining = Math.abs(Math.trunc(numeric));
+      if (remaining < 10000) return sign + remaining.toLocaleString("ko-KR");
+      const units = ["", "만", "억", "조", "경"];
+      const groups = [];
+      let index = 0;
+      while (remaining > 0 && index < units.length) {
+        const group = remaining % 10000;
+        if (group > 0) groups.unshift(`${group.toLocaleString("ko-KR")}${units[index]}`);
+        remaining = Math.floor(remaining / 10000);
+        index += 1;
+      }
+      return sign + groups.join(" ");
+    }
+
+    function displayCode(value, category = "") {
+      if (value === null || value === undefined || value === "") return "-";
+      const text = String(value);
+      const labels = {
+        shard: { steam: "스팀", kakao: "카카오", psn: "플레이스테이션", xbox: "엑스박스" },
+        team_mode: { solo: "솔로", duo: "듀오", squad: "스쿼드", unknown: "알 수 없음" },
+        perspective: { fpp: "1인칭", tpp: "3인칭", unknown: "알 수 없음" },
+        match_type: {
+          official: "일반 매치",
+          competitive: "경쟁전",
+          airoyale: "AI 배틀로얄",
+          arcade: "아케이드",
+          event: "이벤트 모드",
+          trainingroom: "훈련장",
+          custom: "사용자 지정 매치",
+          tutorialatoz: "튜토리얼",
+        },
+        season_state: { progress: "진행 시즌", in_progress: "진행 시즌", closed: "종료 시즌", offseason: "비시즌" },
+        game_mode: {
+          solo: "솔로",
+          "solo-fpp": "1인칭 솔로",
+          duo: "듀오",
+          "duo-fpp": "1인칭 듀오",
+          squad: "스쿼드",
+          "squad-fpp": "1인칭 스쿼드",
+          "normal-squad": "일반 스쿼드",
+          tdm: "팀 데스매치",
+          ibr: "인텐스 배틀로얄",
+          "sdm-fpp": "솔로 데스매치 (1인칭)",
+        },
+        map: {
+          Baltic_Main: "에란겔 리마스터",
+          Erangel_Main: "에란겔",
+          Desert_Main: "미라마",
+          Savage_Main: "사녹",
+          DihorOtok_Main: "비켄디",
+          Summerland_Main: "카라킨",
+          Tiger_Main: "태이고",
+          Chimera_Main: "파라모",
+          Neon_Main: "론도",
+          Kiki_Main: "데스턴",
+          Heaven_Main: "헤이븐",
+          Range_Main: "캠프 자칼",
+          Boardwalk_Main: "보드워크",
+          Italy_TDM_Main: "이탈리아 (팀 데스매치)",
+        },
+        vehicle: {
+          BP_RoadGlideST_LGD_C: "CVO 로드 글라이드 ST",
+          BP_RoadGlideST_ULT_C: "CVO 로드 글라이드 ST",
+          TransportAircraft_Chimera_C: "헬리콥터",
+          IBRTransportAircraft_C: "인텐스 배틀로얄 수송기",
+          IBRTransportAircraft_Helicopter_C: "인텐스 배틀로얄 헬리콥터",
+          BP_Dirtbike_C: "더트 바이크",
+          MortarPawn_C: "박격포",
+          BP_McLarenGT_St_white_C: "맥라렌 GT 스탠다드 (실리카 화이트)",
+          BP_McLarenGT_St_black_C: "맥라렌 GT 스탠다드 (블랙)",
+          BP_McLarenGT_Lx_Yellow_C: "맥라렌 GT 엘리트 (볼케이노 옐로우)",
+        },
+        item_category: { Equipment: "장비", Attachment: "부착물", Ammunition: "탄약", Use: "소모품", Weapon: "무기", None: "기타" },
+        item_sub_category: {
+          None: "기타", Throwable: "투척물", Main: "주무기", backpack: "배낭", Boost: "부스트", Heal: "회복",
+          Vest: "조끼", Headgear: "헬멧", Sight: "조준경", Melee: "근접 무기", Handgun: "권총",
+          Parachute: "낙하산", Ascender: "등강 장비", BlueChip: "블루칩", Fuel: "연료", Gadget: "전술 장비",
+          CamoNetting: "위장막", Revive: "부활 장비",
+        },
+        weapon_family: { AR: "AR · 돌격소총", DMR: "DMR · 지정사수소총", SR: "SR · 저격소총", SMG: "SMG · 기관단총", LMG: "LMG · 경기관총", SG: "SG · 산탄총", HG: "권총", MELEE: "근접 무기", THROWABLE: "투척물" },
+      };
+      const exact = labels[category]?.[text];
+      if (exact) return exact;
+      if (category === "vehicle") {
+        const patterns = [
+          [/^BP_Snowmobile_\\d+_C$/, "스노우모빌"],
+          [/^BP_Van_A_\\d+_C$/, "밴"],
+          [/^BP_Scooter_\\d+_A_C$/, "스쿠터"],
+          [/^BP_TukTukTuk_A_\\d+_C$/, "툭샤이"],
+          [/^BP_Mirado_Open_\\d+_C$/, "미라도 (오픈탑)"],
+          [/^BP_RoadGlideST_[A-Z0-9]+_C$/, "CVO 로드 글라이드 ST"],
+          [/^BP_PanigaleV4S_(?:EP|LGD)\\d+_C$/, "두카티 파니갈레 V4 S"],
+          [/^BP_McLarenGT_[A-Za-z0-9_]+_C$/, "맥라렌 GT"],
+          [/^BP_Classic_\\d+_C$/, "클래식 차량"],
+          [/^BP_Motorbike_\\d+(?:_SideCar)?(?:_Desert)?_C$/, "오토바이"],
+          [/^Uaz(?:2|_[ABC]_\\d+(?:_esports)?)_C$/, "UAZ"],
+        ];
+        return patterns.find(([pattern]) => pattern.test(text))?.[1] || text;
+      }
+      return text;
+    }
+
+    function localizeStaticDisplayValues() {
+      const selectors = {
+        shard: 'select[name="shard"] option',
+        team_mode: 'select[name="team_mode"] option',
+        perspective: 'select[name="perspective"] option',
+        match_type: 'select[name="match_type"] option',
+        season_state: 'select[name="season_state"] option',
+      };
+      for (const [category, selector] of Object.entries(selectors)) {
+        document.querySelectorAll(selector).forEach((option) => {
+          if (!option.value) return;
+          option.textContent = displayCode(option.value, category);
+        });
+      }
+    }
+
+    function applyDisplaySettings() {
+      if (displaySettingsForm) displaySettingsForm.elements.number_format.value = activeNumberFormat;
+      if (displayNumberPreview) displayNumberPreview.textContent = formatInteger(59452);
+      localizeStaticDisplayValues();
+    }
+
     function rankingScore(metric, value) {
-      if (["win_rate", "accuracy", "headshot_hit_rate", "headshot_rate"].includes(metric)) {
+      if (["win_rate", "top10_rate", "accuracy", "headshot_hit_rate", "headshot_rate", "fight_win_rate"].includes(metric)) {
         return percent(value);
       }
-      if (["kda", "avg_damage"].includes(metric)) {
-        return Number(value || 0).toFixed(2);
+      if (metric === "avg_survival") return minutes(value);
+      if (metric === "avg_movement") return distanceKm(value);
+      if (["kda", "kd", "avg_damage", "avg_damage_taken", "damage_ratio", "avg_kills", "avg_assists", "avg_dbnos", "avg_fights"].includes(metric)) {
+        return formatNumber(value, 2);
       }
-      return Number(value || 0).toFixed(0);
+      return formatInteger(value);
     }
 
     function minutes(value) {
@@ -12201,14 +12897,14 @@ _INDEX_HTML = """<!doctype html>
 
     function renderJobQueue(payload, tableBody, cardList, summaryElement) {
       const jobs = payload.jobs || [];
-      summaryElement.textContent = `${queueSummaryText(payload.summary, jobs)} · 최근 ${jobs.length}건 표시`;
+      summaryElement.textContent = `${queueSummaryText(payload.summary, jobs)} · 최근 ${formatInteger(jobs.length)}건 표시`;
       tableBody.innerHTML = jobs.length
         ? jobs.map((job) => `
           <tr>
-            <td>${escapeHtml(job.shard || "-")}</td>
+            <td>${escapeHtml(displayCode(job.shard, "shard"))}</td>
             <td class="identifier" title="${attr(job.target_id || "")}">${escapeHtml(compactIdentifier(job.target_id))}</td>
             <td>${jobQueueStatusBadge(job)}</td>
-            <td>${escapeHtml(job.attempts || 0)}회</td>
+            <td>${formatInteger(job.attempts || 0)}회</td>
             <td>${escapeHtml(formatKstShort(job.updated_at_kst || job.created_at_kst))}</td>
           </tr>
         `).join("")
@@ -12220,8 +12916,8 @@ _INDEX_HTML = """<!doctype html>
               <strong class="identifier" title="${attr(job.target_id || "")}">${escapeHtml(compactIdentifier(job.target_id))}</strong>
               ${jobQueueStatusBadge(job)}
             </div>
-            <div class="dense-card-row"><span>플랫폼</span><strong>${escapeHtml(job.shard || "-")}</strong></div>
-            <div class="dense-card-row"><span>시도 횟수</span><strong>${escapeHtml(job.attempts || 0)}회</strong></div>
+            <div class="dense-card-row"><span>플랫폼</span><strong>${escapeHtml(displayCode(job.shard, "shard"))}</strong></div>
+            <div class="dense-card-row"><span>시도 횟수</span><strong>${formatInteger(job.attempts || 0)}회</strong></div>
             <div class="dense-card-row"><span>마지막 변경</span><strong>${escapeHtml(formatKstShort(job.updated_at_kst || job.created_at_kst))}</strong></div>
             ${job.next_run_at_kst ? `<div class="dense-card-row"><span>다음 시도</span><strong>${escapeHtml(formatKstShort(job.next_run_at_kst))}</strong></div>` : ""}
             ${job.last_error ? `<div class="dense-card-row"><span>최근 오류</span><strong title="${attr(job.last_error)}">${escapeHtml(String(job.last_error).slice(0, 80))}</strong></div>` : ""}
@@ -12273,8 +12969,8 @@ _INDEX_HTML = """<!doctype html>
       </tr>`).join("") || '<tr><td colspan="4">검사 항목 없음</td></tr>';
       const parserRows = (audit.parser_versions || []).map((row) => `<tr>
         <td>${escapeHtml(row.processor_name)}</td><td class="identifier">${escapeHtml(row.parser_version)}</td>
-        <td>${Number(row.matches || 0).toLocaleString("ko-KR")}</td>
-        <td>${Number(row.player_matches || 0).toLocaleString("ko-KR")}</td>
+        <td>${formatInteger(row.matches)}</td>
+        <td>${formatInteger(row.player_matches)}</td>
       </tr>`).join("") || '<tr><td colspan="4">파서 상태 없음</td></tr>';
       playerIntelligenceAuditStatus.textContent = `${audit.passed ? "전체 통과" : "확인 필요"} · ${formatKstShort(audit.generated_at_kst)}`;
       playerIntelligenceAuditBody.className = "";
@@ -12292,10 +12988,10 @@ _INDEX_HTML = """<!doctype html>
       </div><div class="intelligence-data-section"><h3>파서 버전</h3>
         <div class="table-scroll"><table class="intelligence-table"><thead><tr><th>처리기</th><th>버전</th><th>경기</th><th>경기·플레이어</th></tr></thead><tbody>${parserRows}</tbody></table></div>
       </div><div class="intelligence-data-section"><h3>아이템 출처 합계</h3><div class="intelligence-metric-grid">
-        <div class="intelligence-metric-row"><span>루트박스 획득</span><strong>${Number(sources.loot_box_pickups || 0).toLocaleString("ko-KR")}</strong></div>
-        <div class="intelligence-metric-row"><span>보급 획득</span><strong>${Number(sources.carepackage_pickups || 0).toLocaleString("ko-KR")}</strong></div>
-        <div class="intelligence-metric-row"><span>커스텀 패키지 획득</span><strong>${Number(sources.custom_package_pickups || 0).toLocaleString("ko-KR")}</strong></div>
-        <div class="intelligence-metric-row"><span>트렁크 획득 / 보관</span><strong>${Number(sources.vehicle_trunk_pickups || 0).toLocaleString("ko-KR")} / ${Number(sources.vehicle_trunk_puts || 0).toLocaleString("ko-KR")}</strong></div>
+        <div class="intelligence-metric-row"><span>루트박스 획득</span><strong>${formatInteger(sources.loot_box_pickups)}</strong></div>
+        <div class="intelligence-metric-row"><span>보급 획득</span><strong>${formatInteger(sources.carepackage_pickups)}</strong></div>
+        <div class="intelligence-metric-row"><span>커스텀 패키지 획득</span><strong>${formatInteger(sources.custom_package_pickups)}</strong></div>
+        <div class="intelligence-metric-row"><span>트렁크 획득 / 보관</span><strong>${formatInteger(sources.vehicle_trunk_pickups)} / ${formatInteger(sources.vehicle_trunk_puts)}</strong></div>
       </div></div>`;
     }
 
@@ -12848,7 +13544,7 @@ _INDEX_HTML = """<!doctype html>
             <td><strong>${escapeHtml(artifact.player_name || compactIdentifier(artifact.account_id))}</strong></td>
             <td>${escapeHtml(formatKstShort(artifact.match_created_at_kst))}</td>
             <td>${escapeHtml(artifactTypeLabel(artifact.artifact_type))}</td>
-            <td>${escapeHtml(artifact.map_name || "-")}<br><span class="status">${escapeHtml(artifact.game_mode || "-")}</span></td>
+            <td>${escapeHtml(displayCode(artifact.map_name, "map"))}<br><span class="status">${escapeHtml(displayCode(artifact.game_mode, "game_mode"))}</span></td>
             <td class="identifier" title="${attr(artifact.match_id || "")}">${escapeHtml(compactIdentifier(artifact.match_id))}</td>
             <td>${escapeHtml(formatKstShort(artifact.generated_at_kst))}</td>
             <td>${escapeHtml(formatBytes(artifact.size_bytes || 0))}</td>
@@ -12870,7 +13566,7 @@ _INDEX_HTML = """<!doctype html>
               <span class="status-badge info">${escapeHtml(artifactTypeLabel(artifact.artifact_type))}</span>
             </div>
             <div class="dense-card-row"><span>경기</span><strong>${escapeHtml(formatKstShort(artifact.match_created_at_kst))}</strong></div>
-            <div class="dense-card-row"><span>맵 / 모드</span><strong>${escapeHtml(artifact.map_name || "-")} · ${escapeHtml(artifact.game_mode || "-")}</strong></div>
+            <div class="dense-card-row"><span>맵 / 모드</span><strong>${escapeHtml(displayCode(artifact.map_name, "map"))} · ${escapeHtml(displayCode(artifact.game_mode, "game_mode"))}</strong></div>
             <div class="dense-card-row"><span>매치 ID</span><strong class="identifier" title="${attr(artifact.match_id || "")}">${escapeHtml(compactIdentifier(artifact.match_id))}</strong></div>
             <div class="dense-card-row"><span>생성 / 크기</span><strong>${escapeHtml(formatKstShort(artifact.generated_at_kst))} · ${escapeHtml(formatBytes(artifact.size_bytes || 0))}</strong></div>
             <div class="dense-card-actions">
@@ -12968,7 +13664,7 @@ _INDEX_HTML = """<!doctype html>
           artifact.player_name || "알 수 없음",
           formatKstShort(artifact.match_created_at_kst),
           artifact.map_name || "-",
-          artifact.game_mode || "-",
+          displayCode(artifact.game_mode, "game_mode"),
         ].join(" / ");
         return `<option value="${attr(artifact.id)}">${escapeHtml(label)}</option>`;
       }).join("") || `<option value="">재생 타임라인 없음</option>`;
@@ -13305,7 +14001,7 @@ _INDEX_HTML = """<!doctype html>
             "drop",
             event,
             `${replayActorName(event)} · 낙하 시작`,
-            `고도 ${Math.round(Number(event.z || 0) / 100).toLocaleString("ko-KR")}m`,
+            `고도 ${formatInteger(Math.round(Number(event.z || 0) / 100))}m`,
           );
         }
         for (const event of track.landings || []) {
@@ -13675,7 +14371,7 @@ _INDEX_HTML = """<!doctype html>
       if (!timelineEventList) return;
       const visibleEvents = filteredTimelineEvents();
       activeTimelineVisibleEvents = visibleEvents;
-      if (timelineEventCount) timelineEventCount.textContent = `${visibleEvents.length.toLocaleString("ko-KR")}개 사건`;
+      if (timelineEventCount) timelineEventCount.textContent = `${formatInteger(visibleEvents.length)}개 사건`;
       if (!visibleEvents.length) {
         timelineEventList.innerHTML = `<div class="status">표시할 리플레이 이벤트가 없습니다.</div>`;
         return;
@@ -13768,7 +14464,7 @@ _INDEX_HTML = """<!doctype html>
       } else if (nearest.category === "landing") {
         detailLines.push(`비행 거리 ${distanceM(source.distance_m)}`);
       } else if (nearest.category === "drop") {
-        detailLines.push(`첫 기록 고도 ${Math.round(Number(source.z || 0) / 100).toLocaleString("ko-KR")}m`);
+        detailLines.push(`첫 기록 고도 ${formatInteger(Math.round(Number(source.z || 0) / 100))}m`);
       }
       if (source.event_at_kst) detailLines.push(`KST ${escapeHtml(formatKstShort(source.event_at_kst))}`);
       timelineEventDetail.className = "timeline-event-detail";
@@ -14362,8 +15058,11 @@ _INDEX_HTML = """<!doctype html>
       const matchId = compactIdentifier(activeTimelineArtifact?.match_id || activeTimeline?.match?.match_id || "-");
       replayCtx.fillText(`${playerName} · ${matchId}`, 24, 36);
       replayCtx.fillStyle = "#c3ccd6";
-      replayCtx.fillText(`${activeTimeline?.match?.map_name || "-"} · ${activeTimeline?.match?.game_mode || "-"} · ${formatReplayTime(activeTimelineTime)}`, 24, 60);
-      replayCtx.fillText(`KST ${formatReplayKst(activeTimelineTime)} · ${current?.movement_label || "위치 대기"}${current?.vehicle_label ? ` (${current.vehicle_label})` : ""}`, 24, 84);
+      replayCtx.fillText(`${displayCode(activeTimeline?.match?.map_name, "map")} · ${displayCode(activeTimeline?.match?.game_mode, "game_mode")} · ${formatReplayTime(activeTimelineTime)}`, 24, 60);
+      const vehicleLabel = current?.vehicle_id
+        ? displayCode(current.vehicle_id, "vehicle")
+        : (current?.vehicle_label || "");
+      replayCtx.fillText(`KST ${formatReplayKst(activeTimelineTime)} · ${current?.movement_label || "위치 대기"}${vehicleLabel ? ` (${vehicleLabel})` : ""}`, 24, 84);
       const viewportMode = replayPinnedEventId ? "선택 사건" : timelineFollowPlayer.checked ? "플레이어" : "맵 중앙";
       replayCtx.fillText(`확대 ${replayZoom().toFixed(1)}x · 화면 중심 ${viewportMode}`, 24, 108);
     }
@@ -14470,6 +15169,7 @@ _INDEX_HTML = """<!doctype html>
         movement_mode: sample?.movement_mode || "on_foot",
         movement_label: sample?.movement_label || "도보 이동",
         vehicle_label: sample?.vehicle_label || "",
+        vehicle_id: sample?.vehicle_id || "",
       };
     }
 
@@ -14617,7 +15317,7 @@ _INDEX_HTML = """<!doctype html>
       drawReplayBackground(replayCanvas.width, replayCanvas.height);
       replayCtx.fillStyle = "#c3ccd6";
       replayCtx.font = "16px Arial";
-      replayCtx.fillText("No timeline", 24, 36);
+      replayCtx.fillText("재생할 타임라인 없음", 24, 36);
     }
 
     async function refreshCollection() {
@@ -14637,7 +15337,7 @@ _INDEX_HTML = """<!doctype html>
     }
 
     async function processMatchJobs() {
-      banner.textContent = "Match 상세 저장 중";
+      banner.textContent = "매치 상세 저장 중";
       const response = await fetch("/jobs/matches/process", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -14653,7 +15353,7 @@ _INDEX_HTML = """<!doctype html>
     }
 
     async function processTelemetryJobs() {
-      banner.textContent = "Telemetry 저장 중";
+      banner.textContent = "텔레메트리 저장 중";
       const response = await fetch("/jobs/telemetry/process", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -14665,7 +15365,7 @@ _INDEX_HTML = """<!doctype html>
       }
       const payload = await response.json();
       const mb = (payload.result.stored_bytes / 1024 / 1024).toFixed(1);
-      banner.textContent = `Telemetry 저장 완료: 저장 ${payload.result.stored_telemetry}개, ${mb}MB, 실패 ${payload.result.failed_jobs}개`;
+      banner.textContent = `텔레메트리 저장 완료: 저장 ${formatInteger(payload.result.stored_telemetry)}개, ${mb}MB, 실패 ${formatInteger(payload.result.failed_jobs)}개`;
       await loadTelemetryJobs();
     }
 
@@ -14718,7 +15418,7 @@ _INDEX_HTML = """<!doctype html>
     }
 
     async function generateLoadoutSnapshots(force) {
-      banner.textContent = force ? "Loadout snapshot 재생성 중" : "Loadout snapshot 생성 중";
+      banner.textContent = force ? "장비 조합 스냅샷 재생성 중" : "장비 조합 스냅샷 생성 중";
       const response = await fetch("/telemetry/loadout-snapshots/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -14730,11 +15430,11 @@ _INDEX_HTML = """<!doctype html>
       }
       const payload = await response.json();
       loadoutSnapshotStatus.textContent = `처리 ${payload.result.processed_matches}개, 기존 ${payload.result.skipped_existing}개, item없음 ${payload.result.skipped_no_items}개, 실패 ${payload.result.failed_matches}개, snapshot ${payload.result.generated_snapshots}개`;
-      banner.textContent = "Loadout snapshot 생성 완료";
+      banner.textContent = "장비 조합 스냅샷 생성 완료";
     }
 
     async function generateFightOutcomes(force) {
-      banner.textContent = force ? "Fight outcome 재생성 중" : "Fight outcome 생성 중";
+      banner.textContent = force ? "교전 결과 재생성 중" : "교전 결과 생성 중";
       const response = await fetch("/telemetry/fight-outcomes/process", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -14747,11 +15447,11 @@ _INDEX_HTML = """<!doctype html>
       const payload = await response.json();
       const result = payload.result;
       fightOutcomeStatus.textContent = `처리 ${result.parsed_payloads}개, 대상 ${result.tracked_players}명, 승리 ${result.generated_wins}개, 패배 ${result.generated_losses}개, 장비 ${result.generated_loadout_snapshots}개, 실패 ${result.failed_payloads}개`;
-      banner.textContent = "Fight outcome 생성 완료";
+      banner.textContent = "교전 결과 생성 완료";
     }
 
     async function generateMapSnapshots(force) {
-      banner.textContent = force ? "JPEG 재생성 중" : "JPEG 생성 중";
+      banner.textContent = force ? "지도 이미지 재생성 중" : "지도 이미지 생성 중";
       const response = await fetch("/replay/map-snapshots/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -14763,12 +15463,12 @@ _INDEX_HTML = """<!doctype html>
       }
       const payload = await response.json();
       mapSnapshotStatus.textContent = `생성 ${payload.result.generated_snapshots}개, 기존 ${payload.result.skipped_existing}개, 위치없음 ${payload.result.skipped_no_position}개, 실패 ${payload.result.failed_snapshots}개, artifact ${payload.result.artifacts.length}개`;
-      banner.textContent = "JPEG 생성 완료";
+      banner.textContent = "지도 이미지 생성 완료";
       await loadReplayArtifacts();
     }
 
     async function generateReplayTimelines(force) {
-      banner.textContent = force ? "Timeline 재생성 중" : "Timeline 생성 중";
+      banner.textContent = force ? "재생 타임라인 재생성 중" : "재생 타임라인 생성 중";
       const response = await fetch("/replay/timelines/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -14780,7 +15480,7 @@ _INDEX_HTML = """<!doctype html>
       }
       const payload = await response.json();
       timelineStatus.textContent = `생성 ${payload.result.generated_timelines}개, 기존 ${payload.result.skipped_existing}개, 위치없음 ${payload.result.skipped_no_position}개, 실패 ${payload.result.failed_timelines}개, artifact ${payload.result.artifacts.length}개`;
-      banner.textContent = "Timeline 생성 완료";
+      banner.textContent = "재생 타임라인 생성 완료";
       await loadReplayArtifacts();
     }
 
@@ -14823,10 +15523,10 @@ _INDEX_HTML = """<!doctype html>
         raw_compression: String(form.get("raw_compression") || "gzip"),
       });
       storageSettingsStatus.textContent = [
-        `Raw ${formatStoragePathStatus(payload.storage_status?.raw_data_dir)}`,
-        `Replay ${formatStoragePathStatus(payload.storage_status?.replay_data_dir)}`,
-        `Backup ${formatStoragePathStatus(payload.storage_status?.backup_data_dir)}`,
-        `Quarantine ${formatStoragePathStatus(payload.storage_status?.quarantine_data_dir)}`,
+        `원본 ${formatStoragePathStatus(payload.storage_status?.raw_data_dir)}`,
+        `리플레이 ${formatStoragePathStatus(payload.storage_status?.replay_data_dir)}`,
+        `백업 ${formatStoragePathStatus(payload.storage_status?.backup_data_dir)}`,
+        `격리 ${formatStoragePathStatus(payload.storage_status?.quarantine_data_dir)}`,
       ].join(" / ");
       await loadStatus();
       await loadAlerts({ renderHistory: false });
@@ -14841,9 +15541,9 @@ _INDEX_HTML = """<!doctype html>
         player_lookup_chunk_size: Number(form.get("player_lookup_chunk_size") || 10),
       });
       collectorSettingsStatus.textContent = [
-        `${payload.collector.poll_interval_seconds}초`,
-        `${payload.collector.cycle_player_limit}명`,
-        `chunk ${payload.collector.player_lookup_chunk_size}`,
+        `${formatInteger(payload.collector.poll_interval_seconds)}초`,
+        `${formatInteger(payload.collector.cycle_player_limit)}명`,
+        `조회 묶음 ${formatInteger(payload.collector.player_lookup_chunk_size)}명`,
       ].join(" / ");
       await loadStatus();
     }
@@ -14855,7 +15555,7 @@ _INDEX_HTML = """<!doctype html>
 
     function renderCollectorWorkerStatus(worker) {
       if (!worker) {
-        collectorWorkerStatus.textContent = "Auto collector status unavailable";
+        collectorWorkerStatus.textContent = "자동 수집기 상태를 확인할 수 없습니다.";
         setRailStatus(railCollector, "상태 오류", "error");
         return;
       }
@@ -14870,17 +15570,18 @@ _INDEX_HTML = """<!doctype html>
       const lastCycle = worker.last_cycle;
       const lastSummary = lastCycle
         ? [
-            `last ${escapeHtml(lastCycle.finished_at_kst || "-")}`,
-            `new matches ${lastCycle.collection?.queued_match_jobs ?? "-"}`,
-            `stored matches ${lastCycle.match_jobs?.stored_matches ?? "-"}`,
-            `stored telemetry ${lastCycle.telemetry_jobs?.stored_telemetry ?? "-"}`,
+            `최근 완료 ${lastCycle.finished_at_kst || "-"}`,
+            `새 매치 ${formatInteger(lastCycle.collection?.queued_match_jobs)}`,
+            `저장 매치 ${formatInteger(lastCycle.match_jobs?.stored_matches)}`,
+            `저장 텔레메트리 ${formatInteger(lastCycle.telemetry_jobs?.stored_telemetry)}`,
           ].join(" / ")
-        : "no cycle yet";
+        : "아직 실행 이력 없음";
+      const stateLabel = { running: "실행 중", stopping: "종료 중", stopped: "중지" }[state] || "알 수 없음";
       collectorWorkerStatus.textContent = [
-        `Auto collector ${state}`,
-        `cycles ${worker.cycle_count || 0}`,
-        worker.next_run_at_kst ? `next ${worker.next_run_at_kst}` : null,
-        worker.last_error ? `error ${worker.last_error}` : null,
+        `자동 수집기 ${stateLabel}`,
+        `실행 ${formatInteger(worker.cycle_count || 0)}회`,
+        worker.next_run_at_kst ? `다음 실행 ${worker.next_run_at_kst}` : null,
+        worker.last_error ? `오류 ${worker.last_error}` : null,
         lastSummary,
       ].filter(Boolean).join(" / ");
     }
@@ -14910,7 +15611,7 @@ _INDEX_HTML = """<!doctype html>
 
     function renderPostProcessingWorkerStatus(worker) {
       if (!worker) {
-        postProcessingWorkerStatus.textContent = "Post-processing status unavailable";
+        postProcessingWorkerStatus.textContent = "자동 후처리 상태를 확인할 수 없습니다.";
         setRailStatus(railPostProcessing, "상태 오류", "error");
         return;
       }
@@ -14925,21 +15626,22 @@ _INDEX_HTML = """<!doctype html>
       const lastCycle = worker.last_cycle;
       const lastSummary = lastCycle
         ? [
-            `last ${escapeHtml(lastCycle.finished_at_kst || "-")}`,
-            `combat ${lastCycle.combat?.parsed_payloads ?? "-"}`,
-            `activity ${lastCycle.activity?.parsed_payloads ?? "-"}`,
-            `items ${lastCycle.items?.parsed_payloads ?? "-"}`,
-            `movement ${lastCycle.movement?.parsed_payloads ?? "-"}`,
-            `loadout ${lastCycle.loadout_snapshots?.generated_snapshots ?? "-"}`,
-            `maps ${lastCycle.map_snapshots?.generated_snapshots ?? "-"}`,
-            `timelines ${lastCycle.replay_timelines?.generated_timelines ?? "-"}`,
+            `최근 완료 ${lastCycle.finished_at_kst || "-"}`,
+            `전투 ${formatInteger(lastCycle.combat?.parsed_payloads)}`,
+            `행동 ${formatInteger(lastCycle.activity?.parsed_payloads)}`,
+            `아이템 ${formatInteger(lastCycle.items?.parsed_payloads)}`,
+            `이동 ${formatInteger(lastCycle.movement?.parsed_payloads)}`,
+            `장비 조합 ${formatInteger(lastCycle.loadout_snapshots?.generated_snapshots)}`,
+            `지도 ${formatInteger(lastCycle.map_snapshots?.generated_snapshots)}`,
+            `타임라인 ${formatInteger(lastCycle.replay_timelines?.generated_timelines)}`,
           ].join(" / ")
-        : "no cycle yet";
+        : "아직 실행 이력 없음";
+      const stateLabel = { running: "실행 중", stopping: "종료 중", stopped: "중지" }[state] || "알 수 없음";
       postProcessingWorkerStatus.textContent = [
-        `Post-processing ${state}`,
-        `cycles ${worker.cycle_count || 0}`,
-        worker.next_run_at_kst ? `next ${worker.next_run_at_kst}` : null,
-        worker.last_error ? `error ${worker.last_error}` : null,
+        `자동 후처리 ${stateLabel}`,
+        `실행 ${formatInteger(worker.cycle_count || 0)}회`,
+        worker.next_run_at_kst ? `다음 실행 ${worker.next_run_at_kst}` : null,
+        worker.last_error ? `오류 ${worker.last_error}` : null,
         lastSummary,
       ].filter(Boolean).join(" / ");
     }
@@ -15182,6 +15884,19 @@ _INDEX_HTML = """<!doctype html>
     comparisonForm.elements.metric.addEventListener("change", () => {
       if (activeComparisonRows.length) renderComparisonResult();
     });
+    comparisonForm.elements.trend_granularity.addEventListener("change", async () => {
+      if (!activeComparisonRows.length) return;
+      comparisonBody.textContent = "선택한 시간 단위로 비교 추세를 다시 불러오는 중...";
+      try {
+        await loadComparison(comparisonForm);
+        activeComparisonView = "trend";
+        setComparisonView("trend");
+        banner.textContent = "비교 추세 단위 변경 완료";
+      } catch (error) {
+        comparisonBody.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
     comparisonItemPicker.addEventListener("change", (event) => {
       const input = event.target instanceof HTMLInputElement ? event.target : null;
       if (!input) return;
@@ -15317,6 +16032,8 @@ _INDEX_HTML = """<!doctype html>
           String(form.get("shard") || "steam"),
           String(form.get("guild_id") || ""),
           Number(form.get("limit") || 10),
+          Number(form.get("min_matches") || 1),
+          String(form.get("active_only") || "true") === "true",
         );
         banner.textContent = "랭킹 조회 완료";
       } catch (error) {
@@ -15325,25 +16042,53 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
+    displaySettingsForm?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const mode = String(new FormData(displaySettingsForm).get("number_format") || "grouped");
+      activeNumberFormat = ["grouped", "korean_units", "plain"].includes(mode) ? mode : "grouped";
+      try {
+        window.localStorage.setItem("pubg-ai-number-format", activeNumberFormat);
+      } catch (_error) {
+        // Some embedded webviews can block persistence; the current run still uses the selection.
+      }
+      applyDisplaySettings();
+      if (activeRankingReport) renderPlayerRanking();
+      if (activeComparisonRows.length) renderComparisonResult();
+      if (activeIntelligenceReport) renderIntelligenceReport();
+      if (activeTimeInsightReport) renderTimeInsights(String(timeInsightForm.elements.metric.value || "match_count"));
+      if (activeTrendReport) {
+        renderTrendView();
+        renderTrendChart();
+      }
+      displaySettingsStatus.firstChild.textContent = "적용 완료 · 현재 표기 예시: ";
+      banner.textContent = "숫자 표기 설정 적용 완료";
+    });
+    displaySettingsForm?.elements.number_format.addEventListener("change", () => {
+      const previous = activeNumberFormat;
+      activeNumberFormat = displaySettingsForm.elements.number_format.value || "grouped";
+      if (displayNumberPreview) displayNumberPreview.textContent = formatInteger(59452);
+      activeNumberFormat = previous;
+    });
+
     storageSettingsForm.addEventListener("submit", async (event) => {
       try {
         await saveStorageSettings(event);
-        banner.textContent = "Storage settings saved";
+        banner.textContent = "저장 경로 설정 저장 완료";
       } catch (error) {
         event.preventDefault();
-        storageSettingsStatus.textContent = `Error: ${error.message}`;
-        banner.textContent = `Error: ${error.message}`;
+        storageSettingsStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
     alertSettingsForm.addEventListener("submit", async (event) => {
       try {
         await saveAlertSettings(event);
-        banner.textContent = "Alert settings saved";
+        banner.textContent = "알림 설정 저장 완료";
       } catch (error) {
         event.preventDefault();
-        alertSettingsStatus.textContent = `Error: ${error.message}`;
-        banner.textContent = `Error: ${error.message}`;
+        alertSettingsStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -15356,8 +16101,8 @@ _INDEX_HTML = """<!doctype html>
           await loadWorkerRunDetail(workerRunButton.dataset.workerRunFromAlert || "", { scroll: true });
           banner.textContent = "알림에서 작업 실행 상세를 불러왔습니다.";
         } catch (error) {
-          workerRunsStatus.textContent = `Error: ${error.message}`;
-          banner.textContent = `Error: ${error.message}`;
+          workerRunsStatus.textContent = `오류: ${error.message}`;
+          banner.textContent = `오류: ${error.message}`;
         }
         return;
       }
@@ -15370,13 +16115,13 @@ _INDEX_HTML = """<!doctype html>
       try {
         if (button.dataset.alertAction === "acknowledge") {
           await acknowledgeAlert(button.dataset.alertId || "");
-          banner.textContent = "Alert acknowledged";
+          banner.textContent = "알림 확인 처리 완료";
         } else if (button.dataset.alertAction === "snooze") {
           await snoozeAlert(button.dataset.alertId || "", 60);
-          banner.textContent = "Alert snoozed";
+          banner.textContent = "알림 숨김 처리 완료";
         }
       } catch (error) {
-        banner.textContent = `Error: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -15386,8 +16131,8 @@ _INDEX_HTML = """<!doctype html>
         await loadAlertHistory({ offset: 0, updateUrl: true });
         banner.textContent = "알림 이력 조회 완료";
       } catch (error) {
-        alertHistoryStatus.textContent = `Error: ${error.message}`;
-        banner.textContent = `Error: ${error.message}`;
+        alertHistoryStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -15400,7 +16145,7 @@ _INDEX_HTML = """<!doctype html>
         const url = await copyAlertHistoryFilterLink();
         banner.textContent = `알림 이력 조회 링크 복사 완료: ${url}`;
       } catch (error) {
-        banner.textContent = `Error: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -15410,8 +16155,8 @@ _INDEX_HTML = """<!doctype html>
           await applyAlertHistoryPreset(button.dataset.alertHistoryPreset || "");
           banner.textContent = "알림 이력 빠른 조건 조회 완료";
         } catch (error) {
-          alertHistoryStatus.textContent = `Error: ${error.message}`;
-          banner.textContent = `Error: ${error.message}`;
+          alertHistoryStatus.textContent = `오류: ${error.message}`;
+          banner.textContent = `오류: ${error.message}`;
         }
       });
     }
@@ -15425,9 +16170,9 @@ _INDEX_HTML = """<!doctype html>
           await loadWorkerRunDetail(workerRunButton.dataset.workerRunFromAlert || "", { scroll: true });
           banner.textContent = "알림과 연결된 자동 작업 상세 조회 완료";
         } catch (error) {
-          workerRunsStatus.textContent = `Error: ${error.message}`;
-          alertHistoryStatus.textContent = `Error: ${error.message}`;
-          banner.textContent = `Error: ${error.message}`;
+          workerRunsStatus.textContent = `오류: ${error.message}`;
+          alertHistoryStatus.textContent = `오류: ${error.message}`;
+          banner.textContent = `오류: ${error.message}`;
         }
         return;
       }
@@ -15440,12 +16185,12 @@ _INDEX_HTML = """<!doctype html>
           const alert = alertHistoryRecords.find((record) => (
             String(record.id) === String(detailButton.dataset.alertDetailId || "")
           ));
-          if (!alert) throw new Error("alert history row is not loaded");
+          if (!alert) throw new Error("알림 이력 항목을 불러오지 못했습니다.");
           await loadAlertHistoryDetail(alert);
-          banner.textContent = "Alert detail loaded";
+          banner.textContent = "알림 상세 조회 완료";
         } catch (error) {
-          alertHistoryStatus.textContent = `Error: ${error.message}`;
-          banner.textContent = `Error: ${error.message}`;
+          alertHistoryStatus.textContent = `오류: ${error.message}`;
+          banner.textContent = `오류: ${error.message}`;
         }
         return;
       }
@@ -15459,12 +16204,12 @@ _INDEX_HTML = """<!doctype html>
         const alert = alertHistoryRecords.find((record) => (
           String(record.id) === String(button.dataset.alertId || "")
         ));
-        if (!alert) throw new Error("alert history row is not loaded");
+        if (!alert) throw new Error("알림 이력 항목을 불러오지 못했습니다.");
         await loadAlertHistoryDetail(alert, button.dataset.alertNoteType || "note", true);
-        banner.textContent = "Alert detail loaded";
+        banner.textContent = "알림 상세 조회 완료";
       } catch (error) {
-        alertHistoryStatus.textContent = `Error: ${error.message}`;
-        banner.textContent = `Error: ${error.message}`;
+        alertHistoryStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -15476,10 +16221,10 @@ _INDEX_HTML = """<!doctype html>
       event.preventDefault();
       try {
         await saveAlertHistoryNoteForm(form);
-        banner.textContent = "Alert note saved";
+        banner.textContent = "알림 메모 저장 완료";
       } catch (error) {
-        alertHistoryStatus.textContent = `Error: ${error.message}`;
-        banner.textContent = `Error: ${error.message}`;
+        alertHistoryStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -15490,11 +16235,11 @@ _INDEX_HTML = """<!doctype html>
       if (workerRunButton) {
         try {
           await loadWorkerRunDetail(workerRunButton.dataset.workerRunFromAlert || "", { scroll: true });
-          banner.textContent = "Worker run detail loaded from alert";
+          banner.textContent = "알림에서 작업 실행 상세 조회 완료";
         } catch (error) {
-          workerRunsStatus.textContent = `Error: ${error.message}`;
-          alertHistoryStatus.textContent = `Error: ${error.message}`;
-          banner.textContent = `Error: ${error.message}`;
+          workerRunsStatus.textContent = `오류: ${error.message}`;
+          alertHistoryStatus.textContent = `오류: ${error.message}`;
+          banner.textContent = `오류: ${error.message}`;
         }
         return;
       }
@@ -15507,14 +16252,14 @@ _INDEX_HTML = """<!doctype html>
       try {
         if (button.dataset.alertDetailAction === "acknowledge") {
           await acknowledgeAlert(button.dataset.alertId || "");
-          banner.textContent = "Alert acknowledged";
+          banner.textContent = "알림 확인 처리 완료";
         } else if (button.dataset.alertDetailAction === "snooze") {
           await snoozeAlert(button.dataset.alertId || "", 60);
-          banner.textContent = "Alert snoozed";
+          banner.textContent = "알림 숨김 처리 완료";
         }
       } catch (error) {
-        alertHistoryStatus.textContent = `Error: ${error.message}`;
-        banner.textContent = `Error: ${error.message}`;
+        alertHistoryStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -15525,8 +16270,8 @@ _INDEX_HTML = """<!doctype html>
           updateUrl: true,
         });
       } catch (error) {
-        alertHistoryStatus.textContent = `Error: ${error.message}`;
-        banner.textContent = `Error: ${error.message}`;
+        alertHistoryStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -15537,8 +16282,8 @@ _INDEX_HTML = """<!doctype html>
           updateUrl: true,
         });
       } catch (error) {
-        alertHistoryStatus.textContent = `Error: ${error.message}`;
-        banner.textContent = `Error: ${error.message}`;
+        alertHistoryStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -15548,8 +16293,8 @@ _INDEX_HTML = """<!doctype html>
         await loadWorkerRuns({ offset: 0, updateUrl: true });
         banner.textContent = "작업 실행 이력을 불러왔습니다.";
       } catch (error) {
-        workerRunsStatus.textContent = `Error: ${error.message}`;
-        banner.textContent = `Error: ${error.message}`;
+        workerRunsStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -15562,7 +16307,7 @@ _INDEX_HTML = """<!doctype html>
         const url = await copyWorkerRunFilterLink();
         banner.textContent = `작업 실행 필터 링크를 복사했습니다: ${url}`;
       } catch (error) {
-        banner.textContent = `Error: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -15587,8 +16332,8 @@ _INDEX_HTML = """<!doctype html>
           updateUrl: true,
         });
       } catch (error) {
-        workerRunsStatus.textContent = `Error: ${error.message}`;
-        banner.textContent = `Error: ${error.message}`;
+        workerRunsStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -15599,8 +16344,8 @@ _INDEX_HTML = """<!doctype html>
           updateUrl: true,
         });
       } catch (error) {
-        workerRunsStatus.textContent = `Error: ${error.message}`;
-        banner.textContent = `Error: ${error.message}`;
+        workerRunsStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -15613,9 +16358,9 @@ _INDEX_HTML = """<!doctype html>
         await loadWorkerRunDetail(detailButton.dataset.workerRunDetailId || "");
         banner.textContent = "자동 작업 상세 조회 완료";
       } catch (error) {
-        workerRunsStatus.textContent = `Error: ${error.message}`;
-        workerRunDetail.innerHTML = `<div class="status">Error: ${escapeHtml(error.message)}</div>`;
-        banner.textContent = `Error: ${error.message}`;
+        workerRunsStatus.textContent = `오류: ${error.message}`;
+        workerRunDetail.innerHTML = `<div class="status">오류: ${escapeHtml(error.message)}</div>`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -15628,60 +16373,60 @@ _INDEX_HTML = """<!doctype html>
         const url = await copyWorkerRunDetailLink(copyButton.dataset.copyWorkerRunLink || "");
         banner.textContent = `작업 실행 상세 링크를 복사했습니다: ${url}`;
       } catch (error) {
-        banner.textContent = `Error: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
     collectorSettingsForm.addEventListener("submit", async (event) => {
       try {
         await saveCollectorSettings(event);
-        banner.textContent = "Collector settings saved";
+        banner.textContent = "수집기 설정 저장 완료";
       } catch (error) {
         event.preventDefault();
-        collectorSettingsStatus.textContent = `Error: ${error.message}`;
-        banner.textContent = `Error: ${error.message}`;
+        collectorSettingsStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
     collectorWorkerForm.addEventListener("submit", async (event) => {
       try {
         await startCollectorWorker(event);
-        banner.textContent = "Auto collector started";
+        banner.textContent = "자동 수집기 시작 완료";
       } catch (error) {
         event.preventDefault();
-        collectorWorkerStatus.textContent = `Error: ${error.message}`;
-        banner.textContent = `Error: ${error.message}`;
+        collectorWorkerStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
     collectorWorkerStop.addEventListener("click", async () => {
       try {
         await stopCollectorWorker();
-        banner.textContent = "Auto collector stop requested";
+        banner.textContent = "자동 수집기 중지 요청 완료";
       } catch (error) {
-        collectorWorkerStatus.textContent = `Error: ${error.message}`;
-        banner.textContent = `Error: ${error.message}`;
+        collectorWorkerStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
     postProcessingWorkerForm.addEventListener("submit", async (event) => {
       try {
         await startPostProcessingWorker(event);
-        banner.textContent = "Post-processing worker started";
+        banner.textContent = "자동 후처리 시작 완료";
       } catch (error) {
         event.preventDefault();
-        postProcessingWorkerStatus.textContent = `Error: ${error.message}`;
-        banner.textContent = `Error: ${error.message}`;
+        postProcessingWorkerStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
     postProcessingWorkerStop.addEventListener("click", async () => {
       try {
         await stopPostProcessingWorker();
-        banner.textContent = "Post-processing stop requested";
+        banner.textContent = "자동 후처리 중지 요청 완료";
       } catch (error) {
-        postProcessingWorkerStatus.textContent = `Error: ${error.message}`;
-        banner.textContent = `Error: ${error.message}`;
+        postProcessingWorkerStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -15693,6 +16438,12 @@ _INDEX_HTML = """<!doctype html>
         playerIntelligenceAuditStatus.textContent = `오류: ${error.message}`;
         banner.textContent = `오류: ${error.message}`;
       }
+    });
+    rankingViewControls?.addEventListener("click", (event) => {
+      const button = event.target instanceof Element ? event.target.closest("[data-ranking-view]") : null;
+      if (!button) return;
+      activeRankingView = button.dataset.rankingView || "table";
+      renderPlayerRanking();
     });
 
     operationalDrillForm.addEventListener("submit", async (event) => {
@@ -15730,11 +16481,11 @@ _INDEX_HTML = """<!doctype html>
     webSettingsForm.addEventListener("submit", async (event) => {
       try {
         await saveWebSettings(event);
-        banner.textContent = "Local web link settings saved";
+        banner.textContent = "로컬 상세 링크 설정 저장 완료";
       } catch (error) {
         event.preventDefault();
-        webSettingsStatus.textContent = `Error: ${error.message}`;
-        banner.textContent = `Error: ${error.message}`;
+        webSettingsStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -15890,7 +16641,7 @@ _INDEX_HTML = """<!doctype html>
         formElement.reset();
         banner.textContent = "Discord 랭킹 범위를 저장했습니다.";
       } catch (error) {
-        banner.textContent = `Error: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -15902,9 +16653,9 @@ _INDEX_HTML = """<!doctype html>
           guild_ranking_scopes: activeDiscordScopes.guild_ranking_scopes || {},
           public_profile_default: form.get("public_profile_default") === "true",
         });
-        banner.textContent = "Public profile default saved.";
+        banner.textContent = "공개 프로필 기본값 저장 완료";
       } catch (error) {
-        banner.textContent = `Error: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -15922,9 +16673,9 @@ _INDEX_HTML = """<!doctype html>
           guild_ranking_scopes: nextGuildScopes,
           public_profile_default: activeDiscordScopes.public_profile_default !== false,
         });
-        banner.textContent = "Discord scope removed.";
+        banner.textContent = "Discord 서버 범위 삭제 완료";
       } catch (error) {
-        banner.textContent = `Error: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -15973,7 +16724,7 @@ _INDEX_HTML = """<!doctype html>
           await runDataDeletionBackupVerification(button);
         }
       } catch (error) {
-        dataDeletionStatus.textContent = `Error: ${error.message}`;
+        dataDeletionStatus.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -15986,7 +16737,7 @@ _INDEX_HTML = """<!doctype html>
       try {
         await buildDataDeletionBackupArtifacts(form);
       } catch (error) {
-        dataDeletionStatus.textContent = `Error: ${error.message}`;
+        dataDeletionStatus.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -15999,7 +16750,7 @@ _INDEX_HTML = """<!doctype html>
       try {
         await runDataDeletionBackupRestoreRehearsal(form);
       } catch (error) {
-        dataDeletionStatus.textContent = `Error: ${error.message}`;
+        dataDeletionStatus.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -16012,7 +16763,7 @@ _INDEX_HTML = """<!doctype html>
       try {
         await runDataDeletionQuarantinePlanning(form);
       } catch (error) {
-        dataDeletionStatus.textContent = `Error: ${error.message}`;
+        dataDeletionStatus.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -16025,7 +16776,7 @@ _INDEX_HTML = """<!doctype html>
       try {
         await runDataDeletionQuarantineRehearsal(form);
       } catch (error) {
-        dataDeletionStatus.textContent = `Error: ${error.message}`;
+        dataDeletionStatus.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -16038,7 +16789,7 @@ _INDEX_HTML = """<!doctype html>
       try {
         await runDataDeletionCombinedRehearsal(form);
       } catch (error) {
-        dataDeletionStatus.textContent = `Error: ${error.message}`;
+        dataDeletionStatus.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -16051,7 +16802,7 @@ _INDEX_HTML = """<!doctype html>
       try {
         await runDataDeletionFaultMatrix(form);
       } catch (error) {
-        dataDeletionStatus.textContent = `Error: ${error.message}`;
+        dataDeletionStatus.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -16064,7 +16815,7 @@ _INDEX_HTML = """<!doctype html>
       try {
         await generateDataDeletionReviewPacket(form);
       } catch (error) {
-        dataDeletionStatus.textContent = `Error: ${error.message}`;
+        dataDeletionStatus.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -16077,7 +16828,7 @@ _INDEX_HTML = """<!doctype html>
       try {
         await recordDataDeletionBackupEvidence(form);
       } catch (error) {
-        dataDeletionStatus.textContent = `Error: ${error.message}`;
+        dataDeletionStatus.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -16095,7 +16846,7 @@ _INDEX_HTML = """<!doctype html>
         await verifyExportedReviewPacket(exportedReviewPacketVerifierForm);
       } catch (error) {
         exportedReviewPacketVerifierResult.innerHTML = "";
-        exportedReviewPacketVerifierStatus.textContent = `Error: ${error.message}`;
+        exportedReviewPacketVerifierStatus.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -16105,7 +16856,7 @@ _INDEX_HTML = """<!doctype html>
         await compareExportedReviewPackets(exportedReviewPacketComparerForm);
       } catch (error) {
         exportedReviewPacketComparerResult.innerHTML = "";
-        exportedReviewPacketComparerStatus.textContent = `Error: ${error.message}`;
+        exportedReviewPacketComparerStatus.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -16114,7 +16865,7 @@ _INDEX_HTML = """<!doctype html>
       try {
         await loadDataDeletionRequests();
       } catch (error) {
-        dataDeletionStatus.textContent = `Error: ${error.message}`;
+        dataDeletionStatus.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -16134,7 +16885,7 @@ _INDEX_HTML = """<!doctype html>
           await reviewDataDeletionRequest(requestId, action);
         }
       } catch (error) {
-        dataDeletionStatus.textContent = `Error: ${error.message}`;
+        dataDeletionStatus.textContent = `오류: ${error.message}`;
       }
     });
 
@@ -16426,8 +17177,8 @@ _INDEX_HTML = """<!doctype html>
         try {
           await chooseStorageDirectory(button);
         } catch (error) {
-          storageSettingsStatus.textContent = "Error: " + error.message;
-          banner.textContent = "Error: " + error.message;
+          storageSettingsStatus.textContent = "오류: " + error.message;
+          banner.textContent = "오류: " + error.message;
         }
       });
     }
@@ -16438,6 +17189,7 @@ _INDEX_HTML = """<!doctype html>
       railActivity.textContent = banner.textContent || "대기 중";
     }).observe(banner, { childList: true, characterData: true, subtree: true });
 
+    applyDisplaySettings();
     syncWorkspaceToLocation();
     updateKstClock();
     setInterval(updateKstClock, 1000);
@@ -16464,10 +17216,10 @@ _INDEX_HTML = """<!doctype html>
     setInterval(() => runBackgroundRefresh("작업 이력", loadWorkerRuns), 30000);
     setInterval(() => loadOperationalDrills().catch(() => {}), 30000);
     setInterval(() => {
-      loadDataDeletionRequests().catch((error) => { dataDeletionStatus.textContent = `Error: ${error.message}`; });
+      loadDataDeletionRequests().catch((error) => { dataDeletionStatus.textContent = `오류: ${error.message}`; });
     }, 30000);
     setInterval(() => {
-      refreshAlertsAndHistory().catch((error) => { banner.textContent = `Error: ${error.message}`; });
+      refreshAlertsAndHistory().catch((error) => { banner.textContent = `오류: ${error.message}`; });
     }, 30000);
   </script>
 </body>

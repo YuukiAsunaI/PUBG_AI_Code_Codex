@@ -6,6 +6,7 @@ from datetime import datetime, time, timedelta
 from typing import Any, Iterable, Mapping
 import json
 
+from pubg_ai.code_translator import translate_code
 from pubg_ai.metric_catalog import metric_catalog_records
 from pubg_ai.player_registry import RegisteredPlayer
 from pubg_ai.player_stats import PlayerStatsService
@@ -929,8 +930,21 @@ def _merge_item_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
                 target[field] = candidate
         for field in sum_fields:
             target[field] = _normalized_sum((target.get(field), source.get(field)))
+    values = list(merged.values())
+    for row in values:
+        row["item_name_ko"] = translate_code(row["item_code"], "item")
+        if row.get("item_category"):
+            row["item_category_ko"] = translate_code(
+                str(row["item_category"]),
+                "item_category",
+            )
+        if row.get("item_sub_category"):
+            row["item_sub_category_ko"] = translate_code(
+                str(row["item_sub_category"]),
+                "item_sub_category",
+            )
     return sorted(
-        merged.values(),
+        values,
         key=lambda row: _float(row.get("picked_up_events")) + _float(row.get("used_events")),
         reverse=True,
     )
@@ -954,8 +968,19 @@ def _merge_activity_detail_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict[
             _float(target.get("max_speed")),
             _float(source.get("max_speed")),
         )
+    values = list(merged.values())
+    for row in values:
+        if row.get("action"):
+            row["action_ko"] = translate_code(str(row["action"]), "activity_action")
+        if row.get("item_code"):
+            row["item_name_ko"] = translate_code(str(row["item_code"]), "item")
+        if row.get("vehicle_type"):
+            row["vehicle_type_ko"] = translate_code(
+                str(row["vehicle_type"]),
+                "vehicle_type",
+            )
     return sorted(
-        merged.values(),
+        values,
         key=lambda row: _float(row.get("event_count")),
         reverse=True,
     )

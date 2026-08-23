@@ -459,7 +459,7 @@ class ReplayTimelineProcessorTests(unittest.TestCase):
         self.assertEqual(payload["positions"][1]["time_seconds"], 103.0)
         self.assertEqual(payload["positions"][0]["movement_mode"], "airborne")
         self.assertEqual(payload["positions"][1]["movement_mode"], "vehicle")
-        self.assertEqual(payload["positions"][1]["vehicle_label"], "Dacia A 01 v2")
+        self.assertEqual(payload["positions"][1]["vehicle_label"], "다시아")
         self.assertEqual(payload["landings"][0]["time_seconds"], 88.0)
         position_query = next(
             query

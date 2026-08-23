@@ -4,13 +4,70 @@ import unittest
 from datetime import datetime
 
 from pubg_ai.player_recommendations import (
+    DropZoneRecommendation,
     PlayerRecommendationService,
     WeaponRecommendation,
+    _aggregate_drop_regions,
     _inventory_burden,
 )
 
 
 class PlayerRecommendationServiceTests(unittest.TestCase):
+    def test_drop_region_aggregation_preserves_weighted_map_position(self) -> None:
+        zones = [
+            DropZoneRecommendation(
+                map_name="Tiger_Main",
+                map_name_ko="태이고",
+                grid_x=1,
+                grid_y=2,
+                x_pct=0.2,
+                y_pct=0.3,
+                score=10.0,
+                match_count=2,
+                wins=1,
+                kills=2,
+                deaths=1,
+                damage_dealt=400.0,
+                win_rate=0.5,
+                avg_damage_dealt=200.0,
+                avg_survival_seconds=1000.0,
+                reason="test",
+                centroid_x_cm=200.0,
+                centroid_y_cm=300.0,
+                region_id="taego.test",
+                region_display_name_ko="테스트 지역",
+            ),
+            DropZoneRecommendation(
+                map_name="Tiger_Main",
+                map_name_ko="태이고",
+                grid_x=2,
+                grid_y=3,
+                x_pct=0.4,
+                y_pct=0.5,
+                score=20.0,
+                match_count=1,
+                wins=0,
+                kills=1,
+                deaths=1,
+                damage_dealt=100.0,
+                win_rate=0.0,
+                avg_damage_dealt=100.0,
+                avg_survival_seconds=800.0,
+                reason="test",
+                centroid_x_cm=400.0,
+                centroid_y_cm=500.0,
+                region_id="taego.test",
+                region_display_name_ko="테스트 지역",
+            ),
+        ]
+
+        region = _aggregate_drop_regions(zones, min_matches=1, limit=10)[0]
+
+        self.assertAlmostEqual(region.x_pct, 0.2 * 2 / 3 + 0.4 / 3)
+        self.assertAlmostEqual(region.y_pct, 0.3 * 2 / 3 + 0.5 / 3)
+        self.assertAlmostEqual(region.centroid_x_cm or 0.0, 200 * 2 / 3 + 400 / 3)
+        self.assertAlmostEqual(region.centroid_y_cm or 0.0, 300 * 2 / 3 + 500 / 3)
+
     def test_builds_recommendations_from_summary_tables(self) -> None:
         connection = FakeConnection(
             [

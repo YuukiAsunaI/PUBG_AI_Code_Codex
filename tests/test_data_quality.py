@@ -6,6 +6,7 @@ import unittest
 from pubg_ai.data_quality import (
     DataQualityCheck,
     PlayerIntelligenceAudit,
+    _item_use_quantity_mismatches,
     _json_value,
 )
 
@@ -30,6 +31,38 @@ class DataQualityTests(unittest.TestCase):
     def test_mysql_decimals_are_json_safe(self) -> None:
         self.assertEqual(_json_value(Decimal("12")), 12)
         self.assertEqual(_json_value(Decimal("12.5")), 12.5)
+
+    def test_item_use_quantity_audit_checks_v5_event_semantics(self) -> None:
+        class Cursor:
+            def __init__(self) -> None:
+                self.query = ""
+                self.params = ()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def execute(self, query, params):
+                self.query = query
+                self.params = params
+
+            def fetchone(self):
+                return {"value": 0}
+
+        class Connection:
+            def __init__(self) -> None:
+                self.cursor_obj = Cursor()
+
+            def cursor(self):
+                return self.cursor_obj
+
+        connection = Connection()
+
+        self.assertEqual(_item_use_quantity_mismatches(connection), 0)
+        self.assertIn("stats.used_quantity <> stats.used_events", connection.cursor_obj.query)
+        self.assertEqual(connection.cursor_obj.params, ("items-v5",))
 
 
 if __name__ == "__main__":

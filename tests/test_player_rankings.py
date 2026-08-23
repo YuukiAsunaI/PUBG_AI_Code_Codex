@@ -188,9 +188,57 @@ class PlayerRankingServiceTests(unittest.TestCase):
         self.assertAlmostEqual(ranking.rows[0].score, 8 / 25)
         self.assertAlmostEqual(ranking.rows[1].score, 4 / 25)
 
+    def test_detailed_ranking_metrics_include_top10_damage_and_fights(self) -> None:
+        row = _ranking_row(
+            player_id=1,
+            account_id="account.one",
+            name="Alpha",
+            match_count=5,
+            wins=2,
+            kills=10,
+            assists=5,
+            deaths=2,
+            damage_dealt=1500.0,
+        )
+        row.update(
+            {
+                "top10s": 4,
+                "damage_taken": 500.0,
+                "fight_count": 12,
+                "fight_wins": 9,
+                "fight_losses": 3,
+            }
+        )
+        connection = FakeConnection([[row], []])
+
+        ranking = PlayerRankingService(connection).get_player_ranking(
+            shard="steam",
+            metric="교전승률",
+            global_scope=True,
+        )
+
+        result = ranking.rows[0]
+        self.assertEqual(ranking.metric, "fight_win_rate")
+        self.assertAlmostEqual(result.score, 0.75)
+        self.assertAlmostEqual(result.top10_rate, 0.8)
+        self.assertAlmostEqual(result.kd, 5.0)
+        self.assertAlmostEqual(result.avg_kills, 2.0)
+        self.assertAlmostEqual(result.avg_assists, 1.0)
+        self.assertAlmostEqual(result.damage_ratio, 3.0)
+        self.assertAlmostEqual(result.avg_fights_per_match, 2.4)
+        self.assertIn("player_fight_outcomes", connection.executed[0][0])
+
+        self.assertEqual(resolve_ranking_metric("top10수").key, "top10s")
+        self.assertEqual(resolve_ranking_metric("명중수").key, "shots_hit")
+        self.assertEqual(resolve_ranking_metric("헤드샷명중수").key, "headshot_hits")
+        self.assertEqual(resolve_ranking_metric("헤드샷킬수").key, "headshot_kills")
+        self.assertEqual(resolve_ranking_metric("교전승리수").key, "fight_wins")
+
     def test_resolve_metric_aliases(self) -> None:
         self.assertEqual(resolve_ranking_metric("승률").key, "win_rate")
         self.assertEqual(resolve_ranking_metric("킬").key, "kills")
+        self.assertEqual(resolve_ranking_metric("top10").key, "top10_rate")
+        self.assertEqual(resolve_ranking_metric("평균교전").key, "avg_fights")
         self.assertEqual(resolve_ranking_metric("unknown").key, "kda")
 
 

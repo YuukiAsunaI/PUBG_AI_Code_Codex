@@ -350,6 +350,43 @@ class PlayerMatchWeaponStats:
 
 
 @dataclass(frozen=True)
+class PlayerMatchItemStats:
+    item_code: str
+    item_name: str
+    item_category: str | None
+    item_sub_category: str | None
+    picked_up_events: int
+    picked_up_quantity: int
+    loot_box_pickup_events: int
+    carepackage_pickup_events: int
+    custom_package_pickup_events: int
+    vehicle_trunk_pickup_events: int
+    vehicle_trunk_put_events: int
+    dropped_events: int
+    dropped_quantity: int
+    used_events: int
+    used_quantity: int
+    equipped_events: int
+    unequipped_events: int
+    attached_events: int
+    detached_events: int
+
+    def to_record(self) -> dict[str, Any]:
+        record = asdict(self)
+        record["item_category_ko"] = (
+            translate_code(self.item_category, "item_category")
+            if self.item_category
+            else None
+        )
+        record["item_sub_category_ko"] = (
+            translate_code(self.item_sub_category, "item_sub_category")
+            if self.item_sub_category
+            else None
+        )
+        return record
+
+
+@dataclass(frozen=True)
 class PlayerMatchDetail:
     player: RegisteredPlayer
     match_id: str
@@ -394,17 +431,44 @@ class PlayerMatchDetail:
     weapons: list[PlayerMatchWeaponStats]
     replay_artifact: ReplayArtifactRecord | None
     accuracy_breakdown: AccuracyBreakdown | None = None
+    team_mode: str | None = None
+    perspective: str | None = None
+    is_custom_match: bool = False
+    season_state: str | None = None
+    item_summary: dict[str, Any] = field(default_factory=dict)
+    items: list[PlayerMatchItemStats] = field(default_factory=list)
+    activity_summary: dict[str, Any] = field(default_factory=dict)
+    fight_summary: dict[str, Any] = field(default_factory=dict)
 
     def to_record(self) -> dict[str, Any]:
         return {
             "player": self.player.to_record(),
             "match_id": self.match_id,
             "shard": self.shard,
+            "shard_ko": translate_code(self.shard, "shard"),
             "map_name": self.map_name,
             "map_name_ko": translate_code(self.map_name, "map") if self.map_name else None,
             "game_mode": self.game_mode,
             "game_mode_ko": translate_code(self.game_mode, "game_mode") if self.game_mode else None,
             "match_type": self.match_type,
+            "match_type_ko": (
+                translate_code(self.match_type, "match_type") if self.match_type else None
+            ),
+            "team_mode": self.team_mode,
+            "team_mode_ko": (
+                translate_code(self.team_mode, "team_mode") if self.team_mode else None
+            ),
+            "perspective": self.perspective,
+            "perspective_ko": (
+                translate_code(self.perspective, "perspective") if self.perspective else None
+            ),
+            "is_custom_match": self.is_custom_match,
+            "season_state": self.season_state,
+            "season_state_ko": (
+                translate_code(self.season_state, "season_state")
+                if self.season_state
+                else None
+            ),
             "created_at_kst": _datetime_record(self.created_at_kst),
             "duration_seconds": self.duration_seconds,
             "total_players": self.total_players,
@@ -415,6 +479,9 @@ class PlayerMatchDetail:
             "win_place": self.win_place,
             "is_chicken": self.is_chicken,
             "death_type": self.death_type,
+            "death_type_ko": (
+                translate_code(self.death_type, "death_type") if self.death_type else None
+            ),
             "kills": self.kills,
             "assists": self.assists,
             "deaths": self.deaths,
@@ -449,6 +516,10 @@ class PlayerMatchDetail:
             "movement_distance_m": self.movement_distance_m,
             "weapons": [weapon.to_record() for weapon in self.weapons],
             "replay_artifact": self.replay_artifact.to_record() if self.replay_artifact else None,
+            "item_summary": self.item_summary,
+            "items": [item.to_record() for item in self.items],
+            "activity_summary": self.activity_summary,
+            "fight_summary": self.fight_summary,
         }
 
 
@@ -616,6 +687,10 @@ class PlayerStatsService:
         )
         weapons = self._get_match_weapons(player, match_id=match_id, limit=max(weapon_limit, 20))
         accuracy_breakdown = self._get_accuracy_breakdown(player, match_id=match_id)
+        items = self._get_match_items(player, match_id=match_id)
+        item_summary = _match_item_summary(items)
+        activity_summary = self._get_match_activity_summary(player, match_id=match_id)
+        fight_summary = self._get_match_fight_summary(player, match_id=match_id)
 
         return PlayerMatchDetail(
             player=player,
@@ -624,6 +699,10 @@ class PlayerStatsService:
             map_name=row.get("map_name"),
             game_mode=row.get("game_mode"),
             match_type=row.get("match_type"),
+            team_mode=row.get("team_mode"),
+            perspective=row.get("perspective"),
+            is_custom_match=bool(row.get("is_custom_match")),
+            season_state=row.get("season_state"),
             created_at_kst=row.get("created_at_kst"),
             duration_seconds=_optional_int(row.get("duration_seconds")),
             total_players=_optional_int(row.get("total_players")),
@@ -661,6 +740,10 @@ class PlayerStatsService:
             weapons=weapons[: max(1, min(int(weapon_limit), 20))],
             replay_artifact=artifacts[0] if artifacts else None,
             accuracy_breakdown=accuracy_breakdown,
+            item_summary=item_summary,
+            items=items,
+            activity_summary=activity_summary,
+            fight_summary=fight_summary,
         )
 
     def _get_player(
@@ -763,6 +846,10 @@ class PlayerStatsService:
                     matches.map_name,
                     matches.game_mode,
                     matches.match_type,
+                    matches.team_mode,
+                    matches.perspective,
+                    matches.is_custom_match,
+                    matches.season_state,
                     matches.created_at_kst,
                     matches.duration_seconds,
                     matches.total_players,
@@ -886,6 +973,179 @@ class PlayerStatsService:
                 )
             )
         return weapons
+
+    def _get_match_items(
+        self,
+        player: RegisteredPlayer,
+        *,
+        match_id: str,
+    ) -> list[PlayerMatchItemStats]:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    item_code,
+                    item_category,
+                    item_sub_category,
+                    picked_up_events,
+                    picked_up_quantity,
+                    loot_box_pickup_events,
+                    carepackage_pickup_events,
+                    custom_package_pickup_events,
+                    vehicle_trunk_pickup_events,
+                    vehicle_trunk_put_events,
+                    dropped_events,
+                    dropped_quantity,
+                    used_events,
+                    used_quantity,
+                    equipped_events,
+                    unequipped_events,
+                    attached_events,
+                    detached_events
+                FROM player_item_match_stats
+                WHERE account_id = %s
+                  AND match_id = %s
+                  AND (
+                    picked_up_events > 0
+                    OR dropped_events > 0
+                    OR used_events > 0
+                    OR equipped_events > 0
+                    OR unequipped_events > 0
+                    OR attached_events > 0
+                    OR detached_events > 0
+                  )
+                ORDER BY
+                    used_events DESC,
+                    picked_up_events DESC,
+                    equipped_events DESC,
+                    item_code ASC
+                """,
+                (player.account_id, match_id),
+            )
+            rows = cursor.fetchall()
+
+        return [
+            PlayerMatchItemStats(
+                item_code=str(row["item_code"]),
+                item_name=translate_code(str(row["item_code"]), "item"),
+                item_category=_optional_text(row.get("item_category")),
+                item_sub_category=_optional_text(row.get("item_sub_category")),
+                picked_up_events=_int(row.get("picked_up_events")),
+                picked_up_quantity=_int(row.get("picked_up_quantity")),
+                loot_box_pickup_events=_int(row.get("loot_box_pickup_events")),
+                carepackage_pickup_events=_int(row.get("carepackage_pickup_events")),
+                custom_package_pickup_events=_int(row.get("custom_package_pickup_events")),
+                vehicle_trunk_pickup_events=_int(row.get("vehicle_trunk_pickup_events")),
+                vehicle_trunk_put_events=_int(row.get("vehicle_trunk_put_events")),
+                dropped_events=_int(row.get("dropped_events")),
+                dropped_quantity=_int(row.get("dropped_quantity")),
+                used_events=_int(row.get("used_events")),
+                used_quantity=_int(row.get("used_quantity")),
+                equipped_events=_int(row.get("equipped_events")),
+                unequipped_events=_int(row.get("unequipped_events")),
+                attached_events=_int(row.get("attached_events")),
+                detached_events=_int(row.get("detached_events")),
+            )
+            for row in rows
+        ]
+
+    def _get_match_activity_summary(
+        self,
+        player: RegisteredPlayer,
+        *,
+        match_id: str,
+    ) -> dict[str, Any]:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    heal_events,
+                    heal_amount,
+                    item_heal_events,
+                    item_heal_amount,
+                    passive_heal_events,
+                    passive_heal_amount,
+                    throwable_uses,
+                    flare_uses,
+                    revives_caused,
+                    revives_received,
+                    trauma_bag_revives,
+                    carry_events,
+                    vehicle_rides,
+                    vehicle_leaves,
+                    vehicle_distance_m,
+                    vehicle_max_speed,
+                    vehicle_damage,
+                    vehicle_destroys,
+                    wheel_destroys,
+                    vaults,
+                    ledge_grabs,
+                    vehicle_vaults,
+                    swim_sessions,
+                    swim_distance_m,
+                    armor_destroys_caused,
+                    armor_destroys_taken,
+                    object_interactions,
+                    object_destroys,
+                    emergency_pickup_calls,
+                    emergency_pickup_rides,
+                    redeploys,
+                    normalized_event_count
+                FROM player_match_activity_summaries
+                WHERE account_id = %s
+                  AND match_id = %s
+                LIMIT 1
+                """,
+                (player.account_id, match_id),
+            )
+            row = cursor.fetchone()
+        if not row:
+            return {"available": False}
+        record = dict(row)
+        record["available"] = True
+        return record
+
+    def _get_match_fight_summary(
+        self,
+        player: RegisteredPlayer,
+        *,
+        match_id: str,
+    ) -> dict[str, Any]:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    COUNT(*) AS fight_count,
+                    COALESCE(SUM(outcome_type = 'win'), 0) AS wins,
+                    COALESCE(SUM(outcome_type = 'loss'), 0) AS losses,
+                    COALESCE(SUM(outcome_reason = 'kill'), 0) AS kill_wins,
+                    COALESCE(SUM(outcome_reason = 'dbno_caused'), 0) AS dbno_wins,
+                    COALESCE(SUM(outcome_reason = 'death'), 0) AS death_losses,
+                    COALESCE(SUM(outcome_reason = 'dbno_taken'), 0) AS dbno_losses,
+                    COALESCE(SUM(outcome_type = 'win' AND is_headshot = 1), 0) AS headshot_wins,
+                    COALESCE(SUM(opponent_is_bot = 0), 0) AS human_opponent_fights,
+                    COALESCE(SUM(opponent_is_bot = 1), 0) AS bot_opponent_fights,
+                    COALESCE(SUM(opponent_account_id IS NULL), 0) AS unknown_opponent_fights
+                FROM player_fight_outcomes
+                WHERE account_id = %s
+                  AND match_id = %s
+                  AND is_friendly_fire = 0
+                """,
+                (player.account_id, match_id),
+            )
+            row = cursor.fetchone()
+        record = dict(row or {})
+        wins = _int(record.get("wins"))
+        losses = _int(record.get("losses"))
+        record["fight_count"] = _int(record.get("fight_count"))
+        record["wins"] = wins
+        record["losses"] = losses
+        record["fight_win_rate"] = _safe_divide(wins, wins + losses)
+        record["definition"] = (
+            "킬·가한 기절·사망·당한 기절 결과를 각각 1회로 계산하며 "
+            "아군 피해 결과는 제외합니다."
+        )
+        return record
 
     def _get_totals(self, player: RegisteredPlayer) -> PlayerCombatTotals:
         with self.connection.cursor() as cursor:
@@ -1457,7 +1717,7 @@ def _weapon_trend_series(
             fights_by_match.setdefault(match_id, []).append(fight_row)
 
     result: dict[str, PlayerWeaponTrendSeries] = {}
-    for granularity in ("date", "month"):
+    for granularity in ("date", "week", "month"):
         grouped: dict[str, tuple[str, list[dict[str, Any]]]] = {}
         for row in rows:
             created_at_kst = row.get("created_at_kst")
@@ -1466,6 +1726,10 @@ def _weapon_trend_series(
             if granularity == "date":
                 period_key = created_at_kst.strftime("%Y-%m-%d")
                 period_label = period_key
+            elif granularity == "week":
+                iso_year, iso_week, _ = created_at_kst.isocalendar()
+                period_key = f"{iso_year}-W{iso_week:02d}"
+                period_label = f"{iso_year}년 {iso_week}주"
             else:
                 period_key = created_at_kst.strftime("%Y-%m")
                 period_label = created_at_kst.strftime("%Y년 %m월")
@@ -1802,6 +2066,39 @@ def _json_mapping(value: Any) -> Mapping[str, Any]:
 
 def _normalize_weapon_text(value: str) -> str:
     return "".join(ch.lower() for ch in value if ch.isalnum())
+
+
+def _match_item_summary(items: list[PlayerMatchItemStats]) -> dict[str, int]:
+    return {
+        "unique_item_types": len(items),
+        "used_item_types": sum(item.used_events > 0 for item in items),
+        "picked_up_events": sum(item.picked_up_events for item in items),
+        "picked_up_quantity": sum(item.picked_up_quantity for item in items),
+        "loot_box_pickup_events": sum(item.loot_box_pickup_events for item in items),
+        "carepackage_pickup_events": sum(item.carepackage_pickup_events for item in items),
+        "custom_package_pickup_events": sum(
+            item.custom_package_pickup_events for item in items
+        ),
+        "vehicle_trunk_pickup_events": sum(
+            item.vehicle_trunk_pickup_events for item in items
+        ),
+        "vehicle_trunk_put_events": sum(item.vehicle_trunk_put_events for item in items),
+        "dropped_events": sum(item.dropped_events for item in items),
+        "dropped_quantity": sum(item.dropped_quantity for item in items),
+        "used_events": sum(item.used_events for item in items),
+        "used_quantity": sum(item.used_quantity for item in items),
+        "equipped_events": sum(item.equipped_events for item in items),
+        "unequipped_events": sum(item.unequipped_events for item in items),
+        "attached_events": sum(item.attached_events for item in items),
+        "detached_events": sum(item.detached_events for item in items),
+    }
+
+
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _required_text(value: str, label: str) -> str:

@@ -25,6 +25,14 @@ class WebPlayerStatsTests(unittest.TestCase):
         self.assertIn('<select name="match_id" required>', body)
         self.assertIn('<select name="guild_id" id="rankingGuildSelect">', body)
         self.assertIn('id="rankingGuildRefresh"', body)
+        self.assertIn('id="rankingViewControls"', body)
+        self.assertIn('<option value="top10_rate">TOP10 진입률</option>', body)
+        self.assertIn('<option value="fight_win_rate">교전 승리 확률</option>', body)
+        self.assertIn('name="min_matches"', body)
+        self.assertIn('name="active_only"', body)
+        self.assertIn('id="displaySettingsForm"', body)
+        self.assertIn('value="korean_units"', body)
+        self.assertIn("formatKoreanInteger", body)
         self.assertIn('<label>서버 범위', body)
         self.assertIn('class="advanced-filters"', body)
         self.assertIn('id="trendCards"', body)
@@ -147,6 +155,10 @@ class WebPlayerStatsTests(unittest.TestCase):
                     "map_name": "Erangel_Main",
                     "game_mode": "squad-fpp",
                     "match_type": "official",
+                    "team_mode": "squad",
+                    "perspective": "fpp",
+                    "is_custom_match": 0,
+                    "season_state": "progress",
                     "created_at_kst": datetime(2026, 6, 29, 1, 0, 0),
                     "duration_seconds": 1800,
                     "total_players": 100,
@@ -206,6 +218,42 @@ class WebPlayerStatsTests(unittest.TestCase):
                         "shots_hit": 25,
                     }
                 ],
+                [
+                    {
+                        "item_code": "Item_Heal_FirstAid_C",
+                        "item_category": "Use",
+                        "item_sub_category": "Heal",
+                        "picked_up_events": 2,
+                        "picked_up_quantity": 2,
+                        "loot_box_pickup_events": 0,
+                        "carepackage_pickup_events": 0,
+                        "custom_package_pickup_events": 0,
+                        "vehicle_trunk_pickup_events": 0,
+                        "vehicle_trunk_put_events": 0,
+                        "dropped_events": 0,
+                        "dropped_quantity": 0,
+                        "used_events": 1,
+                        "used_quantity": 1,
+                        "equipped_events": 0,
+                        "unequipped_events": 0,
+                        "attached_events": 0,
+                        "detached_events": 0,
+                    }
+                ],
+                {"heal_events": 1, "normalized_event_count": 2},
+                {
+                    "fight_count": 3,
+                    "wins": 2,
+                    "losses": 1,
+                    "kill_wins": 1,
+                    "dbno_wins": 1,
+                    "death_losses": 1,
+                    "dbno_losses": 0,
+                    "headshot_wins": 1,
+                    "human_opponent_fights": 3,
+                    "bot_opponent_fights": 0,
+                    "unknown_opponent_fights": 0,
+                },
             ]
         )
 
@@ -221,6 +269,11 @@ class WebPlayerStatsTests(unittest.TestCase):
         self.assertEqual(payload["bot_players"], 2)
         self.assertEqual(payload["weapons"][0]["weapon_name"], "M416")
         self.assertEqual(payload["accuracy_breakdown"]["estimated_hit_rate"], 0.25)
+        self.assertEqual(payload["team_mode_ko"], "스쿼드")
+        self.assertEqual(payload["items"][0]["item_name"], "구급상자")
+        self.assertEqual(payload["item_summary"]["picked_up_quantity"], 2)
+        self.assertEqual(payload["activity_summary"]["heal_events"], 1)
+        self.assertAlmostEqual(payload["fight_summary"]["fight_win_rate"], 2 / 3)
         self.assertTrue(connection.closed)
 
     def test_player_ranking_endpoint_returns_rows(self) -> None:

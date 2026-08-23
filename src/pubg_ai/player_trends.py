@@ -730,21 +730,15 @@ def _period(
 
     field_name = "map_name" if granularity == "map" else granularity
     value = _optional_text(row.get(field_name)) or "unknown"
-    labels = {
-        "map": translate_code(value, "map"),
-        "game_mode": translate_code(value, "game_mode"),
-        "team_mode": {"solo": "솔로", "duo": "듀오", "squad": "스쿼드", "unknown": "알 수 없음"}.get(
-            value,
-            value,
-        ),
-        "perspective": {"fpp": "1인칭", "tpp": "3인칭", "unknown": "알 수 없음"}.get(value, value),
-        "match_type": {"official": "일반", "competitive": "경쟁전", "custom": "커스텀"}.get(
-            value,
-            value,
-        ),
-        "season_state": value,
-    }
-    return value, labels[granularity], (value.lower(),)
+    category = {
+        "map": "map",
+        "game_mode": "game_mode",
+        "team_mode": "team_mode",
+        "perspective": "perspective",
+        "match_type": "match_type",
+        "season_state": "season_state",
+    }[granularity]
+    return value, translate_code(value, category), (value.lower(),)
 
 
 def _survival_seconds(row: Mapping[str, Any]) -> float:

@@ -1344,10 +1344,7 @@ def _vehicle_label(vehicle_id: Any, vehicle_type: Any) -> str | None:
     if code is None:
         return None
     translated = translate_code(code, "vehicle")
-    if translated != code:
-        return translated
-    readable = code.removeprefix("BP_").removesuffix("_C").replace("_", " ").strip()
-    return readable or code
+    return translated
 
 
 def _set_team_position_counts(

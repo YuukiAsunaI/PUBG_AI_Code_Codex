@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Mapping
 import ast
 import json
+import re
 
 
 TranslationCategory = str
@@ -80,16 +81,28 @@ class CodeTranslator:
         if text is None:
             text = ""
 
+        label = self._lookup_label(text, category)
+        # Telemetry reports vehicle collisions through damageCauserName as well as
+        # vehicleId. Reuse the vehicle dictionary before exposing a raw BP_* code.
+        if label is None and category == "damage_causer":
+            label = self._lookup_label(text, "vehicle")
+        if label:
+            return CodeTranslation(code=text, label=label, category=category, known=True)
+
+        return CodeTranslation(code=text, label=text, category=category, known=False)
+
+    def _lookup_label(self, text: str, category: TranslationCategory) -> str | None:
         table = self.tables.get(category, {})
         label = table.get(text)
         if label is None:
             alias = TRANSLATION_CODE_ALIASES.get((category, text))
             if alias is not None:
                 label = table.get(alias)
-        if label:
-            return CodeTranslation(code=text, label=label, category=category, known=True)
-
-        return CodeTranslation(code=text, label=text, category=category, known=False)
+        if label is None:
+            for pattern, pattern_label in TRANSLATION_PATTERN_LABELS.get(category, ()):
+                if pattern.fullmatch(text):
+                    return pattern_label
+        return label
 
     def translate_auto(self, code: Any) -> CodeTranslation:
         text = _string_code(code)
@@ -242,6 +255,17 @@ CATEGORY_ALIASES = {
     "damage_causer": "damage_causer",
     "vehicle_id_list": "vehicle",
     "vehicle": "vehicle",
+    "shard": "shard",
+    "platform": "shard",
+    "match_type": "match_type",
+    "team_mode": "team_mode",
+    "perspective": "perspective",
+    "season_state": "season_state",
+    "item_category": "item_category",
+    "item_sub_category": "item_sub_category",
+    "item_action": "item_action",
+    "activity_action": "activity_action",
+    "vehicle_type": "vehicle_type",
 }
 
 EVENT_CODE_FIELDS = {
@@ -259,12 +283,159 @@ TRANSLATION_CODE_ALIASES = {
 }
 
 
+TRANSLATION_PATTERN_LABELS: dict[str, tuple[tuple[re.Pattern[str], str], ...]] = {
+    "vehicle": (
+        (re.compile(r"Dacia_A_\d+_v2(?:_Esports)?_C"), "다시아"),
+        (re.compile(r"Uaz_[ABC]_\d+(?:_esports)?_C"), "UAZ"),
+        (re.compile(r"Buggy_A_\d+_C"), "버기"),
+        (re.compile(r"AquaRail_A_\d+_C"), "아쿠아레일"),
+        (re.compile(r"BP_Niva(?:_\d+|_Esports)?_C"), "지마"),
+        (re.compile(r"BP_Mirado_A_\d+(?:_Esports)?_C"), "미라도"),
+        (re.compile(r"BP_Motorbike_\d+(?:_SideCar)?_C"), "오토바이"),
+        (re.compile(r"BP_Snowmobile_\d+_C"), "스노우모빌"),
+        (re.compile(r"BP_Van_A_\d+_C"), "밴"),
+        (re.compile(r"BP_Scooter_\d+_A_C"), "스쿠터"),
+        (re.compile(r"BP_TukTukTuk_A_\d+_C"), "툭샤이"),
+        (re.compile(r"BP_Mirado_Open_\d+_C"), "미라도 (오픈탑)"),
+        (re.compile(r"BP_RoadGlideST_[A-Z0-9]+_C"), "CVO 로드 글라이드 ST"),
+        (re.compile(r"BP_PanigaleV4S_(?:EP|LGD)\d+_C"), "두카티 파니갈레 V4 S"),
+        (re.compile(r"BP_McLarenGT_[A-Za-z0-9_]+_C"), "맥라렌 GT"),
+        (re.compile(r"BP_Classic_\d+_C"), "클래식 차량"),
+        (re.compile(r"BP_PickupTruck_A_(?:\d+|esports)_C"), "픽업트럭"),
+        (re.compile(r"BP_M_Rony_A_\d+_C"), "로니"),
+        (re.compile(r"BP_Bicycle(?:_[A-Za-z0-9]+)?_C"), "산악 자전거"),
+        (re.compile(r"BP_Blanc(?:_Esports)?_C"), "블랑 (쿠페 SUV)"),
+        (re.compile(r"BP_Panamera_[A-Z]+_C"), "포르쉐 파나메라"),
+        (re.compile(r"BP_Cayenne_[A-Z]+_C"), "포르쉐 카이엔"),
+        (re.compile(r"BP_Carrera_[A-Z]+_C"), "포르쉐 911 카레라"),
+        (re.compile(r"BP_Urus_[A-Z]+_C"), "람보르기니 우루스 S"),
+        (re.compile(r"BP_Countach_[A-Z]+_C"), "람보르기니 쿤타치 LPI 800-4"),
+        (re.compile(r"BP_DBX_[A-Z]+_C"), "애스턴 마틴 DBX707"),
+        (re.compile(r"BP_Vantage_[A-Z]+_C"), "애스턴 마틴 V12 밴티지 로드스터"),
+        (re.compile(r"BP_Chiron_[A-Z]+_C"), "부가티 Chiron"),
+    ),
+}
+
+
 DEATH_TYPE_KO = {
     "alive": "생존",
     "byplayer": "유저",
     "byzone": "블루존",
     "suicide": "자살",
     "logout": "로그아웃",
+}
+
+SHARD_KO = {
+    "steam": "스팀",
+    "kakao": "카카오",
+}
+
+MATCH_TYPE_KO = {
+    "official": "일반 매치",
+    "competitive": "경쟁전",
+    "airoyale": "AI 배틀로얄",
+    "arcade": "아케이드",
+    "event": "이벤트 모드",
+    "trainingroom": "훈련장",
+    "custom": "사용자 지정 매치",
+    "tutorialatoz": "튜토리얼",
+}
+
+TEAM_MODE_KO = {
+    "solo": "솔로",
+    "duo": "듀오",
+    "squad": "스쿼드",
+    "unknown": "알 수 없음",
+}
+
+PERSPECTIVE_KO = {
+    "fpp": "1인칭",
+    "tpp": "3인칭",
+}
+
+SEASON_STATE_KO = {
+    "progress": "진행 시즌",
+    "in_progress": "진행 시즌",
+    "closed": "종료 시즌",
+    "offseason": "비시즌",
+}
+
+ITEM_CATEGORY_KO = {
+    "Equipment": "장비",
+    "Attachment": "부착물",
+    "Ammunition": "탄약",
+    "Use": "소모품",
+    "Weapon": "무기",
+    "None": "기타",
+}
+
+ITEM_SUB_CATEGORY_KO = {
+    "None": "기타",
+    "Throwable": "투척물",
+    "Main": "주무기",
+    "backpack": "배낭",
+    "Boost": "부스트",
+    "Heal": "회복",
+    "Vest": "조끼",
+    "Headgear": "헬멧",
+    "Sight": "조준경",
+    "Melee": "근접 무기",
+    "Handgun": "권총",
+    "Parachute": "낙하산",
+    "Ascender": "등강 장비",
+    "BlueChip": "블루칩",
+    "Fuel": "연료",
+    "Gadget": "전술 장비",
+    "CamoNetting": "위장막",
+    "Revive": "부활 장비",
+}
+
+ITEM_ACTION_KO = {
+    "pickup": "획득",
+    "equip": "장착",
+    "unequip": "장착 해제",
+    "use": "사용",
+    "drop": "버림",
+    "attach": "부착",
+    "detach": "부착 해제",
+    "pickup_lootbox": "루트박스 획득",
+    "put_vehicle_trunk": "차량 트렁크 보관",
+    "pickup_vehicle_trunk": "차량 트렁크 획득",
+    "pickup_carepackage": "보급 상자 획득",
+    "pickup_custom_package": "커스텀 패키지 획득",
+}
+
+ACTIVITY_ACTION_KO = {
+    "heal_passive": "지속 회복",
+    "heal_item": "회복 아이템 사용",
+    "vehicle_damage_caused": "차량 피해",
+    "object_interaction": "오브젝트 상호작용",
+    "vehicle_ride": "차량 탑승",
+    "vehicle_leave": "차량 하차",
+    "throwable_use": "투척물 사용",
+    "vault": "볼팅",
+    "object_destroy": "오브젝트 파괴",
+    "armor_destroy_caused": "상대 방어구 파괴",
+    "armor_destroy_taken": "내 방어구 파괴",
+    "revive_received": "부활 받음",
+    "revive_caused": "팀원 부활",
+    "wheel_destroy_caused": "바퀴 파괴",
+    "carry_event": "기절 플레이어 운반",
+    "vehicle_destroy_caused": "차량 파괴",
+    "swim_start": "수영 시작",
+    "swim_end": "수영 종료",
+    "prop_destroy": "구조물 파괴",
+    "flare_use": "플레어 사용",
+    "breachable_wall_destroy": "파괴 가능 벽 파괴",
+}
+
+VEHICLE_TYPE_KO = {
+    "WheeledVehicle": "지상 차량",
+    "TransportAircraft": "수송기",
+    "FlyingVehicle": "비행 탈것",
+    "EmergencyPickup": "긴급 수송",
+    "FloatingVehicle": "수상 탈것",
+    "Mortar": "박격포",
 }
 
 GAME_MODE_KO = {
@@ -274,6 +445,8 @@ GAME_MODE_KO = {
     "duo-fpp": "1인칭 듀오",
     "squad": "스쿼드",
     "squad-fpp": "1인칭 스쿼드",
+    "normal-squad": "일반 스쿼드",
+    "ibr": "인텐스 배틀로얄",
     "tdm": "팀 데스매치",
     "sdm-fpp": "솔로 데스매치 (1인칭)",
 }
@@ -285,6 +458,8 @@ MAP_NAME_KO = {
     "DihorOtok_Main": "비켄디",
     "Erangel_Main": "에란겔",
     "Heaven_Main": "헤이븐",
+    "Boardwalk_Main": "보드워크",
+    "Italy_TDM_Main": "이탈리아 (팀 데스매치)",
     "Kiki_Main": "데스턴",
     "Neon_Main": "론도",
     "Range_Main": "캠프 자칼",
@@ -354,6 +529,8 @@ ITEM_ID_KO = {
     "Item_Neon_Key_C": "비밀의 방 열쇠",
     "Item_Tiger_Key_C": "비밀의 방 열쇠",
     "Item_Mountainbike_C": "산악 자전거",
+    "Item_Rubberboat_C": "고무보트",
+    "Item_SpareTire_C": "스페어 타이어",
     "Item_Special_Ascender_NoChicken_C": "등강기",
     "Item_Special_BackupParachute_C": "비상 낙하산",
     "Item_Special_Bluechip_C": "블루칩",
@@ -388,6 +565,7 @@ ITEM_ID_KO = {
     "Item_Weapon_IntegratedRepair_C": "올인원 수리 키트",
     "Item_Weapon_K2_C": "K2",
     "Item_Weapon_Kar98k_C": "Kar98k",
+    "Item_Weapon_Julies_Kar98k_C": "Kar98k",
     "Item_Weapon_L6_C": "링스 AMR",
     "Item_Weapon_M16A4_C": "M16A4",
     "Item_Weapon_M1911_C": "P1911",
@@ -448,6 +626,7 @@ ITEM_ID_KO = {
     "Item_Attach_Weapon_Lower_LaserPointer_C": "레이저 사이트",
     "Item_Attach_Weapon_Lower_LightweightForeGrip_C": "라이트 그립",
     "Item_Attach_Weapon_Lower_TiltedGrip_C": "틸티드 그립",
+    "Item_Attach_Weapon_Lower_QuickDraw_Large_Crossbow_C": "석궁용 퀵드로우 화살통",
     "Item_Attach_Weapon_Lower_ThumbGrip_C": "엄지 그립",
     "Item_Attach_Weapon_Magazine_ExtendedQuickDraw_Large_C": "대용량 퀵드로우 탄창",
     "Item_Attach_Weapon_Magazine_ExtendedQuickDraw_Medium_C": "대용량 퀵드로우 탄창 (권총, SMG)",
@@ -485,6 +664,10 @@ ITEM_ID_KO = {
     "Item_Attach_Weapon_Upper_Scope3x_C": "3배율 스코프",
     "Item_Attach_Weapon_Upper_Scope6x_C": "6배율 스코프",
     "Item_Attach_Weapon_Upper_Thermal_C": "열화상 스코프",
+    "Item_Weapon_CamoNet_C": "무기 위장막",
+    "Item_Weapon_CamoNet_Taego_C": "무기 위장막 (태이고)",
+    "Item_RandomBox_AR_C": "AR 무작위 상자",
+    "Item_RandomBox_DmrSr_C": "DMR·SR 무작위 상자",
 }
 
 DAMAGE_CAUSER_KO = {
@@ -528,8 +711,10 @@ DAMAGE_CAUSER_KO = {
     "WeapG18_C": "P18C",
     "WeapG36C_C": "G36C",
     "WeapGroza_C": "그로자",
+    "WeapGrenade_C": "수류탄",
     "WeapIntegratedRepair_C": "올인원 수리 키트",
     "WeapHK416_C": "M416",
+    "WeapDuncansHK416_C": "M416",
     "WeapJS9_C": "JS9",
     "WeapK2_C": "K2",
     "WeapKar98k_C": "Kar98k",
@@ -581,6 +766,7 @@ DAMAGE_CAUSER_KO = {
     "WeapVSS_C": "VSS",
     "WeapVector_C": "Vector",
     "WeapWin1894_C": "Win94",
+    "WeapWin94_C": "Win94",
     "WeapWinchester_C": "S1897",
     "Weapvz61Skorpion_C": "스콜피온",
     "ProjGrenade_C": "수류탄",
@@ -606,6 +792,41 @@ VEHICLE_ID_KO = {
     "BP_Niva_06_C": "지마",
     "BP_ATV_C": "ATV",
     "ParachutePlayer_C": "낙하산",
+    "DummyTransportAircraft_C": "수송기",
+    "RedeployAircraft_Tiger_C": "복귀 수송기",
+    "BP_EmergencyPickupVehicle_C": "긴급 수송기",
+    "BP_PicoBus_C": "피코 버스",
+    "BP_LootTruck_C": "루트 트럭",
+    "BP_Porter_C": "포터",
+    "BP_Blanc_C": "블랑 (쿠페 SUV)",
+    "BP_Blanc_Esports_C": "블랑 (쿠페 SUV)",
+    "BP_PonyCoupe_C": "포니 쿠페",
+    "Dacia_A_02_v2_C": "다시아",
+    "Dacia_A_03_v2_Esports_C": "다시아",
+    "Uaz_B_01_C": "UAZ",
+    "Uaz_B_01_esports_C": "UAZ",
+    "Uaz_C_01_C": "UAZ",
+    "BP_Uaz2_C": "UAZ",
+    "BP_Dirtbike_C": "더트 바이크",
+    "BP_Motorbike_04_Desert_C": "오토바이",
+    "BP_Scooter_03_A_C": "스쿠터",
+    "BP_Scooter_04_A_C": "스쿠터",
+    "BP_TukTukTuk_A_02_C": "툭샤이",
+    "MortarPawn_C": "박격포",
+    "TransportAircraft_Chimera_C": "헬리콥터",
+    "BP_RoadGlideST_LGD_C": "CVO 로드 글라이드 ST",
+    "BP_PanigaleV4S_EP01_C": "두카티 파니갈레 V4 S",
+    "BP_PanigaleV4S_LGD03_C": "두카티 파니갈레 V4 S",
+    "BP_Classic_01_C": "클래식 차량",
+    "BP_Classic_02_C": "클래식 차량",
+    "BP_RoadGlideST_ULT_C": "CVO 로드 글라이드 ST",
+    "BP_PanigaleV4S_EP02_C": "두카티 파니갈레 V4 S",
+    "BP_PanigaleV4S_LGD02_C": "두카티 파니갈레 V4 S",
+    "BP_McLarenGT_St_white_C": "맥라렌 GT 스탠다드 (실리카 화이트)",
+    "BP_McLarenGT_St_black_C": "맥라렌 GT 스탠다드 (블랙)",
+    "BP_McLarenGT_Lx_Yellow_C": "맥라렌 GT 엘리트 (볼케이노 옐로우)",
+    "IBRTransportAircraft_C": "인텐스 배틀로얄 수송기",
+    "IBRTransportAircraft_Helicopter_C": "인텐스 배틀로얄 헬리콥터",
 }
 
 DEFAULT_TRANSLATION_TABLES = {
@@ -615,4 +836,14 @@ DEFAULT_TRANSLATION_TABLES = {
     "item": ITEM_ID_KO,
     "damage_causer": DAMAGE_CAUSER_KO,
     "vehicle": VEHICLE_ID_KO,
+    "shard": SHARD_KO,
+    "match_type": MATCH_TYPE_KO,
+    "team_mode": TEAM_MODE_KO,
+    "perspective": PERSPECTIVE_KO,
+    "season_state": SEASON_STATE_KO,
+    "item_category": ITEM_CATEGORY_KO,
+    "item_sub_category": ITEM_SUB_CATEGORY_KO,
+    "item_action": ITEM_ACTION_KO,
+    "activity_action": ACTIVITY_ACTION_KO,
+    "vehicle_type": VEHICLE_TYPE_KO,
 }

@@ -106,6 +106,7 @@ def audit_player_intelligence(connection: Any) -> PlayerIntelligenceAudit:
     heal_mismatches = _heal_mismatches(connection)
     activity_match_count_mismatches = _activity_match_count_mismatches(connection)
     item_event_mismatches = _item_event_mismatches(connection)
+    item_use_quantity_mismatches = _item_use_quantity_mismatches(connection)
     negative_activity_rows = _negative_activity_rows(connection)
     negative_item_rows = _negative_item_rows(connection)
     event_catalog = _event_catalog_coverage(connection)
@@ -157,6 +158,11 @@ def audit_player_intelligence(connection: Any) -> PlayerIntelligenceAudit:
             activity_match_count_mismatches,
         ),
         _zero_check("item_event_reconciliation", "아이템 상태·이벤트 행 수 일치", item_event_mismatches),
+        _zero_check(
+            "item_use_quantity_reconciliation",
+            "아이템 사용 수량 = 사용 이벤트 수",
+            item_use_quantity_mismatches,
+        ),
         _zero_check("negative_activity_values", "행동 요약 음수 값 없음", negative_activity_rows),
         _zero_check("negative_item_values", "아이템 요약 음수 값 없음", negative_item_rows),
     ]
@@ -295,6 +301,23 @@ def _item_event_mismatches(connection: Any) -> int:
         WHERE states.processor_name = 'items'
           AND states.parser_version = %s
           AND COALESCE(events.event_rows, 0) <> states.output_count
+        """,
+        (ITEM_PARSER_VERSION,),
+    )
+
+
+def _item_use_quantity_mismatches(connection: Any) -> int:
+    return _scalar(
+        connection,
+        """
+        SELECT COUNT(*) AS value
+        FROM player_item_match_stats stats
+        INNER JOIN player_telemetry_processing_states states
+            ON states.match_id = stats.match_id
+           AND states.account_id = stats.account_id
+           AND states.processor_name = 'items'
+           AND states.parser_version = %s
+        WHERE stats.used_quantity <> stats.used_events
         """,
         (ITEM_PARSER_VERSION,),
     )

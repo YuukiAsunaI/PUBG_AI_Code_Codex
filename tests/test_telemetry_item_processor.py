@@ -11,8 +11,8 @@ from pubg_ai.telemetry_item_processor import (
 
 
 class TelemetryItemProcessorTests(unittest.TestCase):
-    def test_source_tracking_change_uses_v4_processing_state(self) -> None:
-        self.assertEqual(PARSER_VERSION, "items-v4")
+    def test_stack_count_semantics_change_uses_v5_processing_state(self) -> None:
+        self.assertEqual(PARSER_VERSION, "items-v5")
 
     def test_parses_tracked_item_events_and_summarizes_quantities(self) -> None:
         translator = CodeTranslator(
@@ -60,7 +60,7 @@ class TelemetryItemProcessorTests(unittest.TestCase):
             {
                 "_T": "LogItemUse",
                 "character": {"accountId": "account.tracked"},
-                "item": {"itemId": "Item_Heal_FirstAid_C", "stackCount": 1},
+                "item": {"itemId": "Item_Heal_FirstAid_C", "stackCount": 5},
                 "common": {"isGame": 1},
             },
             {
@@ -80,6 +80,11 @@ class TelemetryItemProcessorTests(unittest.TestCase):
                 "character": {"accountId": "account.other"},
                 "item": {"itemId": "Item_Ammo_556mm_C", "stackCount": 100},
             },
+            {
+                "_T": "LogItemPickupFromLootbox",
+                "character": {"accountId": "account.tracked"},
+                "item": {"itemId": "Item_Heal_Bandage_C", "stackCount": 5},
+            },
         ]
 
         item_events = parse_item_events(
@@ -91,7 +96,7 @@ class TelemetryItemProcessorTests(unittest.TestCase):
         stats = summarize_item_match_stats(item_events)
         by_code = {item.item_code: item for item in stats}
 
-        self.assertEqual(len(item_events), 6)
+        self.assertEqual(len(item_events), 7)
         self.assertEqual(item_events[2].event_at_kst.hour, 9)
         self.assertEqual(item_events[2].item_name_ko, "5.56mm")
         self.assertEqual(item_events[2].location_x, 1.0)
@@ -106,6 +111,8 @@ class TelemetryItemProcessorTests(unittest.TestCase):
         self.assertEqual(by_code["Item_Ammo_556mm_C"].dropped_events, 1)
         self.assertEqual(by_code["Item_Ammo_556mm_C"].dropped_quantity, 5)
         self.assertEqual(by_code["Item_Heal_FirstAid_C"].used_events, 1)
+        self.assertEqual(by_code["Item_Heal_FirstAid_C"].used_quantity, 1)
+        self.assertEqual(by_code["Item_Heal_Bandage_C"].loot_box_pickup_events, 1)
         self.assertEqual(by_code["Item_Attach_Weapon_Upper_DotSight_01_C"].attached_events, 1)
 
 

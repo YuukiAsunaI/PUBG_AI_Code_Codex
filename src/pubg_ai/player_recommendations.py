@@ -425,6 +425,10 @@ class DropRegionStats:
     map_name_ko: str
     region_id: str
     region_name_ko: str
+    x_pct: float
+    y_pct: float
+    centroid_x_cm: float | None
+    centroid_y_cm: float | None
     match_count: int
     wins: int
     kills: int
@@ -1737,6 +1741,11 @@ def _aggregate_drop_regions(
                 "deaths": 0,
                 "damage_dealt": 0.0,
                 "survival_seconds": 0.0,
+                "x_pct_sum": 0.0,
+                "y_pct_sum": 0.0,
+                "centroid_x_cm_sum": 0.0,
+                "centroid_y_cm_sum": 0.0,
+                "centroid_match_count": 0,
                 "zone_count": 0,
             },
         )
@@ -1748,6 +1757,12 @@ def _aggregate_drop_regions(
         group["deaths"] += zone.deaths
         group["damage_dealt"] += zone.damage_dealt
         group["survival_seconds"] += zone.avg_survival_seconds * zone.match_count
+        group["x_pct_sum"] += zone.x_pct * zone.match_count
+        group["y_pct_sum"] += zone.y_pct * zone.match_count
+        if zone.centroid_x_cm is not None and zone.centroid_y_cm is not None:
+            group["centroid_x_cm_sum"] += zone.centroid_x_cm * zone.match_count
+            group["centroid_y_cm_sum"] += zone.centroid_y_cm * zone.match_count
+            group["centroid_match_count"] += zone.match_count
         group["zone_count"] += 1
 
     regions: list[DropRegionStats] = []
@@ -1762,6 +1777,7 @@ def _aggregate_drop_regions(
         deaths = _int(group["deaths"])
         damage_dealt = _float(group["damage_dealt"])
         avg_survival_seconds = _safe_divide(group["survival_seconds"], match_count)
+        centroid_match_count = _int(group["centroid_match_count"])
         score = _performance_score(
             match_count=match_count,
             wins=wins,
@@ -1777,6 +1793,18 @@ def _aggregate_drop_regions(
                 map_name_ko=str(group["map_name_ko"]),
                 region_id=str(group["region_id"]),
                 region_name_ko=str(group["region_name_ko"]),
+                x_pct=_safe_divide(group["x_pct_sum"], match_count),
+                y_pct=_safe_divide(group["y_pct_sum"], match_count),
+                centroid_x_cm=(
+                    _safe_divide(group["centroid_x_cm_sum"], centroid_match_count)
+                    if centroid_match_count
+                    else None
+                ),
+                centroid_y_cm=(
+                    _safe_divide(group["centroid_y_cm_sum"], centroid_match_count)
+                    if centroid_match_count
+                    else None
+                ),
                 match_count=match_count,
                 wins=wins,
                 kills=kills,

@@ -63,6 +63,68 @@ class CodeTranslatorTests(unittest.TestCase):
                 self.assertTrue(translated.known)
                 self.assertEqual(translated.label, expected)
 
+    def test_recent_database_codes_and_display_dimensions_are_translated(self) -> None:
+        translator = CodeTranslator()
+        cases = {
+            ("WeapGrenade_C", "damage_causer"): "수류탄",
+            ("WeapWin94_C", "damage_causer"): "Win94",
+            ("WeapDuncansHK416_C", "damage_causer"): "M416",
+            ("Item_SpareTire_C", "item"): "스페어 타이어",
+            ("Item_Rubberboat_C", "item"): "고무보트",
+            ("Item_Weapon_Julies_Kar98k_C", "item"): "Kar98k",
+            ("Item_Weapon_CamoNet_Taego_C", "item"): "무기 위장막 (태이고)",
+            ("Item_RandomBox_DmrSr_C", "item"): "DMR·SR 무작위 상자",
+            ("BP_Panamera_ULT_C", "vehicle"): "포르쉐 파나메라",
+            ("BP_Urus_LGD_C", "vehicle"): "람보르기니 우루스 S",
+            ("DummyTransportAircraft_C", "vehicle"): "수송기",
+            ("steam", "shard"): "스팀",
+            ("official", "match_type"): "일반 매치",
+            ("squad", "team_mode"): "스쿼드",
+            ("fpp", "perspective"): "1인칭",
+            ("Use", "item_category"): "소모품",
+            ("Heal", "item_sub_category"): "회복",
+            ("pickup_lootbox", "item_action"): "루트박스 획득",
+            ("vehicle_ride", "activity_action"): "차량 탑승",
+            ("WheeledVehicle", "vehicle_type"): "지상 차량",
+            ("BP_RoadGlideST_LGD_C", "vehicle"): "CVO 로드 글라이드 ST",
+            ("TransportAircraft_Chimera_C", "vehicle"): "헬리콥터",
+            ("BP_Motorbike_04_Desert_C", "vehicle"): "오토바이",
+            ("BP_Dirtbike_C", "vehicle"): "더트 바이크",
+            ("MortarPawn_C", "vehicle"): "박격포",
+            ("BP_PanigaleV4S_EP01_C", "vehicle"): "두카티 파니갈레 V4 S",
+            ("BP_PanigaleV4S_LGD03_C", "vehicle"): "두카티 파니갈레 V4 S",
+            ("BP_Scooter_04_A_C", "vehicle"): "스쿠터",
+            ("BP_TukTukTuk_A_02_C", "vehicle"): "툭샤이",
+            ("BP_Classic_01_C", "vehicle"): "클래식 차량",
+            ("BP_Uaz2_C", "vehicle"): "UAZ",
+            ("ibr", "game_mode"): "인텐스 배틀로얄",
+            ("normal-squad", "game_mode"): "일반 스쿼드",
+            ("BP_Snowmobile_02_C", "vehicle"): "스노우모빌",
+            ("BP_Van_A_03_C", "vehicle"): "밴",
+            ("IBRTransportAircraft_C", "vehicle"): "인텐스 배틀로얄 수송기",
+            ("IBRTransportAircraft_Helicopter_C", "vehicle"): "인텐스 배틀로얄 헬리콥터",
+            ("BP_McLarenGT_St_white_C", "vehicle"): "맥라렌 GT 스탠다드 (실리카 화이트)",
+            ("BP_McLarenGT_Lx_Yellow_C", "vehicle"): "맥라렌 GT 엘리트 (볼케이노 옐로우)",
+            ("BP_Mirado_Open_05_C", "vehicle"): "미라도 (오픈탑)",
+            ("BP_RoadGlideST_ULT_C", "vehicle"): "CVO 로드 글라이드 ST",
+            ("BP_PanigaleV4S_EP02_C", "vehicle"): "두카티 파니갈레 V4 S",
+            ("Boardwalk_Main", "map"): "보드워크",
+            ("Italy_TDM_Main", "map"): "이탈리아 (팀 데스매치)",
+            ("unknown", "team_mode"): "알 수 없음",
+        }
+
+        for (code, category), expected in cases.items():
+            with self.subTest(code=code, category=category):
+                translated = translator.translate(code, category)
+                self.assertTrue(translated.known)
+                self.assertEqual(translated.label, expected)
+
+    def test_damage_causer_falls_back_to_vehicle_dictionary(self) -> None:
+        translated = CodeTranslator().translate("BP_Snowmobile_03_C", "damage_causer")
+
+        self.assertTrue(translated.known)
+        self.assertEqual(translated.label, "스노우모빌")
+
     def test_explicit_empty_tables_do_not_enable_defaults(self) -> None:
         translated = CodeTranslator({}).translate("Item_Weapon_BerylM762_C", "item")
 

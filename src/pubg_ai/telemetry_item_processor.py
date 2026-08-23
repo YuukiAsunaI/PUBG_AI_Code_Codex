@@ -21,6 +21,7 @@ from pubg_ai.time_utils import now_kst, to_kst
 
 ITEM_EVENT_ACTIONS = {
     "LogItemPickup": "pickup",
+    "LogItemPickupFromLootbox": "pickup_lootbox",
     "LogItemPickupFromLootBox": "pickup_lootbox",
     "LogItemPickupFromCarepackage": "pickup_carepackage",
     "LogItemPickupFromCustomPackage": "pickup_custom_package",
@@ -36,7 +37,7 @@ ITEM_EVENT_ACTIONS = {
 
 
 PROCESSOR_NAME = "items"
-PARSER_VERSION = "items-v4"
+PARSER_VERSION = "items-v5"
 
 
 class TelemetryItemProcessingError(RuntimeError):
@@ -525,7 +526,8 @@ def summarize_item_match_stats(item_events: Iterable[ItemEventRecord]) -> list[I
             stats.dropped_quantity += event.quantity
         elif event.action == "use":
             stats.used_events += 1
-            stats.used_quantity += event.quantity
+            # LogItemUse.stackCount is the held stack at use time, not the consumed delta.
+            stats.used_quantity += 1
         elif event.action == "equip":
             stats.equipped_events += 1
         elif event.action == "unequip":

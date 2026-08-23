@@ -88,21 +88,21 @@ class SystemAlertsTests(unittest.TestCase):
 
         message = format_discord_alert(alert)
 
-        self.assertIn("[PUBG AI Alert] post_processing worker failed", message)
+        self.assertIn("[PUBG AI 알림] 자동 후처리기 작업 실패", message)
         self.assertIn("drive missing", message)
-        self.assertIn("run_id=9", message)
+        self.assertIn("작업 ID=9", message)
         self.assertEqual(alert.source_id, 9)
         self.assertEqual(alert.metadata["run_id"], 9)
         self.assertEqual(alert.metadata["worker_name"], "post_processing")
-        self.assertNotIn("alert_detail", message)
-        self.assertNotIn("worker_run_detail", message)
+        self.assertNotIn("알림 상세", message)
+        self.assertNotIn("작업 상세", message)
 
         linked = format_discord_alert(alert, detail_base_url="http://127.0.0.1:8000/")
-        self.assertNotIn("alert_detail", linked)
-        self.assertIn("- worker_run_detail: http://127.0.0.1:8000/?worker_run_id=9#workerRunDetail", linked)
+        self.assertNotIn("알림 상세", linked)
+        self.assertIn("- 작업 상세: http://127.0.0.1:8000/?worker_run_id=9#workerRunDetail", linked)
 
     def test_empty_alert_report_message(self) -> None:
-        self.assertEqual(format_alert_report([]), "PUBG AI alerts: no active alerts.")
+        self.assertEqual(format_alert_report([]), "PUBG AI 알림: 현재 활성 경고가 없습니다.")
 
     def test_alert_history_records_include_id_in_discord_messages(self) -> None:
         record = AlertHistoryRecord(
@@ -122,28 +122,28 @@ class SystemAlertsTests(unittest.TestCase):
             updated_at_kst="2026-06-30T10:01:00+09:00",
         )
 
-        self.assertIn("- alert_id: 7", format_discord_alert(record))
+        self.assertIn("- 알림 ID: 7", format_discord_alert(record))
         linked_alert = format_discord_alert(record, detail_base_url="http://127.0.0.1:8000")
         self.assertIn(
-            "- alert_detail: http://127.0.0.1:8000/?alert_id=7#alertHistoryDetail",
+            "- 알림 상세: http://127.0.0.1:8000/?alert_id=7#alertHistoryDetail",
             linked_alert,
         )
         self.assertIn(
-            "- worker_run_detail: http://127.0.0.1:8000/?worker_run_id=7#workerRunDetail",
+            "- 작업 상세: http://127.0.0.1:8000/?worker_run_id=7#workerRunDetail",
             linked_alert,
         )
         report = format_alert_report([record])
-        self.assertIn("#7 collector worker failed", report)
-        self.assertNotIn("current_alerts", report)
+        self.assertIn("#7 자동 수집기 작업 실패", report)
+        self.assertNotIn("현재 경고", report)
 
         linked_report = format_alert_report([record], detail_base_url="http://127.0.0.1:8000/")
         self.assertIn(
-            "- current_alerts: [open](http://127.0.0.1:8000/?"
+            "- 현재 경고: [열기](http://127.0.0.1:8000/?"
             "alert_history_source=all&alert_history_state=current&alert_history_severity=all&"
             "alert_history_sort=severity&alert_history_search=&alert_history_limit=50&alert_history_offset=0#alerts)",
             linked_report,
         )
-        self.assertIn("#7 collector worker failed", linked_report)
+        self.assertIn("#7 자동 수집기 작업 실패", linked_report)
 
     def test_storage_alert_history_record_includes_local_alert_detail_link(self) -> None:
         record = AlertHistoryRecord(
@@ -165,12 +165,12 @@ class SystemAlertsTests(unittest.TestCase):
 
         linked_alert = format_discord_alert(record, detail_base_url="http://127.0.0.1:8000/")
 
-        self.assertIn("- alert_id: 8", linked_alert)
+        self.assertIn("- 알림 ID: 8", linked_alert)
         self.assertIn(
-            "- alert_detail: http://127.0.0.1:8000/?alert_id=8#alertHistoryDetail",
+            "- 알림 상세: http://127.0.0.1:8000/?alert_id=8#alertHistoryDetail",
             linked_alert,
         )
-        self.assertNotIn("worker_run_detail", linked_alert)
+        self.assertNotIn("작업 상세", linked_alert)
 
 
 def _runtime_config(raw_data_dir: Path, replay_data_dir: Path) -> RuntimeConfig:
