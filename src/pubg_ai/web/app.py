@@ -102,7 +102,11 @@ from pubg_ai.discord_command_catalog import (
     RESERVED_COMMAND_GROUPS,
     command_catalog_records,
 )
-from pubg_ai.discord_guild_catalog import list_discord_guild_catalog, sync_discord_guild_catalog
+from pubg_ai.discord_guild_catalog import (
+    list_discord_guild_catalog,
+    list_stored_discord_guild_ids,
+    sync_discord_guild_catalog,
+)
 from pubg_ai.fight_outcome_processor import FightOutcomeProcessor
 from pubg_ai.fight_outcome_stats import FightOutcomeStatsService
 from pubg_ai.flight_path_stats import FlightPathStatsService
@@ -282,6 +286,14 @@ class DiscordBotSettingsRequest(BaseModel):
 
 class DiscordCommandSyncRequest(BaseModel):
     guild_id: str | None = Field(default=None, max_length=32)
+
+
+class DiscordGuildCatalogSyncRequest(BaseModel):
+    prune_stale: bool = False
+    confirmation: str | None = Field(default=None, max_length=64)
+
+
+MANAGED_DISCORD_GUILD_PRUNE_CONFIRMATION = "CONFIRM MANAGED DISCORD GUILD SYNC"
 
 
 class DataDeletionReviewRequest(BaseModel):
@@ -1415,32 +1427,73 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
                 connection,
                 configured_guild_ids=configured_ids,
                 ranking_scope_overrides=scopes.guild_ranking_scopes,
+                managed_guild_ids=bot_settings.managed_guild_ids,
             )
         finally:
             connection.close()
         return {"guilds": [guild.to_record() for guild in guilds]}
 
     @app.post("/discord/guilds/sync")
-    def sync_discord_guilds() -> dict[str, Any]:
+    def sync_discord_guilds(request: DiscordGuildCatalogSyncRequest) -> dict[str, Any]:
+        if (
+            request.prune_stale
+            and request.confirmation != MANAGED_DISCORD_GUILD_PRUNE_CONFIRMATION
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="현재 앱 관리 봇에 없는 서버를 정리하려면 확인 문구가 필요합니다.",
+            )
         runtime_config = current_config()
         token = runtime_config.secrets.discord_bot_token
         if not token:
             raise HTTPException(status_code=400, detail="DISCORD_BOT_TOKEN is not configured.")
         try:
-            remote_guilds = DiscordAcceptanceClient(token).list_guilds()
+            discord = DiscordAcceptanceClient(token)
+            identity = discord.current_bot()
+            remote_guilds = discord.list_guilds()
         except DiscordAcceptanceError as exc:
             status_code = exc.status_code if exc.status_code and 400 <= exc.status_code < 500 else 502
             raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
+        reconciliation = settings_store.reconcile_managed_discord_bot(
+            bot_user_id=identity.user_id,
+            bot_username=identity.username,
+            guild_ids=[guild.guild_id for guild in remote_guilds],
+            prune_stale=request.prune_stale,
+        )
         connection = connect_mysql(runtime_config.database)
         try:
+            stored_guild_ids = (
+                set(list_stored_discord_guild_ids(connection))
+                if request.prune_stale
+                else set()
+            )
             synced_count = sync_discord_guild_catalog(
                 connection,
                 [guild.to_record() for guild in remote_guilds],
+                prune_missing=request.prune_stale,
             )
         finally:
             connection.close()
-        return {"synced_count": synced_count}
+        managed_guild_ids = {guild.guild_id for guild in remote_guilds}
+        removed_catalog_guild_ids = sorted(stored_guild_ids - managed_guild_ids)
+        removed_settings_guild_ids = (
+            reconciliation.removed_guild_ids if request.prune_stale else []
+        )
+        return {
+            "synced_count": synced_count,
+            "managed_bot": {
+                "user_id": identity.user_id,
+                "username": identity.username,
+            },
+            "managed_guild_count": len(remote_guilds),
+            "pruned": request.prune_stale,
+            "removed_guild_ids": sorted(
+                set(removed_catalog_guild_ids) | set(removed_settings_guild_ids)
+            ),
+            "removed_catalog_guild_ids": removed_catalog_guild_ids,
+            "removed_settings_guild_ids": removed_settings_guild_ids,
+        }
 
     @app.get("/discord/channels")
     def discord_channels(
@@ -6033,7 +6086,7 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="displaySettingsStatus" style="margin-top: 12px;">현재 표기 예시: <strong id="displayNumberPreview">59,452</strong></div>
     </section>
     <section id="discord-bot-manager" data-view="discord">
-      <h2>전용 Discord 봇</h2>
+      <h2>앱 관리 Discord 봇</h2>
       <div class="bot-state-strip" aria-live="polite">
         <div><span>실행 상태</span><strong id="discordBotState">중지</strong></div>
         <div><span>봇 계정</span><strong id="discordBotUser">-</strong></div>
@@ -6056,6 +6109,7 @@ _INDEX_HTML = """<!doctype html>
         <button type="button" id="discordBotStart">시작</button>
         <button class="secondary" type="button" id="discordBotStop">중지</button>
         <button class="secondary" type="button" id="discordBotSyncAll">전체 서버 명령 동기화</button>
+        <button class="secondary" type="button" id="discordBotRefreshGuilds">서버 목록 정리</button>
       </div>
       <div class="status" id="discordBotStatus">봇 상태 확인 중</div>
 
@@ -6102,7 +6156,7 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="discordBotCommandsStatus" style="margin-top: 10px;">서버를 선택하세요.</div>
     </section>
     <section id="discord-permissions" data-view="discord">
-      <h2>Discord 권한</h2>
+      <h2>앱 봇 사용자 권한</h2>
       <form id="discordGrantForm">
         <label>Discord 사용자 ID
           <input name="user_id" autocomplete="off" required>
@@ -6136,7 +6190,7 @@ _INDEX_HTML = """<!doctype html>
       </table>
     </section>
     <section id="discord-command-groups" data-view="discord">
-      <h2>Discord 명령 권한 그룹</h2>
+      <h2>앱 봇 명령 권한 그룹</h2>
       <form id="discordCommandGroupForm" class="discord-command-group-form">
         <label>사용자 그룹 키
           <input
@@ -6191,7 +6245,7 @@ _INDEX_HTML = """<!doctype html>
       </div>
     </section>
     <section id="discord-scopes" data-view="discord">
-      <h2>Discord 랭킹 범위</h2>
+      <h2>앱 봇 서버 관리</h2>
       <form id="discordScopeForm">
         <label>서버
           <select name="guild_id" class="discord-guild-select" data-empty-label="서버 선택" required>
@@ -7502,6 +7556,7 @@ _INDEX_HTML = """<!doctype html>
     const discordBotStart = document.querySelector("#discordBotStart");
     const discordBotStop = document.querySelector("#discordBotStop");
     const discordBotSyncAll = document.querySelector("#discordBotSyncAll");
+    const discordBotRefreshGuilds = document.querySelector("#discordBotRefreshGuilds");
     const pubgApiKeyForm = document.querySelector("#pubgApiKeyForm");
     const pubgApiKeyClear = document.querySelector("#pubgApiKeyClear");
     const pubgApiKeyStatus = document.querySelector("#pubgApiKeyStatus");
@@ -7767,7 +7822,7 @@ _INDEX_HTML = """<!doctype html>
       discord: {
         eyebrow: "DISCORD 관리",
         title: "Discord 봇",
-        description: "전용 봇 실행, 서버별 공개 명령, 사용자 권한과 랭킹 범위를 관리합니다.",
+        description: "이 앱이 실행하는 하나의 봇에서 명령, 사용자 권한과 서버 범위를 모두 관리합니다.",
       },
       operations: {
         eyebrow: "운영 센터",
@@ -7820,13 +7875,13 @@ _INDEX_HTML = """<!doctype html>
         },
       ],
       discord: [
-        { key: "bot", label: "전용 봇", ids: ["discord-bot-manager"] },
+        { key: "bot", label: "앱 봇 제어", ids: ["discord-bot-manager"] },
         {
           key: "permissions",
-          label: "명령 권한",
+          label: "명령·권한",
           ids: ["discord-permissions", "discord-command-groups"],
         },
-        { key: "scopes", label: "서버 범위", ids: ["discord-scopes"] },
+        { key: "scopes", label: "서버 관리", ids: ["discord-scopes"] },
       ],
       operations: [
         { key: "quality", label: "데이터 품질", ids: ["player-intelligence-audit"] },
@@ -8960,9 +9015,18 @@ _INDEX_HTML = """<!doctype html>
     function renderDiscordBotState(payload = {}) {
       activeDiscordBotState = payload.bot || activeDiscordBotState;
       const running = Boolean(activeDiscordBotState.running);
+      const managedGuildCount = (activeDiscordBotSettings.managed_guild_ids || []).length;
+      const visibleGuildCount = running
+        ? Number(activeDiscordBotState.guild_count || 0)
+        : managedGuildCount;
       discordBotState.textContent = discordBotStateLabel(activeDiscordBotState.state);
-      discordBotUser.textContent = activeDiscordBotState.bot_user || "-";
-      discordBotGuildCount.textContent = `${formatInteger(activeDiscordBotState.guild_count || 0)}개`;
+      discordBotUser.textContent = activeDiscordBotState.bot_user
+        || activeDiscordBotSettings.managed_bot_username
+        || "-";
+      discordBotUser.title = activeDiscordBotState.bot_user_id
+        || activeDiscordBotSettings.managed_bot_user_id
+        || "";
+      discordBotGuildCount.textContent = `${formatInteger(visibleGuildCount)}개`;
       discordBotLastSync.textContent = activeDiscordBotState.last_sync_at_kst
         ? formatKstShort(activeDiscordBotState.last_sync_at_kst)
         : "-";
@@ -8978,7 +9042,7 @@ _INDEX_HTML = """<!doctype html>
       const statusParts = [
         discordBotStateLabel(activeDiscordBotState.state),
         `접두사 ${activeDiscordBotSettings.command_prefix || "!"}`,
-        `서버 ${formatInteger(activeDiscordBotState.guild_count || 0)}개`,
+        `관리 서버 ${formatInteger(visibleGuildCount)}개`,
       ];
       if (activeDiscordBotState.last_error) statusParts.push(`오류: ${activeDiscordBotState.last_error}`);
       discordBotStatus.textContent = statusParts.join(" · ");
@@ -9306,8 +9370,18 @@ _INDEX_HTML = """<!doctype html>
       return `${name} · 등록 ${formatInteger(playerCount)}명 · ${scope}`;
     }
 
-    async function loadDiscordGuilds({ sync = false } = {}) {
-      if (sync) await postJson("/discord/guilds/sync", {});
+    async function loadDiscordGuilds({ sync = false, pruneStale = false } = {}) {
+      let syncResult = null;
+      if (sync) {
+        syncResult = await postJson("/discord/guilds/sync", {
+          prune_stale: Boolean(pruneStale),
+          confirmation: pruneStale ? "CONFIRM MANAGED DISCORD GUILD SYNC" : null,
+        });
+        if (syncResult.managed_bot) {
+          activeDiscordBotSettings.managed_bot_user_id = syncResult.managed_bot.user_id;
+          activeDiscordBotSettings.managed_bot_username = syncResult.managed_bot.username;
+        }
+      }
       const response = await fetch("/discord/guilds");
       if (!response.ok) {
         const error = await response.json().catch(() => ({ detail: response.statusText }));
@@ -9337,6 +9411,7 @@ _INDEX_HTML = """<!doctype html>
       renderDiscordScopes();
       loadDiscordBotGuildSelection();
       if (registeredPlayers.length) renderPlayersTable();
+      return syncResult;
     }
 
     function renderDiscordScopes() {
@@ -17816,6 +17891,27 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
+    discordBotRefreshGuilds.addEventListener("click", async () => {
+      const confirmed = window.confirm(
+        "현재 앱 관리 봇이 참여하지 않은 이전 서버 목록과 해당 서버 전용 설정을 정리할까요? "
+        + "플레이어 분석 데이터와 전체 서버 권한은 유지됩니다.",
+      );
+      if (!confirmed) return;
+      discordBotRefreshGuilds.disabled = true;
+      try {
+        const result = await loadDiscordGuilds({ sync: true, pruneStale: true });
+        await Promise.all([loadDiscordBot(), loadDiscordPermissions(), loadDiscordScopes()]);
+        const catalogCount = (result?.removed_catalog_guild_ids || []).length;
+        const settingsCount = (result?.removed_settings_guild_ids || []).length;
+        banner.textContent = `앱 관리 봇 서버 ${formatInteger(result?.managed_guild_count || 0)}개 동기화 · 이전 서버 목록 ${formatInteger(catalogCount)}개 · 서버 전용 설정 ${formatInteger(settingsCount)}개 정리`;
+      } catch (error) {
+        discordBotStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      } finally {
+        discordBotRefreshGuilds.disabled = false;
+      }
+    });
+
     pubgApiKeyForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const value = String(event.currentTarget.elements.value.value || "");
@@ -17838,9 +17934,10 @@ _INDEX_HTML = """<!doctype html>
         if (wasRunning) await postJson("/discord/bot/stop", {});
         await postJson("/settings/secrets/discord", { value });
         discordTokenForm.reset();
+        const syncResult = await loadDiscordGuilds({ sync: true });
         if (wasRunning) await postJson("/discord/bot/start", {});
         await Promise.all([loadStatus(), loadDiscordBot()]);
-        banner.textContent = "Discord 봇 토큰 저장 완료";
+        banner.textContent = `앱 관리 봇 ${syncResult?.managed_bot?.username || ""} 연결 · 서버 ${formatInteger(syncResult?.managed_guild_count || 0)}개`;
       } catch (error) {
         discordTokenStatus.textContent = `오류: ${error.message}`;
         banner.textContent = `오류: ${error.message}`;

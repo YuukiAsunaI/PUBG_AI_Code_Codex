@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import asdict, dataclass
 from threading import Event, Lock, Thread
+from time import monotonic
 from typing import Any, Callable
 
 from pubg_ai.config import RuntimeConfig
@@ -24,6 +26,7 @@ class DiscordBotState:
     stop_requested: bool
     command_prefix: str
     bot_user: str | None
+    bot_user_id: str | None
     guild_count: int
     started_at_kst: str | None
     stopped_at_kst: str | None
@@ -65,6 +68,7 @@ class DiscordBotController:
             stop_requested=False,
             command_prefix="!",
             bot_user=None,
+            bot_user_id=None,
             guild_count=0,
             started_at_kst=None,
             stopped_at_kst=None,
@@ -106,6 +110,7 @@ class DiscordBotController:
                 stop_requested=False,
                 command_prefix=settings.command_prefix,
                 bot_user=None,
+                bot_user_id=None,
                 guild_count=0,
                 started_at_kst=isoformat_kst(),
                 stopped_at_kst=None,
@@ -119,6 +124,8 @@ class DiscordBotController:
             return self._state
 
     def stop(self, *, timeout_seconds: float = 15.0) -> DiscordBotState:
+        timeout_seconds = max(0.1, float(timeout_seconds))
+        deadline = monotonic() + timeout_seconds
         with self._lock:
             thread = self._thread
             loop = self._loop
@@ -132,24 +139,37 @@ class DiscordBotController:
                 stop_requested=True,
             )
         if loop is None:
-            self._loop_ready.wait(timeout=min(2.0, max(0.1, timeout_seconds / 3)))
+            self._loop_ready.wait(
+                timeout=min(2.0, max(0.05, deadline - monotonic()))
+            )
             with self._lock:
                 loop = self._loop
                 bot = self._bot
         if loop is not None and loop.is_running() and bot is not None:
             try:
                 future = asyncio.run_coroutine_threadsafe(bot.close(), loop)
-                future.result(timeout=max(1.0, timeout_seconds / 2))
+                future.result(
+                    timeout=max(
+                        0.05,
+                        min(timeout_seconds / 2, deadline - monotonic()),
+                    )
+                )
+            except FutureTimeoutError:
+                # Discord may finish closing after its gateway coroutine returns.
+                # The thread deadline below is the authoritative shutdown result.
+                pass
             except Exception as exc:
                 with self._lock:
                     self._state = _replace_state(
                         self._state,
                         last_error=_safe_error(exc, self._token),
                     )
-        thread.join(timeout=max(1.0, timeout_seconds))
+        thread.join(timeout=max(0.0, deadline - monotonic()))
         with self._lock:
             if thread.is_alive():
-                raise DiscordBotControllerError("Discord 봇 종료 대기 시간이 초과되었습니다.")
+                message = "Discord 봇 종료 대기 시간이 초과되었습니다."
+                self._state = _replace_state(self._state, last_error=message)
+                raise DiscordBotControllerError(message)
             return self._state
 
     def sync_commands(self, guild_id: str | None = None) -> DiscordBotState:
@@ -229,6 +249,7 @@ class DiscordBotController:
                     running=True,
                     ready=True,
                     bot_user=str(details.get("bot_user") or "") or None,
+                    bot_user_id=str(details.get("bot_user_id") or "") or None,
                     guild_count=int(details.get("guild_count") or 0),
                     last_error=None,
                 )

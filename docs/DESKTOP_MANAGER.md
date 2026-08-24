@@ -56,17 +56,22 @@ keeps the same text inputs and hides the native-only buttons.
 - Default backup and quarantine directories are created during manager startup. Missing-path alerts resolve on the
   next status refresh while remaining available as resolved history records.
 
-## Dedicated Discord Bot Control
+## Single Managed Discord Bot
 
-The left navigation entry `Discord 봇` opens the Discord workspace, whose first tab `전용 봇` manages the project's
-dedicated bot without exposing stored credentials:
+The left navigation entry `Discord 봇` opens one bot workspace. `앱 봇 제어`, `명령·권한`, and `서버 관리`
+are three views of the same manager-owned bot, not separate bots:
 
 - PUBG API key and Discord bot token inputs are write-only. Saving writes only to the ignored project `.env`; status
   reports configured/missing and the browser never receives the saved value.
 - Start, stop, command sync, auto-start, and hybrid-command prefix are available from the local manager.
-- Each known Discord server can inherit the full command catalog or expose an explicit command subset. Slash-command
+- The bot user ID and its current guild memberships are bound to local settings. Every guild dropdown only exposes
+  memberships of that managed identity; stale guild rows from a previous bot cannot re-enter through registrations.
+- Each managed Discord server can inherit the full command catalog or expose an explicit command subset. Slash-command
   registration and prefix invocation use the same per-guild gate.
-- Permission groups, command aliases, ranking scope, and player-to-guild registrations remain independently editable.
+- Existing player, ranking, replay, permission, server-scope, alert, and worker features remain on this one bot.
+- `서버 목록 정리` requires an operator confirmation before pruning stale guild catalog rows and guild-specific
+  settings. Player analytics and global permissions are preserved.
+- The standalone `run-discord-bot` CLI path is intentionally removed to prevent a duplicate runtime.
 - The manager stays bound to localhost; bot control does not create a remote administration endpoint.
 
 ## Display Settings

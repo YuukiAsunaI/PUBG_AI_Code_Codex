@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from pubg_ai.discord_guild_catalog import list_discord_guild_catalog, sync_discord_guild_catalog
+from pubg_ai.discord_guild_catalog import (
+    list_discord_guild_catalog,
+    list_stored_discord_guild_ids,
+    sync_discord_guild_catalog,
+)
 
 
 class DiscordGuildCatalogTests(unittest.TestCase):
@@ -48,6 +52,52 @@ class DiscordGuildCatalogTests(unittest.TestCase):
         inserted = [params for query, params in connection.executions if "INSERT INTO discord_guilds" in query]
         self.assertEqual({params[0] for params in inserted}, {"100", "200"})
         self.assertIn(("100", "Alpha renamed"), {(params[0], params[1]) for params in inserted})
+
+    def test_managed_catalog_hides_legacy_sources(self) -> None:
+        connection = FakeConnection(
+            [
+                [
+                    {"guild_id": "100", "name": "Current", "ranking_scope": "guild"},
+                    {"guild_id": "900", "name": "Legacy", "ranking_scope": "guild"},
+                ],
+                [{"guild_id": "900", "registered_player_count": 1}],
+                [{"guild_id": "900"}],
+            ]
+        )
+
+        catalog = list_discord_guild_catalog(
+            connection,
+            configured_guild_ids=["900"],
+            managed_guild_ids=["100"],
+        )
+
+        self.assertEqual([item.guild_id for item in catalog], ["100"])
+
+    def test_authoritative_sync_prunes_missing_guild_rows(self) -> None:
+        connection = FakeConnection([])
+
+        sync_discord_guild_catalog(
+            connection,
+            [{"guild_id": "100", "guild_name": "Current"}],
+            prune_missing=True,
+        )
+
+        deletes = [
+            (query, params)
+            for query, params in connection.executions
+            if "DELETE FROM discord_guilds" in query
+        ]
+        self.assertEqual(len(deletes), 1)
+        self.assertEqual(deletes[0][1], ("100",))
+
+    def test_lists_stored_guild_ids_for_prune_report(self) -> None:
+        connection = FakeConnection(
+            [[{"guild_id": "900"}, {"guild_id": "100"}, {"guild_id": "900"}]]
+        )
+
+        guild_ids = list_stored_discord_guild_ids(connection)
+
+        self.assertEqual(guild_ids, ["100", "900"])
 
 
 class FakeConnection:

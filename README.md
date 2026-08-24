@@ -384,15 +384,11 @@ custom-match, KST period, player, cluster precision, and source-limit filters ar
 GET /analytics/flight-paths
 ```
 
-Run the Discord bot MVP:
-
-```powershell
-python -m pubg_ai.cli run-discord-bot --prefix !
-```
-
-The Discord bot token stays only in `.env` as `DISCORD_BOT_TOKEN`. Core commands are registered as Discord hybrid
-commands, so the same handlers support both prefix and slash invocation. Prefix invocation still requires Discord's
-message content intent, and the application-command tree is synchronized when the bot becomes ready.
+Run the single project Discord bot from the local manager's `Discord 봇 > 앱 봇 제어` view. The app owns its
+start/stop lifecycle; there is no separate CLI bot process that can accidentally create a second runtime. The Discord
+bot token stays only in `.env` as `DISCORD_BOT_TOKEN`. All player, ranking, replay, permission, server-scope, alert,
+and worker commands are registered on this same bot as hybrid commands, so prefix and slash invocation share handlers
+and authorization.
 
 Use the guarded live-acceptance workflow before enabling a production alert channel. The probe is read-only and its
 selected channel row includes `last_message_id` for a pre-send audit:
@@ -691,8 +687,8 @@ favicon icon.
 
 The local `Display Settings` number format is persisted in `config/local_settings.json`, so grouped, Korean-unit, or
 plain rendering remains consistent when the desktop launcher selects a different localhost port. The left navigation
-entry `Discord 봇` opens the dedicated bot manager with write-only PUBG API key and Discord token fields plus start,
-stop, sync, auto-start, prefix, and per-guild command visibility controls.
+entry `Discord 봇` opens the one app-managed bot workspace with write-only PUBG API key and Discord token fields plus
+start, stop, sync, auto-start, prefix, permissions, server scopes, alerts, and per-guild command visibility controls.
 
 Build the local Windows executable:
 

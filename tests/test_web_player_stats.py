@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 from pubg_ai.web.app import create_app
+from pubg_ai.local_settings import LocalSettingsStore
 from pubg_ai.player_registry import PlayerDiscordRegistration, RegisteredPlayer
 
 
@@ -483,8 +484,17 @@ class WebPlayerStatsTests(unittest.TestCase):
             ]
         )
 
-        with patch("pubg_ai.web.app.connect_mysql", return_value=connection):
-            response = TestClient(create_app()).get("/discord/guilds")
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            LocalSettingsStore(base_dir / "config" / "local_settings.json").reconcile_managed_discord_bot(
+                bot_user_id="42",
+                bot_username="PUBG Metrics",
+                guild_ids=["100"],
+            )
+            with patch("pubg_ai.web.app.connect_mysql", return_value=connection):
+                response = TestClient(
+                    create_app(base_dir=base_dir, env_file=".missing")
+                ).get("/discord/guilds")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(

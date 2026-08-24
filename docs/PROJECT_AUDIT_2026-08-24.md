@@ -68,8 +68,8 @@ This is historical frequency evidence, not a claim that the next match's route c
 
 - `EnvSecretStore` writes PUBG API and Discord bot credentials only to the ignored project `.env` using an atomic
   replacement. Saved values have no read-back API; the browser receives configured/missing status only.
-- The local manager can start, stop, and sync the dedicated bot, set auto-start and the hybrid-command prefix, and
-  choose the application commands visible in each known guild.
+- The local manager can start, stop, and sync the single app-managed bot, set auto-start and the hybrid-command prefix,
+  and choose the application commands visible in each known guild.
 - Slash registration and prefix invocation apply the same per-guild command gate. Global application commands are
   cleared when guild-specific commands are synchronized, avoiding accidental visibility in unrelated servers.
 - Permission groups, aliases, ranking scopes, alert channels, and many-to-many player/guild registrations remain

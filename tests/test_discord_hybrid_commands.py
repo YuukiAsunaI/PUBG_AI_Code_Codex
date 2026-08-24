@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 import unittest
 
 from discord.ext.commands import HybridCommand
@@ -89,6 +89,43 @@ class DiscordHybridCommandTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(bot.tree.get_commands(), [])
             finally:
                 await bot.close()
+
+    async def test_partial_guild_events_preserve_full_managed_membership(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            store = LocalSettingsStore(base_dir / "local_settings.json", base_dir=base_dir)
+            checker = DiscordPermissionChecker(store.load_discord_permission_settings())
+            config = RuntimeConfig(
+                app=AppConfig(raw_data_dir=base_dir / "raw", replay_data_dir=base_dir / "replay"),
+                database=DatabaseConfig(),
+                secrets=SecretConfig(discord_bot_token="test-token"),
+            )
+            bot = create_discord_bot(
+                config=config,
+                permission_checker=checker,
+                scope_settings_store=store,
+            )
+            bot._connection.user = SimpleNamespace(id=42, name="PUBG Metrics")
+            first = SimpleNamespace(id=100, name="First")
+            second = SimpleNamespace(id=200, name="Second renamed")
+            bot._connection._guilds = {100: first, 200: second}
+
+            with (
+                patch("pubg_ai.discord_bot.connect_mysql") as connect_mysql,
+                patch("pubg_ai.discord_bot.sync_discord_guild_catalog"),
+            ):
+                try:
+                    bot.pubg_sync_known_guilds([second])
+                    after_update = store.load_discord_bot_settings()
+                    bot._connection._guilds = {100: first}
+                    bot.pubg_sync_known_guilds([])
+                    after_remove = store.load_discord_bot_settings()
+                finally:
+                    await bot.close()
+
+            self.assertEqual(after_update.managed_guild_ids, ["100", "200"])
+            self.assertEqual(after_remove.managed_guild_ids, ["100"])
+            self.assertEqual(connect_mysql.call_count, 2)
 
 
 if __name__ == "__main__":

@@ -1414,13 +1414,29 @@ def create_discord_bot(
             for guild in guilds
             if getattr(guild, "id", None) is not None
         ]
-        if not records:
-            return
+        managed_guild_ids = {
+            str(guild.id)
+            for guild in bot.guilds
+            if getattr(guild, "id", None) is not None
+        }
+        managed_guild_ids.update(record["guild_id"] for record in records)
+        bot_user_id = str(getattr(bot.user, "id", "") or "")
+        if not bot_user_id:
+            raise RuntimeError("Discord managed bot identity is unavailable.")
+        if scope_settings_store is not None:
+            reconciliation = scope_settings_store.reconcile_managed_discord_bot(
+                bot_user_id=bot_user_id,
+                bot_username=str(bot.user or ""),
+                guild_ids=sorted(managed_guild_ids),
+            )
+            permission_checker.settings = reconciliation.permissions
         connection = connect_mysql(config.database)
         try:
             sync_discord_guild_catalog(connection, records)
         finally:
             connection.close()
+
+    bot.pubg_sync_known_guilds = sync_known_guilds
 
     def restore_global_application_commands() -> tuple[Any, ...]:
         nonlocal application_command_templates
@@ -1471,6 +1487,10 @@ def create_discord_bot(
         nonlocal alert_task_started, slash_commands_synced
         print(f"PUBG AI Discord bot logged in as {bot.user}")
         refresh_permission_settings()
+        try:
+            sync_known_guilds(bot.guilds)
+        except Exception as exc:
+            print(f"failed to sync Discord guild catalog: {exc}")
         if not slash_commands_synced:
             try:
                 synced = await sync_application_commands()
@@ -1478,16 +1498,13 @@ def create_discord_bot(
                 print(f"synced Discord application commands for {len(synced)} guilds")
             except Exception as exc:
                 print(f"failed to sync Discord application commands: {exc}")
-        try:
-            sync_known_guilds(bot.guilds)
-        except Exception as exc:
-            print(f"failed to sync Discord guild catalog: {exc}")
         if scope_settings_store is not None and not alert_task_started:
             alert_task_started = True
             bot.loop.create_task(alert_loop())
         notify_status(
             "ready",
             bot_user=str(bot.user or ""),
+            bot_user_id=str(getattr(bot.user, "id", "") or ""),
             guild_count=len(bot.guilds),
         )
 
@@ -1505,6 +1522,13 @@ def create_discord_bot(
             sync_known_guilds([after])
         except Exception as exc:
             print(f"failed to update Discord guild catalog: {exc}")
+
+    @bot.event
+    async def on_guild_remove(_guild: Any) -> None:
+        try:
+            sync_known_guilds([])
+        except Exception as exc:
+            print(f"failed to update Discord guild membership: {exc}")
 
     @bot.event
     async def on_message(message: Any) -> None:
@@ -3139,25 +3163,6 @@ def create_discord_bot(
         )
 
     return bot
-
-
-def run_discord_bot(
-    *,
-    config: RuntimeConfig,
-    permission_checker: DiscordPermissionChecker,
-    scope_settings_store: LocalSettingsStore | None = None,
-    command_prefix: str = DEFAULT_DISCORD_PREFIX,
-) -> None:
-    if not config.secrets.discord_bot_token:
-        raise RuntimeError("DISCORD_BOT_TOKEN is not configured in .env.")
-
-    bot = create_discord_bot(
-        config=config,
-        permission_checker=permission_checker,
-        scope_settings_store=scope_settings_store,
-        command_prefix=command_prefix,
-    )
-    bot.run(config.secrets.discord_bot_token)
 
 
 def _short_account_id(account_id: str) -> str:

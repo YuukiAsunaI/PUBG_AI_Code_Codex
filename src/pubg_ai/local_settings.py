@@ -13,6 +13,7 @@ import time
 
 from pubg_ai.file_io import atomic_write_bytes
 from pubg_ai.discord_command_catalog import (
+    canonical_command_name,
     default_command_groups,
     normalize_command_selection,
 )
@@ -119,6 +120,9 @@ class DiscordBotSettings:
     auto_start: bool = False
     command_prefix: str = "!"
     guild_enabled_commands: dict[str, list[str]] = field(default_factory=dict)
+    managed_bot_user_id: str | None = None
+    managed_bot_username: str | None = None
+    managed_guild_ids: list[str] = field(default_factory=list)
     updated_at: str | None = None
 
     def to_record(self) -> dict[str, Any]:
@@ -126,7 +130,30 @@ class DiscordBotSettings:
             "auto_start": self.auto_start,
             "command_prefix": self.command_prefix,
             "guild_enabled_commands": self.guild_enabled_commands,
+            "managed_bot_user_id": self.managed_bot_user_id,
+            "managed_bot_username": self.managed_bot_username,
+            "managed_guild_ids": self.managed_guild_ids,
             "updated_at": self.updated_at,
+        }
+
+
+@dataclass(frozen=True)
+class ManagedDiscordBotReconciliation:
+    bot: DiscordBotSettings
+    permissions: DiscordPermissionSettings
+    scopes: DiscordScopeSettings
+    first_binding: bool
+    identity_changed: bool
+    removed_guild_ids: list[str]
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "bot": self.bot.to_record(),
+            "permissions": self.permissions.to_record(),
+            "scopes": self.scopes.to_record(),
+            "first_binding": self.first_binding,
+            "identity_changed": self.identity_changed,
+            "removed_guild_ids": self.removed_guild_ids,
         }
 
 
@@ -452,16 +479,145 @@ class LocalSettingsStore:
         command_prefix: str,
         guild_enabled_commands: dict[str, list[str]] | None = None,
     ) -> DiscordBotSettings:
-        settings = DiscordBotSettings(
-            auto_start=bool(auto_start),
-            command_prefix=_normalize_command_prefix(command_prefix),
-            guild_enabled_commands=_normalize_guild_enabled_commands(
-                guild_enabled_commands or {}
-            ),
-            updated_at=isoformat_kst(),
-        )
-        self._update_settings_section("discord_bot", settings.to_record())
-        return settings
+        normalized_prefix = _normalize_command_prefix(command_prefix)
+        normalized_commands = _normalize_guild_enabled_commands(guild_enabled_commands or {})
+
+        def mutate(payload: dict[str, Any]) -> DiscordBotSettings:
+            current_record = payload.get("discord_bot")
+            current = (
+                _discord_bot_settings_from_record(current_record)
+                if isinstance(current_record, dict)
+                else DiscordBotSettings()
+            )
+            settings = DiscordBotSettings(
+                auto_start=bool(auto_start),
+                command_prefix=normalized_prefix,
+                guild_enabled_commands=normalized_commands,
+                managed_bot_user_id=current.managed_bot_user_id,
+                managed_bot_username=current.managed_bot_username,
+                managed_guild_ids=list(current.managed_guild_ids),
+                updated_at=isoformat_kst(),
+            )
+            payload["discord_bot"] = settings.to_record()
+            return settings
+
+        return self._mutate_settings(mutate)
+
+    def reconcile_managed_discord_bot(
+        self,
+        *,
+        bot_user_id: str,
+        bot_username: str | None,
+        guild_ids: list[str],
+        prune_stale: bool = False,
+    ) -> ManagedDiscordBotReconciliation:
+        managed_bot_user_id = _normalize_discord_snowflake(bot_user_id, "Discord bot user id")
+        managed_bot_username = _optional_str(bot_username)
+        managed_guild_ids = _normalize_discord_snowflake_list(guild_ids, "Discord guild id")
+        managed_guild_set = set(managed_guild_ids)
+
+        def mutate(payload: dict[str, Any]) -> ManagedDiscordBotReconciliation:
+            bot_record = payload.get("discord_bot")
+            current_bot = (
+                _discord_bot_settings_from_record(bot_record)
+                if isinstance(bot_record, dict)
+                else DiscordBotSettings()
+            )
+            permission_record = payload.get("discord_permissions")
+            current_permissions = (
+                _discord_permissions_from_record(permission_record)
+                if isinstance(permission_record, dict)
+                else DiscordPermissionSettings(
+                    command_groups=_copy_groups(DEFAULT_COMMAND_GROUPS),
+                    user_grants={},
+                    guild_user_grants={},
+                    global_admin_user_ids=[],
+                )
+            )
+            scope_record = payload.get("discord_scopes")
+            current_scopes = (
+                _discord_scopes_from_record(scope_record)
+                if isinstance(scope_record, dict)
+                else DiscordScopeSettings(guild_ranking_scopes={})
+            )
+
+            first_binding = current_bot.managed_bot_user_id is None
+            identity_changed = (
+                current_bot.managed_bot_user_id is not None
+                and current_bot.managed_bot_user_id != managed_bot_user_id
+            )
+            configured_guild_ids = (
+                set(current_bot.managed_guild_ids)
+                | set(current_bot.guild_enabled_commands)
+                | set(current_permissions.guild_user_grants)
+                | set(current_scopes.guild_ranking_scopes)
+            )
+            removed_guild_ids = sorted(configured_guild_ids - managed_guild_set)
+            updated_at = isoformat_kst()
+
+            bot = DiscordBotSettings(
+                auto_start=current_bot.auto_start,
+                command_prefix=current_bot.command_prefix,
+                guild_enabled_commands=(
+                    {
+                        guild_id: commands
+                        for guild_id, commands in current_bot.guild_enabled_commands.items()
+                        if guild_id in managed_guild_set
+                    }
+                    if prune_stale
+                    else current_bot.guild_enabled_commands
+                ),
+                managed_bot_user_id=managed_bot_user_id,
+                managed_bot_username=managed_bot_username,
+                managed_guild_ids=managed_guild_ids,
+                updated_at=updated_at,
+            )
+            guild_user_grants = (
+                {
+                    guild_id: grants
+                    for guild_id, grants in current_permissions.guild_user_grants.items()
+                    if guild_id in managed_guild_set
+                }
+                if prune_stale
+                else current_permissions.guild_user_grants
+            )
+            permissions = DiscordPermissionSettings(
+                command_groups=current_permissions.command_groups,
+                user_grants=current_permissions.user_grants,
+                guild_user_grants=guild_user_grants,
+                global_admin_user_ids=current_permissions.global_admin_user_ids,
+                updated_at=updated_at,
+                command_aliases=current_permissions.command_aliases,
+            )
+            guild_ranking_scopes = (
+                {
+                    guild_id: scope
+                    for guild_id, scope in current_scopes.guild_ranking_scopes.items()
+                    if guild_id in managed_guild_set
+                }
+                if prune_stale
+                else current_scopes.guild_ranking_scopes
+            )
+            scopes = DiscordScopeSettings(
+                guild_ranking_scopes=guild_ranking_scopes,
+                public_profile_default=current_scopes.public_profile_default,
+                updated_at=updated_at,
+            )
+
+            _validate_discord_permission_settings(permissions)
+            payload["discord_bot"] = bot.to_record()
+            payload["discord_permissions"] = permissions.to_record()
+            payload["discord_scopes"] = scopes.to_record()
+            return ManagedDiscordBotReconciliation(
+                bot=bot,
+                permissions=permissions,
+                scopes=scopes,
+                first_binding=first_binding,
+                identity_changed=identity_changed,
+                removed_guild_ids=removed_guild_ids,
+            )
+
+        return self._mutate_settings(mutate)
 
     def save_web_settings(self, local_web_base_url: str | None) -> WebSettings:
         settings = WebSettings(
@@ -830,14 +986,19 @@ def _normalize_command_aliases(value: dict[str, Any]) -> dict[str, str]:
 
 
 def _merge_default_command_groups(groups: dict[str, list[str]]) -> dict[str, list[str]]:
-    merged = _copy_groups(groups)
-    for group, default_values in DEFAULT_COMMAND_GROUPS.items():
-        merged[group] = sorted(set(merged.get(group, []) + default_values))
-    # Older settings placed soft unregister beside destructive admin commands.
-    # Keep the commands in their dedicated least-privilege group after upgrade.
-    merged["admin"] = sorted(
-        set(merged.get("admin", [])) - set(DEFAULT_COMMAND_GROUPS["player_manage"])
-    )
+    merged: dict[str, list[str]] = {}
+    for group, values in groups.items():
+        if group in DEFAULT_COMMAND_GROUPS:
+            continue
+        current_commands = {
+            canonical
+            for value in values
+            if (canonical := canonical_command_name(value)) is not None
+        }
+        # Keep custom group identities even when all of their legacy commands
+        # disappeared so existing grants remain loadable and explicitly revocable.
+        merged[group] = sorted(current_commands)
+    merged.update(_copy_groups(DEFAULT_COMMAND_GROUPS))
     return merged
 
 
@@ -899,11 +1060,25 @@ def _discord_bot_settings_from_record(record: dict[str, Any]) -> DiscordBotSetti
     if not isinstance(command_prefix, str):
         command_prefix = "!"
     guild_enabled_commands = record.get("guild_enabled_commands")
+    managed_bot_user_id = record.get("managed_bot_user_id")
+    if managed_bot_user_id is not None:
+        managed_bot_user_id = _normalize_discord_snowflake(
+            managed_bot_user_id,
+            "Discord bot user id",
+        )
+    managed_bot_username = _optional_str(record.get("managed_bot_username"))
+    managed_guild_ids = record.get("managed_guild_ids")
     return DiscordBotSettings(
         auto_start=auto_start,
         command_prefix=_normalize_command_prefix(command_prefix),
         guild_enabled_commands=_normalize_guild_enabled_commands(
             guild_enabled_commands if isinstance(guild_enabled_commands, dict) else {}
+        ),
+        managed_bot_user_id=managed_bot_user_id,
+        managed_bot_username=managed_bot_username,
+        managed_guild_ids=_normalize_discord_snowflake_list(
+            managed_guild_ids if isinstance(managed_guild_ids, list) else [],
+            "Discord guild id",
         ),
         updated_at=_optional_str(record.get("updated_at")),
     )
@@ -931,6 +1106,17 @@ def _normalize_guild_enabled_commands(value: dict[str, Any]) -> dict[str, list[s
         except ValueError as exc:
             raise LocalSettingsError(str(exc)) from exc
     return dict(sorted(normalized.items()))
+
+
+def _normalize_discord_snowflake(value: Any, label: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized or len(normalized) > 32 or not normalized.isdigit():
+        raise LocalSettingsError(f"{label} must contain only digits.")
+    return normalized
+
+
+def _normalize_discord_snowflake_list(values: list[Any], label: str) -> list[str]:
+    return sorted({_normalize_discord_snowflake(value, label) for value in values})
 
 
 def _web_settings_from_record(record: dict[str, Any]) -> WebSettings:

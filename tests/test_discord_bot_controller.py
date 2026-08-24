@@ -42,6 +42,12 @@ class _FailingBot(_FakeBot):
         raise RuntimeError(f"login rejected for {token}")
 
 
+class _SlowClosingBot(_FakeBot):
+    async def close(self) -> None:
+        await asyncio.sleep(0.15)
+        await super().close()
+
+
 class DiscordBotControllerTests(unittest.TestCase):
     def test_start_sync_and_stop(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -62,6 +68,20 @@ class DiscordBotControllerTests(unittest.TestCase):
             self.assertEqual(stopped.state, "stopped")
             self.assertFalse(stopped.running)
             self.assertEqual(stopped.command_prefix, "?")
+            self.assertIsNone(stopped.last_error)
+
+    def test_completed_shutdown_does_not_keep_intermediate_close_timeout(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store = LocalSettingsStore(Path(temp_dir) / "local_settings.json")
+            controller = self._controller(store, _SlowClosingBot)
+
+            controller.start()
+            self._wait_until(lambda: controller.status().ready)
+            stopped = controller.stop(timeout_seconds=0.4)
+
+            self.assertEqual(stopped.state, "stopped")
+            self.assertFalse(stopped.running)
+            self.assertIsNone(stopped.last_error)
 
     def test_runtime_error_redacts_token(self) -> None:
         with TemporaryDirectory() as temp_dir:

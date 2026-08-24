@@ -15,9 +15,8 @@ from pubg_ai.discord_acceptance import (
     DISCORD_ACCEPTANCE_CONFIRMATION,
     DiscordAcceptanceClient,
 )
-from pubg_ai.discord_bot import DEFAULT_DISCORD_PREFIX, run_discord_bot
+from pubg_ai.discord_bot import DEFAULT_DISCORD_PREFIX
 from pubg_ai.discord_permission_manager import DiscordPermissionManager
-from pubg_ai.discord_permissions import DiscordPermissionChecker
 from pubg_ai.fight_outcome_processor import FightOutcomeProcessor
 from pubg_ai.fight_outcome_stats import FightOutcomeStatsService
 from pubg_ai.local_settings import LocalSettingsError, LocalSettingsStore
@@ -305,9 +304,6 @@ def main(argv: list[str] | None = None) -> int:
         help="Print recent persisted operational drill reports.",
     )
     drill_history_parser.add_argument("--limit", type=int, default=20)
-
-    discord_parser = subparsers.add_parser("run-discord-bot", help="Run the Discord bot.")
-    discord_parser.add_argument("--prefix", default=DEFAULT_DISCORD_PREFIX, help="Text command prefix.")
 
     discord_probe_parser = subparsers.add_parser(
         "discord-acceptance-probe",
@@ -879,21 +875,6 @@ def main(argv: list[str] | None = None) -> int:
         )
         _print_json({"discord_acceptance_round_trip": report.to_record()})
         return 0 if report.verified else 2
-
-    if args.command == "run-discord-bot":
-        if not config.secrets.discord_bot_token:
-            raise SystemExit("DISCORD_BOT_TOKEN is not configured in .env.")
-        settings_store = _local_settings_store(base_dir=base_dir, env_file=args.env_file)
-        permission_checker = DiscordPermissionChecker(
-            settings_store.load_discord_permission_settings()
-        )
-        run_discord_bot(
-            config=config,
-            permission_checker=permission_checker,
-            scope_settings_store=settings_store,
-            command_prefix=args.prefix,
-        )
-        return 0
 
     if args.command == "discord-permissions":
         settings_store = _local_settings_store(base_dir=base_dir, env_file=args.env_file)

@@ -53,7 +53,7 @@ Recommended JSON shape:
     "command_groups": {
       "register": ["유저등록", "pubg-register"],
       "player_manage": ["유저삭제", "pubg-unregister"],
-      "profile_read": ["유저조회", "전적", "무기", "매치", "pubg-profile", "pubg-stats", "pubg-recent", "pubg-match", "pubg-weapon"],
+      "profile_read": ["유저조회", "전적", "교전", "추세", "무기", "추천", "매치"],
       "ranking_read": ["랭킹", "pubg-ranking"],
       "replay_read": ["pubg-replay"],
       "settings_write": ["pubg-settings"],
@@ -77,6 +77,15 @@ Recommended JSON shape:
     "public_profile_default": true,
     "updated_at": "2026-06-27T21:00:00+09:00"
   },
+  "discord_bot": {
+    "auto_start": false,
+    "command_prefix": "!",
+    "guild_enabled_commands": {},
+    "managed_bot_user_id": "discord-bot-user-id",
+    "managed_bot_username": "PUBG Metrics",
+    "managed_guild_ids": ["discord-guild-id"],
+    "updated_at": "2026-08-25T12:00:00+09:00"
+  },
   "alerts": {
     "minimum_free_bytes": 53687091200,
     "discord_channel_ids": ["discord-alert-channel-id"],
@@ -98,8 +107,8 @@ from Discord.
 The `player_manage` group contains only `유저삭제` and `pubg-unregister`. Both commands perform a soft unregister:
 future collection stops, while normalized rows and raw/replay files remain. This delegated group does not permit
 `pubg-delete-data`, `pubg-permission`, alert controls, or worker controls. For compatibility, an `admin` grant implies
-`player_manage`, but the reverse is never true. Legacy settings are normalized by moving the two soft-unregister
-command names out of the stored `admin` command list when loaded.
+`player_manage`, but the reverse is never true. Built-in groups are regenerated from the current managed-bot command
+catalog when loaded, so removed legacy command names cannot remain active; valid custom groups and global grants stay.
 
 The `settings_write` group enables `pubg-settings`. Guild-scoped grants may read only a restricted summary. Global
 admins and globally granted `settings_write` users may change collector limits and the default `public_profile` value.

@@ -23,6 +23,7 @@ def list_discord_guild_catalog(
     *,
     configured_guild_ids: Iterable[str] = (),
     ranking_scope_overrides: Mapping[str, str] | None = None,
+    managed_guild_ids: Iterable[str] | None = None,
 ) -> list[DiscordGuildCatalogEntry]:
     with connection.cursor() as cursor:
         cursor.execute(
@@ -89,6 +90,20 @@ def list_discord_guild_catalog(
         if normalized:
             entries.setdefault(normalized, _empty_entry())["ranking_scope"] = _ranking_scope(scope)
 
+    if managed_guild_ids is not None:
+        managed = {
+            normalized
+            for guild_id in managed_guild_ids
+            if (normalized := _optional_text(guild_id)) is not None
+        }
+        entries = {
+            guild_id: entry
+            for guild_id, entry in entries.items()
+            if guild_id in managed
+        }
+        for guild_id in managed:
+            entries.setdefault(guild_id, _empty_entry())
+
     catalog = [
         DiscordGuildCatalogEntry(
             guild_id=guild_id,
@@ -103,9 +118,24 @@ def list_discord_guild_catalog(
     return catalog
 
 
+def list_stored_discord_guild_ids(connection: Any) -> list[str]:
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT guild_id FROM discord_guilds", ())
+        rows = cursor.fetchall()
+    return sorted(
+        {
+            guild_id
+            for row in rows
+            if (guild_id := _optional_text(row.get("guild_id"))) is not None
+        }
+    )
+
+
 def sync_discord_guild_catalog(
     connection: Any,
     guilds: Iterable[Mapping[str, Any]],
+    *,
+    prune_missing: bool = False,
 ) -> int:
     normalized: dict[str, str | None] = {}
     for guild in guilds:
@@ -113,9 +143,6 @@ def sync_discord_guild_catalog(
         if not guild_id:
             continue
         normalized[guild_id] = _optional_text(guild.get("guild_name") or guild.get("name"))
-
-    if not normalized:
-        return 0
 
     synced_at = now_kst().replace(tzinfo=None)
     with connection.cursor() as cursor:
@@ -137,6 +164,16 @@ def sync_discord_guild_catalog(
                 """,
                 (guild_id, name, synced_at, synced_at),
             )
+        if prune_missing:
+            managed_ids = sorted(normalized)
+            if managed_ids:
+                placeholders = ", ".join(["%s"] * len(managed_ids))
+                cursor.execute(
+                    f"DELETE FROM discord_guilds WHERE guild_id NOT IN ({placeholders})",
+                    tuple(managed_ids),
+                )
+            else:
+                cursor.execute("DELETE FROM discord_guilds", ())
     return len(normalized)
 
 

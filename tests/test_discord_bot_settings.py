@@ -61,6 +61,89 @@ class DiscordBotSettingsTests(unittest.TestCase):
                     guild_enabled_commands={"100": ["없는명령"]},
                 )
 
+    def test_managed_bot_reconciliation_prunes_only_explicit_guild_state(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store = LocalSettingsStore(Path(temp_dir) / "local_settings.json")
+            first = store.reconcile_managed_discord_bot(
+                bot_user_id="42",
+                bot_username="PUBG Metrics",
+                guild_ids=["100", "200"],
+            )
+            store.save_discord_bot_settings(
+                auto_start=True,
+                command_prefix="!",
+                guild_enabled_commands={"100": ["전적"], "900": ["추천"]},
+            )
+            permissions = store.load_discord_permission_settings()
+            store.save_discord_permission_settings(
+                command_groups=permissions.command_groups,
+                user_grants={"global-user": ["profile_read"]},
+                guild_user_grants={
+                    "100": {"current-user": ["profile_read"]},
+                    "900": {"legacy-user": ["profile_read"]},
+                },
+                global_admin_user_ids=["global-admin"],
+            )
+            store.save_discord_scope_settings(
+                guild_ranking_scopes={"100": "guild", "900": "global"},
+            )
+
+            preview = store.reconcile_managed_discord_bot(
+                bot_user_id="42",
+                bot_username="PUBG Metrics",
+                guild_ids=["100", "200"],
+            )
+            pruned = store.reconcile_managed_discord_bot(
+                bot_user_id="42",
+                bot_username="PUBG Metrics",
+                guild_ids=["100", "200"],
+                prune_stale=True,
+            )
+
+            self.assertTrue(first.first_binding)
+            self.assertFalse(preview.identity_changed)
+            self.assertEqual(preview.removed_guild_ids, ["900"])
+            self.assertIn("900", preview.bot.guild_enabled_commands)
+            self.assertNotIn("900", pruned.bot.guild_enabled_commands)
+            self.assertNotIn("900", pruned.permissions.guild_user_grants)
+            self.assertNotIn("900", pruned.scopes.guild_ranking_scopes)
+            self.assertEqual(pruned.permissions.user_grants["global-user"], ["profile_read"])
+            self.assertEqual(pruned.permissions.global_admin_user_ids, ["global-admin"])
+            self.assertEqual(pruned.bot.managed_bot_user_id, "42")
+            self.assertEqual(pruned.bot.managed_guild_ids, ["100", "200"])
+
+    def test_loading_replaces_obsolete_built_in_command_entries(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store = LocalSettingsStore(Path(temp_dir) / "local_settings.json")
+            permissions = store.load_discord_permission_settings()
+            stale_groups = dict(permissions.command_groups)
+            stale_groups["profile_read"] = stale_groups["profile_read"] + ["pubg-recent"]
+            store.save_discord_permission_settings(
+                command_groups=stale_groups,
+                user_grants={},
+            )
+
+            loaded = store.load_discord_permission_settings()
+
+            self.assertNotIn("pubg-recent", loaded.command_groups["profile_read"])
+            self.assertIn("추천", loaded.command_groups["profile_read"])
+
+    def test_loading_preserves_granted_custom_group_after_legacy_commands_disappear(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store = LocalSettingsStore(Path(temp_dir) / "local_settings.json")
+            permissions = store.load_discord_permission_settings()
+            stale_groups = dict(permissions.command_groups)
+            stale_groups["legacy_custom"] = ["pubg-recent"]
+            store.save_discord_permission_settings(
+                command_groups=stale_groups,
+                user_grants={"user-1": ["legacy_custom"]},
+            )
+
+            loaded = store.load_discord_permission_settings()
+
+            self.assertEqual(loaded.command_groups["legacy_custom"], [])
+            self.assertEqual(loaded.user_grants["user-1"], ["legacy_custom"])
+
 
 if __name__ == "__main__":
     unittest.main()

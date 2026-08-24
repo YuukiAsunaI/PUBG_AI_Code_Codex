@@ -349,9 +349,10 @@ The current local runtime can automate the analysis and replay-artifact side aft
 
 ## Implemented Discord Bot MVP Slice
 
-The current Discord bot slice is intentionally small and reuses the same local MySQL and file stores:
+The Discord command surface reuses the same local MySQL and file stores and is owned by the manager-controlled bot:
 
-- `python -m pubg_ai.cli run-discord-bot --prefix !` starts the bot with the token from `.env`.
+- `Discord 봇 > 앱 봇 제어` starts and stops the only bot runtime. A separate CLI runtime is intentionally unavailable
+  so command, permission, alert, and server management cannot split across two bot processes.
 - All 26 catalog commands are registered through `Bot.hybrid_command`, so prefix and slash invocation reuse the same
   permission checks and handlers. Prefix invocation requires message content intent; the slash tree is synchronized
   from the ready hook.
