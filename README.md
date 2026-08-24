@@ -17,6 +17,9 @@ Discord command layer, operational controls, and the research and evidence behin
 - [Code Translation](docs/CODE_TRANSLATION.md)
 - [Sample Match Analysis](docs/SAMPLE_MATCH_ANALYSIS.md)
 - [Configuration](docs/CONFIGURATION.md)
+- [Desktop Manager](docs/DESKTOP_MANAGER.md)
+- [Map Region Catalog](docs/MAP_REGION_CATALOG.md)
+- [Full Project Audit - 2026-08-24](docs/PROJECT_AUDIT_2026-08-24.md)
 - [Reference Project Survey](docs/REFERENCE_PROJECT_SURVEY.md)
 - [Additional Reference Research](docs/ADDITIONAL_REFERENCE_RESEARCH.md)
 - [Sources](docs/SOURCES.md)
@@ -27,7 +30,8 @@ Discord command layer, operational controls, and the research and evidence behin
 - Registered PUBG players are treated as admin-managed tracking targets, not ownership claims by Discord users.
 - Nickname registration requires a platform shard, then resolves `accountId`; later polling and matching use
   `accountId`.
-- PUBG API key and Discord bot token stay only in `.env`; local program settings must not store or display them.
+- PUBG API key and Discord bot token stay only in the ignored `.env`. The local program provides write-only inputs
+  that can replace those values but never reads a saved secret back into the browser or stores it in local settings.
 - All discovered match types are collected and immediately classified by `game_mode`, `match_type`, map, shard,
   team mode, perspective, ranked/custom flags, and completion-only availability.
 - Known PUBG item/weapon/map/vehicle codes are translated to Korean display labels; unknown codes are shown as-is.
@@ -83,6 +87,8 @@ The first executable slice is now available:
 - combat loadout snapshot generator for weapon + attachment state at kill/DBNO/finish moments
 - versioned official-asset-backed map-region catalog for Korean named drop-zone recommendations with
   raw-coordinate fallback
+- completed-match flight-path frequency analysis with per-map overlays, physical-route clustering, dominant travel
+  direction, detailed KST/match filters, and registered-player scope
 - localhost-only FastAPI management app
 - browser UI for status, user registration, user lookup, collection stop/delete action, match job processing, and
   telemetry job/combat/item processing
@@ -100,6 +106,8 @@ The first executable slice is now available:
 - local and Discord alert settings for storage pressure and worker failures, including configurable Discord alert
   channel IDs, alert acknowledgement/snooze controls, and persisted alert history without storing bot tokens outside
   `.env`
+- dedicated Discord bot manager with write-only `.env` secret entry, start/stop/sync controls, hybrid-command prefix,
+  and per-guild visible-command selection
 
 Install dependencies:
 
@@ -367,6 +375,15 @@ coordinates; the PUBG telemetry schema does not expose a general aim vector for 
 invents one. Initial transport-aircraft points are identified from the plane event window, vehicle state, and altitude
 together because `common.isGame == 0.1` can remain present after the player has jumped.
 
+The separate `비행기 동선` replay view analyzes retained completed-match plane routes rather than one selected
+player timeline. It extends observed aircraft samples to map boundaries and groups frequently repeated physical
+routes by angle and distance from the map center while retaining the dominant travel direction. Map, mode, season,
+custom-match, KST period, player, cluster precision, and source-limit filters are available at:
+
+```text
+GET /analytics/flight-paths
+```
+
 Run the Discord bot MVP:
 
 ```powershell
@@ -565,14 +582,16 @@ Packet text and comparison results remain in memory and are never persisted. No 
 evidence, production mutation, restore, quarantine, deletion, or execution capability is created. Version 22 adds no
 environment variable or table; at that feature slice, the schema remained version 20 with 44 tables.
 
-The current runtime schema is version 28 with 52 tables. Version 28 adds authoritative many-to-many Discord guild
-registrations for tracked players; rerun `python -m pubg_ai.cli init-db` after updating. Existing legacy guild fields
-are backfilled idempotently, while raw and replay artifacts are not rewritten. The local player manager can change
-collection/public-profile state independently and connect one PUBG account to multiple known Discord guilds. See
+The current runtime schema is version 29 with 52 tables. Version 29 adds weapon-level `character_hits`,
+`vehicle_hits`, and `vehicle_damage_dealt`, so vehicle impacts count toward total hit evidence without entering the
+character-hit or headshot-hit denominator. Version 28 added authoritative many-to-many Discord guild registrations
+for tracked players. Rerun `python -m pubg_ai.cli init-db` after updating; migrations are idempotent and do not rewrite
+raw or replay artifacts. The local player manager can change collection/public-profile state independently and
+connect one PUBG account to multiple known Discord guilds. See
 [`docs/MULTI_DISCORD_AND_DIMENSION_ANALYTICS_2026-08-23.md`](docs/MULTI_DISCORD_AND_DIMENSION_ANALYTICS_2026-08-23.md)
 for the data contract and live validation evidence. See also
-[`docs/PROJECT_AUDIT_2026-08-21.md`](docs/PROJECT_AUDIT_2026-08-21.md) for the latest full validation evidence. The
-previous 2026-08-14 baseline remains in [`docs/PROJECT_AUDIT_2026-08-14.md`](docs/PROJECT_AUDIT_2026-08-14.md).
+[`docs/PROJECT_AUDIT_2026-08-24.md`](docs/PROJECT_AUDIT_2026-08-24.md) for the latest full validation evidence. The
+previous 2026-08-21 baseline remains in [`docs/PROJECT_AUDIT_2026-08-21.md`](docs/PROJECT_AUDIT_2026-08-21.md).
 
 Each packet is guarded by six `ON DELETE RESTRICT` foreign keys. Generation appends only one version 20 audit row; it
 grants no authorization,
@@ -665,7 +684,8 @@ After the desktop dependency is installed, `run_desktop.cmd` provides the same m
 Desktop mode starts the FastAPI manager on the configured localhost URL, or reuses it when the same manager is
 already running. The native window exposes Windows folder pickers for Raw, Replay, deletion-backup, and quarantine
 roots; the selected value is not persisted until the Storage Settings Save button is pressed. Closing the window
-stops only a web server that the desktop launcher started itself. The bind boundary remains localhost-only.
+stops only services that the desktop launcher started itself, including its Discord bot controller. The bind boundary
+remains localhost-only. The supplied artwork is packaged as the window, taskbar, executable, header, and favicon icon.
 
 Build the local Windows executable:
 

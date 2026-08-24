@@ -25,7 +25,7 @@ from pubg_ai.weapon_stats import (
 
 
 PROCESSOR_NAME = "combat"
-PARSER_VERSION = "combat-v3"
+PARSER_VERSION = "combat-v4"
 
 
 class TelemetryCombatProcessingError(RuntimeError):
@@ -225,6 +225,9 @@ class TelemetryCombatProcessor:
                 summary.account_id,
                 summary.shots_fired,
                 summary.shots_hit,
+                summary.character_hits,
+                summary.vehicle_hits,
+                summary.vehicle_damage_dealt,
                 summary.hits_taken,
                 summary.damage_dealt,
                 summary.damage_taken,
@@ -256,6 +259,9 @@ class TelemetryCombatProcessor:
                     account_id,
                     shots_fired,
                     shots_hit,
+                    character_hits,
+                    vehicle_hits,
+                    vehicle_damage_dealt,
                     hits_taken,
                     damage_dealt,
                     damage_taken,
@@ -276,7 +282,7 @@ class TelemetryCombatProcessor:
                     taken_hit_parts,
                     updated_at_kst
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 rows,
             )
@@ -293,6 +299,9 @@ class TelemetryCombatProcessor:
                 stats.weapon_code,
                 stats.shots_fired,
                 stats.shots_hit,
+                stats.character_hits,
+                stats.vehicle_hits,
+                stats.vehicle_damage_dealt,
                 stats.hits_taken,
                 stats.damage_dealt,
                 stats.damage_taken,
@@ -325,6 +334,9 @@ class TelemetryCombatProcessor:
                     weapon_code,
                     shots_fired,
                     shots_hit,
+                    character_hits,
+                    vehicle_hits,
+                    vehicle_damage_dealt,
                     hits_taken,
                     damage_dealt,
                     damage_taken,
@@ -345,7 +357,7 @@ class TelemetryCombatProcessor:
                     taken_hit_parts,
                     updated_at_kst
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 rows,
             )

@@ -93,6 +93,29 @@ class MapRegionTests(unittest.TestCase):
                 self.assertIsNotNone(resolution.distance_to_center_m)
                 self.assertIsNotNone(resolution.radius_m)
 
+    def test_taego_market_and_terminal_are_distinct_reviewed_areas(self) -> None:
+        world_size = 816000.0
+
+        market = resolve_map_region("Tiger_Main", 0.535 * world_size, 0.445 * world_size)
+        terminal = resolve_map_region("Tiger_Main", 0.600 * world_size, 0.445 * world_size)
+
+        self.assertEqual(market.region_id, "taego.market")
+        self.assertEqual(market.region_display_name_ko, "시장")
+        self.assertEqual(terminal.region_id, "taego.terminal")
+        self.assertEqual(terminal.region_display_name_ko, "터미널")
+
+        catalog = map_region_catalog_record("Tiger_Main")
+        regions = {
+            region["region_id"]: region
+            for region in catalog["maps"][0]["regions"]
+        }
+        self.assertEqual(regions["taego.market"]["review"]["confidence"], "high")
+        self.assertEqual(
+            regions["taego.market"]["review"]["parent_region_id"],
+            "taego.terminal_district",
+        )
+        self.assertGreaterEqual(len(regions["taego.market"]["review"]["sources"]), 3)
+
     def test_unmatched_coordinate_is_not_forced_to_nearest_landmark(self) -> None:
         resolution = resolve_map_region("Baltic_Main", 0.50 * 816000.0, 0.02 * 816000.0)
 

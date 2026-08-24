@@ -11,6 +11,62 @@ from pubg_ai.weapon_stats import (
 
 
 class WeaponStatsTests(unittest.TestCase):
+    def test_counts_vehicle_damage_as_a_separate_accuracy_hit(self) -> None:
+        events = [
+            {
+                "_T": "LogPlayerAttack",
+                "attackType": "Weapon",
+                "attacker": {"accountId": "account.attacker"},
+                "weapon": {"itemId": "Item_Weapon_BerylM762_C"},
+                "common": {"isGame": 1},
+            },
+            {
+                "_T": "LogPlayerTakeDamage",
+                "attacker": {"accountId": "account.attacker", "teamId": 1},
+                "victim": {"accountId": "account.victim", "teamId": 2},
+                "damageTypeCategory": "Damage_Gun",
+                "damageReason": "HeadShot",
+                "damage": 80.0,
+                "damageCauserName": "WeapBerylM762_C",
+                "common": {"isGame": 1},
+            },
+            {
+                "_T": "LogVehicleDamage",
+                "attacker": {"accountId": "account.attacker", "teamId": 1},
+                "vehicle": {"vehicleType": "WheeledVehicle"},
+                "damageTypeCategory": "Damage_Gun",
+                "damageCauserName": "WeapBerylM762_C",
+                "damage": 34.5,
+                "common": {"isGame": 1},
+            },
+        ]
+        stats = summarize_weapon_combat_stats(
+            events,
+            match_id="match-vehicle",
+            tracked_account_ids={"account.attacker"},
+        )
+
+        self.assertEqual(len(stats), 1)
+        weapon = stats[0]
+        self.assertEqual(weapon.shots_fired, 1)
+        self.assertEqual(weapon.shots_hit, 2)
+        self.assertEqual(weapon.character_hits, 1)
+        self.assertEqual(weapon.vehicle_hits, 1)
+        self.assertEqual(weapon.vehicle_damage_dealt, 34.5)
+        self.assertEqual(weapon.damage_dealt, 80.0)
+        self.assertEqual(weapon.hit_parts, {"head": 1})
+
+        summary = summarize_player_match_combat(
+            events,
+            match_id="match-vehicle",
+            tracked_account_ids={"account.attacker"},
+        )[0]
+        self.assertEqual(summary.shots_hit, 2)
+        self.assertEqual(summary.character_hits, 1)
+        self.assertEqual(summary.vehicle_hits, 1)
+        self.assertEqual(summary.vehicle_damage_dealt, 34.5)
+        self.assertEqual(summary.damage_dealt, 80.0)
+
     def test_normalizes_item_weapon_code_to_damage_causer_code(self) -> None:
         self.assertEqual(normalize_weapon_code("Item_Weapon_BerylM762_C"), "WeapBerylM762_C")
         self.assertEqual(normalize_weapon_code("WeapBerylM762_C_1"), "WeapBerylM762_C")

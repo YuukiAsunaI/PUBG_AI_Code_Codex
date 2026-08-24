@@ -25,6 +25,9 @@ class WeaponCombatStats:
     weapon_code: str
     shots_fired: int = 0
     shots_hit: int = 0
+    character_hits: int = 0
+    vehicle_hits: int = 0
+    vehicle_damage_dealt: float = 0.0
     fire_count_checkpoint: int = 0
     fire_count_events: int = 0
     shot_count_source: str = "none"
@@ -70,6 +73,9 @@ class PlayerMatchCombatSummary:
     account_id: str
     shots_fired: int = 0
     shots_hit: int = 0
+    character_hits: int = 0
+    vehicle_hits: int = 0
+    vehicle_damage_dealt: float = 0.0
     hits_taken: int = 0
     damage_dealt: float = 0.0
     damage_taken: float = 0.0
@@ -187,6 +193,7 @@ def summarize_weapon_combat_stats(
             attacker_stats = get_stats(attacker_account_id, weapon_code) if is_opponent else None
             if attacker_stats is not None:
                 attacker_stats.shots_hit += 1
+                attacker_stats.character_hits += 1
                 attacker_stats.damage_dealt += damage
                 _increment(attacker_stats.hit_parts, body_part)
                 if body_part == "head":
@@ -199,6 +206,22 @@ def summarize_weapon_combat_stats(
                 _increment(victim_stats.taken_hit_parts, body_part)
                 if body_part == "head":
                     victim_stats.headshot_hits_taken += 1
+
+        elif event_type == "LogVehicleDamage":
+            if event.get("damageTypeCategory") != "Damage_Gun":
+                continue
+
+            weapon_code = normalize_weapon_code(event.get("damageCauserName"))
+            if not weapon_code or not is_ballistic_weapon(weapon_code):
+                continue
+            attacker_stats = get_stats(
+                _character_account_id(event.get("attacker")),
+                weapon_code,
+            )
+            if attacker_stats is not None:
+                attacker_stats.shots_hit += 1
+                attacker_stats.vehicle_hits += 1
+                attacker_stats.vehicle_damage_dealt += _float_or_zero(event.get("damage"))
 
         elif event_type == "LogPlayerMakeGroggy":
             if event.get("damageTypeCategory") != "Damage_Gun":
@@ -386,6 +409,9 @@ def _add_weapon_stats_to_summary(
 ) -> None:
     summary.shots_fired += stats.shots_fired
     summary.shots_hit += stats.shots_hit
+    summary.character_hits += stats.character_hits
+    summary.vehicle_hits += stats.vehicle_hits
+    summary.vehicle_damage_dealt += stats.vehicle_damage_dealt
     summary.hits_taken += stats.hits_taken
     summary.damage_dealt += stats.damage_dealt
     summary.damage_taken += stats.damage_taken
@@ -428,6 +454,7 @@ def _apply_unattributed_overall_event(event: Mapping[str, Any], get_summary: Any
             body_part = body_part_from_damage_reason(event.get("damageReason"))
             if attacker is not None:
                 attacker.shots_hit += 1
+                attacker.character_hits += 1
                 _increment(attacker.hit_parts, body_part)
                 if body_part == "head":
                     attacker.headshot_hits += 1

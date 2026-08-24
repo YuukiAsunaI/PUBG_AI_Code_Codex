@@ -57,6 +57,22 @@ class RuntimeConfigTests(unittest.TestCase):
             self.assertEqual(config.app.raw_data_dir, base_dir / "raw")
             self.assertEqual(config.app.local_web_base_url, "http://127.0.0.1:8000")
 
+    def test_blank_process_secret_does_not_mask_saved_env_secret(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            (base_dir / ".env").write_text(
+                "PUBG_API_KEY=saved-key\nDISCORD_BOT_TOKEN=saved-token\n",
+                encoding="utf-8",
+            )
+
+            config = RuntimeConfig.from_sources(
+                env={"PUBG_API_KEY": "", "DISCORD_BOT_TOKEN": "   "},
+                base_dir=base_dir,
+            )
+
+            self.assertEqual(config.secrets.pubg_api_key, "saved-key")
+            self.assertEqual(config.secrets.discord_bot_token, "saved-token")
+
     def test_database_config_safe_record_masks_password(self) -> None:
         config = DatabaseConfig(password="super-secret")
 
@@ -118,7 +134,7 @@ class DatabaseSchemaTests(unittest.TestCase):
         ]:
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table_name}", schema)
 
-        self.assertEqual(SCHEMA_VERSION, 28)
+        self.assertEqual(SCHEMA_VERSION, 29)
         self.assertIn("vehicle_type VARCHAR(64)", schema)
         self.assertIn("vehicle_id VARCHAR(128)", schema)
         self.assertIn("vehicle_unique_id BIGINT", schema)

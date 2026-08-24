@@ -9,7 +9,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 29
 
 
 class DatabaseError(RuntimeError):
@@ -82,6 +82,8 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 applied += 1
             if _ensure_player_activity_heal_columns(cursor, config.database):
                 applied += 1
+            if _ensure_combat_vehicle_hit_columns(cursor, config.database):
+                applied += 1
             if _backfill_player_discord_registrations(cursor):
                 applied += 1
             cursor.execute(
@@ -92,7 +94,7 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 """,
                 (
                     SCHEMA_VERSION,
-                    "many-to-many Discord guild registrations for tracked players",
+                    "vehicle-hit-aware combat accuracy and damage evidence",
                 ),
             )
             applied += 1
@@ -1024,6 +1026,9 @@ def schema_statements() -> list[str]:
             account_id VARCHAR(128) NOT NULL,
             shots_fired INT NOT NULL DEFAULT 0,
             shots_hit INT NOT NULL DEFAULT 0,
+            character_hits INT NOT NULL DEFAULT 0,
+            vehicle_hits INT NOT NULL DEFAULT 0,
+            vehicle_damage_dealt FLOAT NOT NULL DEFAULT 0,
             hits_taken INT NOT NULL DEFAULT 0,
             damage_dealt FLOAT NOT NULL DEFAULT 0,
             damage_taken FLOAT NOT NULL DEFAULT 0,
@@ -1055,6 +1060,9 @@ def schema_statements() -> list[str]:
             weapon_code VARCHAR(128) NOT NULL,
             shots_fired INT NOT NULL DEFAULT 0,
             shots_hit INT NOT NULL DEFAULT 0,
+            character_hits INT NOT NULL DEFAULT 0,
+            vehicle_hits INT NOT NULL DEFAULT 0,
+            vehicle_damage_dealt FLOAT NOT NULL DEFAULT 0,
             hits_taken INT NOT NULL DEFAULT 0,
             damage_dealt FLOAT NOT NULL DEFAULT 0,
             damage_taken FLOAT NOT NULL DEFAULT 0,
@@ -1829,6 +1837,53 @@ def _ensure_player_activity_heal_columns(cursor: Any, database: str) -> bool:
     clauses = ", ".join(f"ADD COLUMN {name} {definition}" for name, definition in missing)
     cursor.execute(f"ALTER TABLE player_match_activity_summaries {clauses}")
     return True
+
+
+def _ensure_combat_vehicle_hit_columns(cursor: Any, database: str) -> bool:
+    expected = {
+        "character_hits": "INT NOT NULL DEFAULT 0 AFTER shots_hit",
+        "vehicle_hits": "INT NOT NULL DEFAULT 0 AFTER character_hits",
+        "vehicle_damage_dealt": "FLOAT NOT NULL DEFAULT 0 AFTER vehicle_hits",
+    }
+    changed = False
+    for table_name in ("player_match_combat_summaries", "player_weapon_match_stats"):
+        cursor.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = %s
+              AND table_name = %s
+              AND column_name IN ('character_hits', 'vehicle_hits', 'vehicle_damage_dealt')
+            """,
+            (database, table_name),
+        )
+        existing = {
+            str(row.get("column_name") or row.get("COLUMN_NAME") or "")
+            for row in cursor.fetchall()
+        }
+        missing = [
+            (name, definition)
+            for name, definition in expected.items()
+            if name not in existing
+        ]
+        if not missing:
+            continue
+        clauses = ", ".join(
+            f"ADD COLUMN {name} {definition}" for name, definition in missing
+        )
+        cursor.execute(f"ALTER TABLE {table_name} {clauses}")
+        if "character_hits" not in existing:
+            cursor.execute(
+                f"""
+                UPDATE {table_name}
+                SET character_hits = shots_hit
+                WHERE shots_hit > 0
+                  AND character_hits = 0
+                  AND vehicle_hits = 0
+                """
+            )
+        changed = True
+    return changed
 
 
 def _backfill_player_discord_registrations(cursor: Any) -> bool:

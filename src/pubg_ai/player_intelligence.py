@@ -172,6 +172,9 @@ class PlayerIntelligenceService:
                     activity_state.processed_at_kst AS activity_processed_at_kst,
                     combat.shots_fired,
                     combat.shots_hit,
+                    combat.character_hits,
+                    combat.vehicle_hits,
+                    combat.vehicle_damage_dealt,
                     combat.hits_taken,
                     combat.damage_dealt,
                     combat.damage_taken,
@@ -717,6 +720,13 @@ def _combat_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     deaths = _sum_rows(rows, "deaths")
     shots_fired = _sum_rows(rows, "shots_fired")
     shots_hit = _sum_rows(rows, "shots_hit")
+    character_hits = sum(
+        _int(row.get("shots_hit"))
+        if row.get("character_hits") is None
+        else _int(row.get("character_hits"))
+        for row in rows
+    )
+    vehicle_hits = _sum_rows(rows, "vehicle_hits")
     headshot_hits = _sum_rows(rows, "headshot_hits")
     fights = _sum_rows(rows, "fight_count")
     fight_wins = _sum_rows(rows, "fight_wins")
@@ -740,11 +750,14 @@ def _combat_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "avg_damage_taken": _ratio(_sum_rows(rows, "damage_taken"), match_count),
         "shots_fired": shots_fired,
         "shots_hit": shots_hit,
+        "character_hits": character_hits,
+        "vehicle_hits": vehicle_hits,
+        "vehicle_damage_dealt": _sum_rows(rows, "vehicle_damage_dealt"),
         "hits_taken": _sum_rows(rows, "hits_taken"),
         "accuracy": _ratio(shots_hit, shots_fired),
         "headshot_hits": headshot_hits,
         "headshot_hits_taken": _sum_rows(rows, "headshot_hits_taken"),
-        "headshot_hit_rate": _ratio(headshot_hits, shots_hit),
+        "headshot_hit_rate": _ratio(headshot_hits, character_hits),
         "headshot_hit_taken_rate": _ratio(
             _sum_rows(rows, "headshot_hits_taken"),
             _sum_rows(rows, "hits_taken"),
@@ -819,8 +832,26 @@ def _dimension_rows(rows: list[dict[str, Any]], field: str) -> list[dict[str, An
     for row in rows:
         value = str(row.get(field) or "unknown")
         grouped[value].append(row)
-    result = [_bucket_summary(value, value, bucket) for value, bucket in grouped.items()]
+    result = [
+        _bucket_summary(value, _dimension_label(field, value), bucket)
+        for value, bucket in grouped.items()
+    ]
     return sorted(result, key=lambda row: (-_int(row["matches"]), str(row["key"])))
+
+
+def _dimension_label(field: str, value: str) -> str:
+    if value == "unknown":
+        return "알 수 없음"
+    category_by_field = {
+        "map_name": "map",
+        "team_mode": "team_mode",
+        "game_mode": "game_mode",
+        "perspective": "perspective",
+        "match_type": "match_type",
+        "season_state": "season_state",
+    }
+    category = category_by_field.get(field)
+    return translate_code(value, category) if category else value
 
 
 def _time_dimension_rows(rows: list[dict[str, Any]], kind: str) -> list[dict[str, Any]]:

@@ -247,6 +247,9 @@ def run_desktop_app(
             maximized=maximized,
         )
         api.bind(window=window, webview_module=webview)
-        webview.start(debug=debug)
+        webview.start(
+            debug=debug,
+            icon=str(Path(__file__).resolve().parent / "assets" / "app_icon.ico"),
+        )
     finally:
         server.stop()

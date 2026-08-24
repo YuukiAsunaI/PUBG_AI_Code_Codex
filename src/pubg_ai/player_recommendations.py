@@ -21,6 +21,9 @@ from pubg_ai.weapon_accuracy import (
 from pubg_ai.weapon_stats import normalize_weapon_code
 
 
+DROP_ZONE_GRID_SIZE = 20
+
+
 AMMO_TYPE_BY_WEAPON = {
     "WeapACE32_C": "7.62mm",
     "WeapAK47_C": "7.62mm",
@@ -265,6 +268,9 @@ class WeaponRecommendation:
     reason: str
     headshot_hits: int = 0
     headshot_hit_rate: float = 0.0
+    character_hits: int = 0
+    vehicle_hits: int = 0
+    vehicle_damage_dealt: float = 0.0
     fight_count: int = 0
     fight_wins: int = 0
     fight_losses: int = 0
@@ -395,7 +401,7 @@ class DropZoneRecommendation:
     avg_survival_seconds: float
     reason: str
     cluster_id: str | None = None
-    grid_size: int = 10
+    grid_size: int = DROP_ZONE_GRID_SIZE
     centroid_x_cm: float | None = None
     centroid_y_cm: float | None = None
     region_status: str = "unmatched"
@@ -719,6 +725,9 @@ class PlayerRecommendationService:
                     COALESCE(SUM(weapon_stats.damage_dealt), 0) AS damage_dealt,
                     COALESCE(SUM(weapon_stats.shots_fired), 0) AS shots_fired,
                     COALESCE(SUM(weapon_stats.shots_hit), 0) AS shots_hit,
+                    COALESCE(SUM(weapon_stats.character_hits), 0) AS character_hits,
+                    COALESCE(SUM(weapon_stats.vehicle_hits), 0) AS vehicle_hits,
+                    COALESCE(SUM(weapon_stats.vehicle_damage_dealt), 0) AS vehicle_damage_dealt,
                     COALESCE(SUM(weapon_stats.headshot_hits), 0) AS headshot_hits
                 FROM player_weapon_match_stats weapon_stats
                 INNER JOIN matches
@@ -753,6 +762,11 @@ class PlayerRecommendationService:
             damage_dealt = _float(row.get("damage_dealt"))
             shots_fired = _int(row.get("shots_fired"))
             shots_hit = _int(row.get("shots_hit"))
+            character_hits = (
+                shots_hit
+                if row.get("character_hits") is None
+                else _int(row.get("character_hits"))
+            )
             headshot_hits = _int(row.get("headshot_hits"))
             weapon_code = str(row["weapon_code"])
             fight_row = fight_by_weapon.get(normalize_weapon_code(weapon_code), {})
@@ -802,6 +816,9 @@ class PlayerRecommendationService:
                     damage_dealt=damage_dealt,
                     shots_fired=shots_fired,
                     shots_hit=shots_hit,
+                    character_hits=character_hits,
+                    vehicle_hits=_int(row.get("vehicle_hits")),
+                    vehicle_damage_dealt=_float(row.get("vehicle_damage_dealt")),
                     win_rate=_safe_divide(wins, match_count),
                     kills_per_match=_safe_divide(kills, match_count),
                     dbnos_per_match=_safe_divide(dbnos, match_count),
@@ -813,7 +830,7 @@ class PlayerRecommendationService:
                         f"경기당 킬 {_safe_divide(kills, match_count):.2f}"
                     ),
                     headshot_hits=headshot_hits,
-                    headshot_hit_rate=_safe_divide(headshot_hits, shots_hit),
+                    headshot_hit_rate=_safe_divide(headshot_hits, character_hits),
                     fight_count=fight_count,
                     fight_wins=fight_wins,
                     fight_losses=fight_losses,
@@ -1617,8 +1634,8 @@ class PlayerRecommendationService:
             world_size = MAP_WORLD_SIZE_CM.get(map_name, DEFAULT_WORLD_SIZE_CM)
             x_pct = _clamped(_safe_divide(_float(row.get("landing_x")), world_size))
             y_pct = _clamped(_safe_divide(_float(row.get("landing_y")), world_size))
-            grid_x = min(9, int(x_pct * 10))
-            grid_y = min(9, int(y_pct * 10))
+            grid_x = min(DROP_ZONE_GRID_SIZE - 1, int(x_pct * DROP_ZONE_GRID_SIZE))
+            grid_y = min(DROP_ZONE_GRID_SIZE - 1, int(y_pct * DROP_ZONE_GRID_SIZE))
             key = (map_name, grid_x, grid_y)
             bucket = clusters.setdefault(
                 key,
@@ -1677,7 +1694,10 @@ class PlayerRecommendationService:
             centroid_x_cm = _safe_divide(bucket["x_cm_sum"], match_count)
             centroid_y_cm = _safe_divide(bucket["y_cm_sum"], match_count)
             region = resolve_map_region(map_name, centroid_x_cm, centroid_y_cm)
-            cluster_id = f"{map_name}:grid10:{bucket['grid_x']}:{bucket['grid_y']}"
+            cluster_id = (
+                f"{map_name}:grid{DROP_ZONE_GRID_SIZE}:"
+                f"{bucket['grid_x']}:{bucket['grid_y']}"
+            )
             region_label = region.region_display_name_ko or f"grid {bucket['grid_x']},{bucket['grid_y']}"
             recommendations.append(
                 DropZoneRecommendation(
@@ -1698,6 +1718,7 @@ class PlayerRecommendationService:
                     avg_survival_seconds=_safe_divide(bucket["survival_seconds"], match_count),
                     reason=f"{region_label} · 승률 {_safe_divide(wins, match_count) * 100:.1f}%",
                     cluster_id=cluster_id,
+                    grid_size=DROP_ZONE_GRID_SIZE,
                     centroid_x_cm=centroid_x_cm,
                     centroid_y_cm=centroid_y_cm,
                     region_status=region.status,

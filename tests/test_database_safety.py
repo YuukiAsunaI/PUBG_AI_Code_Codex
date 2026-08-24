@@ -7,6 +7,7 @@ import unittest
 from pubg_ai.database import (
     DatabaseError,
     _ensure_api_fetch_job_unique_index,
+    _ensure_combat_vehicle_hit_columns,
     _ensure_replay_artifact_versioned_unique_index,
     mysql_transaction,
 )
@@ -129,6 +130,32 @@ class ProcessingStateTests(unittest.TestCase):
 
 
 class QueueUniquenessTests(unittest.TestCase):
+    def test_combat_vehicle_hit_migration_backfills_existing_hits(self) -> None:
+        cursor = CombatColumnMigrationCursor({})
+
+        changed = _ensure_combat_vehicle_hit_columns(cursor, "pubg_ai")
+
+        self.assertTrue(changed)
+        alter_queries = [query for query, _ in cursor.executed if "ALTER TABLE" in query]
+        update_queries = [query for query, _ in cursor.executed if "UPDATE player_" in query]
+        self.assertEqual(len(alter_queries), 2)
+        self.assertEqual(len(update_queries), 2)
+        self.assertTrue(all("character_hits = shots_hit" in query for query in update_queries))
+
+    def test_combat_vehicle_hit_migration_is_idempotent(self) -> None:
+        columns = {"character_hits", "vehicle_hits", "vehicle_damage_dealt"}
+        cursor = CombatColumnMigrationCursor(
+            {
+                "player_match_combat_summaries": columns,
+                "player_weapon_match_stats": columns,
+            }
+        )
+
+        changed = _ensure_combat_vehicle_hit_columns(cursor, "pubg_ai")
+
+        self.assertFalse(changed)
+        self.assertFalse(any("ALTER TABLE" in query for query, _ in cursor.executed))
+
     def test_schema_migration_adds_unique_index_when_missing(self) -> None:
         cursor = MigrationCursor(duplicate_groups=0, index_exists=False)
 
@@ -290,6 +317,28 @@ class ReplayIndexMigrationCursor:
 
     def fetchall(self) -> list[dict[str, object]]:
         return [{"column_name": column} for column in self.columns]
+
+
+class CombatColumnMigrationCursor:
+    def __init__(self, columns_by_table: dict[str, set[str]]) -> None:
+        self.columns_by_table = columns_by_table
+        self.query = ""
+        self.params: object = None
+        self.executed: list[tuple[str, object]] = []
+
+    def execute(self, query: str, params: object = None) -> None:
+        self.query = query
+        self.params = params
+        self.executed.append((query, params))
+
+    def fetchall(self) -> list[dict[str, object]]:
+        table_name = ""
+        if isinstance(self.params, tuple) and len(self.params) >= 2:
+            table_name = str(self.params[1])
+        return [
+            {"column_name": column}
+            for column in self.columns_by_table.get(table_name, set())
+        ]
 
 
 class QueueConnection:

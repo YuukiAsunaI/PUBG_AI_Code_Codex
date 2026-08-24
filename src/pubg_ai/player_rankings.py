@@ -57,6 +57,9 @@ class PlayerRankingRow:
     avg_fights_per_match: float = 0.0
     headshot_hits: int = 0
     headshot_hit_rate: float = 0.0
+    character_hits: int = 0
+    vehicle_hits: int = 0
+    vehicle_damage_dealt: float = 0.0
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
@@ -185,6 +188,9 @@ class PlayerRankingService:
                     COALESCE(SUM(summaries.damage_taken), 0) AS damage_taken,
                     COALESCE(SUM(summaries.shots_fired), 0) AS shots_fired,
                     COALESCE(SUM(summaries.shots_hit), 0) AS shots_hit,
+                    COALESCE(SUM(summaries.character_hits), 0) AS character_hits,
+                    COALESCE(SUM(summaries.vehicle_hits), 0) AS vehicle_hits,
+                    COALESCE(SUM(summaries.vehicle_damage_dealt), 0) AS vehicle_damage_dealt,
                     COALESCE(SUM(summaries.headshot_hits), 0) AS headshot_hits,
                     COALESCE(SUM(summaries.headshot_kills), 0) AS headshot_kills,
                     COALESCE(AVG(
@@ -336,6 +342,13 @@ def _ranking_row_from_record(
     damage_taken = _float(row.get("damage_taken"))
     shots_fired = _int(row.get("shots_fired"))
     shots_hit = _int(row.get("shots_hit"))
+    character_hits = (
+        shots_hit
+        if row.get("character_hits") is None
+        else _int(row.get("character_hits"))
+    )
+    vehicle_hits = _int(row.get("vehicle_hits"))
+    vehicle_damage_dealt = _float(row.get("vehicle_damage_dealt"))
     headshot_hits = _int(row.get("headshot_hits"))
     headshot_kills = _int(row.get("headshot_kills"))
 
@@ -360,7 +373,7 @@ def _ranking_row_from_record(
         if accuracy_breakdown is None
         else accuracy_breakdown.estimated_hit_rate or 0.0
     )
-    headshot_hit_rate = _safe_divide(headshot_hits, shots_hit)
+    headshot_hit_rate = _safe_divide(headshot_hits, character_hits)
     headshot_kill_rate = _safe_divide(headshot_kills, kills)
     avg_damage_dealt = _safe_divide(damage_dealt, match_count)
     avg_damage_taken = _safe_divide(damage_taken, match_count)
@@ -394,6 +407,9 @@ def _ranking_row_from_record(
         "matches": match_count,
         "accuracy": accuracy,
         "shots_hit": shots_hit,
+        "character_hits": character_hits,
+        "vehicle_hits": vehicle_hits,
+        "vehicle_damage_dealt": vehicle_damage_dealt,
         "headshot_hits": headshot_hits,
         "headshot_kills": headshot_kills,
         "headshot_hit_rate": headshot_hit_rate,
@@ -424,6 +440,9 @@ def _ranking_row_from_record(
         damage_taken=damage_taken,
         shots_fired=shots_fired,
         shots_hit=shots_hit,
+        character_hits=character_hits,
+        vehicle_hits=vehicle_hits,
+        vehicle_damage_dealt=vehicle_damage_dealt,
         headshot_hits=headshot_hits,
         headshot_kills=headshot_kills,
         avg_damage_dealt=avg_damage_dealt,
@@ -517,6 +536,9 @@ RANKING_METRICS = {
     "matches": RankingMetric(key="matches", label="경기 수"),
     "accuracy": RankingMetric(key="accuracy", label="추정 명중률(일반 탄환)"),
     "shots_hit": RankingMetric(key="shots_hit", label="총 명중 횟수"),
+    "character_hits": RankingMetric(key="character_hits", label="캐릭터 명중 횟수"),
+    "vehicle_hits": RankingMetric(key="vehicle_hits", label="차량 명중 횟수"),
+    "vehicle_damage_dealt": RankingMetric(key="vehicle_damage_dealt", label="차량에 가한 피해"),
     "headshot_hits": RankingMetric(key="headshot_hits", label="헤드샷 명중 횟수"),
     "headshot_kills": RankingMetric(key="headshot_kills", label="헤드샷 킬 수"),
     "headshot_hit_rate": RankingMetric(key="headshot_hit_rate", label="헤드샷 명중 확률"),
@@ -554,6 +576,9 @@ RANKING_METRIC_ALIASES = {
     "명중률": "accuracy",
     "accuracy": "accuracy",
     "명중수": "shots_hit",
+    "캐릭터명중수": "character_hits",
+    "차량명중수": "vehicle_hits",
+    "차량피해": "vehicle_damage_dealt",
     "헤드샷명중수": "headshot_hits",
     "헤드샷킬수": "headshot_kills",
     "헤드샷": "headshot_hit_rate",

@@ -8,7 +8,7 @@ from pubg_ai.code_translator import translate_code
 from pubg_ai.map_snapshot_renderer import MAP_WORLD_SIZE_CM
 
 
-MAP_REGION_CATALOG_VERSION = "2024-10-28.api-assets-32b13b5.v1"
+MAP_REGION_CATALOG_VERSION = "2024-10-28.api-assets-32b13b5.v2"
 MAP_REGION_SOURCE_COMMIT = "32b13b51128b8d8909ae5e77f3b833e01230b24d"
 MAP_REGION_SOURCE_REPOSITORY = "https://github.com/pubg/api-assets"
 MAP_REGION_SOURCE_BASE_URL = (
@@ -37,7 +37,11 @@ class MapRegionDefinition:
     geometry_type: str = "circle"
 
     def to_record(self) -> dict[str, Any]:
-        return asdict(self)
+        record = asdict(self)
+        review = _REGION_REVIEW_EVIDENCE.get(self.region_id)
+        if review is not None:
+            record["review"] = review
+        return record
 
 
 @dataclass(frozen=True)
@@ -117,6 +121,66 @@ _SOURCE_SHA256 = {
 }
 
 _DYNAMIC_MAPS = {"Paramo_Main"}
+
+_REGION_REVIEW_EVIDENCE: dict[str, dict[str, Any]] = {
+    "taego.market": {
+        "status": "reviewed",
+        "confidence": "high",
+        "reviewed_at": "2026-08-24",
+        "classification": "named_subarea",
+        "parent_region_id": "taego.terminal_district",
+        "note_ko": "터미널 서쪽의 재래시장 교전지를 터미널 본체와 분리했습니다.",
+        "sources": [
+            {
+                "kind": "official_map_asset",
+                "title": "PUBG API Assets - Taego 31.2 map",
+                "url": (
+                    "https://github.com/pubg/api-assets/blob/"
+                    f"{MAP_REGION_SOURCE_COMMIT}/Assets/Maps/Taego_Main_Low_Res.png"
+                ),
+            },
+            {
+                "kind": "official_patch_note",
+                "title": "PUBG Update 14.2 - Taego Market",
+                "url": "https://pubg.com/en/news/1732?category=patch_notes",
+            },
+            {
+                "kind": "location_cross_check",
+                "title": "배틀그라운드 인벤 - 태이고 Terminal 리뷰",
+                "url": (
+                    "https://www.inven.co.kr/webzine/news/"
+                    "?news=259109&site=battlegrounds"
+                ),
+            },
+        ],
+    },
+    "taego.terminal": {
+        "status": "reviewed",
+        "confidence": "high",
+        "reviewed_at": "2026-08-24",
+        "classification": "named_landmark",
+        "parent_region_id": "taego.terminal_district",
+        "note_ko": "버스 터미널과 상가 중심부로 범위를 축소했습니다.",
+        "sources": [
+            {
+                "kind": "official_map_asset",
+                "title": "PUBG API Assets - Taego 31.2 map",
+                "url": (
+                    "https://github.com/pubg/api-assets/blob/"
+                    f"{MAP_REGION_SOURCE_COMMIT}/Assets/Maps/Taego_Main_Low_Res.png"
+                ),
+            },
+            {
+                "kind": "location_cross_check",
+                "title": "배틀그라운드 인벤 - 태이고 Terminal 리뷰",
+                "url": (
+                    "https://www.inven.co.kr/webzine/news/"
+                    "?news=259109&site=battlegrounds"
+                ),
+            },
+        ],
+    },
+}
 
 
 def _regions(
@@ -284,7 +348,8 @@ _REGIONS_BY_CANONICAL_MAP = {
             ("yong_cheon", "Yong Cheon", "용천", 0.56, 0.30, 0.080),
             ("airport", "Airport", "공항", 0.91, 0.36, 0.080),
             ("palace", "Palace", "궁전", 0.37, 0.44, 0.060),
-            ("terminal", "Terminal", "터미널", 0.58, 0.44, 0.070),
+            ("market", "Market", "시장", 0.535, 0.445, 0.032),
+            ("terminal", "Terminal", "터미널", 0.600, 0.445, 0.043),
             ("fishing_camp", "Fishing Camp", "낚시터", 0.30, 0.52, 0.055),
             ("ha_po", "Ha Po", "하포", 0.14, 0.54, 0.065),
             ("kang_neung", "Kang Neung", "강릉", 0.80, 0.55, 0.075),

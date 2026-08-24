@@ -55,6 +55,9 @@ class PlayerCombatTotals:
     headshot_hit_taken_rate: float = 0.0
     hit_parts: dict[str, int] = field(default_factory=dict)
     taken_hit_parts: dict[str, int] = field(default_factory=dict)
+    character_hits: int = 0
+    vehicle_hits: int = 0
+    vehicle_damage_dealt: float = 0.0
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
@@ -81,10 +84,20 @@ class PlayerWeaponStats:
     headshot_kills: int
     accuracy_metric: WeaponAccuracyMetric | None = None
     headshot_hits: int = 0
+    character_hits: int = 0
+    vehicle_hits: int = 0
+    vehicle_damage_dealt: float = 0.0
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
-        record["headshot_hit_rate"] = _safe_divide(self.headshot_hits, self.shots_hit)
+        record["headshot_hit_rate"] = _safe_divide(
+            self.headshot_hits,
+            _character_hit_denominator(
+                self.character_hits,
+                self.vehicle_hits,
+                self.shots_hit,
+            ),
+        )
         record["headshot_kill_rate"] = _safe_divide(self.headshot_kills, self.kills)
         return record
 
@@ -144,6 +157,9 @@ class PlayerWeaponDetailTotals:
     fight_losses: int = 0
     fight_win_rate: float = 0.0
     avg_fights_per_match: float = 0.0
+    character_hits: int = 0
+    vehicle_hits: int = 0
+    vehicle_damage_dealt: float = 0.0
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
@@ -152,7 +168,14 @@ class PlayerWeaponDetailTotals:
         record["avg_dbnos"] = _safe_divide(self.dbnos, self.match_count)
         record["avg_deaths_taken"] = _safe_divide(self.deaths_taken, self.match_count)
         record["avg_damage_taken"] = _safe_divide(self.damage_taken, self.match_count)
-        record["headshot_hit_rate"] = _safe_divide(self.headshot_hits, self.shots_hit)
+        record["headshot_hit_rate"] = _safe_divide(
+            self.headshot_hits,
+            _character_hit_denominator(
+                self.character_hits,
+                self.vehicle_hits,
+                self.shots_hit,
+            ),
+        )
         record["headshot_hit_taken_rate"] = _safe_divide(
             self.taken_hit_parts.get("head", 0),
             self.hits_taken,
@@ -337,12 +360,19 @@ class PlayerMatchWeaponStats:
     hit_parts: dict[str, int]
     taken_hit_parts: dict[str, int]
     accuracy_metric: WeaponAccuracyMetric | None = None
+    character_hits: int = 0
+    vehicle_hits: int = 0
+    vehicle_damage_dealt: float = 0.0
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
         record["headshot_hit_rate"] = _safe_divide(
             self.hit_parts.get("head", 0),
-            self.shots_hit,
+            _character_hit_denominator(
+                self.character_hits,
+                self.vehicle_hits,
+                self.shots_hit,
+            ),
         )
         record["headshot_kill_rate"] = _safe_divide(self.headshot_kills, self.kills)
         record["hit_part_rates"] = _part_rates(self.hit_parts)
@@ -440,6 +470,9 @@ class PlayerMatchDetail:
     items: list[PlayerMatchItemStats] = field(default_factory=list)
     activity_summary: dict[str, Any] = field(default_factory=dict)
     fight_summary: dict[str, Any] = field(default_factory=dict)
+    character_hits: int = 0
+    vehicle_hits: int = 0
+    vehicle_damage_dealt: float = 0.0
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -494,6 +527,9 @@ class PlayerMatchDetail:
             "damage_taken": self.damage_taken,
             "shots_fired": self.shots_fired,
             "shots_hit": self.shots_hit,
+            "character_hits": self.character_hits,
+            "vehicle_hits": self.vehicle_hits,
+            "vehicle_damage_dealt": self.vehicle_damage_dealt,
             "hits_taken": self.hits_taken,
             "accuracy": self.accuracy,
             "accuracy_breakdown": (
@@ -507,7 +543,14 @@ class PlayerMatchDetail:
             "headshot_dbnos_taken": self.headshot_dbnos_taken,
             "hit_parts": self.hit_parts,
             "taken_hit_parts": self.taken_hit_parts,
-            "headshot_hit_rate": _safe_divide(self.headshot_hits, self.shots_hit),
+            "headshot_hit_rate": _safe_divide(
+                self.headshot_hits,
+                _character_hit_denominator(
+                    self.character_hits,
+                    self.vehicle_hits,
+                    self.shots_hit,
+                ),
+            ),
             "headshot_hit_taken_rate": _safe_divide(self.headshot_hits_taken, self.hits_taken),
             "headshot_kill_rate": _safe_divide(self.headshot_kills, self.kills),
             "hit_part_rates": _part_rates(self.hit_parts),
@@ -678,6 +721,7 @@ class PlayerStatsService:
 
         shots_fired = _int(row.get("shots_fired"))
         shots_hit = _int(row.get("shots_hit"))
+        character_hits = _int_or_fallback(row.get("character_hits"), shots_hit)
         win_place = _optional_int(row.get("win_place"))
         artifacts = list_replay_artifacts(
             self.connection,
@@ -725,6 +769,9 @@ class PlayerStatsService:
             damage_taken=_float(row.get("damage_taken")),
             shots_fired=shots_fired,
             shots_hit=shots_hit,
+            character_hits=character_hits,
+            vehicle_hits=_int(row.get("vehicle_hits")),
+            vehicle_damage_dealt=_float(row.get("vehicle_damage_dealt")),
             hits_taken=_int(row.get("hits_taken")),
             accuracy=accuracy_breakdown.estimated_hit_rate or 0.0,
             headshot_hits=_int(row.get("headshot_hits")),
@@ -863,6 +910,9 @@ class PlayerStatsService:
                     participants.raw_stats,
                     summaries.shots_fired,
                     summaries.shots_hit,
+                    summaries.character_hits,
+                    summaries.vehicle_hits,
+                    summaries.vehicle_damage_dealt,
                     summaries.hits_taken,
                     summaries.damage_dealt,
                     summaries.damage_taken,
@@ -917,6 +967,9 @@ class PlayerStatsService:
                     weapon_code,
                     shots_fired,
                     shots_hit,
+                    character_hits,
+                    vehicle_hits,
+                    vehicle_damage_dealt,
                     hits_taken,
                     damage_dealt,
                     damage_taken,
@@ -966,6 +1019,9 @@ class PlayerStatsService:
                     damage_taken=_float(row.get("damage_taken")),
                     shots_fired=shots_fired,
                     shots_hit=shots_hit,
+                    character_hits=_int_or_fallback(row.get("character_hits"), shots_hit),
+                    vehicle_hits=_int(row.get("vehicle_hits")),
+                    vehicle_damage_dealt=_float(row.get("vehicle_damage_dealt")),
                     accuracy=metric.estimated_hit_rate or 0.0,
                     headshot_kills=_int(row.get("headshot_kills")),
                     hit_parts=_part_map(row.get("hit_parts")),
@@ -1164,6 +1220,9 @@ class PlayerStatsService:
                     COALESCE(SUM(summaries.damage_taken), 0) AS damage_taken,
                     COALESCE(SUM(summaries.shots_fired), 0) AS shots_fired,
                     COALESCE(SUM(summaries.shots_hit), 0) AS shots_hit,
+                    COALESCE(SUM(summaries.character_hits), 0) AS character_hits,
+                    COALESCE(SUM(summaries.vehicle_hits), 0) AS vehicle_hits,
+                    COALESCE(SUM(summaries.vehicle_damage_dealt), 0) AS vehicle_damage_dealt,
                     COALESCE(SUM(summaries.hits_taken), 0) AS hits_taken,
                     COALESCE(SUM(summaries.headshot_hits), 0) AS headshot_hits,
                     COALESCE(SUM(summaries.headshot_hits_taken), 0) AS headshot_hits_taken,
@@ -1213,6 +1272,7 @@ class PlayerStatsService:
         deaths = _int(row.get("deaths"))
         shots_fired = _int(row.get("shots_fired"))
         shots_hit = _int(row.get("shots_hit"))
+        character_hits = _int_or_fallback(row.get("character_hits"), shots_hit)
         hits_taken = _int(row.get("hits_taken"))
         headshot_hits = _int(row.get("headshot_hits"))
         headshot_hits_taken = _int(row.get("headshot_hits_taken"))
@@ -1233,6 +1293,9 @@ class PlayerStatsService:
             damage_taken=damage_taken,
             shots_fired=shots_fired,
             shots_hit=shots_hit,
+            character_hits=character_hits,
+            vehicle_hits=_int(row.get("vehicle_hits")),
+            vehicle_damage_dealt=_float(row.get("vehicle_damage_dealt")),
             headshot_kills=headshot_kills,
             avg_damage_dealt=_safe_divide(damage_dealt, match_count),
             avg_damage_taken=_safe_divide(damage_taken, match_count),
@@ -1248,7 +1311,7 @@ class PlayerStatsService:
             hits_taken=hits_taken,
             headshot_hits=headshot_hits,
             headshot_hits_taken=headshot_hits_taken,
-            headshot_hit_rate=_safe_divide(headshot_hits, shots_hit),
+            headshot_hit_rate=_safe_divide(headshot_hits, character_hits),
             headshot_hit_taken_rate=_safe_divide(headshot_hits_taken, hits_taken),
             hit_parts=_sum_json_part_maps(row.get("hit_part_maps")),
             taken_hit_parts=_sum_json_part_maps(row.get("taken_hit_part_maps")),
@@ -1303,6 +1366,9 @@ class PlayerStatsService:
                     COALESCE(SUM(weapon_stats.damage_dealt), 0) AS damage_dealt,
                     COALESCE(SUM(weapon_stats.shots_fired), 0) AS shots_fired,
                     COALESCE(SUM(weapon_stats.shots_hit), 0) AS shots_hit,
+                    COALESCE(SUM(weapon_stats.character_hits), 0) AS character_hits,
+                    COALESCE(SUM(weapon_stats.vehicle_hits), 0) AS vehicle_hits,
+                    COALESCE(SUM(weapon_stats.vehicle_damage_dealt), 0) AS vehicle_damage_dealt,
                     COALESCE(SUM(weapon_stats.headshot_hits), 0) AS headshot_hits,
                     COALESCE(SUM(weapon_stats.headshot_kills), 0) AS headshot_kills
                 FROM player_weapon_match_stats weapon_stats
@@ -1324,6 +1390,7 @@ class PlayerStatsService:
             weapon_code = str(row["weapon_code"])
             shots_fired = _int(row.get("shots_fired"))
             shots_hit = _int(row.get("shots_hit"))
+            character_hits = _int_or_fallback(row.get("character_hits"), shots_hit)
             metric = weapon_accuracy_metric(weapon_code, shots_fired, shots_hit)
             weapons.append(
                 PlayerWeaponStats(
@@ -1337,6 +1404,9 @@ class PlayerStatsService:
                     damage_dealt=_float(row.get("damage_dealt")),
                     shots_fired=shots_fired,
                     shots_hit=shots_hit,
+                    character_hits=character_hits,
+                    vehicle_hits=_int(row.get("vehicle_hits")),
+                    vehicle_damage_dealt=_float(row.get("vehicle_damage_dealt")),
                     accuracy=metric.estimated_hit_rate or 0.0,
                     headshot_hits=_int(row.get("headshot_hits")),
                     headshot_kills=_int(row.get("headshot_kills")),
@@ -1502,6 +1572,9 @@ class PlayerStatsService:
                     weapon_stats.match_id,
                     weapon_stats.shots_fired,
                     weapon_stats.shots_hit,
+                    weapon_stats.character_hits,
+                    weapon_stats.vehicle_hits,
+                    weapon_stats.vehicle_damage_dealt,
                     weapon_stats.hits_taken,
                     weapon_stats.damage_dealt,
                     weapon_stats.damage_taken,
@@ -1661,6 +1734,12 @@ def _weapon_totals_from_rows(
     damage_taken = sum(_float(row.get("damage_taken")) for row in rows)
     shots_fired = sum(_int(row.get("shots_fired")) for row in rows)
     shots_hit = sum(_int(row.get("shots_hit")) for row in rows)
+    character_hits = sum(
+        _int_or_fallback(row.get("character_hits"), _int(row.get("shots_hit")))
+        for row in rows
+    )
+    vehicle_hits = sum(_int(row.get("vehicle_hits")) for row in rows)
+    vehicle_damage_dealt = sum(_float(row.get("vehicle_damage_dealt")) for row in rows)
     hits_taken = sum(_int(row.get("hits_taken")) for row in rows)
     headshot_hits = sum(_int(row.get("headshot_hits")) for row in rows)
     headshot_kills = sum(_int(row.get("headshot_kills")) for row in rows)
@@ -1685,6 +1764,9 @@ def _weapon_totals_from_rows(
         damage_taken=damage_taken,
         shots_fired=shots_fired,
         shots_hit=shots_hit,
+        character_hits=character_hits,
+        vehicle_hits=vehicle_hits,
+        vehicle_damage_dealt=vehicle_damage_dealt,
         hits_taken=hits_taken,
         headshot_hits=headshot_hits,
         headshot_kills=headshot_kills,
@@ -2137,6 +2219,20 @@ def _safe_divide(numerator: float | int, denominator: float | int) -> float:
     if not denominator:
         return 0.0
     return float(numerator) / float(denominator)
+
+
+def _int_or_fallback(value: Any, fallback: int) -> int:
+    return fallback if value is None else _int(value)
+
+
+def _character_hit_denominator(
+    character_hits: int,
+    vehicle_hits: int,
+    shots_hit: int,
+) -> int:
+    if character_hits > 0 or vehicle_hits > 0:
+        return character_hits
+    return shots_hit
 
 
 WEAPON_ALIASES = {

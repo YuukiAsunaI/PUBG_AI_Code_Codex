@@ -130,6 +130,9 @@ class PlayerTrendMetrics:
     headshot_hits_taken: int = 0
     headshot_hit_rate: float = 0.0
     headshot_hit_taken_rate: float = 0.0
+    character_hits: int = 0
+    vehicle_hits: int = 0
+    vehicle_damage_dealt: float = 0.0
     hit_parts: dict[str, int] = field(default_factory=dict)
     taken_hit_parts: dict[str, int] = field(default_factory=dict)
     hit_part_rates: dict[str, float] = field(default_factory=dict)
@@ -356,6 +359,9 @@ class PlayerTrendService:
                     summaries.damage_taken,
                     summaries.shots_fired,
                     summaries.shots_hit,
+                    summaries.character_hits,
+                    summaries.vehicle_hits,
+                    summaries.vehicle_damage_dealt,
                     summaries.hits_taken,
                     summaries.headshot_hits,
                     summaries.headshot_hits_taken,
@@ -603,6 +609,9 @@ class _TrendAccumulator:
     damage_taken: float = 0.0
     shots_fired: int = 0
     shots_hit: int = 0
+    character_hits: int = 0
+    vehicle_hits: int = 0
+    vehicle_damage_dealt: float = 0.0
     hits_taken: int = 0
     headshot_hits: int = 0
     headshot_hits_taken: int = 0
@@ -630,6 +639,13 @@ class _TrendAccumulator:
         self.damage_taken += _float(row.get("damage_taken"))
         self.shots_fired += _int(row.get("shots_fired"))
         self.shots_hit += _int(row.get("shots_hit"))
+        self.character_hits += (
+            _int(row.get("shots_hit"))
+            if row.get("character_hits") is None
+            else _int(row.get("character_hits"))
+        )
+        self.vehicle_hits += _int(row.get("vehicle_hits"))
+        self.vehicle_damage_dealt += _float(row.get("vehicle_damage_dealt"))
         self.hits_taken += _int(row.get("hits_taken"))
         self.headshot_hits += _int(row.get("headshot_hits"))
         self.headshot_hits_taken += _int(row.get("headshot_hits_taken"))
@@ -682,6 +698,9 @@ class _TrendAccumulator:
             avg_damage_taken=_safe_divide(self.damage_taken, self.match_count),
             shots_fired=self.shots_fired,
             shots_hit=self.shots_hit,
+            character_hits=self.character_hits,
+            vehicle_hits=self.vehicle_hits,
+            vehicle_damage_dealt=self.vehicle_damage_dealt,
             accuracy=accuracy,
             headshot_kills=self.headshot_kills,
             headshot_kill_rate=_safe_divide(self.headshot_kills, self.kills),
@@ -691,7 +710,7 @@ class _TrendAccumulator:
             hits_taken=self.hits_taken,
             headshot_hits=self.headshot_hits,
             headshot_hits_taken=self.headshot_hits_taken,
-            headshot_hit_rate=_safe_divide(self.headshot_hits, self.shots_hit),
+            headshot_hit_rate=_safe_divide(self.headshot_hits, self.character_hits),
             headshot_hit_taken_rate=_safe_divide(self.headshot_hits_taken, self.hits_taken),
             hit_parts=dict(self.hit_parts),
             taken_hit_parts=dict(self.taken_hit_parts),

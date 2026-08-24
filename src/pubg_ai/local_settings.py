@@ -12,7 +12,10 @@ import tempfile
 import time
 
 from pubg_ai.file_io import atomic_write_bytes
-from pubg_ai.discord_command_catalog import default_command_groups
+from pubg_ai.discord_command_catalog import (
+    default_command_groups,
+    normalize_command_selection,
+)
 from pubg_ai.storage_alerts import DEFAULT_MINIMUM_FREE_BYTES
 from pubg_ai.storage_contract import storage_root_contract_conflicts
 from pubg_ai.time_utils import isoformat_kst
@@ -104,6 +107,22 @@ class DiscordScopeSettings:
         return {
             "guild_ranking_scopes": self.guild_ranking_scopes,
             "public_profile_default": self.public_profile_default,
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass(frozen=True)
+class DiscordBotSettings:
+    auto_start: bool = False
+    command_prefix: str = "!"
+    guild_enabled_commands: dict[str, list[str]] = field(default_factory=dict)
+    updated_at: str | None = None
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "auto_start": self.auto_start,
+            "command_prefix": self.command_prefix,
+            "guild_enabled_commands": self.guild_enabled_commands,
             "updated_at": self.updated_at,
         }
 
@@ -235,6 +254,13 @@ class LocalSettingsStore:
             return DiscordScopeSettings(guild_ranking_scopes={})
 
         return _discord_scopes_from_record(discord_scopes)
+
+    def load_discord_bot_settings(self) -> DiscordBotSettings:
+        payload = self._read_settings() or {}
+        discord_bot = payload.get("discord_bot")
+        if not isinstance(discord_bot, dict):
+            return DiscordBotSettings()
+        return _discord_bot_settings_from_record(discord_bot)
 
     def load_web_settings(self) -> WebSettings | None:
         payload = self._read_settings() or {}
@@ -395,6 +421,24 @@ class LocalSettingsStore:
             updated_at=isoformat_kst(),
         )
         self._update_settings_section("discord_scopes", settings.to_record())
+        return settings
+
+    def save_discord_bot_settings(
+        self,
+        *,
+        auto_start: bool,
+        command_prefix: str,
+        guild_enabled_commands: dict[str, list[str]] | None = None,
+    ) -> DiscordBotSettings:
+        settings = DiscordBotSettings(
+            auto_start=bool(auto_start),
+            command_prefix=_normalize_command_prefix(command_prefix),
+            guild_enabled_commands=_normalize_guild_enabled_commands(
+                guild_enabled_commands or {}
+            ),
+            updated_at=isoformat_kst(),
+        )
+        self._update_settings_section("discord_bot", settings.to_record())
         return settings
 
     def save_web_settings(self, local_web_base_url: str | None) -> WebSettings:
@@ -800,6 +844,48 @@ def _discord_scopes_from_record(record: dict[str, Any]) -> DiscordScopeSettings:
         public_profile_default=public_profile_default,
         updated_at=_optional_str(record.get("updated_at")),
     )
+
+
+def _discord_bot_settings_from_record(record: dict[str, Any]) -> DiscordBotSettings:
+    auto_start = record.get("auto_start", False)
+    if not isinstance(auto_start, bool):
+        auto_start = False
+    command_prefix = record.get("command_prefix", "!")
+    if not isinstance(command_prefix, str):
+        command_prefix = "!"
+    guild_enabled_commands = record.get("guild_enabled_commands")
+    return DiscordBotSettings(
+        auto_start=auto_start,
+        command_prefix=_normalize_command_prefix(command_prefix),
+        guild_enabled_commands=_normalize_guild_enabled_commands(
+            guild_enabled_commands if isinstance(guild_enabled_commands, dict) else {}
+        ),
+        updated_at=_optional_str(record.get("updated_at")),
+    )
+
+
+def _normalize_command_prefix(value: str) -> str:
+    normalized = str(value or "")
+    if not 1 <= len(normalized) <= 5:
+        raise LocalSettingsError("Discord command prefix must be 1-5 characters.")
+    if any(character.isspace() or ord(character) < 32 for character in normalized):
+        raise LocalSettingsError("Discord command prefix cannot contain whitespace or control characters.")
+    return normalized
+
+
+def _normalize_guild_enabled_commands(value: dict[str, Any]) -> dict[str, list[str]]:
+    normalized: dict[str, list[str]] = {}
+    for raw_guild_id, raw_commands in value.items():
+        guild_id = str(raw_guild_id or "").strip()
+        if not guild_id or len(guild_id) > 32 or not guild_id.isdigit():
+            raise LocalSettingsError("Discord guild ids must contain only digits.")
+        if not isinstance(raw_commands, list):
+            raise LocalSettingsError(f"Discord guild {guild_id} commands must be a list.")
+        try:
+            normalized[guild_id] = normalize_command_selection(raw_commands)
+        except ValueError as exc:
+            raise LocalSettingsError(str(exc)) from exc
+    return dict(sorted(normalized.items()))
 
 
 def _web_settings_from_record(record: dict[str, Any]) -> WebSettings:

@@ -141,7 +141,10 @@ class DesktopLauncherTests(unittest.TestCase):
         self.assertEqual(positional[1], "http://127.0.0.1:8018")
         self.assertEqual(keyword["background_color"], "#0b0d0f")
         self.assertTrue(keyword["maximized"])
-        fake_webview.start.assert_called_once_with(debug=False)
+        fake_webview.start.assert_called_once()
+        start_kwargs = fake_webview.start.call_args.kwargs
+        self.assertFalse(start_kwargs["debug"])
+        self.assertTrue(start_kwargs["icon"].endswith("assets\\app_icon.ico"))
 
     def test_packaged_entrypoint_finds_project_above_dist_directory(self) -> None:
         with TemporaryDirectory() as temp_dir:

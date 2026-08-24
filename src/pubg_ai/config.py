@@ -233,10 +233,11 @@ class RuntimeConfig:
     ) -> "RuntimeConfig":
         base = base_dir or Path.cwd()
         values = dict(load_dotenv_values(_config_path(str(env_file), base)))
-        if env is None:
-            values.update(os.environ)
-        else:
-            values.update(env)
+        overrides = os.environ if env is None else env
+        for key, value in overrides.items():
+            if key in {"PUBG_API_KEY", "DISCORD_BOT_TOKEN"} and not str(value).strip():
+                continue
+            values[key] = value
         return cls(
             app=AppConfig.from_sources(values, base),
             database=DatabaseConfig.from_env(values),

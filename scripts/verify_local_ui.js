@@ -178,10 +178,20 @@ async function runExpandedFeatureChecks(page) {
   const displayForm = page.locator("#displaySettingsForm");
   await displayForm.locator('[name="number_format"]').selectOption("korean_units");
   const koreanPreview = await page.locator("#displayNumberPreview").innerText();
-  await displayForm.locator('button[type="submit"]').click();
-  await page.locator("#displaySettingsStatus").filter({ hasText: "적용 완료" }).waitFor();
-  await displayForm.locator('[name="number_format"]').selectOption("grouped");
-  await displayForm.locator('button[type="submit"]').click();
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: "networkidle" }),
+    displayForm.locator('button[type="submit"]').click(),
+  ]);
+  await openWorkspaceSection(page, "settings", "display");
+  const persistedKoreanMode = await page.locator('#displaySettingsForm [name="number_format"]').inputValue();
+  const persistedKoreanPreview = await page.locator("#displayNumberPreview").innerText();
+  await page.locator('#displaySettingsForm [name="number_format"]').selectOption("grouped");
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: "networkidle" }),
+    page.locator('#displaySettingsForm button[type="submit"]').click(),
+  ]);
+  await openWorkspaceSection(page, "settings", "display");
+  const restoredGroupedMode = await page.locator('#displaySettingsForm [name="number_format"]').inputValue();
 
   await openWorkspaceSection(page, "players", "matches");
 
@@ -255,11 +265,54 @@ async function runExpandedFeatureChecks(page) {
   await page.locator("#comparison-analysis").scrollIntoViewIfNeeded();
   await page.screenshot({ path: comparisonScreenshot, fullPage: false });
 
+  await openWorkspaceSection(page, "replay", "flight-paths");
+  const flightDetails = page.locator("#flightPathForm details");
+  if ((await flightDetails.getAttribute("open")) === null) {
+    await flightDetails.locator("summary").click();
+  }
+  await page.locator('#flightPathForm input[name="top_per_map"]').fill("5");
+  await page.locator('#flightPathForm input[name="recent_limit"]').fill("5");
+  await page.locator('#flightPathForm input[name="route_limit"]').fill("1000");
+  await page.locator('#flightPathForm button[type="submit"]').click();
+  await page.locator("#flightPathStatus").filter({ hasText: "분석 완료" }).waitFor({ timeout: 60000 });
+  await page.waitForFunction(() => {
+    const image = document.querySelector("#flightPathMapImage");
+    return Boolean(image?.complete && image.naturalWidth > 0 && image.naturalHeight > 0);
+  });
+  const flightPathStatus = await page.locator("#flightPathStatus").innerText();
+  const flightMapOptions = await page.locator("#flightPathMapSelect option").count();
+  const flightMapLines = await page.locator("#flightPathOverlay [data-flight-line]").count();
+  const flightRankRows = await page.locator("#flightPathList [data-flight-row]").count();
+  const flightOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
+  const flightScreenshot = path.join(outputDir, "flight-paths-desktop.png");
+  await page.locator("#flightPathResult").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: flightScreenshot, fullPage: false });
+
+  await openWorkspaceSection(page, "discord", "bot");
+  await page.locator("#discordBotStatus").filter({ hasNotText: "확인 중" }).waitFor({ timeout: 30000 });
+  const discordBotStatus = await page.locator("#discordBotStatus").innerText();
+  const secretInputsEmpty = await page.locator(
+    '#pubgApiKeyForm input[name="value"], #discordTokenForm input[name="value"]',
+  ).evaluateAll((inputs) => inputs.every((input) => input.value === ""));
+  const discordGuildOptions = await page.locator("#discordBotGuildSelect option").count();
+  const discordOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
+  const discordScreenshot = path.join(outputDir, "discord-bot-desktop.png");
+  await page.locator("#discord-bot-manager").screenshot({ path: discordScreenshot });
+
+  const iconLoaded = await page.locator(".brand-mark").evaluate(
+    (image) => image.complete && image.naturalWidth > 0 && image.naturalHeight > 0,
+  );
+
   const items = matchApi.items || [];
   return {
     numberFormat: {
       koreanPreview,
-      koreanUnitsRendered: koreanPreview.includes("5만") && koreanPreview.includes("9,452"),
+      persistedKoreanPreview,
+      persistedKoreanMode,
+      restoredGroupedMode,
+      koreanUnitsRendered: koreanPreview.includes("5만") && koreanPreview.includes("9,452")
+        && persistedKoreanPreview.includes("5만") && persistedKoreanMode === "korean_units"
+        && restoredGroupedMode === "grouped",
     },
     match: {
       matchId,
@@ -285,7 +338,27 @@ async function runExpandedFeatureChecks(page) {
       bars: comparisonBars,
       trendSeries: comparisonSeries,
     },
-    screenshots: { matchScreenshot, landingScreenshot, comparisonScreenshot },
+    flightPaths: {
+      status: flightPathStatus,
+      mapOptions: flightMapOptions,
+      mapLines: flightMapLines,
+      rankRows: flightRankRows,
+      overflow: flightOverflow,
+    },
+    discordBot: {
+      status: discordBotStatus,
+      secretInputsEmpty,
+      guildOptions: discordGuildOptions,
+      overflow: discordOverflow,
+    },
+    iconLoaded,
+    screenshots: {
+      matchScreenshot,
+      landingScreenshot,
+      comparisonScreenshot,
+      flightScreenshot,
+      discordScreenshot,
+    },
   };
 }
 
@@ -389,6 +462,14 @@ async function layoutDiagnostics(page) {
       result.desktop.features.comparison.selected < 2,
       result.desktop.features.comparison.bars < 2,
       result.desktop.features.comparison.trendSeries < 2,
+      !result.desktop.features.iconLoaded,
+      result.desktop.features.flightPaths.mapOptions < 1,
+      result.desktop.features.flightPaths.mapLines < 1,
+      result.desktop.features.flightPaths.rankRows < 1,
+      result.desktop.features.flightPaths.overflow,
+      !result.desktop.features.discordBot.secretInputsEmpty,
+      !result.desktop.features.discordBot.status,
+      result.desktop.features.discordBot.overflow,
       result.desktop.registryDimensions.registryRows < 1,
       result.desktop.registryDimensions.managementButtons < result.desktop.registryDimensions.registryRows * 2,
       result.desktop.registryDimensions.discordEditors < result.desktop.registryDimensions.registryRows,

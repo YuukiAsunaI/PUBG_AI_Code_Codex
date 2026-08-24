@@ -7,7 +7,10 @@ a = Analysis(
     ["src/pubg_ai/desktop_entry.py"],
     pathex=["src"],
     binaries=[],
-    datas=[],
+    datas=[
+        ("src/pubg_ai/assets/app_icon.png", "pubg_ai/assets"),
+        ("src/pubg_ai/assets/app_icon.ico", "pubg_ai/assets"),
+    ],
     hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},
@@ -37,4 +40,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon="src/pubg_ai/assets/app_icon.ico",
 )

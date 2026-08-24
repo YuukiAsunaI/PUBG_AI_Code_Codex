@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
 import shlex
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlencode
 
 from pubg_ai.alert_history import (
@@ -36,6 +36,7 @@ from pubg_ai.data_deletion_requests import (
 )
 from pubg_ai.database import connect_mysql
 from pubg_ai.discord_guild_catalog import sync_discord_guild_catalog
+from pubg_ai.discord_command_catalog import DISCORD_COMMAND_SPECS
 from pubg_ai.discord_permission_manager import DiscordPermissionManager
 from pubg_ai.discord_permissions import DiscordCommandIdentity, DiscordPermissionChecker
 from pubg_ai.fight_outcome_stats import FightOutcomeStatsService, PlayerFightOutcomeReport
@@ -955,6 +956,11 @@ def format_player_fight_outcomes(
 
 def format_player_weapon_detail(detail: PlayerWeaponDetail, *, detail_base_url: str | None = None) -> str:
     totals = detail.totals
+    character_hits = (
+        totals.character_hits
+        if totals.character_hits or totals.vehicle_hits
+        else totals.shots_hit
+    )
     lines = [
         f"{detail.player.current_name} {detail.weapon_name} 무기 통계",
         f"- 사용 경기/치킨: {totals.match_count}전 {totals.wins}치킨 ({_percent(totals.win_rate)})",
@@ -962,8 +968,9 @@ def format_player_weapon_detail(detail: PlayerWeaponDetail, *, detail_base_url: 
         f"- 딜/평균 딜: {_number(totals.damage_dealt, 0)} / {_number(totals.avg_damage_dealt, 1)}",
         f"- 명중 지표: {_accuracy_metric_text(totals.accuracy, totals.accuracy_metric)} "
         f"({totals.shots_hit}/{totals.shots_fired})",
-        f"- 헤드샷 명중: {_percent(_safe_ratio(totals.headshot_hits, totals.shots_hit))} "
-        f"({totals.headshot_hits}/{totals.shots_hit}명중)",
+        f"- 헤드샷 명중: {_percent(totals.to_record()['headshot_hit_rate'])} "
+        f"({totals.headshot_hits}/{character_hits} 캐릭터 명중, 차량 제외)",
+        f"- 차량 명중/피해: {totals.vehicle_hits}회 / {_number(totals.vehicle_damage_dealt, 1)}",
         f"- 헤드샷 킬/기절: {totals.headshot_kills}/{totals.headshot_dbnos}",
         f"- 교전 승률: {_percent(totals.fight_win_rate)} "
         f"({totals.fight_wins}승/{totals.fight_losses}패, 경기당 {_number(totals.avg_fights_per_match, 2)}회)",
@@ -1195,6 +1202,7 @@ def create_discord_bot(
     permission_checker: DiscordPermissionChecker,
     scope_settings_store: LocalSettingsStore | None = None,
     command_prefix: str = DEFAULT_DISCORD_PREFIX,
+    status_callback: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> Any:
     import discord
     from discord.ext import commands
@@ -1208,6 +1216,15 @@ def create_discord_bot(
     alert_last_worker_run_id: int | None = None
     sent_storage_alert_keys: set[str] = set()
     custom_prefix_aliases: dict[str, str] = {}
+    application_command_templates: tuple[Any, ...] | None = None
+
+    def notify_status(event: str, **details: Any) -> None:
+        if status_callback is None:
+            return
+        try:
+            status_callback(event, details)
+        except Exception:
+            pass
 
     def guild_id_for(ctx: Any) -> str | None:
         return str(ctx.guild.id) if ctx.guild else None
@@ -1246,6 +1263,26 @@ def create_discord_bot(
             return False
         sync_custom_prefix_aliases()
         return True
+
+    def enabled_commands_for_guild(guild_id: str) -> set[str] | None:
+        if scope_settings_store is None:
+            return None
+        try:
+            settings = scope_settings_store.load_discord_bot_settings()
+        except LocalSettingsError:
+            return None
+        configured = settings.guild_enabled_commands.get(guild_id)
+        return set(configured) if configured is not None else None
+
+    def prefix_command_is_visible(ctx: Any) -> bool:
+        guild_id = guild_id_for(ctx)
+        if guild_id is None:
+            return True
+        enabled = enabled_commands_for_guild(guild_id)
+        if enabled is None:
+            return True
+        command_name = str(getattr(getattr(ctx, "command", None), "name", "") or "")
+        return not command_name or command_name in enabled
 
     def guild_ranking_scope(ctx: Any) -> str:
         guild_id = guild_id_for(ctx)
@@ -1385,6 +1422,50 @@ def create_discord_bot(
         finally:
             connection.close()
 
+    def restore_global_application_commands() -> tuple[Any, ...]:
+        nonlocal application_command_templates
+        if application_command_templates is None:
+            application_command_templates = tuple(bot.tree.get_commands())
+        bot.tree.clear_commands(guild=None)
+        for command in application_command_templates:
+            bot.tree.add_command(command, override=True)
+        return application_command_templates
+
+    async def sync_application_commands(guild_ids: list[str] | None = None) -> dict[str, int]:
+        templates = restore_global_application_commands()
+        available_names = {str(command.name) for command in templates}
+        requested_ids = set(guild_ids or [])
+        guilds = [
+            guild
+            for guild in bot.guilds
+            if not requested_ids or str(getattr(guild, "id", "")) in requested_ids
+        ]
+        synced_by_guild: dict[str, int] = {}
+        for guild in guilds:
+            guild_id = str(guild.id)
+            restore_global_application_commands()
+            bot.tree.clear_commands(guild=guild)
+            bot.tree.copy_global_to(guild=guild)
+            enabled = enabled_commands_for_guild(guild_id)
+            if enabled is not None:
+                for command_name in sorted(available_names - enabled):
+                    bot.tree.remove_command(command_name, guild=guild)
+            synced = await bot.tree.sync(guild=guild)
+            synced_by_guild[guild_id] = len(synced)
+
+        # This bot is managed per guild. Removing global registrations prevents
+        # disabled commands from lingering in a server's slash-command picker.
+        bot.tree.clear_commands(guild=None)
+        await bot.tree.sync()
+        notify_status(
+            "commands_synced",
+            guild_command_counts=synced_by_guild,
+            available_command_count=len(DISCORD_COMMAND_SPECS),
+        )
+        return synced_by_guild
+
+    bot.pubg_sync_application_commands = sync_application_commands
+
     @bot.event
     async def on_ready() -> None:
         nonlocal alert_task_started, slash_commands_synced
@@ -1392,9 +1473,9 @@ def create_discord_bot(
         refresh_permission_settings()
         if not slash_commands_synced:
             try:
-                synced = await bot.tree.sync()
+                synced = await sync_application_commands()
                 slash_commands_synced = True
-                print(f"synced {len(synced)} Discord application commands")
+                print(f"synced Discord application commands for {len(synced)} guilds")
             except Exception as exc:
                 print(f"failed to sync Discord application commands: {exc}")
         try:
@@ -1404,11 +1485,17 @@ def create_discord_bot(
         if scope_settings_store is not None and not alert_task_started:
             alert_task_started = True
             bot.loop.create_task(alert_loop())
+        notify_status(
+            "ready",
+            bot_user=str(bot.user or ""),
+            guild_count=len(bot.guilds),
+        )
 
     @bot.event
     async def on_guild_join(guild: Any) -> None:
         try:
             sync_known_guilds([guild])
+            await sync_application_commands([str(guild.id)])
         except Exception as exc:
             print(f"failed to add Discord guild to catalog: {exc}")
 
@@ -1422,7 +1509,18 @@ def create_discord_bot(
     @bot.event
     async def on_message(message: Any) -> None:
         refresh_permission_settings()
+        ctx = await bot.get_context(message)
+        if not prefix_command_is_visible(ctx):
+            return
         await bot.process_commands(message)
+
+    @bot.event
+    async def on_disconnect() -> None:
+        notify_status("disconnected")
+
+    @bot.event
+    async def on_resumed() -> None:
+        notify_status("resumed", guild_count=len(bot.guilds))
 
     @bot.hybrid_command(name="배그도움말", aliases=["pubg-help", "pubg-ai"])
     async def help_command(ctx: Any) -> None:

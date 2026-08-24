@@ -94,6 +94,10 @@ from pubg_ai.data_deletion_preview import (
 from pubg_ai.data_deletion_requests import DataDeletionRequestError, DataDeletionRequestService
 from pubg_ai.database import connect_mysql, count_tables
 from pubg_ai.discord_acceptance import DiscordAcceptanceClient, DiscordAcceptanceError
+from pubg_ai.discord_bot_controller import (
+    DiscordBotController,
+    DiscordBotControllerError,
+)
 from pubg_ai.discord_command_catalog import (
     RESERVED_COMMAND_GROUPS,
     command_catalog_records,
@@ -101,7 +105,10 @@ from pubg_ai.discord_command_catalog import (
 from pubg_ai.discord_guild_catalog import list_discord_guild_catalog, sync_discord_guild_catalog
 from pubg_ai.fight_outcome_processor import FightOutcomeProcessor
 from pubg_ai.fight_outcome_stats import FightOutcomeStatsService
+from pubg_ai.flight_path_stats import FlightPathStatsService
 from pubg_ai.discord_permission_manager import DiscordPermissionManager
+from pubg_ai.discord_permissions import DiscordPermissionChecker
+from pubg_ai.env_secrets import EnvSecretError, EnvSecretStore
 from pubg_ai.local_settings import LocalSettingsError, LocalSettingsStore, check_storage_path
 from pubg_ai.loadout_snapshot_processor import LoadoutSnapshotProcessor
 from pubg_ai.map_regions import map_region_catalog_record, resolve_map_region
@@ -151,6 +158,9 @@ from pubg_ai.worker_run_history import (
     get_worker_run_page,
     list_worker_runs,
 )
+
+
+_ASSET_DIR = Path(__file__).resolve().parent.parent / "assets"
 
 
 class RegisterPlayerRequest(BaseModel):
@@ -253,6 +263,20 @@ class DiscordCommandAliasRequest(BaseModel):
 class DiscordScopeSettingsRequest(BaseModel):
     guild_ranking_scopes: dict[str, str] = Field(default_factory=dict)
     public_profile_default: bool = True
+
+
+class SecretUpdateRequest(BaseModel):
+    value: str = Field(min_length=1, max_length=4096)
+
+
+class DiscordBotSettingsRequest(BaseModel):
+    auto_start: bool = False
+    command_prefix: str = Field(default="!", min_length=1, max_length=5)
+    guild_enabled_commands: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class DiscordCommandSyncRequest(BaseModel):
+    guild_id: str | None = Field(default=None, max_length=32)
 
 
 class DataDeletionReviewRequest(BaseModel):
@@ -455,6 +479,10 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
     _ensure_configured_storage_directories(config)
     settings_store = _local_settings_store(base_dir, env_file=env_file)
     permission_manager = DiscordPermissionManager(settings_store)
+    env_path = Path(env_file).expanduser()
+    if not env_path.is_absolute():
+        env_path = base_dir / env_path
+    secret_store = EnvSecretStore(env_path)
 
     def current_config() -> RuntimeConfig:
         return RuntimeConfig.from_sources(base_dir=base_dir, env_file=env_file)
@@ -787,12 +815,29 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
 
     collector_worker = CollectorWorkerController(config_loader=current_config)
     post_processing_worker = PostProcessingWorkerController(config_loader=current_config)
+    discord_bot_controller = DiscordBotController(
+        config_loader=current_config,
+        settings_store=settings_store,
+        permission_checker=DiscordPermissionChecker(
+            settings_store.load_discord_permission_settings()
+        ),
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> Any:
+        bot_settings = settings_store.load_discord_bot_settings()
+        if bot_settings.auto_start and current_config().secrets.discord_bot_token:
+            try:
+                discord_bot_controller.start()
+            except DiscordBotControllerError:
+                pass
         try:
             yield
         finally:
+            try:
+                discord_bot_controller.stop()
+            except DiscordBotControllerError:
+                pass
             collector_worker.stop()
             post_processing_worker.stop()
 
@@ -807,6 +852,7 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
         TrustedHostMiddleware,
         allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"],
     )
+    app.state.discord_bot_controller = discord_bot_controller
 
     @app.middleware("http")
     async def enforce_local_browser_boundary(request: Request, call_next: Any) -> Response:
@@ -845,12 +891,54 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
         }
 
     @app.get("/favicon.ico", include_in_schema=False)
-    def favicon() -> Response:
-        return Response(status_code=204)
+    def favicon() -> FileResponse:
+        return FileResponse(_ASSET_DIR / "app_icon.ico", media_type="image/x-icon")
+
+    @app.get("/assets/app-icon.png", include_in_schema=False)
+    def app_icon() -> FileResponse:
+        return FileResponse(_ASSET_DIR / "app_icon.png", media_type="image/png")
 
     @app.get("/settings/status")
     def settings_status() -> dict[str, Any]:
         return _settings_status_record(current_config())
+
+    def save_managed_secret(name: str, value: str) -> dict[str, Any]:
+        try:
+            secret_store.set_secret(name, value)
+        except EnvSecretError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        runtime_config = current_config()
+        configured = (
+            bool(runtime_config.secrets.pubg_api_key)
+            if name == "PUBG_API_KEY"
+            else bool(runtime_config.secrets.discord_bot_token)
+        )
+        return {"configured": configured, "settings": _settings_status_record(runtime_config)}
+
+    @app.post("/settings/secrets/pubg")
+    def save_pubg_api_key(request: SecretUpdateRequest) -> dict[str, Any]:
+        return save_managed_secret("PUBG_API_KEY", request.value)
+
+    @app.post("/settings/secrets/discord")
+    def save_discord_bot_token(request: SecretUpdateRequest) -> dict[str, Any]:
+        return save_managed_secret("DISCORD_BOT_TOKEN", request.value)
+
+    @app.delete("/settings/secrets/pubg")
+    def clear_pubg_api_key() -> dict[str, Any]:
+        try:
+            secret_store.clear_secret("PUBG_API_KEY")
+        except EnvSecretError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"configured": False, "settings": _settings_status_record(current_config())}
+
+    @app.delete("/settings/secrets/discord")
+    def clear_discord_bot_token() -> dict[str, Any]:
+        try:
+            discord_bot_controller.stop()
+            secret_store.clear_secret("DISCORD_BOT_TOKEN")
+        except (DiscordBotControllerError, EnvSecretError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"configured": False, "settings": _settings_status_record(current_config())}
 
     @app.post("/settings/web")
     def save_web_settings(request: WebSettingsRequest) -> dict[str, Any]:
@@ -1211,6 +1299,65 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
             connection.close()
         return {"run": run.to_record()}
 
+    @app.get("/discord/bot/status")
+    def discord_bot_status() -> dict[str, Any]:
+        runtime_config = current_config()
+        return {
+            "bot": discord_bot_controller.status().to_record(),
+            "configured": bool(runtime_config.secrets.discord_bot_token),
+            "pubg_api_configured": bool(runtime_config.secrets.pubg_api_key),
+            "settings": settings_store.load_discord_bot_settings().to_record(),
+        }
+
+    @app.get("/discord/bot/settings")
+    def discord_bot_settings() -> dict[str, Any]:
+        return {
+            "discord_bot": settings_store.load_discord_bot_settings().to_record(),
+            "command_catalog": command_catalog_records(),
+        }
+
+    @app.post("/discord/bot/settings")
+    def save_discord_bot_settings(request: DiscordBotSettingsRequest) -> dict[str, Any]:
+        try:
+            settings = settings_store.save_discord_bot_settings(
+                auto_start=request.auto_start,
+                command_prefix=request.command_prefix,
+                guild_enabled_commands=request.guild_enabled_commands,
+            )
+        except LocalSettingsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "discord_bot": settings.to_record(),
+            "bot": discord_bot_controller.status().to_record(),
+        }
+
+    @app.post("/discord/bot/start")
+    def start_discord_bot() -> dict[str, Any]:
+        try:
+            state = discord_bot_controller.start()
+        except (DiscordBotControllerError, LocalSettingsError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"bot": state.to_record()}
+
+    @app.post("/discord/bot/stop")
+    def stop_discord_bot() -> dict[str, Any]:
+        try:
+            state = discord_bot_controller.stop()
+        except DiscordBotControllerError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"bot": state.to_record()}
+
+    @app.post("/discord/bot/sync")
+    def sync_discord_bot_commands(request: DiscordCommandSyncRequest) -> dict[str, Any]:
+        guild_id = str(request.guild_id or "").strip() or None
+        if guild_id is not None and not guild_id.isdigit():
+            raise HTTPException(status_code=400, detail="Discord 서버 ID 형식이 올바르지 않습니다.")
+        try:
+            state = discord_bot_controller.sync_commands(guild_id)
+        except DiscordBotControllerError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"bot": state.to_record()}
+
     @app.get("/discord/permissions")
     def discord_permissions() -> dict[str, Any]:
         try:
@@ -1227,9 +1374,14 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
         try:
             permissions = permission_manager.load()
             scopes = settings_store.load_discord_scope_settings()
+            bot_settings = settings_store.load_discord_bot_settings()
         except LocalSettingsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        configured_ids = set(permissions.guild_user_grants) | set(scopes.guild_ranking_scopes)
+        configured_ids = (
+            set(permissions.guild_user_grants)
+            | set(scopes.guild_ranking_scopes)
+            | set(bot_settings.guild_enabled_commands)
+        )
         connection = connect_mysql(current_config().database)
         try:
             guilds = list_discord_guild_catalog(
@@ -2399,6 +2551,65 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
     def analytics_telemetry_events() -> dict[str, Any]:
         return {"events": telemetry_event_catalog_records()}
 
+    @app.get("/analytics/flight-paths")
+    def analytics_flight_paths(
+        shard: str | None = None,
+        account_id: str | None = None,
+        game_mode: str | None = None,
+        team_mode: str | None = None,
+        perspective: str | None = None,
+        match_type: str | None = None,
+        map_name: str | None = None,
+        season_state: str | None = None,
+        is_custom_match: str | None = None,
+        year: int | None = Query(default=None, ge=2000, le=2100),
+        quarter: int | None = Query(default=None, ge=1, le=4),
+        month: int | None = Query(default=None, ge=1, le=12),
+        exact_date_kst: str | None = None,
+        hour: int | None = Query(default=None, ge=0, le=23),
+        from_date_kst: str | None = None,
+        to_date_kst: str | None = None,
+        angle_bin_degrees: float = Query(default=10.0, ge=1.0, le=45.0),
+        offset_bin_m: float = Query(default=500.0, ge=50.0, le=4000.0),
+        top_per_map: int = Query(default=20, ge=1, le=50),
+        recent_limit: int = Query(default=50, ge=1, le=200),
+        route_limit: int = Query(default=50000, ge=100, le=100000),
+    ) -> dict[str, Any]:
+        try:
+            filters = PlayerTrendFilters(
+                game_mode=game_mode,
+                team_mode=team_mode,
+                perspective=perspective,
+                match_type=match_type,
+                map_name=map_name,
+                season_state=season_state,
+                is_custom_match=parse_optional_bool(is_custom_match, "is_custom_match"),
+                year=year,
+                quarter=quarter,
+                month=month,
+                exact_date_kst=parse_trend_date(exact_date_kst, "exact_date_kst"),
+                hour=hour,
+                from_date_kst=parse_trend_date(from_date_kst, "from_date_kst"),
+                to_date_kst=parse_trend_date(to_date_kst, "to_date_kst"),
+            ).normalized()
+            connection = connect_mysql(config.database)
+            try:
+                report = FlightPathStatsService(connection).get_report(
+                    shard=shard,
+                    account_id=account_id,
+                    filters=filters,
+                    angle_bin_degrees=angle_bin_degrees,
+                    offset_bin_m=offset_bin_m,
+                    top_per_map=top_per_map,
+                    recent_limit=recent_limit,
+                    route_limit=route_limit,
+                )
+            finally:
+                connection.close()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"flight_paths": report.to_record()}
+
     @app.get("/players/intelligence")
     def player_intelligence(
         shard: str = "steam",
@@ -3265,7 +3476,7 @@ def _settings_status_record(config: RuntimeConfig) -> dict[str, Any]:
         },
         "database": config.database.safe_record(),
         "secrets": {
-            key: status.to_record()
+            key: {"configured": status.configured}
             for key, status in config.secrets.status().items()
         },
     }
@@ -3468,6 +3679,7 @@ _INDEX_HTML = """<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PUBG AI Local Manager</title>
+  <link rel="icon" href="/favicon.ico" sizes="any">
   <style>
     :root {
       color-scheme: light;
@@ -3785,6 +3997,78 @@ _INDEX_HTML = """<!doctype html>
     .discord-command-group-form {
       grid-template-columns: minmax(180px, 0.7fr) minmax(220px, 1fr) auto auto;
     }
+    .bot-state-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(120px, 1fr));
+      margin: 10px 0;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+    .bot-state-strip > div {
+      min-width: 0;
+      padding: 10px 12px;
+      border-right: 1px solid var(--line);
+    }
+    .bot-state-strip > div:last-child { border-right: 0; }
+    .bot-state-strip span { display: block; color: var(--muted); font-size: 10px; }
+    .bot-state-strip strong {
+      display: block;
+      margin-top: 4px;
+      overflow: hidden;
+      color: var(--text);
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .discord-bot-settings-form {
+      grid-template-columns: minmax(150px, 0.6fr) minmax(130px, 0.4fr) auto;
+      align-items: end;
+    }
+    .bot-runtime-actions { margin: 10px 0; }
+    .switch-field { min-height: 57px; justify-content: space-between; }
+    .switch-control { display: inline-flex; align-items: center; min-height: 34px; }
+    .switch-control input { position: absolute; inline-size: 1px; block-size: 1px; opacity: 0; }
+    .switch-control span {
+      position: relative;
+      display: inline-block;
+      width: 42px;
+      height: 22px;
+      border: 1px solid var(--line-strong);
+      border-radius: 11px;
+      background: var(--panel-soft);
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+    .switch-control span::after {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--muted);
+      content: "";
+      transition: transform 120ms ease, background 120ms ease;
+    }
+    .switch-control input:checked + span { border-color: var(--accent); background: rgb(59 207 166 / 18%); }
+    .switch-control input:checked + span::after { transform: translateX(19px); background: var(--accent); }
+    .switch-control input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .bot-secret-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .bot-secret-grid form {
+      grid-template-columns: minmax(220px, 1fr) auto auto;
+      align-items: end;
+      padding: 10px 0;
+      border-top: 1px solid var(--line);
+    }
+    .bot-secret-grid .status { grid-column: 1 / -1; }
+    .discord-bot-guild-form {
+      grid-template-columns: minmax(220px, 0.8fr) minmax(220px, 1fr) auto;
+      align-items: end;
+    }
+    .bot-command-actions { align-self: end; }
     .command-catalog-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -3907,6 +4191,96 @@ _INDEX_HTML = """<!doctype html>
     .drop-view-panel { min-width: 0; }
     .drop-view-panel[hidden] { display: none !important; }
     .drop-view-panel .drop-map-panel { width: min(760px, 100%); }
+    .flight-path-layout {
+      display: grid;
+      grid-template-columns: minmax(420px, 1.35fr) minmax(280px, 0.65fr);
+      gap: 16px;
+      align-items: start;
+      min-width: 0;
+    }
+    .flight-path-map-stage {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 1;
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 5px;
+      background: #080b0d;
+    }
+    .flight-path-map-stage img,
+    .flight-path-map-stage svg {
+      position: absolute;
+      inset: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    .flight-path-map-stage img { object-fit: contain; }
+    .flight-path-map-stage svg { overflow: visible; }
+    .flight-route-line {
+      cursor: pointer;
+      transition: opacity 120ms ease, stroke-width 120ms ease;
+      vector-effect: non-scaling-stroke;
+    }
+    .flight-route-line:hover,
+    .flight-route-line:focus,
+    .flight-route-line.active {
+      opacity: 1 !important;
+      outline: none;
+      filter: drop-shadow(0 0 3px #ffffff);
+    }
+    .flight-path-list {
+      max-height: 640px;
+      overflow: auto;
+      border-top: 1px solid var(--line);
+    }
+    .flight-path-row {
+      width: 100%;
+      min-height: 58px;
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr) auto;
+      gap: 9px;
+      align-items: center;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      border-radius: 0;
+      padding: 8px 4px;
+      background: transparent;
+      color: var(--text);
+      text-align: left;
+    }
+    .flight-path-row:hover,
+    .flight-path-row.active { background: #14231e; }
+    .flight-path-rank {
+      display: grid;
+      width: 27px;
+      height: 27px;
+      place-items: center;
+      border: 1px solid currentColor;
+      border-radius: 50%;
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .flight-path-row strong,
+    .flight-path-row small { display: block; overflow-wrap: anywhere; }
+    .flight-path-row strong { font-size: 11px; }
+    .flight-path-row small { margin-top: 3px; color: var(--muted); font-size: 10px; }
+    .flight-path-share { color: var(--accent); font-size: 12px; font-weight: 700; }
+    .flight-path-detail {
+      min-height: 66px;
+      margin-top: 8px;
+      border-left: 3px solid var(--accent);
+      padding: 8px 10px;
+      background: var(--panel-soft);
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.55;
+    }
+    .flight-path-detail strong { display: block; color: var(--text); font-size: 12px; }
+    @media (max-width: 1050px) {
+      .flight-path-layout { grid-template-columns: 1fr; }
+      .flight-path-list { max-height: 360px; }
+    }
     .recommendation-view-switch {
       display: inline-flex;
       width: max-content;
@@ -4162,6 +4536,49 @@ _INDEX_HTML = """<!doctype html>
       padding: 10px 12px;
       border-left: 3px solid var(--accent);
       background: #f8fafc;
+    }
+    .app-dialog {
+      width: min(920px, calc(100vw - 28px));
+      max-width: none;
+      max-height: min(88vh, 900px);
+      margin: auto;
+      padding: 0;
+      overflow: hidden;
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel);
+      box-shadow: 0 24px 80px rgb(0 0 0 / 55%);
+    }
+    .app-dialog::backdrop { background: rgb(0 0 0 / 72%); }
+    .app-dialog-shell {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      max-height: min(88vh, 900px);
+    }
+    .app-dialog-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-strong);
+    }
+    .app-dialog-header h3 { margin: 0; font-size: 14px; }
+    .app-dialog-close {
+      width: 32px;
+      min-width: 32px;
+      height: 32px;
+      padding: 0;
+      font-size: 21px;
+      line-height: 1;
+    }
+    .app-dialog-content {
+      min-width: 0;
+      padding: 14px;
+      overflow: auto;
+      overscroll-behavior: contain;
     }
     .detail-note-form {
       margin-top: 10px;
@@ -4478,7 +4895,14 @@ _INDEX_HTML = """<!doctype html>
       .alert-settings-form,
       .alert-channel-picker,
       .discord-command-group-form,
-      .discord-alias-form { grid-template-columns: 1fr; }
+      .discord-alias-form,
+      .discord-bot-settings-form,
+      .discord-bot-guild-form,
+      .bot-secret-grid,
+      .bot-secret-grid form { grid-template-columns: 1fr; }
+      .bot-state-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .bot-state-strip > div:nth-child(2) { border-right: 0; }
+      .bot-state-strip > div:nth-child(-n + 2) { border-bottom: 1px solid var(--line); }
       header { align-items: flex-start; flex-direction: column; }
     }
 
@@ -4524,15 +4948,11 @@ _INDEX_HTML = """<!doctype html>
       min-width: 0;
     }
     .brand-mark {
-      display: grid;
       width: 36px;
       height: 36px;
-      place-items: center;
       border: 1px solid var(--accent);
       border-radius: 5px;
-      color: var(--accent);
-      font-size: 12px;
-      font-weight: 800;
+      object-fit: contain;
     }
     .brand-lockup h1 {
       margin: 0;
@@ -5292,7 +5712,7 @@ _INDEX_HTML = """<!doctype html>
 <body data-active-view="overview">
   <header class="app-header">
     <div class="brand-lockup">
-      <span class="brand-mark">PA</span>
+      <img class="brand-mark" src="/assets/app-icon.png" alt="PUBG AI">
       <div>
         <h1>PUBG AI</h1>
         <span>로컬 운영</span>
@@ -5355,13 +5775,13 @@ _INDEX_HTML = """<!doctype html>
         <label>원본 매치 저장 경로
           <span class="path-input-row">
             <input name="raw_data_dir" autocomplete="off" required>
-            <button class="secondary desktop-only path-picker" type="button" data-path-purpose="raw" data-path-input="raw_data_dir" title="Raw 저장 폴더 선택">찾기</button>
+            <button class="secondary desktop-only path-picker" type="button" data-path-purpose="raw" data-path-input="raw_data_dir" title="원본 저장 폴더 선택">찾기</button>
           </span>
         </label>
         <label>2D 리플레이 저장 경로
           <span class="path-input-row">
             <input name="replay_data_dir" autocomplete="off" required>
-            <button class="secondary desktop-only path-picker" type="button" data-path-purpose="replay" data-path-input="replay_data_dir" title="Replay 저장 폴더 선택">찾기</button>
+            <button class="secondary desktop-only path-picker" type="button" data-path-purpose="replay" data-path-input="replay_data_dir" title="리플레이 저장 폴더 선택">찾기</button>
           </span>
         </label>
         <label>삭제 백업 저장 경로
@@ -5515,9 +5935,15 @@ _INDEX_HTML = """<!doctype html>
         <tbody id="alertHistoryBody"></tbody>
       </table></div>
       <div class="dense-card-list" id="alertHistoryCards"></div>
-      <div class="detail-panel" id="alertHistoryDetail">
-        알림 이력을 선택하세요.
-      </div>
+      <dialog class="app-dialog" id="alertHistoryDialog" aria-labelledby="alertHistoryDialogTitle">
+        <div class="app-dialog-shell">
+          <header class="app-dialog-header">
+            <h3 id="alertHistoryDialogTitle">알림 상세</h3>
+            <button class="secondary app-dialog-close" type="button" id="alertHistoryDialogClose" title="상세 창 닫기" aria-label="알림 상세 창 닫기">×</button>
+          </header>
+          <div class="app-dialog-content" id="alertHistoryDetail">알림 상세를 불러오는 중입니다.</div>
+        </div>
+      </dialog>
     </section>
     <section id="collector-settings" data-view="collection">
       <h2>자동 수집 설정</h2>
@@ -5578,6 +6004,75 @@ _INDEX_HTML = """<!doctype html>
         <button type="submit">적용</button>
       </form>
       <div class="status" id="displaySettingsStatus" style="margin-top: 12px;">현재 표기 예시: <strong id="displayNumberPreview">59,452</strong></div>
+    </section>
+    <section id="discord-bot-manager" data-view="discord">
+      <h2>전용 Discord 봇</h2>
+      <div class="bot-state-strip" aria-live="polite">
+        <div><span>실행 상태</span><strong id="discordBotState">중지</strong></div>
+        <div><span>봇 계정</span><strong id="discordBotUser">-</strong></div>
+        <div><span>연결 서버</span><strong id="discordBotGuildCount">0개</strong></div>
+        <div><span>최근 동기화</span><strong id="discordBotLastSync">-</strong></div>
+      </div>
+      <form id="discordBotSettingsForm" class="discord-bot-settings-form">
+        <label class="switch-field">자동 시작
+          <span class="switch-control">
+            <input name="auto_start" type="checkbox">
+            <span aria-hidden="true"></span>
+          </span>
+        </label>
+        <label>접두사
+          <input name="command_prefix" value="!" maxlength="5" autocomplete="off" required>
+        </label>
+        <button type="submit">설정 저장</button>
+      </form>
+      <div class="actions bot-runtime-actions">
+        <button type="button" id="discordBotStart">시작</button>
+        <button class="secondary" type="button" id="discordBotStop">중지</button>
+        <button class="secondary" type="button" id="discordBotSyncAll">전체 서버 명령 동기화</button>
+      </div>
+      <div class="status" id="discordBotStatus">봇 상태 확인 중</div>
+
+      <h3>보안 키</h3>
+      <div class="bot-secret-grid">
+        <form id="pubgApiKeyForm">
+          <label>PUBG API 키
+            <input name="value" type="password" autocomplete="new-password" spellcheck="false" required>
+          </label>
+          <button type="submit">저장</button>
+          <button class="danger" type="button" id="pubgApiKeyClear">삭제</button>
+          <span class="status" id="pubgApiKeyStatus">확인 중</span>
+        </form>
+        <form id="discordTokenForm">
+          <label>Discord 봇 토큰
+            <input name="value" type="password" autocomplete="new-password" spellcheck="false" required>
+          </label>
+          <button type="submit">저장</button>
+          <button class="danger" type="button" id="discordTokenClear">삭제</button>
+          <span class="status" id="discordTokenStatus">확인 중</span>
+        </form>
+      </div>
+
+      <h3>서버별 명령 공개</h3>
+      <form id="discordBotGuildCommandsForm" class="discord-bot-guild-form">
+        <label>Discord 서버
+          <select name="guild_id" id="discordBotGuildSelect" class="discord-guild-select" data-empty-label="서버 선택" required>
+            <option value="">서버 선택</option>
+          </select>
+        </label>
+        <label>명령 찾기
+          <input id="discordBotCommandSearch" type="search" autocomplete="off" placeholder="전적, 추천, 알림">
+        </label>
+        <div class="actions bot-command-actions">
+          <button class="secondary" type="button" id="discordBotCommandsAll">전체 선택</button>
+          <button class="secondary" type="button" id="discordBotCommandsNone">전체 해제</button>
+          <button class="secondary" type="button" id="discordBotCommandsDefault">기본값</button>
+        </div>
+      </form>
+      <div id="discordBotCommandCatalog" class="command-catalog-grid"></div>
+      <div class="actions" style="margin-top: 10px;">
+        <button type="button" id="discordBotCommandsSave">저장 후 동기화</button>
+      </div>
+      <div class="status" id="discordBotCommandsStatus" style="margin-top: 10px;">서버를 선택하세요.</div>
     </section>
     <section id="discord-permissions" data-view="discord">
       <h2>Discord 권한</h2>
@@ -6316,8 +6811,11 @@ _INDEX_HTML = """<!doctype html>
               <option value="avg_fights">경기당 교전 수</option>
             </optgroup>
             <optgroup label="사격·생존">
-              <option value="accuracy">추정 명중률(일반 탄환)</option>
-              <option value="shots_hit">총 명중 횟수</option>
+              <option value="accuracy">명중률(캐릭터·차량)</option>
+              <option value="shots_hit">전체 명중 횟수</option>
+              <option value="character_hits">캐릭터 명중 횟수</option>
+              <option value="vehicle_hits">차량 명중 횟수</option>
+              <option value="vehicle_damage_dealt">차량에 가한 피해</option>
               <option value="headshot_hit_rate">헤드샷 명중 확률</option>
               <option value="headshot_hits">헤드샷 명중 횟수</option>
               <option value="headshot_rate">헤드샷 킬 비율</option>
@@ -6732,6 +7230,61 @@ _INDEX_HTML = """<!doctype html>
       </div>
       <div class="status" id="replayPlayerStatus" style="margin-top: 12px;">대기 중</div>
     </section>
+    <section id="flight-path-analysis" data-view="replay">
+      <h2>자주 나온 비행기 동선</h2>
+      <form id="flightPathForm" class="analysis-form">
+        <div class="query-primary">
+          <label>플랫폼
+            <select name="shard">
+              <option value="">전체</option>
+              <option value="steam">Steam</option>
+              <option value="kakao">Kakao</option>
+            </select>
+          </label>
+          <label>등록 유저
+            <select name="account_id" id="flightPathPlayerSelect">
+              <option value="">전체 등록 유저</option>
+            </select>
+          </label>
+          <label>맵
+            <select name="map_name" id="flightPathMapFilter" data-catalog-facet="maps">
+              <option value="">전체 맵</option>
+            </select>
+          </label>
+          <button type="submit">분석</button>
+          <button class="secondary" type="button" id="flightPathReset">초기화</button>
+        </div>
+        <details class="advanced-filters">
+          <summary>상세 필터와 군집 기준</summary>
+          <div class="filter-grid">
+            <label>게임 모드<select name="game_mode" data-catalog-facet="game_modes"><option value="">전체</option></select></label>
+            <label>팀 모드<select name="team_mode"><option value="">전체</option><option value="solo">솔로</option><option value="duo">듀오</option><option value="squad">스쿼드</option></select></label>
+            <label>시점<select name="perspective"><option value="">전체</option><option value="fpp">1인칭</option><option value="tpp">3인칭</option></select></label>
+            <label>매치 유형<select name="match_type" data-catalog-facet="match_types"><option value="">전체</option></select></label>
+            <label>시즌 상태<select name="season_state" data-catalog-facet="season_states"><option value="">전체</option></select></label>
+            <label>커스텀<select name="is_custom_match"><option value="">전체</option><option value="false">일반</option><option value="true">커스텀</option></select></label>
+            <label>연도<input name="year" type="number" min="2000" max="2100" inputmode="numeric"></label>
+            <label>분기<select name="quarter"><option value="">전체</option><option value="1">1분기</option><option value="2">2분기</option><option value="3">3분기</option><option value="4">4분기</option></select></label>
+            <label>월<select name="month"><option value="">전체</option><option value="1">1월</option><option value="2">2월</option><option value="3">3월</option><option value="4">4월</option><option value="5">5월</option><option value="6">6월</option><option value="7">7월</option><option value="8">8월</option><option value="9">9월</option><option value="10">10월</option><option value="11">11월</option><option value="12">12월</option></select></label>
+            <label>특정 일자 (KST)<input name="exact_date_kst" type="date"></label>
+            <label>시간대 (KST)<select name="hour"><option value="">전체</option></select></label>
+            <label>시작일 (KST)<input name="from_date_kst" type="date"></label>
+            <label>종료일 (KST)<input name="to_date_kst" type="date"></label>
+            <label>각도 묶음
+              <select name="angle_bin_degrees"><option value="5">5도</option><option value="10" selected>10도</option><option value="15">15도</option><option value="30">30도</option></select>
+            </label>
+            <label>항로 간격 묶음
+              <select name="offset_bin_m"><option value="250">250m</option><option value="500" selected>500m</option><option value="1000">1km</option><option value="2000">2km</option></select>
+            </label>
+            <label>맵별 상위 항로<input name="top_per_map" type="number" min="1" max="50" value="20" inputmode="numeric"></label>
+            <label>최근 원본 항로<input name="recent_limit" type="number" min="1" max="200" value="50" inputmode="numeric"></label>
+            <label>분석 최대 항로<input name="route_limit" type="number" min="100" max="100000" value="50000" inputmode="numeric"></label>
+          </div>
+        </details>
+      </form>
+      <div class="status" id="flightPathStatus">분석 대기 중</div>
+      <div id="flightPathResult" hidden></div>
+    </section>
     <section id="replay-artifacts" data-view="replay">
       <h2>2D 리플레이 저장 목록</h2>
       <form id="replayArtifactListForm" class="query-form">
@@ -6801,8 +7354,8 @@ _INDEX_HTML = """<!doctype html>
         <strong>저장 공간</strong>
       </div>
       <div class="rail-storage">
-        <div><span>RAW</span><strong id="railRawStorage">확인 중</strong></div>
-        <div><span>REPLAY</span><strong id="railReplayStorage">확인 중</strong></div>
+        <div><span>원본</span><strong id="railRawStorage">확인 중</strong></div>
+        <div><span>리플레이</span><strong id="railReplayStorage">확인 중</strong></div>
       </div>
       <div class="rail-header">
         <span>최근 상태</span>
@@ -6907,6 +7460,35 @@ _INDEX_HTML = """<!doctype html>
     const replayArtifactsBody = document.querySelector("#replayArtifactsBody");
     const replayArtifactsCards = document.querySelector("#replayArtifactsCards");
     const replayArtifactsStatus = document.querySelector("#replayArtifactsStatus");
+    const flightPathForm = document.querySelector("#flightPathForm");
+    const flightPathPlayerSelect = document.querySelector("#flightPathPlayerSelect");
+    const flightPathMapFilter = document.querySelector("#flightPathMapFilter");
+    const flightPathReset = document.querySelector("#flightPathReset");
+    const flightPathStatus = document.querySelector("#flightPathStatus");
+    const flightPathResult = document.querySelector("#flightPathResult");
+    const discordBotSettingsForm = document.querySelector("#discordBotSettingsForm");
+    const discordBotState = document.querySelector("#discordBotState");
+    const discordBotUser = document.querySelector("#discordBotUser");
+    const discordBotGuildCount = document.querySelector("#discordBotGuildCount");
+    const discordBotLastSync = document.querySelector("#discordBotLastSync");
+    const discordBotStatus = document.querySelector("#discordBotStatus");
+    const discordBotStart = document.querySelector("#discordBotStart");
+    const discordBotStop = document.querySelector("#discordBotStop");
+    const discordBotSyncAll = document.querySelector("#discordBotSyncAll");
+    const pubgApiKeyForm = document.querySelector("#pubgApiKeyForm");
+    const pubgApiKeyClear = document.querySelector("#pubgApiKeyClear");
+    const pubgApiKeyStatus = document.querySelector("#pubgApiKeyStatus");
+    const discordTokenForm = document.querySelector("#discordTokenForm");
+    const discordTokenClear = document.querySelector("#discordTokenClear");
+    const discordTokenStatus = document.querySelector("#discordTokenStatus");
+    const discordBotGuildSelect = document.querySelector("#discordBotGuildSelect");
+    const discordBotCommandSearch = document.querySelector("#discordBotCommandSearch");
+    const discordBotCommandCatalog = document.querySelector("#discordBotCommandCatalog");
+    const discordBotCommandsAll = document.querySelector("#discordBotCommandsAll");
+    const discordBotCommandsNone = document.querySelector("#discordBotCommandsNone");
+    const discordBotCommandsDefault = document.querySelector("#discordBotCommandsDefault");
+    const discordBotCommandsSave = document.querySelector("#discordBotCommandsSave");
+    const discordBotCommandsStatus = document.querySelector("#discordBotCommandsStatus");
     const discordGrantForm = document.querySelector("#discordGrantForm");
     const discordPermissionsBody = document.querySelector("#discordPermissionsBody");
     const discordPermissionGroup = document.querySelector("#discordPermissionGroup");
@@ -6945,6 +7527,8 @@ _INDEX_HTML = """<!doctype html>
     const alertHistoryPrev = document.querySelector("#alertHistoryPrev");
     const alertHistoryNext = document.querySelector("#alertHistoryNext");
     const alertHistoryPresetButtons = document.querySelectorAll("[data-alert-history-preset]");
+    const alertHistoryDialog = document.querySelector("#alertHistoryDialog");
+    const alertHistoryDialogClose = document.querySelector("#alertHistoryDialogClose");
     const alertHistoryDetail = document.querySelector("#alertHistoryDetail");
     const collectorSettingsForm = document.querySelector("#collectorSettingsForm");
     const collectorSettingsStatus = document.querySelector("#collectorSettingsStatus");
@@ -7070,6 +7654,20 @@ _INDEX_HTML = """<!doctype html>
     let activeDiscordCommandCatalog = [];
     let reservedDiscordCommandGroups = new Set();
     let selectedDiscordGroupCommands = new Set();
+    let activeDiscordBotSettings = {
+      auto_start: false,
+      command_prefix: "!",
+      guild_enabled_commands: {},
+      updated_at: null,
+    };
+    let activeDiscordBotState = {
+      state: "stopped",
+      running: false,
+      ready: false,
+      guild_count: 0,
+    };
+    let selectedDiscordBotCommands = new Set();
+    let discordBotGuildUsesDefault = true;
     let activeAlertChannelIds = new Set();
     const alertChannelCatalog = new Map();
     let rankingGuildPrefill = "";
@@ -7146,8 +7744,8 @@ _INDEX_HTML = """<!doctype html>
       },
       discord: {
         eyebrow: "DISCORD 관리",
-        title: "Discord 권한",
-        description: "서버별 명령 권한, 관리자와 랭킹 범위를 관리합니다.",
+        title: "Discord 봇",
+        description: "전용 봇 실행, 서버별 공개 명령, 사용자 권한과 랭킹 범위를 관리합니다.",
       },
       operations: {
         eyebrow: "운영 센터",
@@ -7177,6 +7775,7 @@ _INDEX_HTML = """<!doctype html>
       ],
       replay: [
         { key: "player", label: "2D 재생", ids: ["replay-player"] },
+        { key: "flight-paths", label: "비행기 동선", ids: ["flight-path-analysis"] },
         { key: "artifacts", label: "저장 목록", ids: ["replay-artifacts"] },
         { key: "regions", label: "지역 확인", ids: ["map-region-lookup"] },
       ],
@@ -7199,6 +7798,7 @@ _INDEX_HTML = """<!doctype html>
         },
       ],
       discord: [
+        { key: "bot", label: "전용 봇", ids: ["discord-bot-manager"] },
         {
           key: "permissions",
           label: "명령 권한",
@@ -7350,7 +7950,7 @@ _INDEX_HTML = """<!doctype html>
         if (!input) throw new Error("저장 경로 입력란을 찾을 수 없습니다.");
         input.value = result.path;
         input.dispatchEvent(new Event("input", { bubbles: true }));
-        storageSettingsStatus.textContent = "선택한 경로를 적용하려면 Save를 누르세요.";
+        storageSettingsStatus.textContent = "선택한 경로를 적용하려면 저장 버튼을 누르세요.";
         banner.textContent = result.path + " 선택됨";
       } finally {
         button.disabled = false;
@@ -7369,7 +7969,7 @@ _INDEX_HTML = """<!doctype html>
           loadJobs(),
           loadTelemetryJobs(),
         ]),
-        discord: () => Promise.all([loadDiscordPermissions(), loadDiscordScopes(), loadDiscordGuilds()]),
+        discord: () => Promise.all([loadDiscordBot(), loadDiscordPermissions(), loadDiscordScopes(), loadDiscordGuilds()]),
         operations: () => Promise.all([
           loadAlerts(),
           loadOperationalDrills(),
@@ -7564,8 +8164,8 @@ _INDEX_HTML = """<!doctype html>
         cell("원본 데이터", `매치 ${formatInteger(operations.raw_matches || 0)} · 텔레메트리 ${formatInteger(operations.raw_telemetry || 0)}`),
         cell("2D 결과", `스냅샷 ${formatInteger(operations.map_snapshots || 0)} · 타임라인 ${formatInteger(operations.timelines || 0)}`),
         cell("실패 작업", `${formatInteger(operations.failed_jobs || 0)}건`),
-        cell("PUBG API Key", settings.secrets.PUBG_API_KEY.configured ? "설정됨" : "없음"),
-        cell("Discord Token", settings.secrets.DISCORD_BOT_TOKEN.configured ? "설정됨" : "없음"),
+        cell("PUBG API 키", settings.secrets.PUBG_API_KEY.configured ? "설정됨" : "없음"),
+        cell("Discord 봇 토큰", settings.secrets.DISCORD_BOT_TOKEN.configured ? "설정됨" : "없음"),
         cell("원본 저장소", escapeHtml(storageRailText(settings.storage_status?.raw_data_dir))),
         cell("2D 저장소", escapeHtml(storageRailText(settings.storage_status?.replay_data_dir))),
         cell("백업 저장소", escapeHtml(storageRailText(settings.storage_status?.backup_data_dir))),
@@ -7745,9 +8345,9 @@ _INDEX_HTML = """<!doctype html>
       alertSettingsForm.elements.worker_error_alerts_enabled.value = settings.worker_error_alerts_enabled === false ? "false" : "true";
       alertSettingsStatus.textContent = [
         `최소 여유 ${formatBytes(Number(settings.minimum_free_bytes || 0))}`,
-        `알림 채널 ${(settings.discord_channel_ids || []).length}개`,
-        `활성 경고 ${(payload.alerts || []).length}건`,
-        `전체 이력 ${payload.alert_history_page?.total ?? (payload.alert_history || []).length}건`,
+        `알림 채널 ${formatInteger((settings.discord_channel_ids || []).length)}개`,
+        `활성 경고 ${formatInteger((payload.alerts || []).length)}건`,
+        `전체 이력 ${formatInteger(payload.alert_history_page?.total ?? (payload.alert_history || []).length)}건`,
       ].join(" · ");
       renderAlerts(payload.alerts || []);
       if (renderHistory) {
@@ -7778,7 +8378,7 @@ _INDEX_HTML = """<!doctype html>
         `).join("")
         : '<span class="result-caption">선택된 알림 채널 없음</span>';
       alertDiscordChannelsStatus.textContent = ids.length
-        ? `저장 대상 ${ids.length}개 채널`
+        ? `저장 대상 ${formatInteger(ids.length)}개 채널`
         : "선택된 알림 채널 없음";
     }
 
@@ -7789,7 +8389,7 @@ _INDEX_HTML = """<!doctype html>
       if (!guildId) {
         alertDiscordChannelSelect.innerHTML = '<option value="">서버 선택 필요</option>';
         alertDiscordChannelsStatus.textContent = activeAlertChannelIds.size
-          ? `저장 대상 ${activeAlertChannelIds.size}개 채널`
+          ? `저장 대상 ${formatInteger(activeAlertChannelIds.size)}개 채널`
           : "선택된 알림 채널 없음";
         return;
       }
@@ -7835,6 +8435,7 @@ _INDEX_HTML = """<!doctype html>
             <td>
               <div class="actions">
                 ${alertWorkerRunButton(alert)}
+                <button class="secondary" type="button" data-alert-detail-id="${attr(alert.id)}">상세</button>
                 <button type="button" data-alert-action="acknowledge" data-alert-id="${attr(alert.id)}">확인</button>
                 <button class="secondary" type="button" data-alert-action="snooze" data-alert-id="${attr(alert.id)}">1시간 숨김</button>
               </div>
@@ -8049,6 +8650,7 @@ _INDEX_HTML = """<!doctype html>
     }
 
     async function loadAlertHistoryDetail(alert, noteType = activeAlertHistoryNoteType, focusEditor = false) {
+      openAlertHistoryDialog();
       activeAlertHistoryDetailId = alert.id;
       activeAlertHistoryDetailAlert = alert;
       activeAlertHistoryNoteType = noteType === "resolution" ? "resolution" : "note";
@@ -8063,6 +8665,7 @@ _INDEX_HTML = """<!doctype html>
     }
 
     async function loadAlertHistoryDetailById(alertId, noteType = activeAlertHistoryNoteType, focusEditor = false) {
+      openAlertHistoryDialog();
       activeAlertHistoryDetailId = alertId;
       activeAlertHistoryNoteType = noteType === "resolution" ? "resolution" : "note";
       alertHistoryDetail.innerHTML = `<div class="status">알림 #${escapeHtml(alertId)} 상세를 불러오는 중...</div>`;
@@ -8084,7 +8687,14 @@ _INDEX_HTML = """<!doctype html>
       const alertId = params.get("alert_id") || params.get("alert");
       if (!alertId) return;
       await loadAlertHistoryDetailById(alertId);
-      alertHistoryDetail.scrollIntoView({ block: "start" });
+    }
+
+    function openAlertHistoryDialog() {
+      if (!alertHistoryDialog.open) alertHistoryDialog.showModal();
+    }
+
+    function closeAlertHistoryDialog() {
+      if (alertHistoryDialog.open) alertHistoryDialog.close();
     }
 
     function loadInitialAlertHistoryFiltersFromUrl() {
@@ -8312,6 +8922,132 @@ _INDEX_HTML = """<!doctype html>
       return Number(value || 0) / 1024 / 1024 / 1024;
     }
 
+    function discordBotStateLabel(value) {
+      return {
+        stopped: "중지",
+        starting: "시작 중",
+        connecting: "연결 중",
+        running: "실행 중",
+        reconnecting: "재연결 중",
+        stopping: "종료 중",
+        error: "오류",
+      }[String(value || "")] || String(value || "-");
+    }
+
+    function renderDiscordBotState(payload = {}) {
+      activeDiscordBotState = payload.bot || activeDiscordBotState;
+      const running = Boolean(activeDiscordBotState.running);
+      discordBotState.textContent = discordBotStateLabel(activeDiscordBotState.state);
+      discordBotUser.textContent = activeDiscordBotState.bot_user || "-";
+      discordBotGuildCount.textContent = `${formatInteger(activeDiscordBotState.guild_count || 0)}개`;
+      discordBotLastSync.textContent = activeDiscordBotState.last_sync_at_kst
+        ? formatKstShort(activeDiscordBotState.last_sync_at_kst)
+        : "-";
+      discordBotStart.disabled = running;
+      discordBotStop.disabled = !running;
+      discordBotSyncAll.disabled = !activeDiscordBotState.ready;
+      if (Object.prototype.hasOwnProperty.call(payload, "pubg_api_configured")) {
+        pubgApiKeyStatus.textContent = payload.pubg_api_configured ? "설정됨" : "설정되지 않음";
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, "configured")) {
+        discordTokenStatus.textContent = payload.configured ? "설정됨" : "설정되지 않음";
+      }
+      const statusParts = [
+        discordBotStateLabel(activeDiscordBotState.state),
+        `접두사 ${activeDiscordBotSettings.command_prefix || "!"}`,
+        `서버 ${formatInteger(activeDiscordBotState.guild_count || 0)}개`,
+      ];
+      if (activeDiscordBotState.last_error) statusParts.push(`오류: ${activeDiscordBotState.last_error}`);
+      discordBotStatus.textContent = statusParts.join(" · ");
+      if (running || Object.prototype.hasOwnProperty.call(payload, "configured")) {
+        setRailStatus(
+          railDiscord,
+          running ? "봇 실행 중" : (payload.configured ? "토큰 설정됨" : "토큰 없음"),
+          running || payload.configured ? "ok" : "error",
+        );
+      }
+    }
+
+    function applyDiscordBotSettingsForm() {
+      discordBotSettingsForm.elements.auto_start.checked = Boolean(activeDiscordBotSettings.auto_start);
+      discordBotSettingsForm.elements.command_prefix.value = activeDiscordBotSettings.command_prefix || "!";
+    }
+
+    async function loadDiscordBot() {
+      const [statusPayload, settingsPayload] = await Promise.all([
+        requestJson("/discord/bot/status", "GET"),
+        requestJson("/discord/bot/settings", "GET"),
+      ]);
+      activeDiscordBotSettings = settingsPayload.discord_bot || statusPayload.settings || activeDiscordBotSettings;
+      if (!activeDiscordBotSettings.guild_enabled_commands) activeDiscordBotSettings.guild_enabled_commands = {};
+      if ((settingsPayload.command_catalog || []).length) {
+        activeDiscordCommandCatalog = settingsPayload.command_catalog;
+      }
+      applyDiscordBotSettingsForm();
+      renderDiscordBotState(statusPayload);
+      loadDiscordBotGuildSelection();
+    }
+
+    async function saveActiveDiscordBotSettings(settings = activeDiscordBotSettings) {
+      const payload = await postJson("/discord/bot/settings", {
+        auto_start: Boolean(settings.auto_start),
+        command_prefix: String(settings.command_prefix || "!"),
+        guild_enabled_commands: settings.guild_enabled_commands || {},
+      });
+      activeDiscordBotSettings = payload.discord_bot;
+      applyDiscordBotSettingsForm();
+      renderDiscordBotState({ bot: payload.bot });
+      return payload;
+    }
+
+    function loadDiscordBotGuildSelection() {
+      const guildId = String(discordBotGuildSelect.value || "");
+      const configured = activeDiscordBotSettings.guild_enabled_commands || {};
+      if (!guildId) {
+        selectedDiscordBotCommands = new Set();
+        discordBotGuildUsesDefault = true;
+        renderDiscordBotCommandCatalog();
+        return;
+      }
+      discordBotGuildUsesDefault = !Object.prototype.hasOwnProperty.call(configured, guildId);
+      selectedDiscordBotCommands = new Set(
+        discordBotGuildUsesDefault
+          ? activeDiscordCommandCatalog.map((command) => command.name)
+          : configured[guildId] || [],
+      );
+      renderDiscordBotCommandCatalog();
+    }
+
+    function renderDiscordBotCommandCatalog() {
+      const guildId = String(discordBotGuildSelect.value || "");
+      const search = String(discordBotCommandSearch.value || "").trim().toLocaleLowerCase();
+      const commands = activeDiscordCommandCatalog.filter((command) => (
+        !search
+        || [command.name, command.label, command.description, ...(command.aliases || [])]
+          .some((value) => String(value || "").toLocaleLowerCase().includes(search))
+      ));
+      discordBotCommandCatalog.innerHTML = guildId
+        ? commands.map((command) => `
+          <label class="command-choice">
+            <input type="checkbox" value="${attr(command.name)}" ${selectedDiscordBotCommands.has(command.name) ? "checked" : ""}>
+            <span>
+              <strong>${escapeHtml(command.label)} · /${escapeHtml(command.name)}</strong>
+              <small>${escapeHtml(command.description)}</small>
+            </span>
+          </label>
+        `).join("") || '<span class="result-caption">조건에 맞는 명령이 없습니다.</span>'
+        : '<span class="result-caption">Discord 서버를 선택하세요.</span>';
+      discordBotCommandsSave.disabled = !guildId;
+      discordBotCommandsStatus.textContent = guildId
+        ? [
+            discordGuildName(guildId),
+            discordBotGuildUsesDefault ? "기본값 · 전체 공개" : "사용자 설정",
+            `선택 ${formatInteger(selectedDiscordBotCommands.size)}/${formatInteger(activeDiscordCommandCatalog.length)}개`,
+            `검색 결과 ${formatInteger(commands.length)}개`,
+          ].join(" · ")
+        : "서버를 선택하세요.";
+    }
+
     async function loadDiscordPermissions() {
       const response = await fetch("/discord/permissions");
       const payload = await response.json();
@@ -8322,7 +9058,7 @@ _INDEX_HTML = """<!doctype html>
       reservedDiscordCommandGroups = new Set(payload.reserved_groups || []);
       const groupNames = Object.keys(settings.command_groups || {}).sort();
       discordPermissionGroup.innerHTML = groupNames.map((group) => (
-        `<option value="${attr(group)}">${escapeHtml(group)} · ${canonicalCommandsForGroup(group).length}개 명령</option>`
+        `<option value="${attr(group)}">${escapeHtml(group)} · ${formatInteger(canonicalCommandsForGroup(group).length)}개 명령</option>`
       )).join("");
       if (discordSettingsPrefill.permission_group) {
         setFormElementValue(discordGrantForm, "group", discordSettingsPrefill.permission_group);
@@ -8375,7 +9111,7 @@ _INDEX_HTML = """<!doctype html>
         <tr>
           <td>${escapeHtml(scopeLabel)}${row.guildId ? `<br><span class="result-caption">${escapeHtml(row.guildId)}</span>` : ""}</td>
           <td>${escapeHtml(row.userId)}</td>
-          <td><strong>${escapeHtml(row.group)}</strong><br><span class="result-caption">${commandCount}개 명령</span></td>
+          <td><strong>${escapeHtml(row.group)}</strong><br><span class="result-caption">${formatInteger(commandCount)}개 명령</span></td>
           <td>
             <div class="actions">
               <button
@@ -8434,7 +9170,7 @@ _INDEX_HTML = """<!doctype html>
           </span>
         </label>
       `).join("") || '<span class="result-caption">조건에 맞는 명령이 없습니다.</span>';
-      discordCommandGroupStatus.textContent = `전체 ${activeDiscordCommandCatalog.length}개 · 선택 ${selectedDiscordGroupCommands.size}개 · 표시 ${commands.length}개`;
+      discordCommandGroupStatus.textContent = `전체 ${formatInteger(activeDiscordCommandCatalog.length)}개 · 선택 ${formatInteger(selectedDiscordGroupCommands.size)}개 · 표시 ${formatInteger(commands.length)}개`;
     }
 
     function discordGroupGrantCount(group) {
@@ -8461,7 +9197,7 @@ _INDEX_HTML = """<!doctype html>
           <tr>
             <td><strong>${escapeHtml(group)}</strong><br><span class="result-caption">${reserved ? "기본 · 읽기 전용" : "사용자 정의"}</span></td>
             <td><div class="result-chip-list">${commandChips || '<span class="result-caption">명령 없음</span>'}</div></td>
-            <td>${discordGroupGrantCount(group)}명</td>
+            <td>${formatInteger(discordGroupGrantCount(group))}명</td>
             <td><div class="actions">
               <button class="secondary" type="button" data-discord-group-action="${reserved ? "clone" : "edit"}" data-group="${attr(group)}">${reserved ? "복제" : "수정"}</button>
               ${reserved ? "" : `<button class="danger" type="button" data-discord-group-action="delete" data-group="${attr(group)}">삭제</button>`}
@@ -8544,7 +9280,7 @@ _INDEX_HTML = """<!doctype html>
       const name = guild.name || `이름 미확인 서버 · ${String(guild.guild_id).slice(-6)}`;
       const playerCount = Number(guild.registered_player_count || 0);
       const scope = guild.ranking_scope === "global" ? "전체 범위" : "서버 범위";
-      return `${name} · 등록 ${playerCount}명 · ${scope}`;
+      return `${name} · 등록 ${formatInteger(playerCount)}명 · ${scope}`;
     }
 
     async function loadDiscordGuilds({ sync = false } = {}) {
@@ -8576,6 +9312,7 @@ _INDEX_HTML = """<!doctype html>
       discordSettingsPrefill.permission_guild_id = "";
       discordSettingsPrefill.scope_guild_id = "";
       renderDiscordScopes();
+      loadDiscordBotGuildSelection();
       if (registeredPlayers.length) renderPlayersTable();
     }
 
@@ -8681,6 +9418,15 @@ _INDEX_HTML = """<!doctype html>
       ].join("");
       if ([...replayArtifactPlayerSelect.options].some((option) => option.value === selectedAccountId)) {
         replayArtifactPlayerSelect.value = selectedAccountId;
+      }
+      const selectedFlightAccountId = flightPathPlayerSelect.value;
+      flightPathPlayerSelect.innerHTML = replayArtifactPlayerSelect.innerHTML;
+      for (const option of flightPathPlayerSelect.options) {
+        const player = registeredPlayers.find((item) => item.account_id === option.value);
+        if (player) option.dataset.shard = player.shard;
+      }
+      if ([...flightPathPlayerSelect.options].some((option) => option.value === selectedFlightAccountId)) {
+        flightPathPlayerSelect.value = selectedFlightAccountId;
       }
     }
 
@@ -9000,7 +9746,7 @@ _INDEX_HTML = """<!doctype html>
         <tr${highlighted ? ' class="linked-row"' : ""}>
           <td>
             <span class="registry-player-name">${escapeHtml(player.current_name)}</span>
-            <span class="registry-player-meta">${escapeHtml(player.shard)} · ${escapeHtml(player.account_id)}</span>
+            <span class="registry-player-meta">${escapeHtml(displayCode(player.shard, "shard"))} · ${escapeHtml(player.account_id)}</span>
           </td>
           <td><button class="${player.active ? "secondary" : ""} registry-state-button" type="button" data-player-management="active" data-next-value="${String(!player.active)}" data-shard="${attr(player.shard)}" data-account-id="${attr(player.account_id)}">${player.active ? "수집 중" : "수집 중지"}</button></td>
           <td><button class="${player.public_profile ? "secondary" : ""} registry-state-button" type="button" data-player-management="public_profile" data-next-value="${String(!player.public_profile)}" data-shard="${attr(player.shard)}" data-account-id="${attr(player.account_id)}">${player.public_profile ? "공개" : "비공개"}</button></td>
@@ -9392,7 +10138,7 @@ _INDEX_HTML = """<!doctype html>
           <td>${escapeHtml(operation.sequence)}</td>
           <td>${escapeHtml(operation.phase)}</td>
           <td>${escapeHtml(operation.table)}</td>
-          <td>${escapeHtml(operation.estimated_rows)}</td>
+          <td>${Number.isFinite(Number(operation.estimated_rows)) ? formatInteger(operation.estimated_rows) : escapeHtml(operationValueLabel(operation.estimated_rows))}</td>
           <td>${escapeHtml(JSON.stringify(operation.selector || {}))}</td>
         </tr>`).join("") || `<tr><td colspan="5">예정된 데이터베이스 작업이 없습니다.</td></tr>`;
       const fileRows = (plan.file_operations || []).map((operation) => `
@@ -9414,13 +10160,13 @@ _INDEX_HTML = """<!doctype html>
         <tr>
           <td>데이터베이스</td>
           <td>${escapeHtml(item.table)}</td>
-          <td>${escapeHtml(item.row_count)}</td>
+          <td>${formatInteger(item.row_count)}</td>
           <td>${escapeHtml(item.reason)}</td>
         </tr>`).join("") + (plan.file_exclusions || []).map((item) => `
         <tr>
           <td>파일</td>
           <td>${escapeHtml(item.category)}</td>
-          <td>${escapeHtml(item.file_count)}</td>
+          <td>${formatInteger(item.file_count)}</td>
           <td>${escapeHtml(item.reason)}</td>
         </tr>`).join("");
       const historyRows = (state.plans || []).map((item) => `
@@ -10798,6 +11544,8 @@ _INDEX_HTML = """<!doctype html>
         ["가한 / 당한 기절", "dbnos_caused", `${formatInteger(combat.dbnos_caused)} / ${formatInteger(combat.dbnos_taken)}`],
         ["준 / 받은 피해", "damage_dealt", `${formatNumber(combat.damage_dealt, 1)} / ${formatNumber(combat.damage_taken, 1)}`],
         ["발사 / 명중", "shots_fired", `${formatInteger(combat.shots_fired)} / ${formatInteger(combat.shots_hit)}`],
+        ["캐릭터 / 차량 명중", "shots_hit", hitTargetEvidence(combat)],
+        ["차량에 가한 피해", "vehicle_damage_dealt", formatNumber(combat.vehicle_damage_dealt, 1)],
         ["헤드샷 명중 / 피격", "headshot_hits", `${formatInteger(combat.headshot_hits)} / ${formatInteger(combat.headshot_hits_taken)}`],
         ["교전 승 / 패", "fight_count", `${formatInteger(combat.fight_wins)} / ${formatInteger(combat.fight_losses)}`],
       ].map(([label, key, value]) => [label, key, value]))
@@ -10885,7 +11633,7 @@ _INDEX_HTML = """<!doctype html>
       const dimension = intelligenceBreakdownDimension.value || "maps";
       const metric = intelligenceTrendMetric.value || "win_rate";
       const activityMetric = ["avg_heal_amount", "avg_revives_caused", "avg_throwable_uses"].includes(metric);
-      const breakdownCategories = { game_modes: "game_mode", team_modes: "team_mode", perspectives: "perspective", match_types: "match_type", season_states: "season_state" };
+      const breakdownCategories = { maps: "map", game_modes: "game_mode", team_modes: "team_mode", perspectives: "perspective", match_types: "match_type", season_states: "season_state" };
       const rows = (report.breakdowns?.[dimension] || []).filter((row) => (
         !activityMetric || Number(row.activity_covered_matches || 0) > 0
       )).map((row) => ({
@@ -11030,7 +11778,9 @@ _INDEX_HTML = """<!doctype html>
         ["평균 생존", minutes(totals.avg_survival_seconds)],
         ["평균 이동", distanceKm(totals.avg_movement_distance_m)],
         ["명중 확률", accuracyBreakdownText(totals.accuracy, totals.accuracy_breakdown)],
-        ["헤드샷 명중 확률", `${percent(totals.headshot_hit_rate)} · ${formatInteger(totals.headshot_hits)}/${formatInteger(totals.shots_hit)}명중`],
+        ["헤드샷 명중 확률", `${percent(totals.headshot_hit_rate)} · ${formatInteger(totals.headshot_hits)}/${formatInteger(characterHitCount(totals))} 캐릭터 명중`],
+        ["캐릭터 / 차량 명중", hitTargetEvidence(totals)],
+        ["차량에 가한 피해", formatNumber(totals.vehicle_damage_dealt, 1)],
         ["헤드샷 킬 비율", `${percent(totals.headshot_kill_rate)} · ${formatInteger(totals.headshot_kills)}/${formatInteger(totals.kills)}킬`],
         ["교전 승리 확률", fightMetricsAvailable
           ? `${percent(fightTotals.fight_win_rate)} · ${formatInteger(fightTotals.wins)}/${formatInteger(fightTotals.fight_count)}교전`
@@ -11205,7 +11955,8 @@ _INDEX_HTML = """<!doctype html>
           ["KDA", formatNumber(totals.kda, 2)],
           ["평균 딜", formatNumber(totals.avg_damage_dealt, 1)],
           ["명중 지표", accuracyBreakdownText(totals.accuracy, totals.accuracy_breakdown)],
-          ["헤드샷 명중 확률", `${percent(totals.headshot_hit_rate)} · ${formatInteger(totals.headshot_hits)}/${formatInteger(totals.shots_hit)}명중`],
+          ["헤드샷 명중 확률", `${percent(totals.headshot_hit_rate)} · ${formatInteger(totals.headshot_hits)}/${formatInteger(characterHitCount(totals))} 캐릭터 명중`],
+          ["캐릭터 / 차량 명중", hitTargetEvidence(totals)],
           ["헤드샷 킬 비율", `${percent(totals.headshot_kill_rate)} · ${formatInteger(totals.headshot_kills)}/${formatInteger(totals.kills)}킬`],
           ["교전 승리 확률", `${percent(totals.fight_win_rate)} · ${formatInteger(totals.fight_wins)}/${formatInteger(totals.fight_count)}교전`],
           ["경기당 평균 교전", `${formatNumber(totals.avg_fights_per_match, 2)}회`],
@@ -11223,7 +11974,7 @@ _INDEX_HTML = """<!doctype html>
           <td>${formatNumber(bucket.avg_kills, 2)} / ${formatNumber(bucket.avg_dbnos_caused, 2)}</td>
           <td>${formatNumber(bucket.avg_damage_dealt, 1)} / ${formatNumber(bucket.avg_damage_taken, 1)}</td>
           <td>${accuracyBreakdownText(bucket.accuracy, bucket.accuracy_breakdown)}</td>
-          <td>${percent(bucket.headshot_hit_rate)}<br><span class="status">${formatInteger(bucket.headshot_hits)}/${formatInteger(bucket.shots_hit)}명중</span></td>
+          <td>${percent(bucket.headshot_hit_rate)}<br><span class="status">${formatInteger(bucket.headshot_hits)}/${formatInteger(characterHitCount(bucket))} 캐릭터 명중 · 차량 ${formatInteger(bucket.vehicle_hits)}회</span></td>
           <td>${percent(bucket.fight_win_rate)}<br><span class="status">${formatInteger(bucket.fight_wins)}/${formatInteger(bucket.fight_count)} · 경기당 ${formatNumber(bucket.avg_fights_per_match, 2)}회</span></td>
           <td>${formatInteger(bucket.dbnos_caused)} / ${formatInteger(bucket.dbnos_taken)}</td>
           <td>${minutes(bucket.avg_survival_seconds)}</td>
@@ -11238,7 +11989,8 @@ _INDEX_HTML = """<!doctype html>
             <div><dt>K/D/A · KDA</dt><dd>${formatInteger(bucket.kills)}/${formatInteger(bucket.deaths)}/${formatInteger(bucket.assists)} · ${formatNumber(bucket.kda, 2)}</dd></div>
             <div><dt>경기당 킬 / 기절</dt><dd>${formatNumber(bucket.avg_kills, 2)} / ${formatNumber(bucket.avg_dbnos_caused, 2)}</dd></div>
             <div><dt>평균 딜 / 받은 딜</dt><dd>${formatNumber(bucket.avg_damage_dealt, 1)} / ${formatNumber(bucket.avg_damage_taken, 1)}</dd></div>
-            <div><dt>헤드샷 명중 확률</dt><dd>${percent(bucket.headshot_hit_rate)} · ${formatInteger(bucket.headshot_hits)}/${formatInteger(bucket.shots_hit)}</dd></div>
+            <div><dt>헤드샷 명중 확률</dt><dd>${percent(bucket.headshot_hit_rate)} · ${formatInteger(bucket.headshot_hits)}/${formatInteger(characterHitCount(bucket))} 캐릭터 명중</dd></div>
+            <div><dt>차량 명중 / 피해</dt><dd>${formatInteger(bucket.vehicle_hits)}회 / ${formatNumber(bucket.vehicle_damage_dealt, 1)}</dd></div>
             <div><dt>교전 승리 확률</dt><dd>${percent(bucket.fight_win_rate)} · ${formatInteger(bucket.fight_wins)}/${formatInteger(bucket.fight_count)}</dd></div>
             <div><dt>경기당 교전</dt><dd>${formatNumber(bucket.avg_fights_per_match, 2)}회</dd></div>
             <div><dt>기절 +/-</dt><dd>${formatInteger(bucket.dbnos_caused)} / ${formatInteger(bucket.dbnos_taken)}</dd></div>
@@ -11322,7 +12074,7 @@ _INDEX_HTML = """<!doctype html>
       if (!Number.isFinite(previous)) return "비교 구간 없음";
       const difference = current - previous;
       const sign = difference > 0 ? "+" : "";
-      if (definition.percentage) return sign + (difference * 100).toFixed(1) + "%p";
+      if (definition.percentage) return sign + formatNumber(difference * 100, 1) + "%p";
       return sign + definition.format(difference);
     }
 
@@ -11330,8 +12082,8 @@ _INDEX_HTML = """<!doctype html>
       if (definition.percentage) {
         const percentage = value * 100;
         return percentage < 10 && percentage > 0
-          ? percentage.toFixed(1) + "%"
-          : percentage.toFixed(0) + "%";
+          ? formatNumber(percentage, 1) + "%"
+          : formatNumber(percentage, 0) + "%";
       }
       return definition.format(value);
     }
@@ -11578,7 +12330,7 @@ _INDEX_HTML = """<!doctype html>
         </div>`;
       }).join("");
       const tableRows = buckets.filter((bucket) => bucket.match_count > 0).map((bucket) => `
-        <tr><td>${escapeHtml(bucket.period_label)}</td><td>${formatInteger(bucket.match_count)}</td><td>${formatInteger(bucket.wins)} · ${percent(bucket.win_rate)}</td><td>${formatNumber(bucket.avg_damage_dealt, 1)}</td><td>${percent(bucket.accuracy)} · ${formatInteger(bucket.shots_hit)}/${formatInteger(bucket.shots_fired)}</td><td>${percent(bucket.headshot_hit_rate)} · ${formatInteger(bucket.headshot_hits)}/${formatInteger(bucket.shots_hit)}</td><td>${percent(bucket.fight_win_rate)} · ${formatInteger(bucket.fight_wins)}/${formatInteger(bucket.fight_count)}</td></tr>
+        <tr><td>${escapeHtml(bucket.period_label)}</td><td>${formatInteger(bucket.match_count)}</td><td>${formatInteger(bucket.wins)} · ${percent(bucket.win_rate)}</td><td>${formatNumber(bucket.avg_damage_dealt, 1)}</td><td>${percent(bucket.accuracy)} · ${formatInteger(bucket.shots_hit)}/${formatInteger(bucket.shots_fired)}</td><td>${percent(bucket.headshot_hit_rate)} · ${formatInteger(bucket.headshot_hits)}/${formatInteger(characterHitCount(bucket))}</td><td>${percent(bucket.fight_win_rate)} · ${formatInteger(bucket.fight_wins)}/${formatInteger(bucket.fight_count)}</td></tr>
       `).join("") || '<tr><td colspan="7">조건에 맞는 완료 경기가 없습니다.</td></tr>';
       timeInsightBody.innerHTML = `<div class="result-shell">
         ${resultHeading(activeTimeInsightReport.player.current_name, `KST · ${definition.label}`, `${formatInteger(activeTimeInsightReport.totals.match_count)}경기`)}
@@ -11654,7 +12406,7 @@ _INDEX_HTML = """<!doctype html>
 
     function updateComparisonSelectionCount() {
       const checked = [...comparisonItemPicker.querySelectorAll('input[name="comparison_item"]:checked')];
-      comparisonSelectionCount.textContent = `${checked.length}/5`;
+      comparisonSelectionCount.textContent = `${formatInteger(checked.length)}/${formatInteger(5)}`;
       for (const input of comparisonItemPicker.querySelectorAll('input[name="comparison_item"]:not(:checked)')) {
         input.disabled = checked.length >= 5;
       }
@@ -12013,7 +12765,9 @@ _INDEX_HTML = """<!doctype html>
           ["준 딜 / 받은 딜", `${formatNumber(totals.damage_dealt, 0)} / ${formatNumber(totals.damage_taken, 0)}`],
           ["경기당 평균 딜", formatNumber(totals.avg_damage_dealt, 1)],
           ["명중 지표", `${accuracyMetricText(totals.accuracy, totals.accuracy_metric)} · ${formatInteger(totals.shots_hit)}/${formatInteger(totals.shots_fired)}`],
-          ["헤드샷 명중 확률", `${percent(totals.headshot_hit_rate)} · ${formatInteger(totals.headshot_hits)}/${formatInteger(totals.shots_hit)}명중`],
+          ["헤드샷 명중 확률", `${percent(totals.headshot_hit_rate)} · ${formatInteger(totals.headshot_hits)}/${formatInteger(characterHitCount(totals))} 캐릭터 명중`],
+          ["캐릭터 / 차량 명중", hitTargetEvidence(totals)],
+          ["차량에 가한 피해", formatNumber(totals.vehicle_damage_dealt, 1)],
           ["헤드샷 킬 비율", `${percent(totals.headshot_kill_rate)} · ${formatInteger(totals.headshot_kills)}/${formatInteger(totals.kills)}킬`],
           ["받은 헤드샷 비율", `${percent(totals.headshot_hit_taken_rate)} · ${formatInteger(totals.taken_hit_parts?.head)}/${formatInteger(totals.hits_taken)}피격`],
           ["교전 승리 확률", `${percent(totals.fight_win_rate)} · ${formatInteger(totals.fight_wins)}/${formatInteger(totals.fight_count)}교전`],
@@ -12192,7 +12946,7 @@ _INDEX_HTML = """<!doctype html>
           ${resultSection("지역별 상세", `<div class="table-scroll"><table class="drop-region-table"><thead><tr><th>맵</th><th>지역</th><th>착지</th><th>치킨·승률</th><th>평균 킬/어시/기절/사망</th><th>평균 피해</th><th>평균 생존</th><th>위치</th></tr></thead><tbody>${regionRows || '<tr><td colspan="8">조건을 충족한 지역이 없습니다.</td></tr>'}</tbody></table></div>`)}
         </div>
         <div class="drop-view-panel" data-drop-analysis-view="grid" hidden>
-          ${resultSection("세부 10×10 격자", `<div class="result-list">${zoneRows}</div>`)}
+          ${resultSection("세부 20×20 격자", `<div class="result-list">${zoneRows}</div>`)}
         </div>
       </div>`;
 
@@ -12352,7 +13106,7 @@ _INDEX_HTML = """<!doctype html>
           <span>${formatInteger(index + 1)}위 · ${formatInteger(item.match_count)}경기</span>
           <strong>${escapeHtml(item.weapon_name)}</strong>
           <p>점수 ${formatNumber(item.score, 1)} · 평균 딜 ${formatNumber(item.avg_damage_dealt, 1)} · 승률 ${percent(item.win_rate)} · ${escapeHtml(accuracyMetricText(item.accuracy, item.accuracy_metric))}<br>
-          헤드샷 명중 ${percent(item.headshot_hit_rate)} (${formatInteger(item.headshot_hits)}/${formatInteger(item.shots_hit)}명중) · 교전 승률 ${percent(item.fight_win_rate)} (${formatInteger(item.fight_wins)}승/${formatInteger(item.fight_losses)}패)<br>${escapeHtml(item.reason || "")}</p>
+          헤드샷 명중 ${percent(item.headshot_hit_rate)} (${formatInteger(item.headshot_hits)}/${formatInteger(characterHitCount(item))} 캐릭터 명중) · 차량 명중 ${formatInteger(item.vehicle_hits)}회 · 교전 승률 ${percent(item.fight_win_rate)} (${formatInteger(item.fight_wins)}승/${formatInteger(item.fight_losses)}패)<br>${escapeHtml(item.reason || "")}</p>
           <details class="result-disclosure">
             <summary>무기 점수 계산</summary>
             ${resultTextRows([
@@ -12752,7 +13506,9 @@ _INDEX_HTML = """<!doctype html>
           ["준 딜 / 받은 딜", `${formatNumber(detail.damage_dealt, 1)} / ${formatNumber(detail.damage_taken, 1)}`],
           ["공격 / 명중", `${formatInteger(detail.shots_fired)} / ${formatInteger(detail.shots_hit)}`],
           ["명중 지표", accuracyBreakdownText(detail.accuracy, detail.accuracy_breakdown)],
-          ["헤드샷 명중 확률", `${percent(detail.headshot_hit_rate)} · ${formatInteger(detail.headshot_hits)}/${formatInteger(detail.shots_hit)}명중`],
+          ["헤드샷 명중 확률", `${percent(detail.headshot_hit_rate)} · ${formatInteger(detail.headshot_hits)}/${formatInteger(characterHitCount(detail))} 캐릭터 명중`],
+          ["캐릭터 / 차량 명중", hitTargetEvidence(detail)],
+          ["차량에 가한 피해", formatNumber(detail.vehicle_damage_dealt, 1)],
           ["받은 헤드샷 비율", `${percent(detail.headshot_hit_taken_rate)} · ${formatInteger(detail.headshot_hits_taken)}/${formatInteger(detail.hits_taken)}피격`],
           ["헤드샷 킬 비율", `${percent(detail.headshot_kill_rate)} · ${formatInteger(detail.headshot_kills)}/${formatInteger(detail.kills)}킬`],
           ["교전 / 승리 확률", `${formatInteger(fights.fight_count)}회 · ${percent(fights.fight_win_rate)}`],
@@ -12835,7 +13591,7 @@ _INDEX_HTML = """<!doctype html>
           <td>${formatNumber(row.kd, 2)} / ${formatNumber(row.kda, 2)}</td>
           <td>${formatNumber(row.avg_kills, 2)} / ${formatNumber(row.avg_assists, 2)} / ${formatNumber(row.avg_dbnos_caused, 2)}</td>
           <td>${formatNumber(row.avg_damage_dealt, 1)} / ${formatNumber(row.avg_damage_taken, 1)}<br><span class="result-caption">교환 ${formatNumber(row.damage_ratio, 2)}</span></td>
-          <td>${percent(row.accuracy)} / ${percent(row.headshot_hit_rate)}</td>
+          <td>${percent(row.accuracy)} / ${percent(row.headshot_hit_rate)}<br><span class="result-caption">캐릭터 ${formatInteger(row.character_hits)} · 차량 ${formatInteger(row.vehicle_hits)}</span></td>
           <td>${percent(row.fight_win_rate)}<br><span class="result-caption">경기당 ${formatNumber(row.avg_fights_per_match, 2)}회</span></td>
           <td>${minutes(row.avg_survival_seconds)} / ${distanceKm(row.avg_movement_distance_m)}</td>
         </tr>
@@ -12861,7 +13617,7 @@ _INDEX_HTML = """<!doctype html>
           ["표시 인원", `${formatInteger((ranking.rows || []).length)}명`],
         ])}
         ${content}
-        <p class="result-caption">헤드샷 명중 확률은 헤드샷 명중 ÷ 전체 명중, 교전 승리 확률은 아군 피해를 제외한 킬·가한 기절 승리 ÷ 전체 교전 결과입니다.</p>
+        <p class="result-caption">헤드샷 명중 확률은 헤드샷 명중 ÷ 캐릭터 명중으로 계산해 차량 명중을 제외합니다. 전체 명중률은 캐릭터와 차량에 적중한 일반 탄환을 포함합니다.</p>
       </div>`;
     }
 
@@ -12919,7 +13675,18 @@ _INDEX_HTML = """<!doctype html>
       return parts.join(" · ") || "측정 불가";
     }
     function percent(value) {
-      return `${(Number(value || 0) * 100).toFixed(1)}%`;
+      return formatNumber(Number(value || 0) * 100, 1) + "%";
+    }
+
+    function characterHitCount(value) {
+      const characterHits = Number(value?.character_hits || 0);
+      const vehicleHits = Number(value?.vehicle_hits || 0);
+      if (characterHits > 0 || vehicleHits > 0) return characterHits;
+      return Number(value?.shots_hit || 0);
+    }
+
+    function hitTargetEvidence(value) {
+      return `캐릭터 ${formatInteger(characterHitCount(value))}회 · 차량 ${formatInteger(value?.vehicle_hits || 0)}회`;
     }
 
     function formatNumber(value, maximumFractionDigits = 0) {
@@ -12933,8 +13700,8 @@ _INDEX_HTML = """<!doctype html>
           maximumFractionDigits,
         });
       }
-      if (activeNumberFormat === "korean_units" && maximumFractionDigits === 0) {
-        return formatKoreanInteger(Math.round(numeric));
+      if (activeNumberFormat === "korean_units") {
+        return formatKoreanNumber(numeric, maximumFractionDigits);
       }
       return numeric.toLocaleString("ko-KR", {
         minimumFractionDigits: maximumFractionDigits,
@@ -12964,6 +13731,21 @@ _INDEX_HTML = """<!doctype html>
       return sign + groups.join(" ");
     }
 
+    function formatKoreanNumber(value, maximumFractionDigits = 0) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return "-";
+      const sign = numeric < 0 ? "-" : "";
+      const fixed = Math.abs(numeric).toLocaleString("en-US", {
+        useGrouping: false,
+        minimumFractionDigits: maximumFractionDigits,
+        maximumFractionDigits,
+      });
+      const [integerText, fractionText = ""] = fixed.split(".");
+      const integerPart = Number(integerText);
+      const integerDisplay = formatKoreanInteger(integerPart);
+      return sign + integerDisplay + (fractionText ? "." + fractionText : "");
+    }
+
     function displayCode(value, category = "") {
       if (value === null || value === undefined || value === "") return "-";
       const text = String(value);
@@ -12972,6 +13754,7 @@ _INDEX_HTML = """<!doctype html>
         team_mode: { solo: "솔로", duo: "듀오", squad: "스쿼드", unknown: "알 수 없음" },
         perspective: { fpp: "1인칭", tpp: "3인칭", unknown: "알 수 없음" },
         match_type: {
+          unknown: "알 수 없음",
           official: "일반 매치",
           competitive: "경쟁전",
           airoyale: "AI 배틀로얄",
@@ -12981,7 +13764,7 @@ _INDEX_HTML = """<!doctype html>
           custom: "사용자 지정 매치",
           tutorialatoz: "튜토리얼",
         },
-        season_state: { progress: "진행 시즌", in_progress: "진행 시즌", closed: "종료 시즌", offseason: "비시즌" },
+        season_state: { progress: "진행 시즌", in_progress: "진행 시즌", closed: "종료 시즌", offseason: "비시즌", unknown: "알 수 없음" },
         game_mode: {
           solo: "솔로",
           "solo-fpp": "1인칭 솔로",
@@ -13080,6 +13863,7 @@ _INDEX_HTML = """<!doctype html>
       }
       if (metric === "avg_survival") return minutes(value);
       if (metric === "avg_movement") return distanceKm(value);
+      if (metric === "vehicle_damage_dealt") return formatNumber(value, 1);
       if (["kda", "kd", "avg_damage", "avg_damage_taken", "damage_ratio", "avg_kills", "avg_assists", "avg_dbnos", "avg_fights"].includes(metric)) {
         return formatNumber(value, 2);
       }
@@ -13087,15 +13871,15 @@ _INDEX_HTML = """<!doctype html>
     }
 
     function minutes(value) {
-      return value === null || value === undefined ? "-" : `${(Number(value) / 60).toFixed(1)}분`;
+      return value === null || value === undefined ? "-" : formatNumber(Number(value) / 60, 1) + "분";
     }
 
     function distanceKm(value) {
-      return value === null || value === undefined ? "-" : `${(Number(value) / 1000).toFixed(1)}km`;
+      return value === null || value === undefined ? "-" : formatNumber(Number(value) / 1000, 1) + "km";
     }
 
     function distanceM(value) {
-      return value === null || value === undefined ? "-" : `${Number(value).toFixed(0)}m`;
+      return value === null || value === undefined ? "-" : formatNumber(Number(value), 0) + "m";
     }
 
     function renderJobQueue(payload, tableBody, cardList, summaryElement) {
@@ -13180,11 +13964,11 @@ _INDEX_HTML = """<!doctype html>
       playerIntelligenceAuditBody.innerHTML = intelligenceKpis([
         ["원본 경기", "raw_matches", counts.raw_matches],
         ["추적 경기·플레이어", "eligible_player_matches", counts.eligible_player_matches],
-        ["행동 파서", "activity_matches", `${counts.activity_matches || 0} / ${counts.eligible_matches || 0}`],
-        ["아이템 파서", "item_matches", `${counts.item_matches || 0} / ${counts.eligible_matches || 0}`],
+        ["행동 파서", "activity_matches", `${formatInteger(counts.activity_matches || 0)} / ${formatInteger(counts.eligible_matches || 0)}`],
+        ["아이템 파서", "item_matches", `${formatInteger(counts.item_matches || 0)} / ${formatInteger(counts.eligible_matches || 0)}`],
         ["행동 원장", "activity_event_rows", counts.activity_event_rows],
         ["아이템 원장", "item_event_rows", counts.item_event_rows],
-        ["정규화 이벤트 타입", "normalized_type_count", `${eventCatalog.normalized_type_count || 0} / ${eventCatalog.event_type_count || 0}`],
+        ["정규화 이벤트 타입", "normalized_type_count", `${formatInteger(eventCatalog.normalized_type_count || 0)} / ${formatInteger(eventCatalog.event_type_count || 0)}`],
         ["원본 전용 타입", "raw_only_type_count", eventCatalog.raw_only_type_count],
       ]) + `<div class="intelligence-data-section"><h3>정합성 검사</h3>
         <div class="table-scroll"><table class="data-quality-checks"><thead><tr><th>상태</th><th>검사</th><th>기대</th><th>실제</th></tr></thead><tbody>${checkRows}</tbody></table></div>
@@ -13214,9 +13998,9 @@ _INDEX_HTML = """<!doctype html>
       const checks = report.checks || [];
       operationalDrillDetail.innerHTML = [
         `<strong>#${escapeHtml(record.id)} ${escapeHtml(record.mode)} / ${escapeHtml(record.status)}</strong>`,
-        `계약: ${escapeHtml(record.contract_version || "-")} · 반복: ${escapeHtml(record.requested_cycles || 0)} · 시간: ${Number(record.duration_seconds || 0).toFixed(3)}초`,
+        `계약: ${escapeHtml(record.contract_version || "-")} · 반복: ${formatInteger(record.requested_cycles || 0)} · 시간: ${formatNumber(record.duration_seconds || 0, 3)}초`,
         checks.length
-          ? checks.map((check) => `${check.passed ? "PASS" : "FAIL"} · ${escapeHtml(check.name)} · ${escapeHtml(check.summary || "-")}<br><code>${escapeHtml(JSON.stringify(check.metrics || {}))}</code>`).join("<br>")
+          ? checks.map((check) => `${check.passed ? "통과" : "실패"} · ${escapeHtml(check.name)} · ${escapeHtml(check.summary || "-")}<br><code>${escapeHtml(JSON.stringify(check.metrics || {}))}</code>`).join("<br>")
           : "저장된 체크가 없습니다.",
       ].join("<br>");
     }
@@ -13229,12 +14013,12 @@ _INDEX_HTML = """<!doctype html>
           <td>${escapeHtml(record.mode)}</td>
           <td><strong>${escapeHtml(record.status)}</strong></td>
           <td>${escapeHtml(record.finished_at_kst || record.created_at_kst || "-")}</td>
-          <td>${Number(record.duration_seconds || 0).toFixed(3)}초</td>
-          <td>${escapeHtml(record.passed_check_count)}/${escapeHtml(record.check_count)}</td>
+          <td>${formatNumber(record.duration_seconds || 0, 3)}초</td>
+          <td>${formatInteger(record.passed_check_count)}/${formatInteger(record.check_count)}</td>
           <td><button class="secondary" type="button" data-operational-drill-id="${attr(record.id)}">상세</button></td>
         </tr>
       `).join("") || `<tr><td colspan="7">저장된 운영 훈련이 없습니다.</td></tr>`;
-      operationalDrillsStatus.textContent = `${operationalDrillRecords.length}개 이력`;
+      operationalDrillsStatus.textContent = `${formatInteger(operationalDrillRecords.length)}개 이력`;
     }
 
     async function loadOperationalDrills() {
@@ -13255,7 +14039,7 @@ _INDEX_HTML = """<!doctype html>
       operationalDrillsStatus.textContent = `${mode} 실행 중`;
       const payload = await postJson("/operations/drills", { mode, cycles });
       const report = payload.operational_drill;
-      operationalDrillsStatus.textContent = `#${payload.run_id} ${report.passed ? "통과" : "실패"} · ${report.passed_check_count}/${report.check_count}`;
+      operationalDrillsStatus.textContent = `#${formatInteger(payload.run_id)} ${report.passed ? "통과" : "실패"} · ${formatInteger(report.passed_check_count)}/${formatInteger(report.check_count)}`;
       await loadOperationalDrills();
       const saved = operationalDrillRecords.find((record) => String(record.id) === String(payload.run_id));
       if (saved) renderOperationalDrillDetail(saved);
@@ -13361,7 +14145,7 @@ _INDEX_HTML = """<!doctype html>
         last_7d: "최근 7일",
       };
       workerRunsStatus.textContent = [
-        `전체 ${workerRunPage.total}건 중 ${start}-${end}`,
+        `전체 ${formatInteger(workerRunPage.total)}건 중 ${formatInteger(start)}-${formatInteger(end)}`,
         `작업 ${workerRunPage.worker_name ? workerNameLabel(workerRunPage.worker_name) : "전체"}`,
         `상태 ${statusLabel}`,
         `기간 ${rangeLabels[workerRunPage.quick_range] || "직접 지정"}`,
@@ -13373,9 +14157,9 @@ _INDEX_HTML = """<!doctype html>
         ? runs.map((run) => `
             <tr>
               <td>${escapeHtml(workerNameLabel(run.worker_name))}</td>
-              <td>${jobStatusBadge(run.status)}${run.error_count ? ` <span class="status">오류 ${escapeHtml(run.error_count)}건</span>` : ""}</td>
+              <td>${jobStatusBadge(run.status)}${run.error_count ? ` <span class="status">오류 ${formatInteger(run.error_count)}건</span>` : ""}</td>
               <td>${escapeHtml(formatKstShort(run.finished_at_kst || run.created_at_kst))}</td>
-              <td>${run.duration_seconds === null || run.duration_seconds === undefined ? "-" : `${Number(run.duration_seconds).toFixed(2)}초`}</td>
+              <td>${run.duration_seconds === null || run.duration_seconds === undefined ? "-" : formatNumber(run.duration_seconds, 2) + "초"}</td>
               <td>${workerRunSummary(run)}</td>
               <td><button class="secondary" type="button" data-worker-run-detail-id="${attr(run.id)}">상세</button></td>
             </tr>
@@ -13389,7 +14173,7 @@ _INDEX_HTML = """<!doctype html>
               ${jobStatusBadge(run.status)}
             </div>
             <div class="dense-card-row"><span>완료 시각</span><strong>${escapeHtml(formatKstShort(run.finished_at_kst || run.created_at_kst))}</strong></div>
-            <div class="dense-card-row"><span>소요 시간</span><strong>${run.duration_seconds === null || run.duration_seconds === undefined ? "-" : `${Number(run.duration_seconds).toFixed(2)}초`}</strong></div>
+            <div class="dense-card-row"><span>소요 시간</span><strong>${run.duration_seconds === null || run.duration_seconds === undefined ? "-" : formatNumber(run.duration_seconds, 2) + "초"}</strong></div>
             <div class="dense-card-row"><span>요약</span><strong>${workerRunSummary(run)}</strong></div>
             <div class="dense-card-actions"><button class="secondary" type="button" data-worker-run-detail-id="${attr(run.id)}">상세</button></div>
           </article>
@@ -13469,17 +14253,17 @@ _INDEX_HTML = """<!doctype html>
       const summary = run.summary || {};
       if (run.worker_name === "collector") {
         return escapeHtml([
-          `매치 대기 ${summary.collection?.queued_match_jobs ?? "-"}`,
-          `매치 저장 ${summary.match_jobs?.stored_matches ?? "-"}`,
-          `텔레메트리 저장 ${summary.telemetry_jobs?.stored_telemetry ?? "-"}`,
+          `매치 대기 ${formatInteger(summary.collection?.queued_match_jobs)}`,
+          `매치 저장 ${formatInteger(summary.match_jobs?.stored_matches)}`,
+          `텔레메트리 저장 ${formatInteger(summary.telemetry_jobs?.stored_telemetry)}`,
         ].join(" · "));
       }
       return escapeHtml([
-        `전투 ${summary.combat?.parsed_payloads ?? "-"}`,
-        `아이템 ${summary.items?.parsed_payloads ?? "-"}`,
-        `이동 ${summary.movement?.parsed_payloads ?? "-"}`,
-        `지도 ${summary.map_snapshots?.generated_snapshots ?? "-"}`,
-        `타임라인 ${summary.replay_timelines?.generated_timelines ?? "-"}`,
+        `전투 ${formatInteger(summary.combat?.parsed_payloads)}`,
+        `아이템 ${formatInteger(summary.items?.parsed_payloads)}`,
+        `이동 ${formatInteger(summary.movement?.parsed_payloads)}`,
+        `지도 ${formatInteger(summary.map_snapshots?.generated_snapshots)}`,
+        `타임라인 ${formatInteger(summary.replay_timelines?.generated_timelines)}`,
       ].join(" · "));
     }
 
@@ -13535,7 +14319,7 @@ _INDEX_HTML = """<!doctype html>
           ${cell("작업 종류", escapeHtml(workerNameLabel(run.worker_name)))}
           ${cell("상태", jobStatusBadge(run.status))}
           ${cell("완료 시각 (KST)", escapeHtml(formatKstShort(run.finished_at_kst || run.created_at_kst)))}
-          ${cell("소요 시간", run.duration_seconds === null || run.duration_seconds === undefined ? "-" : `${Number(run.duration_seconds).toFixed(2)}초`)}
+          ${cell("소요 시간", run.duration_seconds === null || run.duration_seconds === undefined ? "-" : formatNumber(run.duration_seconds, 2) + "초")}
         </div>
         <table class="detail-table">
           <thead><tr><th>요약 지표</th><th>값</th></tr></thead>
@@ -13689,7 +14473,7 @@ _INDEX_HTML = """<!doctype html>
           return workerRunSummaryMetrics(value, metricKey);
         }
         if (Array.isArray(value)) {
-          return [{ key: metricKey, value: `${value.length} items` }];
+          return [{ key: metricKey, value: `${formatInteger(value.length)}개 항목` }];
         }
         return [{ key: metricKey, value: formatWorkerRunMetricValue(value) }];
       });
@@ -13712,6 +14496,9 @@ _INDEX_HTML = """<!doctype html>
     function formatWorkerRunMetricValue(value) {
       if (value === null || value === undefined) return "-";
       if (typeof value === "object") return JSON.stringify(value);
+      if (typeof value === "number") {
+        return Number.isInteger(value) ? formatInteger(value) : formatNumber(value, 3);
+      }
       return String(value);
     }
 
@@ -13737,7 +14524,7 @@ _INDEX_HTML = """<!doctype html>
         updateTimelineOptions(artifacts, options.artifact_id ?? replayArtifactFilter.artifact_id);
       }
       replayArtifactsStatus.textContent = [
-        `${artifacts.length}개 표시`,
+        `${formatInteger(artifacts.length)}개 표시`,
         accountId ? `유저 ${registeredPlayers.find((player) => player.account_id === accountId)?.current_name || compactIdentifier(accountId)}` : "전체 등록 유저",
         artifactType ? artifactTypeLabel(artifactType) : "전체 파일",
       ].join(" · ");
@@ -13783,6 +14570,176 @@ _INDEX_HTML = """<!doctype html>
       if (accountId && replayTimelineArtifacts.length && (!activeTimelineArtifact || String(activeTimelineArtifact.id) !== timelineSelect.value)) {
         await loadSelectedTimeline();
       }
+    }
+
+    const flightPathColors = ["#46d2aa", "#f0d479", "#ff8a65", "#70b7ff", "#d0a7ff", "#9ccc65"];
+
+    async function loadFlightPathMapCatalog() {
+      const selected = flightPathMapFilter.value;
+      const response = await fetch("/map-regions");
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || response.statusText);
+      const maps = (payload.map_region_catalog?.maps || [])
+        .filter((item) => item.world_size_cm && item.canonical_map_name)
+        .sort((left, right) => String(left.map_name_ko).localeCompare(String(right.map_name_ko)));
+      flightPathMapFilter.innerHTML = '<option value="">전체 맵</option>' + maps.map((item) => (
+        '<option value="' + attr(item.map_name) + '">' + escapeHtml(item.map_name_ko || item.map_name) + '</option>'
+      )).join("");
+      if ([...flightPathMapFilter.options].some((option) => option.value === selected)) {
+        flightPathMapFilter.value = selected;
+      }
+    }
+
+    function flightPathClusterDetail(cluster) {
+      if (!cluster) return "항로를 선택하면 빈도와 방향 근거가 표시됩니다.";
+      const offset = Number(cluster.offset_from_center_m || 0);
+      const offsetText = Math.abs(offset) < 1
+        ? "맵 중심 통과"
+        : `${formatNumber(Math.abs(offset), 0)}m ${offset > 0 ? "우측" : "좌측"}`;
+      return `
+        <strong>${escapeHtml(cluster.map_name_ko)} · ${escapeHtml(cluster.dominant_direction_ko)} 진행</strong>
+        ${formatInteger(cluster.route_count)}회 / 이 맵 ${formatInteger(cluster.map_route_count)}회 · 출현 ${percent(cluster.map_share)}
+        · 주 방향 일치 ${percent(cluster.dominant_direction_share)}<br>
+        물리 각도 ${formatNumber(cluster.physical_angle_degrees, 1)}도 · ${escapeHtml(offsetText)}
+        · 평균 관측 ${formatNumber(cluster.avg_observed_length_m, 0)}m / ${formatNumber(cluster.avg_sample_count, 1)}개 표본<br>
+        기간 ${escapeHtml(formatKstShort(cluster.first_seen_at_kst))} ~ ${escapeHtml(formatKstShort(cluster.last_seen_at_kst))}
+      `;
+    }
+
+    function selectFlightPathCluster(clusterId) {
+      const line = flightPathResult.querySelector('[data-flight-line="' + CSS.escape(clusterId) + '"]');
+      const row = flightPathResult.querySelector('[data-flight-row="' + CSS.escape(clusterId) + '"]');
+      flightPathResult.querySelectorAll("[data-flight-line]").forEach((item) => item.classList.toggle("active", item === line));
+      flightPathResult.querySelectorAll("[data-flight-row]").forEach((item) => item.classList.toggle("active", item === row));
+      const detail = flightPathResult.querySelector("#flightPathDetail");
+      const cluster = (flightPathResult._report?.clusters || []).find((item) => item.cluster_id === clusterId);
+      if (detail) detail.innerHTML = flightPathClusterDetail(cluster);
+      row?.scrollIntoView({ block: "nearest" });
+    }
+
+    function renderFlightPathMap(report, mapName) {
+      const image = flightPathResult.querySelector("#flightPathMapImage");
+      const overlay = flightPathResult.querySelector("#flightPathOverlay");
+      const list = flightPathResult.querySelector("#flightPathList");
+      if (!image || !overlay || !list) return;
+      const clusters = (report.clusters || []).filter((item) => item.map_name === mapName);
+      image.src = mapName ? "/replay/map-assets/" + encodeURIComponent(mapName) : "";
+      image.alt = (report.maps || []).find((item) => item.map_name === mapName)?.map_name_ko + " 비행기 항로 지도";
+      overlay.innerHTML = `
+        <defs>
+          <marker id="flightArrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L7,3.5 L0,7 Z" fill="#ffffff"></path>
+          </marker>
+        </defs>
+        ${clusters.map((cluster, index) => {
+          const color = flightPathColors[index % flightPathColors.length];
+          const width = 2 + 8 * Math.sqrt(Math.max(0, Number(cluster.map_share || 0)));
+          const opacity = 0.38 + 0.58 * Math.sqrt(Math.max(0, Number(cluster.map_share || 0)));
+          return `<line class="flight-route-line" tabindex="0" role="button"
+            x1="${Number(cluster.start_x_pct) * 1000}" y1="${Number(cluster.start_y_pct) * 1000}"
+            x2="${Number(cluster.end_x_pct) * 1000}" y2="${Number(cluster.end_y_pct) * 1000}"
+            stroke="${color}" stroke-width="${width.toFixed(2)}" opacity="${opacity.toFixed(3)}"
+            marker-end="url(#flightArrow)" data-flight-line="${attr(cluster.cluster_id)}"
+          ><title>#${formatInteger(index + 1)} · ${escapeHtml(cluster.dominant_direction_ko)} · ${formatInteger(cluster.route_count)}회 (${percent(cluster.map_share)})</title></line>`;
+        }).join("")}
+      `;
+      list.innerHTML = clusters.map((cluster, index) => {
+        const color = flightPathColors[index % flightPathColors.length];
+        return `
+          <button type="button" class="flight-path-row" data-flight-row="${attr(cluster.cluster_id)}">
+            <span class="flight-path-rank" style="color:${color}">#${formatInteger(index + 1)}</span>
+            <span><strong>${escapeHtml(cluster.dominant_direction_ko)} 진행 · 중심 간격 ${formatNumber(Math.abs(cluster.offset_from_center_m), 0)}m</strong><small>${formatInteger(cluster.route_count)}회 · 주 방향 ${percent(cluster.dominant_direction_share)} · 평균 ${formatNumber(cluster.avg_sample_count, 1)}표본</small></span>
+            <span class="flight-path-share">${percent(cluster.map_share)}</span>
+          </button>
+        `;
+      }).join("") || '<div class="status">선택한 맵에 조건을 충족한 항로가 없습니다.</div>';
+      flightPathResult.querySelectorAll("[data-flight-line]").forEach((line) => {
+        line.addEventListener("click", () => selectFlightPathCluster(line.dataset.flightLine || ""));
+        line.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            selectFlightPathCluster(line.dataset.flightLine || "");
+          }
+        });
+      });
+      flightPathResult.querySelectorAll("[data-flight-row]").forEach((row) => {
+        row.addEventListener("click", () => selectFlightPathCluster(row.dataset.flightRow || ""));
+      });
+      const detail = flightPathResult.querySelector("#flightPathDetail");
+      if (detail) detail.innerHTML = flightPathClusterDetail(clusters[0]);
+      if (clusters[0]) selectFlightPathCluster(clusters[0].cluster_id);
+    }
+
+    function renderFlightPathReport(report) {
+      flightPathResult._report = report;
+      const maps = report.maps || [];
+      const initialMap = report.filters?.map_name || maps[0]?.map_name || "";
+      const recentRows = (report.recent_routes || []).map((route) => `
+        <tr>
+          <td>${escapeHtml(formatKstShort(route.created_at_kst))}</td>
+          <td>${escapeHtml(route.map_name_ko)}</td>
+          <td>${escapeHtml(route.travel_direction_ko)}</td>
+          <td>${formatInteger(route.sample_count)}개</td>
+          <td>${formatNumber(route.observed_length_m, 0)}m</td>
+          <td class="identifier" title="${attr(route.match_id)}">${escapeHtml(compactIdentifier(route.match_id))}</td>
+        </tr>
+      `).join("");
+      flightPathResult.hidden = false;
+      flightPathResult.innerHTML = `<div class="result-shell">
+        ${resultHeading("비행기 동선 빈도", "완료 경기 · KST · 맵 경계까지 연장", `${formatInteger(report.analyzed_route_count)}개 항로`)}
+        ${resultMetricGrid([
+          ["분석 항로", `${formatInteger(report.analyzed_route_count)}개`],
+          ["맵", `${formatInteger(maps.length)}개`],
+          ["항로 군집", `${formatInteger(report.available_cluster_count)}개`],
+          ["제외", `${formatInteger(report.rejected_route_count)}개`],
+          ["군집 기준", `${formatNumber(report.angle_bin_degrees, 0)}도 · ${formatNumber(report.offset_bin_m, 0)}m`],
+        ])}
+        <div class="flight-path-layout">
+          <div class="drop-map-panel">
+            <div class="drop-map-toolbar">
+              <h3>빈도 지도</h3>
+              <label>표시할 맵<select id="flightPathMapSelect">${maps.map((item) => `<option value="${attr(item.map_name)}"${item.map_name === initialMap ? " selected" : ""}>${escapeHtml(item.map_name_ko)} · ${formatInteger(item.route_count)}회</option>`).join("")}</select></label>
+            </div>
+            <div class="flight-path-map-stage">
+              <img id="flightPathMapImage" alt="비행기 항로 지도">
+              <svg id="flightPathOverlay" viewBox="0 0 1000 1000" aria-label="빈도별 비행기 항로"></svg>
+            </div>
+            <div class="flight-path-detail" id="flightPathDetail">항로를 선택하세요.</div>
+          </div>
+          <div>
+            <h3>선택 맵 항로 순위</h3>
+            <div class="flight-path-list" id="flightPathList"></div>
+          </div>
+        </div>
+        <details class="result-disclosure">
+          <summary>최근 원본 항로 · ${formatInteger(report.recent_routes?.length || 0)}개</summary>
+          <div class="table-scroll"><table><thead><tr><th>KST</th><th>맵</th><th>진행 방향</th><th>표본</th><th>관측 길이</th><th>매치</th></tr></thead><tbody>${recentRows || '<tr><td colspan="6">원본 항로가 없습니다.</td></tr>'}</tbody></table></div>
+        </details>
+        <p class="result-caption">${escapeHtml(report.method_ko)} 방향이 반대여도 같은 물리 항로로 묶고, 주 운항 방향은 별도로 표시합니다.</p>
+      </div>`;
+      const mapSelect = flightPathResult.querySelector("#flightPathMapSelect");
+      mapSelect?.addEventListener("change", () => renderFlightPathMap(report, mapSelect.value));
+      renderFlightPathMap(report, initialMap);
+    }
+
+    async function loadFlightPathAnalysis() {
+      const form = new FormData(flightPathForm);
+      const accountId = String(form.get("account_id") || "");
+      if (accountId && !form.get("shard")) {
+        const player = registeredPlayers.find((item) => item.account_id === accountId);
+        if (player) form.set("shard", player.shard);
+      }
+      const params = new URLSearchParams();
+      for (const [key, value] of form.entries()) {
+        const text = String(value || "").trim();
+        if (text) params.set(key, text);
+      }
+      flightPathStatus.textContent = "저장된 항로를 분석하는 중";
+      const response = await fetch("/analytics/flight-paths?" + params.toString());
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || response.statusText);
+      renderFlightPathReport(payload.flight_paths);
+      flightPathStatus.textContent = `분석 완료 · ${formatInteger(payload.flight_paths.analyzed_route_count)}개 항로 · ${formatInteger(payload.flight_paths.available_cluster_count)}개 군집`;
     }
 
     function clearReplayTimeline(message = "등록 유저를 선택한 뒤 경기를 불러오세요.") {
@@ -13888,7 +14845,7 @@ _INDEX_HTML = """<!doctype html>
         size /= 1024;
         unit += 1;
       }
-      return `${size.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+      return formatNumber(size, unit === 0 ? 0 : 1) + " " + units[unit];
     }
 
     async function loadSelectedTimeline() {
@@ -14218,7 +15175,7 @@ _INDEX_HTML = """<!doctype html>
           const details = isReviveAction(event.action)
             ? [event.damage_reason || "부활", distanceM(event.distance_m)]
             : [weapon];
-          if (Number(event.damage || 0) > 0) details.push(`피해 ${Number(event.damage).toFixed(1)}`);
+          if (Number(event.damage || 0) > 0) details.push(`피해 ${formatNumber(event.damage, 1)}`);
           if (Number(event.distance_m || 0) > 0) details.push(distanceM(event.distance_m));
           if (related) details.push(related);
           add("combat", event, `${replayActorName(event)} · ${action}${suffix}`, details.join(" / "));
@@ -14243,12 +15200,12 @@ _INDEX_HTML = """<!doctype html>
           "engagement",
           source,
           `${engagement.actor_name || "팀원"} · ${verifiedOpponent ? "교전" : "공격 활동"}`,
-          `${verifiedOpponent ? `상대 ${engagement.opponent_count || 0}명 확인` : "상대 미확인"} / ${outcome} / ${engagement.event_count || 0}개 사건 / 킬 ${engagement.kills || 0} / 기절 ${engagement.dbnos_caused || 0}`,
+          `${verifiedOpponent ? `상대 ${formatInteger(engagement.opponent_count || 0)}명 확인` : "상대 미확인"} / ${outcome} / ${formatInteger(engagement.event_count || 0)}개 사건 / 킬 ${formatInteger(engagement.kills || 0)} / 기절 ${formatInteger(engagement.dbnos_caused || 0)}`,
         );
       }
       for (const event of timeline.care_packages || []) {
         const label = event.event_type === "LogCarePackageLand" ? "보급 상자 착지" : "보급 상자 생성";
-        add("care", event, label, `${event.item_count || 0}개 아이템`);
+        add("care", event, label, `${formatInteger(event.item_count || 0)}개 아이템`);
       }
 
       return events.sort((left, right) => (
@@ -14544,11 +15501,11 @@ _INDEX_HTML = """<!doctype html>
         if (member.position_sample_count > 0 && !member.is_self) badges.push("이동 경로");
         if (member.combat_event_count > 0) badges.push("전투 기록");
         const stats = [
-          `킬 ${Number(member.kills || 0)}`,
+          `킬 ${formatInteger(member.kills || 0)}`,
           `어시 ${Number(member.assists || 0)}`,
-          `피해 ${Number(member.damage_dealt || 0).toFixed(0)}`,
-          member.position_sample_count > 0 ? `위치 ${Number(member.position_sample_count || 0)}개` : "",
-          member.combat_event_count > 0 ? `전투 ${Number(member.combat_event_count || 0)}건` : "",
+          `피해 ${formatNumber(member.damage_dealt || 0, 0)}`,
+          member.position_sample_count > 0 ? `위치 ${formatInteger(member.position_sample_count || 0)}개` : "",
+          member.combat_event_count > 0 ? `전투 ${formatInteger(member.combat_event_count || 0)}건` : "",
           member.win_place ? `${member.win_place}위` : "",
         ].filter(Boolean).join(" / ");
         const actorFilterValue = member.is_self ? "focus" : member.account_id;
@@ -14567,7 +15524,7 @@ _INDEX_HTML = """<!doctype html>
       const seconds = Math.max(0, Number(value || 0));
       const minutes = Math.floor(seconds / 60);
       const rest = seconds - minutes * 60;
-      return `${minutes}:${rest.toFixed(1).padStart(4, "0")}`;
+      return `${formatInteger(minutes)}:${formatNumber(rest, 1).padStart(4, "0")}`;
     }
 
     function renderTimelineEventList() {
@@ -14638,7 +15595,7 @@ _INDEX_HTML = """<!doctype html>
           if (!["shot", "throw", "melee", "attack"].includes(source.action)) {
             const impactDetails = [`피격 부위 ${escapeHtml(source.damage_reason || "-")}`];
             if (source.damage !== null && source.damage !== undefined && source.damage !== "" && Number.isFinite(Number(source.damage))) {
-              impactDetails.push(`피해 ${Number(source.damage).toFixed(1)}`);
+              impactDetails.push(`피해 ${formatNumber(source.damage, 1)}`);
             }
             impactDetails.push(`거리 ${distanceM(source.distance_m)}`);
             detailLines.push(impactDetails.join(" / "));
@@ -14655,13 +15612,13 @@ _INDEX_HTML = """<!doctype html>
       } else if (nearest.category === "engagement") {
         detailLines.push(`구간 ${formatReplayTime(source.start_time_seconds)}–${formatReplayTime(source.end_time_seconds)}`);
         detailLines.push(source.evidence === "verified_opponent" || Number(source.opponent_count || 0) > 0
-          ? `근거 상대 계정 ${Number(source.opponent_count || 0)}명 확인`
+          ? `근거 상대 계정 ${formatInteger(source.opponent_count || 0)}명 확인`
           : "근거 공격 기록만 확인 · 상대 미확인");
-        detailLines.push(`사건 ${source.event_count || 0} / 발사 ${source.shots || 0} / 투척 ${source.throws || 0} / 명중 ${source.hits_caused || 0} / 피격 ${source.hits_taken || 0}`);
-        detailLines.push(`킬 ${source.kills || 0} / 기절 ${source.dbnos_caused || 0} / 가한 피해 ${Number(source.damage_caused || 0).toFixed(1)}`);
+        detailLines.push(`사건 ${formatInteger(source.event_count || 0)} / 발사 ${formatInteger(source.shots || 0)} / 투척 ${formatInteger(source.throws || 0)} / 명중 ${formatInteger(source.hits_caused || 0)} / 피격 ${formatInteger(source.hits_taken || 0)}`);
+        detailLines.push(`킬 ${formatInteger(source.kills || 0)} / 기절 ${formatInteger(source.dbnos_caused || 0)} / 가한 피해 ${formatNumber(source.damage_caused || 0, 1)}`);
         if ((source.weapons || []).length) detailLines.push(`무기 ${escapeHtml(source.weapons.join(", "))}`);
       } else if (nearest.category === "care") {
-        detailLines.push(`유형 ${escapeHtml(source.event_type || "-")} / 아이템 ${source.item_count || 0}개`);
+        detailLines.push(`유형 ${escapeHtml(source.event_type || "-")} / 아이템 ${formatInteger(source.item_count || 0)}개`);
         const itemCodes = (source.item_codes || []).slice(0, 8).join(", ");
         if (itemCodes) detailLines.push(`아이템 코드 ${escapeHtml(itemCodes)}`);
       } else if (nearest.category === "landing") {
@@ -14891,7 +15848,7 @@ _INDEX_HTML = """<!doctype html>
         const point = canvasPoint(current);
         if (!canvasPointVisible(point, 16)) return;
         drawReplayActorMarker(point, current.movement_mode, color, false);
-        drawReplayLabel(point, track.name || track.account_id || "team", color);
+        drawReplayLabel(point, track.name || track.account_id || "팀원", color);
       });
       replayCtx.setLineDash([]);
     }
@@ -15267,7 +16224,7 @@ _INDEX_HTML = """<!doctype html>
         : (current?.vehicle_label || "");
       replayCtx.fillText(`KST ${formatReplayKst(activeTimelineTime)} · ${current?.movement_label || "위치 대기"}${vehicleLabel ? ` (${vehicleLabel})` : ""}`, 24, 84);
       const viewportMode = replayPinnedEventId ? "선택 사건" : timelineFollowPlayer.checked ? "플레이어" : "맵 중앙";
-      replayCtx.fillText(`확대 ${replayZoom().toFixed(1)}x · 화면 중심 ${viewportMode}`, 24, 108);
+      replayCtx.fillText(`확대 ${formatNumber(replayZoom(), 1)}x · 화면 중심 ${viewportMode}`, 24, 108);
     }
 
     function formatReplayKst(seconds) {
@@ -15535,7 +16492,7 @@ _INDEX_HTML = """<!doctype html>
         throw new Error(error.detail || response.statusText);
       }
       const payload = await response.json();
-      banner.textContent = `수집 완료: 신규 ${payload.result.queued_match_jobs}개, 기존 ${payload.result.existing_match_jobs}개`;
+      banner.textContent = `수집 완료: 신규 ${formatInteger(payload.result.queued_match_jobs)}개, 기존 ${formatInteger(payload.result.existing_match_jobs)}개`;
       await Promise.all([loadPlayers(), loadJobs()]);
     }
 
@@ -15551,7 +16508,7 @@ _INDEX_HTML = """<!doctype html>
         throw new Error(error.detail || response.statusText);
       }
       const payload = await response.json();
-      banner.textContent = `상세 저장 완료: 저장 ${payload.result.stored_matches}개, telemetry 신규 ${payload.result.queued_telemetry_jobs}개, 실패 ${payload.result.failed_jobs}개`;
+      banner.textContent = `상세 저장 완료: 저장 ${formatInteger(payload.result.stored_matches)}개, 텔레메트리 신규 ${formatInteger(payload.result.queued_telemetry_jobs)}개, 실패 ${formatInteger(payload.result.failed_jobs)}개`;
       await Promise.all([loadJobs(), loadTelemetryJobs()]);
     }
 
@@ -15567,7 +16524,7 @@ _INDEX_HTML = """<!doctype html>
         throw new Error(error.detail || response.statusText);
       }
       const payload = await response.json();
-      const mb = (payload.result.stored_bytes / 1024 / 1024).toFixed(1);
+      const mb = formatNumber(payload.result.stored_bytes / 1024 / 1024, 1);
       banner.textContent = `텔레메트리 저장 완료: 저장 ${formatInteger(payload.result.stored_telemetry)}개, ${mb}MB, 실패 ${formatInteger(payload.result.failed_jobs)}개`;
       await loadTelemetryJobs();
     }
@@ -15584,7 +16541,7 @@ _INDEX_HTML = """<!doctype html>
         throw new Error(error.detail || response.statusText);
       }
       const payload = await response.json();
-      combatStatus.textContent = `파싱 ${payload.result.parsed_payloads}개, 요약 ${payload.result.combat_summaries}개, 무기 ${payload.result.weapon_stats}개, 실패 ${payload.result.failed_payloads}개`;
+      combatStatus.textContent = `파싱 ${formatInteger(payload.result.parsed_payloads)}개, 요약 ${formatInteger(payload.result.combat_summaries)}개, 무기 ${formatInteger(payload.result.weapon_stats)}개, 실패 ${formatInteger(payload.result.failed_payloads)}개`;
       banner.textContent = "전투 파싱 완료";
     }
 
@@ -15600,7 +16557,7 @@ _INDEX_HTML = """<!doctype html>
         throw new Error(error.detail || response.statusText);
       }
       const payload = await response.json();
-      itemStatus.textContent = `파싱 ${payload.result.parsed_payloads}개, 이벤트 ${payload.result.item_events}개, 아이템 ${payload.result.item_stats}개, 실패 ${payload.result.failed_payloads}개`;
+      itemStatus.textContent = `파싱 ${formatInteger(payload.result.parsed_payloads)}개, 이벤트 ${formatInteger(payload.result.item_events)}개, 아이템 ${formatInteger(payload.result.item_stats)}개, 실패 ${formatInteger(payload.result.failed_payloads)}개`;
       banner.textContent = "아이템 파싱 완료";
     }
 
@@ -15616,7 +16573,7 @@ _INDEX_HTML = """<!doctype html>
         throw new Error(error.detail || response.statusText);
       }
       const payload = await response.json();
-      movementStatus.textContent = `파싱 ${payload.result.parsed_payloads}개, 위치 ${payload.result.position_samples}개, 전투위치 ${payload.result.combat_location_events}개, 보급 ${payload.result.care_package_events}개, 비행기 ${payload.result.plane_routes}개, 자기장 ${payload.result.phase_events || 0}개, 실패 ${payload.result.failed_payloads}개`;
+      movementStatus.textContent = `파싱 ${formatInteger(payload.result.parsed_payloads)}개, 위치 ${formatInteger(payload.result.position_samples)}개, 전투 위치 ${formatInteger(payload.result.combat_location_events)}개, 보급 ${formatInteger(payload.result.care_package_events)}개, 비행기 ${formatInteger(payload.result.plane_routes)}개, 자기장 ${formatInteger(payload.result.phase_events || 0)}개, 실패 ${formatInteger(payload.result.failed_payloads)}개`;
       banner.textContent = "위치 파싱 완료";
     }
 
@@ -15632,7 +16589,7 @@ _INDEX_HTML = """<!doctype html>
         throw new Error(error.detail || response.statusText);
       }
       const payload = await response.json();
-      loadoutSnapshotStatus.textContent = `처리 ${payload.result.processed_matches}개, 기존 ${payload.result.skipped_existing}개, item없음 ${payload.result.skipped_no_items}개, 실패 ${payload.result.failed_matches}개, snapshot ${payload.result.generated_snapshots}개`;
+      loadoutSnapshotStatus.textContent = `처리 ${formatInteger(payload.result.processed_matches)}개, 기존 ${formatInteger(payload.result.skipped_existing)}개, 아이템 없음 ${formatInteger(payload.result.skipped_no_items)}개, 실패 ${formatInteger(payload.result.failed_matches)}개, 장비 스냅샷 ${formatInteger(payload.result.generated_snapshots)}개`;
       banner.textContent = "장비 조합 스냅샷 생성 완료";
     }
 
@@ -15649,7 +16606,7 @@ _INDEX_HTML = """<!doctype html>
       }
       const payload = await response.json();
       const result = payload.result;
-      fightOutcomeStatus.textContent = `처리 ${result.parsed_payloads}개, 대상 ${result.tracked_players}명, 승리 ${result.generated_wins}개, 패배 ${result.generated_losses}개, 장비 ${result.generated_loadout_snapshots}개, 실패 ${result.failed_payloads}개`;
+      fightOutcomeStatus.textContent = `처리 ${formatInteger(result.parsed_payloads)}개, 대상 ${formatInteger(result.tracked_players)}명, 승리 ${formatInteger(result.generated_wins)}개, 패배 ${formatInteger(result.generated_losses)}개, 장비 ${formatInteger(result.generated_loadout_snapshots)}개, 실패 ${formatInteger(result.failed_payloads)}개`;
       banner.textContent = "교전 결과 생성 완료";
     }
 
@@ -15665,7 +16622,7 @@ _INDEX_HTML = """<!doctype html>
         throw new Error(error.detail || response.statusText);
       }
       const payload = await response.json();
-      mapSnapshotStatus.textContent = `생성 ${payload.result.generated_snapshots}개, 기존 ${payload.result.skipped_existing}개, 위치없음 ${payload.result.skipped_no_position}개, 실패 ${payload.result.failed_snapshots}개, artifact ${payload.result.artifacts.length}개`;
+      mapSnapshotStatus.textContent = `생성 ${formatInteger(payload.result.generated_snapshots)}개, 기존 ${formatInteger(payload.result.skipped_existing)}개, 위치 없음 ${formatInteger(payload.result.skipped_no_position)}개, 실패 ${formatInteger(payload.result.failed_snapshots)}개, 결과 파일 ${formatInteger(payload.result.artifacts.length)}개`;
       banner.textContent = "지도 이미지 생성 완료";
       await loadReplayArtifacts();
     }
@@ -15682,7 +16639,7 @@ _INDEX_HTML = """<!doctype html>
         throw new Error(error.detail || response.statusText);
       }
       const payload = await response.json();
-      timelineStatus.textContent = `생성 ${payload.result.generated_timelines}개, 기존 ${payload.result.skipped_existing}개, 위치없음 ${payload.result.skipped_no_position}개, 실패 ${payload.result.failed_timelines}개, artifact ${payload.result.artifacts.length}개`;
+      timelineStatus.textContent = `생성 ${formatInteger(payload.result.generated_timelines)}개, 기존 ${formatInteger(payload.result.skipped_existing)}개, 위치 없음 ${formatInteger(payload.result.skipped_no_position)}개, 실패 ${formatInteger(payload.result.failed_timelines)}개, 결과 파일 ${formatInteger(payload.result.artifacts.length)}개`;
       banner.textContent = "재생 타임라인 생성 완료";
       await loadReplayArtifacts();
     }
@@ -16323,17 +17280,7 @@ _INDEX_HTML = """<!doctype html>
       } catch (_error) {
         // Some embedded webviews can block persistence; the current run still uses the selection.
       }
-      applyDisplaySettings();
-      if (activeRankingReport) renderPlayerRanking();
-      if (activeComparisonRows.length) renderComparisonResult();
-      if (activeIntelligenceReport) renderIntelligenceReport();
-      if (activeTimeInsightReport) renderTimeInsights(String(timeInsightForm.elements.metric.value || "match_count"));
-      if (activeTrendReport) {
-        renderTrendView();
-        renderTrendChart();
-      }
-      displaySettingsStatus.firstChild.textContent = "적용 완료 · 현재 표기 예시: ";
-      banner.textContent = "숫자 표기 설정 적용 완료";
+      window.location.reload();
     });
     displaySettingsForm?.elements.number_format.addEventListener("change", () => {
       const previous = activeNumberFormat;
@@ -16457,8 +17404,11 @@ _INDEX_HTML = """<!doctype html>
           const alert = alertHistoryRecords.find((record) => (
             String(record.id) === String(detailButton.dataset.alertDetailId || "")
           ));
-          if (!alert) throw new Error("알림 이력 항목을 불러오지 못했습니다.");
-          await loadAlertHistoryDetail(alert);
+          if (alert) {
+            await loadAlertHistoryDetail(alert);
+          } else {
+            await loadAlertHistoryDetailById(detailButton.dataset.alertDetailId || "");
+          }
           banner.textContent = "알림 상세 조회 완료";
         } catch (error) {
           alertHistoryStatus.textContent = `오류: ${error.message}`;
@@ -16506,6 +17456,7 @@ _INDEX_HTML = """<!doctype html>
         : null;
       if (workerRunButton) {
         try {
+          closeAlertHistoryDialog();
           await loadWorkerRunDetail(workerRunButton.dataset.workerRunFromAlert || "", { scroll: true });
           banner.textContent = "알림에서 작업 실행 상세 조회 완료";
         } catch (error) {
@@ -16533,6 +17484,11 @@ _INDEX_HTML = """<!doctype html>
         alertHistoryStatus.textContent = `오류: ${error.message}`;
         banner.textContent = `오류: ${error.message}`;
       }
+    });
+
+    alertHistoryDialogClose.addEventListener("click", closeAlertHistoryDialog);
+    alertHistoryDialog.addEventListener("click", (event) => {
+      if (event.target === alertHistoryDialog) closeAlertHistoryDialog();
     });
 
     alertHistoryPrev.addEventListener("click", async () => {
@@ -16761,6 +17717,183 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
+    discordBotSettingsForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const wasRunning = Boolean(activeDiscordBotState.running);
+      const previousPrefix = activeDiscordBotSettings.command_prefix || "!";
+      const nextPrefix = String(event.currentTarget.elements.command_prefix.value || "!").trim();
+      try {
+        await saveActiveDiscordBotSettings({
+          ...activeDiscordBotSettings,
+          auto_start: event.currentTarget.elements.auto_start.checked,
+          command_prefix: nextPrefix,
+        });
+        if (wasRunning && previousPrefix !== nextPrefix) {
+          await postJson("/discord/bot/stop", {});
+          await postJson("/discord/bot/start", {});
+        }
+        await loadDiscordBot();
+        banner.textContent = wasRunning && previousPrefix !== nextPrefix
+          ? "Discord 봇 설정 저장 및 접두사 적용 완료"
+          : "Discord 봇 설정 저장 완료";
+      } catch (error) {
+        discordBotStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    discordBotStart.addEventListener("click", async () => {
+      discordBotStart.disabled = true;
+      try {
+        await postJson("/discord/bot/start", {});
+        await loadDiscordBot();
+        banner.textContent = "Discord 봇 시작 요청 완료";
+      } catch (error) {
+        discordBotStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      } finally {
+        discordBotStart.disabled = Boolean(activeDiscordBotState.running);
+      }
+    });
+
+    discordBotStop.addEventListener("click", async () => {
+      discordBotStop.disabled = true;
+      try {
+        await postJson("/discord/bot/stop", {});
+        await loadDiscordBot();
+        banner.textContent = "Discord 봇 중지 완료";
+      } catch (error) {
+        discordBotStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      } finally {
+        discordBotStop.disabled = !activeDiscordBotState.running;
+      }
+    });
+
+    discordBotSyncAll.addEventListener("click", async () => {
+      discordBotSyncAll.disabled = true;
+      try {
+        await postJson("/discord/bot/sync", { guild_id: null });
+        await loadDiscordBot();
+        banner.textContent = "전체 Discord 서버 명령 동기화 완료";
+      } catch (error) {
+        discordBotStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      } finally {
+        discordBotSyncAll.disabled = !activeDiscordBotState.ready;
+      }
+    });
+
+    pubgApiKeyForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const value = String(event.currentTarget.elements.value.value || "");
+      try {
+        await postJson("/settings/secrets/pubg", { value });
+        pubgApiKeyForm.reset();
+        await Promise.all([loadStatus(), loadDiscordBot()]);
+        banner.textContent = "PUBG API 키 저장 완료";
+      } catch (error) {
+        pubgApiKeyStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    discordTokenForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const value = String(event.currentTarget.elements.value.value || "");
+      const wasRunning = Boolean(activeDiscordBotState.running);
+      try {
+        if (wasRunning) await postJson("/discord/bot/stop", {});
+        await postJson("/settings/secrets/discord", { value });
+        discordTokenForm.reset();
+        if (wasRunning) await postJson("/discord/bot/start", {});
+        await Promise.all([loadStatus(), loadDiscordBot()]);
+        banner.textContent = "Discord 봇 토큰 저장 완료";
+      } catch (error) {
+        discordTokenStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    pubgApiKeyClear.addEventListener("click", async () => {
+      if (!window.confirm("저장된 PUBG API 키를 삭제할까요?")) return;
+      try {
+        await requestJson("/settings/secrets/pubg", "DELETE");
+        pubgApiKeyForm.reset();
+        await Promise.all([loadStatus(), loadDiscordBot()]);
+        banner.textContent = "PUBG API 키 삭제 완료";
+      } catch (error) {
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    discordTokenClear.addEventListener("click", async () => {
+      if (!window.confirm("Discord 봇을 중지하고 저장된 토큰을 삭제할까요?")) return;
+      try {
+        await requestJson("/settings/secrets/discord", "DELETE");
+        discordTokenForm.reset();
+        await Promise.all([loadStatus(), loadDiscordBot()]);
+        banner.textContent = "Discord 봇 토큰 삭제 완료";
+      } catch (error) {
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+
+    discordBotGuildSelect.addEventListener("change", loadDiscordBotGuildSelection);
+    discordBotCommandSearch.addEventListener("input", renderDiscordBotCommandCatalog);
+    discordBotCommandCatalog.addEventListener("change", (event) => {
+      const checkbox = event.target instanceof HTMLInputElement && event.target.type === "checkbox"
+        ? event.target
+        : null;
+      if (!checkbox) return;
+      discordBotGuildUsesDefault = false;
+      if (checkbox.checked) selectedDiscordBotCommands.add(checkbox.value);
+      else selectedDiscordBotCommands.delete(checkbox.value);
+      renderDiscordBotCommandCatalog();
+    });
+    discordBotCommandsAll.addEventListener("click", () => {
+      discordBotGuildUsesDefault = false;
+      selectedDiscordBotCommands = new Set(activeDiscordCommandCatalog.map((command) => command.name));
+      renderDiscordBotCommandCatalog();
+    });
+    discordBotCommandsNone.addEventListener("click", () => {
+      discordBotGuildUsesDefault = false;
+      selectedDiscordBotCommands = new Set();
+      renderDiscordBotCommandCatalog();
+    });
+    discordBotCommandsDefault.addEventListener("click", () => {
+      discordBotGuildUsesDefault = true;
+      selectedDiscordBotCommands = new Set(activeDiscordCommandCatalog.map((command) => command.name));
+      renderDiscordBotCommandCatalog();
+    });
+    discordBotCommandsSave.addEventListener("click", async () => {
+      const guildId = String(discordBotGuildSelect.value || "");
+      if (!guildId) {
+        banner.textContent = "Discord 서버를 선택하세요.";
+        return;
+      }
+      const guildEnabledCommands = { ...(activeDiscordBotSettings.guild_enabled_commands || {}) };
+      if (discordBotGuildUsesDefault) delete guildEnabledCommands[guildId];
+      else guildEnabledCommands[guildId] = Array.from(selectedDiscordBotCommands).sort();
+      discordBotCommandsSave.disabled = true;
+      try {
+        await saveActiveDiscordBotSettings({
+          ...activeDiscordBotSettings,
+          guild_enabled_commands: guildEnabledCommands,
+        });
+        if (activeDiscordBotState.ready) {
+          await postJson("/discord/bot/sync", { guild_id: guildId });
+        }
+        await loadDiscordBot();
+        banner.textContent = `${discordGuildName(guildId)} 명령 공개 설정 저장 완료`;
+      } catch (error) {
+        discordBotCommandsStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      } finally {
+        discordBotCommandsSave.disabled = false;
+      }
+    });
+
     discordGrantForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const formElement = event.currentTarget;
@@ -16790,7 +17923,7 @@ _INDEX_HTML = """<!doctype html>
       } else {
         selectedDiscordGroupCommands.delete(checkbox.value);
       }
-      discordCommandGroupStatus.textContent = `전체 ${activeDiscordCommandCatalog.length}개 · 선택 ${selectedDiscordGroupCommands.size}개`;
+      discordCommandGroupStatus.textContent = `전체 ${formatInteger(activeDiscordCommandCatalog.length)}개 · 선택 ${formatInteger(selectedDiscordGroupCommands.size)}개`;
     });
     discordCommandGroupReset.addEventListener("click", resetDiscordCommandGroupEditor);
     discordCommandGroupForm.addEventListener("submit", async (event) => {
@@ -17197,6 +18330,45 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
+    flightPathForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        await loadFlightPathAnalysis();
+        banner.textContent = "비행기 동선 분석 완료";
+      } catch (error) {
+        flightPathStatus.textContent = "오류: " + error.message;
+        banner.textContent = "오류: " + error.message;
+      }
+    });
+    flightPathReset.addEventListener("click", async () => {
+      flightPathForm.reset();
+      flightPathResult.hidden = true;
+      flightPathResult.innerHTML = "";
+      flightPathStatus.textContent = "분석 대기 중";
+      try {
+        await loadFlightPathMapCatalog();
+      } catch (error) {
+        flightPathStatus.textContent = "맵 목록 오류: " + error.message;
+      }
+      banner.textContent = "비행기 동선 필터를 초기화했습니다.";
+    });
+    flightPathPlayerSelect.addEventListener("change", async () => {
+      const player = registeredPlayers.find((item) => item.account_id === flightPathPlayerSelect.value);
+      try {
+        if (!player) {
+          for (const select of flightPathForm.querySelectorAll("select[data-catalog-facet]")) {
+            if (select !== flightPathMapFilter) select.innerHTML = '<option value="">전체</option>';
+          }
+          await loadFlightPathMapCatalog();
+          return;
+        }
+        flightPathForm.elements.shard.value = player.shard;
+        applyPlayerCatalog(flightPathForm, await loadPlayerCatalog(player));
+      } catch (error) {
+        flightPathStatus.textContent = "필터 목록 오류: " + error.message;
+      }
+    });
+
     alertDiscordGuildSelect.addEventListener("change", async () => {
       try {
         await loadDiscordAlertChannels();
@@ -17471,7 +18643,7 @@ _INDEX_HTML = """<!doctype html>
     const initialAlertHistoryFilterFromUrl = loadInitialAlertHistoryFiltersFromUrl();
     loadInitialWorkerRunFiltersFromUrl();
 
-    Promise.all([loadStatus(), loadAlerts(), loadDiscordPermissions(), loadDiscordScopes(), loadDiscordGuilds(), loadCollectorWorkerStatus(), loadPostProcessingWorkerStatus(), loadOperationalDrills(), loadWorkerRuns(), loadPlayers(), loadDataDeletionRequests(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts()])
+    Promise.all([loadStatus(), loadAlerts(), loadDiscordBot(), loadDiscordPermissions(), loadDiscordScopes(), loadDiscordGuilds(), loadCollectorWorkerStatus(), loadPostProcessingWorkerStatus(), loadOperationalDrills(), loadWorkerRuns(), loadPlayers(), loadDataDeletionRequests(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts(), loadFlightPathMapCatalog()])
       .then(() => initialAlertHistoryFilterFromUrl ? loadAlertHistory(alertHistoryPage) : null)
       .then(() => loadInitialAlertDetailFromUrl())
       .then(() => loadInitialWorkerRunDetailFromUrl())
@@ -17485,6 +18657,7 @@ _INDEX_HTML = """<!doctype html>
     }
     setInterval(() => runBackgroundRefresh("수집기", loadCollectorWorkerStatus), 10000);
     setInterval(() => runBackgroundRefresh("후처리", loadPostProcessingWorkerStatus), 10000);
+    setInterval(() => runBackgroundRefresh("Discord 봇", loadDiscordBot), 10000);
     setInterval(() => runBackgroundRefresh("작업 이력", loadWorkerRuns), 30000);
     setInterval(() => loadOperationalDrills().catch(() => {}), 30000);
     setInterval(() => {

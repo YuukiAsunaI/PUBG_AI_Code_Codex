@@ -404,7 +404,7 @@ class WebSettingsTests(unittest.TestCase):
         with TemporaryDirectory() as temp_dir:
             settings_file = Path(temp_dir) / "config" / "local_settings.json"
             with patch.dict(os.environ, {"PUBG_LOCAL_SETTINGS_FILE": str(settings_file), "PUBG_API_KEY": ""}):
-                client = TestClient(create_app())
+                client = TestClient(create_app(base_dir=Path(temp_dir)))
                 response = client.post(
                     "/collector/worker/start",
                     json={"match_job_limit": 10, "telemetry_job_limit": 5},
