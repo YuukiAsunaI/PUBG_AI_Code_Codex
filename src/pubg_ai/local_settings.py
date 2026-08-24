@@ -25,6 +25,9 @@ class LocalSettingsError(RuntimeError):
     """Raised when local program settings cannot be read or saved."""
 
 
+NUMBER_FORMATS = frozenset({"grouped", "korean_units", "plain"})
+
+
 @dataclass(frozen=True)
 class StoragePathStatus:
     path: str
@@ -135,6 +138,18 @@ class WebSettings:
     def to_record(self) -> dict[str, Any]:
         return {
             "local_web_base_url": self.local_web_base_url,
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass(frozen=True)
+class DisplaySettings:
+    number_format: str = "grouped"
+    updated_at: str | None = None
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "number_format": self.number_format,
             "updated_at": self.updated_at,
         }
 
@@ -269,6 +284,13 @@ class LocalSettingsStore:
             return None
 
         return _web_settings_from_record(web)
+
+    def load_display_settings(self) -> DisplaySettings:
+        payload = self._read_settings() or {}
+        display = payload.get("display")
+        if not isinstance(display, dict):
+            return DisplaySettings()
+        return _display_settings_from_record(display)
 
     def load_alert_settings(self) -> AlertSettings:
         payload = self._read_settings() or {}
@@ -447,6 +469,14 @@ class LocalSettingsStore:
             updated_at=isoformat_kst(),
         )
         self._update_settings_section("web", settings.to_record())
+        return settings
+
+    def save_display_settings(self, number_format: str) -> DisplaySettings:
+        settings = DisplaySettings(
+            number_format=_normalize_number_format(number_format),
+            updated_at=isoformat_kst(),
+        )
+        self._update_settings_section("display", settings.to_record())
         return settings
 
     def save_alert_settings(
@@ -695,6 +725,21 @@ def _collector_settings_from_record(record: dict[str, Any]) -> CollectorSettings
     )
     _validate_collector_settings(settings)
     return settings
+
+
+def _display_settings_from_record(record: dict[str, Any]) -> DisplaySettings:
+    return DisplaySettings(
+        number_format=_normalize_number_format(record.get("number_format", "grouped")),
+        updated_at=_optional_str(record.get("updated_at")),
+    )
+
+
+def _normalize_number_format(value: Any) -> str:
+    normalized = str(value or "").strip()
+    if normalized not in NUMBER_FORMATS:
+        allowed = ", ".join(sorted(NUMBER_FORMATS))
+        raise LocalSettingsError(f"number_format must be one of: {allowed}.")
+    return normalized
 
 
 def _validate_collector_settings(settings: CollectorSettings) -> None:

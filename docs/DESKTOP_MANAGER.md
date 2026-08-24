@@ -3,8 +3,9 @@
 ## Architecture
 
 The Windows desktop manager is a thin pywebview shell around the existing FastAPI UI. It does not duplicate player,
-collection, analytics, permission, or replay logic. `pubg_ai.desktop` resolves a localhost endpoint, verifies an
-existing process through `/health`, starts FastAPI only when needed, and opens that URL in a native window.
+collection, analytics, permission, or replay logic. `pubg_ai.desktop` resolves a localhost endpoint, selects an
+available port, starts a manager instance owned by that window, and opens that URL in a native window. It never
+attaches a new executable to an older manager merely because `/health` returned a valid local response.
 
 The browser-only `run-web` mode remains supported. Both modes use the same endpoints, local settings file, MySQL
 database, Raw storage, Replay storage, workers, and tests.
@@ -17,12 +18,14 @@ transparent helmet/data-shield adaptation of the operator-provided artwork so it
 
 - Desktop endpoints accept only `127.0.0.1`, `localhost`, or `::1`.
 - `0.0.0.0` and remote host names are rejected.
-- An occupied port is reused only when its health response identifies the PUBG local manager.
+- An occupied preferred port is skipped. The launcher scans up to 100 local ports and starts its own current build on
+  the first available one.
 - The JavaScript bridge returns runtime metadata and folder-picker results only. It never returns PUBG or Discord
   secrets.
-- Closing a desktop window does not stop a manager process that was already running before the window opened.
 - Closing a window that started its own manager stops the Discord bot controller first, then the local web server.
   A normal zero exit is not surfaced as an error dialog.
+- The top-right runtime badge exposes the active application release and the bridge tooltip exposes the selected
+  localhost URL, making stale-window diagnosis explicit.
 
 ## Storage Selection
 
@@ -55,7 +58,8 @@ keeps the same text inputs and hides the native-only buttons.
 
 ## Dedicated Discord Bot Control
 
-The Discord workspace manages the project's dedicated bot without exposing stored credentials:
+The left navigation entry `Discord 봇` opens the Discord workspace, whose first tab `전용 봇` manages the project's
+dedicated bot without exposing stored credentials:
 
 - PUBG API key and Discord bot token inputs are write-only. Saving writes only to the ignored project `.env`; status
   reports configured/missing and the browser never receives the saved value.
@@ -64,6 +68,14 @@ The Discord workspace manages the project's dedicated bot without exposing store
   registration and prefix invocation use the same per-guild gate.
 - Permission groups, command aliases, ranking scope, and player-to-guild registrations remain independently editable.
 - The manager stays bound to localhost; bot control does not create a remote administration endpoint.
+
+## Display Settings
+
+The grouped, Korean-unit, and plain number modes are stored in the shared local settings file rather than only in
+browser `localStorage`. A selected mode therefore survives reloads, packaged-app restarts, and automatic fallback from
+an occupied preferred port to another localhost port. The browser workflow verifies the preview and real player
+analysis values; Korean-unit mode fails verification if any visible grouped value of 10,000 or greater remains without
+a Korean large-number unit.
 
 ## Frequent Flight Paths
 
@@ -89,7 +101,8 @@ python -m pubg_ai.cli run-desktop --maximized
 ```
 
 The repository-root `run_desktop.cmd` provides a double-click launcher after installation. The configured
-`local_web_base_url` supplies the default desktop port, with `8000` used when no local URL is configured.
+`local_web_base_url` supplies the preferred desktop port, with `8000` used when no local URL is configured. If that
+port is occupied, the launcher selects the next available localhost port and displays it in the runtime badge tooltip.
 
 ## Windows Executable
 

@@ -11,9 +11,12 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import urlopen
 
+from pubg_ai.release import APP_RELEASE
+
 
 LOCAL_DESKTOP_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 DEFAULT_DESKTOP_PORT = 8000
+DEFAULT_DESKTOP_PORT_SCAN = 100
 DESKTOP_WINDOW_TITLE = "PUBG AI Local Manager"
 
 
@@ -71,7 +74,11 @@ def probe_local_manager(endpoint: DesktopEndpoint, *, timeout_seconds: float = 0
             payload = json.loads(response.read().decode("utf-8"))
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, OSError):
         return False
-    return payload.get("status") == "ok" and payload.get("local_only") is True
+    return (
+        payload.get("status") == "ok"
+        and payload.get("local_only") is True
+        and payload.get("app_release") == APP_RELEASE
+    )
 
 
 def _port_accepts_connections(endpoint: DesktopEndpoint, *, timeout_seconds: float = 0.25) -> bool:
@@ -80,6 +87,25 @@ def _port_accepts_connections(endpoint: DesktopEndpoint, *, timeout_seconds: flo
             return True
     except OSError:
         return False
+
+
+def select_available_desktop_endpoint(
+    preferred: DesktopEndpoint,
+    *,
+    max_attempts: int = DEFAULT_DESKTOP_PORT_SCAN,
+    occupied: Callable[[DesktopEndpoint], bool] = _port_accepts_connections,
+) -> DesktopEndpoint:
+    if max_attempts < 1:
+        raise DesktopLaunchError("Desktop port scan must check at least one port.")
+
+    last_port = min(65535, preferred.port + max_attempts - 1)
+    for candidate_port in range(preferred.port, last_port + 1):
+        candidate = DesktopEndpoint(host=preferred.host, port=candidate_port)
+        if not occupied(candidate):
+            return candidate
+    raise DesktopLaunchError(
+        f"No available localhost port was found from {preferred.port} through {last_port}."
+    )
 
 
 class LocalManagerServer:
@@ -101,11 +127,9 @@ class LocalManagerServer:
         self.owns_server = False
 
     def start(self, *, timeout_seconds: float = 15.0) -> bool:
-        if self._health_probe(self.endpoint):
-            return False
         if _port_accepts_connections(self.endpoint):
             raise DesktopLaunchError(
-                f"Port {self.endpoint.port} is already occupied by a service that is not the PUBG local manager."
+                f"Port {self.endpoint.port} became occupied before the PUBG local manager could start."
             )
 
         try:
@@ -178,6 +202,7 @@ class DesktopApi:
             "local_only": True,
             "base_url": self.endpoint.base_url,
             "project_dir": str(self.base_dir),
+            "app_release": APP_RELEASE,
         }
 
     def choose_directory(self, purpose: str) -> dict[str, Any]:
@@ -226,11 +251,12 @@ def run_desktop_app(
             'Desktop dependencies are missing. Run: python -m pip install -e ".[desktop]"'
         ) from exc
 
-    endpoint = resolve_desktop_endpoint(
+    preferred_endpoint = resolve_desktop_endpoint(
         configured_base_url=configured_base_url,
         host=host,
         port=port,
     )
+    endpoint = select_available_desktop_endpoint(preferred_endpoint)
     server = LocalManagerServer(endpoint=endpoint, base_dir=base_dir, env_file=env_file)
     server.start()
 

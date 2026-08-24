@@ -69,11 +69,16 @@ async function runPlayerAnalysis(page) {
   await page.locator('[data-intelligence-view="evidence"]').click();
   await page.locator("#intelligenceBody .intelligence-definition").first().waitFor();
   const definitionCount = await page.locator("#intelligenceBody .intelligence-definition").count();
+  const unconvertedLargeNumbers = [...overview.matchAll(/\b\d{1,3}(?:,\d{3})+(?:\.\d+)?\b/g)]
+    .map((match) => match[0])
+    .filter((text) => Number(text.replaceAll(",", "")) >= 10000);
   return {
     quality,
     hasPlayer: overview.includes("명중률") && overview.includes("교전"),
     chartCount,
     definitionCount,
+    hasKoreanLargeUnit: /\d+(?:억|만)(?:\s|\d)/.test(overview),
+    unconvertedLargeNumbers: [...new Set(unconvertedLargeNumbers)].slice(0, 20),
   };
 }
 
@@ -176,6 +181,7 @@ async function runMobileRegistryCheck(page) {
 async function runExpandedFeatureChecks(page) {
   await openWorkspaceSection(page, "settings", "display");
   const displayForm = page.locator("#displaySettingsForm");
+  const originalNumberMode = await displayForm.locator('[name="number_format"]').inputValue();
   await displayForm.locator('[name="number_format"]').selectOption("korean_units");
   const koreanPreview = await page.locator("#displayNumberPreview").innerText();
   await Promise.all([
@@ -185,13 +191,16 @@ async function runExpandedFeatureChecks(page) {
   await openWorkspaceSection(page, "settings", "display");
   const persistedKoreanMode = await page.locator('#displaySettingsForm [name="number_format"]').inputValue();
   const persistedKoreanPreview = await page.locator("#displayNumberPreview").innerText();
-  await page.locator('#displaySettingsForm [name="number_format"]').selectOption("grouped");
+  const koreanAnalysis = await runPlayerAnalysis(page);
+
+  await openWorkspaceSection(page, "settings", "display");
+  await page.locator('#displaySettingsForm [name="number_format"]').selectOption(originalNumberMode);
   await Promise.all([
     page.waitForNavigation({ waitUntil: "networkidle" }),
     page.locator('#displaySettingsForm button[type="submit"]').click(),
   ]);
   await openWorkspaceSection(page, "settings", "display");
-  const restoredGroupedMode = await page.locator('#displaySettingsForm [name="number_format"]').inputValue();
+  const restoredOriginalMode = await page.locator('#displaySettingsForm [name="number_format"]').inputValue();
 
   await openWorkspaceSection(page, "players", "matches");
 
@@ -306,13 +315,18 @@ async function runExpandedFeatureChecks(page) {
   const items = matchApi.items || [];
   return {
     numberFormat: {
+      originalNumberMode,
       koreanPreview,
       persistedKoreanPreview,
       persistedKoreanMode,
-      restoredGroupedMode,
+      restoredOriginalMode,
+      actualAnalysisHasKoreanUnit: koreanAnalysis.hasKoreanLargeUnit,
+      actualAnalysisUnconvertedLargeNumbers: koreanAnalysis.unconvertedLargeNumbers,
       koreanUnitsRendered: koreanPreview.includes("5만") && koreanPreview.includes("9,452")
         && persistedKoreanPreview.includes("5만") && persistedKoreanMode === "korean_units"
-        && restoredGroupedMode === "grouped",
+        && restoredOriginalMode === originalNumberMode
+        && koreanAnalysis.hasKoreanLargeUnit
+        && koreanAnalysis.unconvertedLargeNumbers.length === 0,
     },
     match: {
       matchId,
@@ -347,6 +361,8 @@ async function runExpandedFeatureChecks(page) {
     },
     discordBot: {
       status: discordBotStatus,
+      navigationLabel: await page.locator('[data-view-target="discord"]').innerText(),
+      managerVisible: await page.locator("#discord-bot-manager").isVisible(),
       secretInputsEmpty,
       guildOptions: discordGuildOptions,
       overflow: discordOverflow,
@@ -469,6 +485,8 @@ async function layoutDiagnostics(page) {
       result.desktop.features.flightPaths.overflow,
       !result.desktop.features.discordBot.secretInputsEmpty,
       !result.desktop.features.discordBot.status,
+      !result.desktop.features.discordBot.navigationLabel.includes("Discord 봇"),
+      !result.desktop.features.discordBot.managerVisible,
       result.desktop.features.discordBot.overflow,
       result.desktop.registryDimensions.registryRows < 1,
       result.desktop.registryDimensions.managementButtons < result.desktop.registryDimensions.registryRows * 2,

@@ -139,6 +139,7 @@ from pubg_ai.player_trends import (
     parse_trend_date,
 )
 from pubg_ai.pubg_client import PubgApiClient, PubgApiError
+from pubg_ai.release import APP_RELEASE
 from pubg_ai.raw_storage import RawPayloadStore
 from pubg_ai.replay_artifact_catalog import get_replay_artifact, list_replay_artifacts
 from pubg_ai.replay_storage import ReplayArtifactStore, ReplayStorageError
@@ -267,6 +268,10 @@ class DiscordScopeSettingsRequest(BaseModel):
 
 class SecretUpdateRequest(BaseModel):
     value: str = Field(min_length=1, max_length=4096)
+
+
+class DisplaySettingsRequest(BaseModel):
+    number_format: str = Field(pattern=r"^(grouped|korean_units|plain)$")
 
 
 class DiscordBotSettingsRequest(BaseModel):
@@ -880,7 +885,12 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
-        return _INDEX_HTML
+        display_settings = settings_store.load_display_settings()
+        return (
+            _INDEX_HTML
+            .replace("__PUBG_AI_APP_RELEASE__", APP_RELEASE)
+            .replace("__PUBG_AI_NUMBER_FORMAT__", display_settings.number_format)
+        )
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -888,6 +898,7 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
             "status": "ok",
             "local_only": True,
             "bind_host": "127.0.0.1",
+            "app_release": APP_RELEASE,
         }
 
     @app.get("/favicon.ico", include_in_schema=False)
@@ -950,6 +961,22 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
             "web": web_settings.to_record(),
             "settings": _settings_status_record(current_config()),
         }
+
+    @app.get("/settings/display")
+    def display_settings() -> dict[str, Any]:
+        try:
+            settings = settings_store.load_display_settings()
+        except LocalSettingsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"display": settings.to_record()}
+
+    @app.post("/settings/display")
+    def save_display_settings(request: DisplaySettingsRequest) -> dict[str, Any]:
+        try:
+            settings = settings_store.save_display_settings(request.number_format)
+        except LocalSettingsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"display": settings.to_record()}
 
     @app.post("/settings/storage")
     def save_storage_settings(request: StorageSettingsRequest) -> dict[str, Any]:
@@ -5709,7 +5736,7 @@ _INDEX_HTML = """<!doctype html>
     }
   </style>
 </head>
-<body data-active-view="overview">
+<body data-active-view="overview" data-app-release="__PUBG_AI_APP_RELEASE__">
   <header class="app-header">
     <div class="brand-lockup">
       <img class="brand-mark" src="/assets/app-icon.png" alt="PUBG AI">
@@ -5723,7 +5750,7 @@ _INDEX_HTML = """<!doctype html>
       <span class="command-message" id="banner">localhost 전용 관리 화면</span>
     </div>
     <div class="header-meta">
-      <span id="runtimeMode">브라우저</span>
+      <span id="runtimeMode">브라우저 · __PUBG_AI_APP_RELEASE__</span>
       <strong id="kstClock">--:--:--</strong>
     </div>
   </header>
@@ -5738,7 +5765,7 @@ _INDEX_HTML = """<!doctype html>
         <button type="button" data-view-target="players"><span>02</span>플레이어</button>
         <button type="button" data-view-target="replay"><span>03</span>2D 리플레이</button>
         <button type="button" data-view-target="collection"><span>04</span>수집·처리</button>
-        <button type="button" data-view-target="discord"><span>05</span>Discord</button>
+        <button type="button" data-view-target="discord"><span>05</span>Discord 봇</button>
         <button type="button" data-view-target="operations"><span>06</span>운영·알림</button>
         <button type="button" data-view-target="settings"><span>07</span>설정</button>
       </nav>
@@ -7634,14 +7661,9 @@ _INDEX_HTML = """<!doctype html>
     let activeRecommendationChartMetric = "score";
     let activeRankingReport = null;
     let activeRankingView = "table";
-    let activeNumberFormat = (() => {
-      try {
-        const saved = window.localStorage.getItem("pubg-ai-number-format");
-        return ["grouped", "korean_units", "plain"].includes(saved) ? saved : "grouped";
-      } catch (_error) {
-        return "grouped";
-      }
-    })();
+    let activeNumberFormat = ["grouped", "korean_units", "plain"].includes("__PUBG_AI_NUMBER_FORMAT__")
+      ? "__PUBG_AI_NUMBER_FORMAT__"
+      : "grouped";
     let registeredPlayers = [];
     let activeDiscordGuilds = [];
     let activeDiscordPermissions = {
@@ -7930,9 +7952,10 @@ _INDEX_HTML = """<!doctype html>
     async function enableDesktopFeatures() {
       if (!window.pywebview?.api) return false;
       document.body.classList.add("desktop-host");
-      runtimeMode.textContent = "데스크톱";
+      runtimeMode.textContent = `데스크톱 · ${document.body.dataset.appRelease || "버전 확인 불가"}`;
       try {
         const status = await window.pywebview.api.runtime_status();
+        if (status.app_release) runtimeMode.textContent = `데스크톱 · ${status.app_release}`;
         runtimeMode.title = status.base_url + " / " + status.project_dir;
       } catch (error) {
         runtimeMode.title = "데스크톱 연결 오류: " + error.message;
@@ -17271,16 +17294,25 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
-    displaySettingsForm?.addEventListener("submit", (event) => {
+    displaySettingsForm?.addEventListener("submit", async (event) => {
       event.preventDefault();
       const mode = String(new FormData(displaySettingsForm).get("number_format") || "grouped");
-      activeNumberFormat = ["grouped", "korean_units", "plain"].includes(mode) ? mode : "grouped";
       try {
-        window.localStorage.setItem("pubg-ai-number-format", activeNumberFormat);
-      } catch (_error) {
-        // Some embedded webviews can block persistence; the current run still uses the selection.
+        displaySettingsStatus.textContent = "표시 설정 저장 중";
+        const payload = await postJson("/settings/display", { number_format: mode });
+        activeNumberFormat = payload.display.number_format;
+        try {
+          window.localStorage.setItem("pubg-ai-number-format", activeNumberFormat);
+        } catch (_error) {
+          // The server-side setting remains authoritative when webview storage is unavailable.
+        }
+        applyDisplaySettings();
+        banner.textContent = "숫자 표기 설정 적용 완료";
+        window.location.reload();
+      } catch (error) {
+        displaySettingsStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
       }
-      window.location.reload();
     });
     displaySettingsForm?.elements.number_format.addEventListener("change", () => {
       const previous = activeNumberFormat;

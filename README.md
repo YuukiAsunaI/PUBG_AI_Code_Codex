@@ -681,11 +681,18 @@ python -m pubg_ai.cli run-desktop --maximized
 ```
 
 After the desktop dependency is installed, `run_desktop.cmd` provides the same maximized launch by double-click.
-Desktop mode starts the FastAPI manager on the configured localhost URL, or reuses it when the same manager is
-already running. The native window exposes Windows folder pickers for Raw, Replay, deletion-backup, and quarantine
-roots; the selected value is not persisted until the Storage Settings Save button is pressed. Closing the window
-stops only services that the desktop launcher started itself, including its Discord bot controller. The bind boundary
-remains localhost-only. The supplied artwork is packaged as the window, taskbar, executable, header, and favicon icon.
+Desktop mode always starts its own FastAPI manager. If the configured localhost port is already occupied, it scans
+forward for an available local port instead of attaching a new window to a stale or older manager build. The header
+shows the active release identifier and the native window exposes Windows folder pickers for Raw, Replay,
+deletion-backup, and quarantine roots; the selected value is not persisted until the Storage Settings Save button is
+pressed. Closing the window stops only services owned by that launch, including its Discord bot controller. The bind
+boundary remains localhost-only. The supplied artwork is packaged as the window, taskbar, executable, header, and
+favicon icon.
+
+The local `Display Settings` number format is persisted in `config/local_settings.json`, so grouped, Korean-unit, or
+plain rendering remains consistent when the desktop launcher selects a different localhost port. The left navigation
+entry `Discord 봇` opens the dedicated bot manager with write-only PUBG API key and Discord token fields plus start,
+stop, sync, auto-start, prefix, and per-guild command visibility controls.
 
 Build the local Windows executable:
 
