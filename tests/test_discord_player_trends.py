@@ -80,7 +80,7 @@ class DiscordPlayerTrendTests(unittest.TestCase):
         self.assertIn("Player KST 월별 추세 (steam)", body)
         self.assertIn("10전 2치킨/8비치킨 (20.0%)", body)
         self.assertIn("일반 탄환 추정 10.0%", body)
-        self.assertIn("team=squad, view=fpp, from=2026-07-01", body)
+        self.assertIn("팀 모드=스쿼드, 시점=1인칭, 시작일=2026-07-01", body)
         self.assertIn("2026년 08월: 10전 2치킨 20.0%", body)
         self.assertIn("#trend-lookup", body)
 

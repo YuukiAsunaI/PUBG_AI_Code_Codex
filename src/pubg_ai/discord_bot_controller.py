@@ -197,6 +197,58 @@ class DiscordBotController:
             )
             return self._state
 
+    def fetch_commands(self, guild_id: str) -> list[str]:
+        return self.fetch_command_exposure(guild_id)["visible_commands"]
+
+    def fetch_command_exposure(self, guild_id: str) -> dict[str, list[str]]:
+        normalized_guild_id = str(guild_id or "").strip()
+        if not normalized_guild_id.isdigit():
+            raise DiscordBotControllerError("Discord 서버 ID 형식이 올바르지 않습니다.")
+        with self._lock:
+            bot = self._bot
+            loop = self._loop
+            ready = self._state.ready
+        if not ready or bot is None or loop is None or not loop.is_running():
+            raise DiscordBotControllerError("Discord 봇을 먼저 실행해 주세요.")
+        fetch_exposure = getattr(bot, "pubg_fetch_application_command_exposure", None)
+        fetch_legacy = getattr(bot, "pubg_fetch_application_commands", None)
+        if not callable(fetch_exposure) and not callable(fetch_legacy):
+            raise DiscordBotControllerError("Discord 명령 검증 기능을 사용할 수 없습니다.")
+        try:
+            if callable(fetch_exposure):
+                future = asyncio.run_coroutine_threadsafe(
+                    fetch_exposure(normalized_guild_id),
+                    loop,
+                )
+                raw = dict(future.result(timeout=60.0) or {})
+                global_commands = sorted(str(name) for name in raw.get("global_commands", []))
+                guild_commands = sorted(str(name) for name in raw.get("guild_commands", []))
+                visible_commands = sorted(
+                    str(name)
+                    for name in raw.get(
+                        "visible_commands",
+                        sorted(set(global_commands) | set(guild_commands)),
+                    )
+                )
+            else:
+                future = asyncio.run_coroutine_threadsafe(
+                    fetch_legacy([normalized_guild_id]),
+                    loop,
+                )
+                result = dict(future.result(timeout=60.0) or {})
+                global_commands = []
+                guild_commands = sorted(
+                    str(name) for name in result.get(normalized_guild_id, [])
+                )
+                visible_commands = list(guild_commands)
+        except Exception as exc:
+            raise DiscordBotControllerError(_safe_error(exc, self._token)) from exc
+        return {
+            "global_commands": global_commands,
+            "guild_commands": guild_commands,
+            "visible_commands": visible_commands,
+        }
+
     def _run(self) -> None:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)

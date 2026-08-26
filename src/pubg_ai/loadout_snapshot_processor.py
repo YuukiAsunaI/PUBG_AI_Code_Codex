@@ -132,7 +132,7 @@ class LoadoutSnapshotProcessor:
                 f"""
                 SELECT location_events.match_id
                 FROM player_combat_location_events location_events
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = location_events.match_id
                 WHERE location_events.action IN ('kill', 'dbno_caused', 'finish')
                   AND location_events.damage_causer_name IS NOT NULL

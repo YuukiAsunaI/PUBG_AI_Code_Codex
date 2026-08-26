@@ -137,7 +137,7 @@ def list_replay_artifacts(
                 artifacts.renderer_version,
                 artifacts.generated_at_kst
             FROM replay_artifacts artifacts
-            INNER JOIN matches
+            INNER JOIN analysis_matches AS matches
                 ON matches.match_id = artifacts.match_id
             LEFT JOIN registered_players
                 ON registered_players.account_id = artifacts.account_id
@@ -181,7 +181,7 @@ def get_replay_artifact(connection: Any, artifact_id: int) -> ReplayArtifactReco
                 artifacts.renderer_version,
                 artifacts.generated_at_kst
             FROM replay_artifacts artifacts
-            INNER JOIN matches
+            INNER JOIN analysis_matches AS matches
                 ON matches.match_id = artifacts.match_id
             LEFT JOIN registered_players
                 ON registered_players.account_id = artifacts.account_id

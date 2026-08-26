@@ -187,8 +187,8 @@ class DiscordRecommendationFormattingTests(unittest.TestCase):
         self.assertIn("추정 30.0%", body)
         self.assertIn("헤드샷 명중 20.0%", body)
         self.assertIn("교전 승률 70.0%", body)
-        self.assertIn("Vertical Grip", body)
-        self.assertIn("M416 + Vertical Grip", body)
+        self.assertIn("수직 손잡이", body)
+        self.assertIn("M416 + 수직 손잡이", body)
         self.assertIn("M416 10-15m", body)
         self.assertIn("Erangel", body)
         self.assertIn("Friend (등록 유저)", body)
@@ -209,9 +209,10 @@ class DiscordRecommendationFormattingTests(unittest.TestCase):
         self.assertIn("weapon_code=WeapHK416_C", body_with_links)
         self.assertIn("attachment_code=Item_Attach_Weapon_Lower_Foregrip_C", body_with_links)
         self.assertIn(
-            "- 로컬 상세: [열기](http://127.0.0.1:8000/?shard=steam&account_id=account.test&min_matches=1#recommendation-lookup)",
+            "- 로컬 앱 추천 상세: [열기](http://127.0.0.1:8000/?shard=steam&account_id=account.test&min_matches=1#recommendation-lookup)",
             body_with_links,
         )
+        self.assertIn("[근거]", body_with_links)
 
 
 if __name__ == "__main__":

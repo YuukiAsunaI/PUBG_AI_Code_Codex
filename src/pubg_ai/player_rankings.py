@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from typing import Any
 
 from pubg_ai.player_registry import RegisteredPlayer
-from pubg_ai.player_scope import PLAYER_GUILD_SCOPE_CONDITION
 from pubg_ai.weapon_accuracy import AccuracyBreakdown, summarize_accuracy_rows
 
 
@@ -78,6 +77,7 @@ class PlayerRanking:
     active_only: bool
     min_matches: int
     rows: list[PlayerRankingRow]
+    scope_guild_ids: list[str] = field(default_factory=list)
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -85,6 +85,7 @@ class PlayerRanking:
             "metric_label": self.metric_label,
             "shard": self.shard,
             "guild_id": self.guild_id,
+            "scope_guild_ids": self.scope_guild_ids,
             "global_scope": self.global_scope,
             "active_only": self.active_only,
             "min_matches": self.min_matches,
@@ -102,6 +103,7 @@ class PlayerRankingService:
         shard: str = "steam",
         metric: str = "kda",
         guild_id: str | None = None,
+        guild_ids: list[str] | None = None,
         global_scope: bool = False,
         active_only: bool = True,
         min_matches: int = 1,
@@ -111,9 +113,17 @@ class PlayerRankingService:
         metric_info = resolve_ranking_metric(metric)
         min_matches = max(1, int(min_matches))
         limit = max(1, min(int(limit), 100))
+        scoped_guild_ids = sorted(
+            {
+                str(value).strip()
+                for value in (guild_ids if guild_ids is not None else [guild_id])
+                if value is not None and str(value).strip()
+            }
+        )
         rows = self._load_rows(
             shard=shard,
             guild_id=guild_id,
+            guild_ids=scoped_guild_ids,
             global_scope=global_scope,
             active_only=active_only,
             min_matches=min_matches,
@@ -134,6 +144,7 @@ class PlayerRankingService:
             metric_label=metric_info.label,
             shard=shard,
             guild_id=None if global_scope else guild_id,
+            scope_guild_ids=[] if global_scope else scoped_guild_ids,
             global_scope=global_scope,
             active_only=active_only,
             min_matches=min_matches,
@@ -145,6 +156,7 @@ class PlayerRankingService:
         *,
         shard: str,
         guild_id: str | None,
+        guild_ids: list[str],
         global_scope: bool,
         active_only: bool,
         min_matches: int,
@@ -156,10 +168,23 @@ class PlayerRankingService:
         if active_only:
             conditions.append("registered_players.active = 1")
         if not global_scope:
-            if not guild_id:
+            if not guild_ids:
                 return []
-            conditions.append(PLAYER_GUILD_SCOPE_CONDITION)
-            params.append(guild_id)
+            placeholders = ", ".join(["%s"] * len(guild_ids))
+            conditions.append(
+                """
+                EXISTS (
+                    SELECT 1
+                    FROM player_discord_registrations AS player_scope_registration
+                    WHERE player_scope_registration.registered_player_id = registered_players.id
+                      AND player_scope_registration.guild_id IN ("""
+                + placeholders
+                + """)
+                      AND player_scope_registration.active = 1
+                )
+                """.strip()
+            )
+            params.extend(guild_ids)
 
         params.append(min_matches)
 
@@ -219,7 +244,7 @@ class PlayerRankingService:
                 FROM registered_players
                 INNER JOIN player_match_combat_summaries summaries
                     ON summaries.account_id = registered_players.account_id
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = summaries.match_id
                    AND matches.shard = registered_players.shard
                 LEFT JOIN match_participants participants
@@ -236,7 +261,7 @@ class PlayerRankingService:
                         COALESCE(SUM(fights.outcome_type = 'win'), 0) AS fight_wins,
                         COALESCE(SUM(fights.outcome_type = 'loss'), 0) AS fight_losses
                     FROM player_fight_outcomes fights
-                    INNER JOIN matches fight_matches
+                    INNER JOIN analysis_matches AS fight_matches
                         ON fight_matches.match_id = fights.match_id
                     WHERE fights.is_friendly_fire = 0
                     GROUP BY fights.account_id, fight_matches.shard
@@ -293,7 +318,7 @@ class PlayerRankingService:
                     COALESCE(SUM(weapon_stats.shots_fired), 0) AS shots_fired,
                     COALESCE(SUM(weapon_stats.shots_hit), 0) AS shots_hit
                 FROM player_weapon_match_stats weapon_stats
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = weapon_stats.match_id
                 WHERE matches.shard = %s
                   AND weapon_stats.account_id IN (

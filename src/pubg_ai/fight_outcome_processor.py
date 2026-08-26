@@ -215,7 +215,7 @@ class FightOutcomeProcessor:
                     matches.game_mode,
                     matches.team_mode
                 FROM raw_telemetry_payloads raw_payloads
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = raw_payloads.match_id
                 {where}
                 ORDER BY raw_payloads.id ASC

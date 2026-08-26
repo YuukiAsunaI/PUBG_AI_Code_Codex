@@ -46,6 +46,21 @@ class DiscordGuildSummary:
 
 
 @dataclass(frozen=True)
+class DiscordGuildMember:
+    guild_id: str
+    user_id: str
+    display_name: str
+    nickname: str | None
+    global_name: str | None
+    username: str
+    discriminator: str | None
+    is_bot: bool
+
+    def to_record(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class DiscordChannelCandidate:
     guild_id: str
     guild_name: str
@@ -234,6 +249,67 @@ class DiscordAcceptanceClient:
             username=str(payload.get("username") or ""),
             is_bot=bool(payload.get("bot")),
         )
+
+    def list_guild_members(
+        self,
+        *,
+        guild_id: str,
+        search: str | None = None,
+        limit: int = 100,
+    ) -> list[DiscordGuildMember]:
+        selected_guild_id = _required_snowflake(guild_id, "guild_id")
+        normalized_search = str(search or "").strip()
+        selected_limit = max(1, min(int(limit), 1000))
+        if normalized_search:
+            records = self._get_json(
+                f"/guilds/{selected_guild_id}/members/search",
+                params={"query": normalized_search[:100], "limit": str(selected_limit)},
+                operation="guild member search",
+            )
+        else:
+            records = self._get_json(
+                f"/guilds/{selected_guild_id}/members",
+                params={"limit": str(selected_limit)},
+                operation="guild member list",
+            )
+        if not isinstance(records, list):
+            raise DiscordAcceptanceError("Discord guild member list returned an unexpected payload.")
+
+        members: list[DiscordGuildMember] = []
+        for record in records:
+            if not isinstance(record, Mapping):
+                continue
+            user = record.get("user")
+            if not isinstance(user, Mapping) or not user.get("id"):
+                continue
+            username = str(user.get("username") or "").strip()
+            nickname = _optional_text(record.get("nick"))
+            global_name = _optional_text(user.get("global_name"))
+            display_name = nickname or global_name or username or str(user["id"])
+            discriminator = _optional_text(user.get("discriminator"))
+            if discriminator == "0":
+                discriminator = None
+            members.append(
+                DiscordGuildMember(
+                    guild_id=selected_guild_id,
+                    user_id=_required_snowflake(user.get("id"), "user id"),
+                    display_name=display_name,
+                    nickname=nickname,
+                    global_name=global_name,
+                    username=username,
+                    discriminator=discriminator,
+                    is_bot=bool(user.get("bot")),
+                )
+            )
+        members.sort(
+            key=lambda item: (
+                item.is_bot,
+                item.display_name.casefold(),
+                item.username.casefold(),
+                item.user_id,
+            )
+        )
+        return members[:selected_limit]
 
     def send_controlled_alert(
         self,

@@ -69,6 +69,33 @@ class FakeDiscordTransport:
                     },
                 ],
             )
+        if method == "GET" and path == "/guilds/100/members":
+            return FakeResponse(
+                200,
+                [
+                    {
+                        "nick": "아스나",
+                        "user": {
+                            "id": "777",
+                            "username": "yuuki",
+                            "global_name": "Yuuki",
+                            "discriminator": "0",
+                        },
+                    },
+                    {
+                        "user": {
+                            "id": "778",
+                            "username": "helper-bot",
+                            "bot": True,
+                        },
+                    },
+                ],
+            )
+        if method == "GET" and path == "/guilds/100/members/search":
+            return FakeResponse(
+                200,
+                [{"user": {"id": "777", "username": "yuuki", "global_name": "Yuuki"}}],
+            )
         if method == "POST" and path == "/channels/300/messages":
             body = kwargs.get("json")
             assert isinstance(body, dict)
@@ -111,6 +138,23 @@ class DiscordAcceptanceTests(unittest.TestCase):
         self.assertEqual([guild.to_record() for guild in guilds], [{"guild_id": "100", "guild_name": "test guild"}])
         paths = [str(call["url"]).removeprefix("https://discord.test/api/v10") for call in self.transport.calls]
         self.assertEqual(paths, ["/users/@me/guilds"])
+
+    def test_list_guild_members_uses_nickname_and_search_endpoint(self) -> None:
+        members = self.client.list_guild_members(guild_id="100", limit=50)
+
+        self.assertEqual(members[0].display_name, "아스나")
+        self.assertEqual(members[0].user_id, "777")
+        self.assertFalse(members[0].is_bot)
+        self.assertTrue(members[1].is_bot)
+        list_call = self.transport.calls[-1]
+        self.assertEqual(list_call["params"], {"limit": "50"})
+
+        searched = self.client.list_guild_members(guild_id="100", search="Yuu", limit=25)
+
+        self.assertEqual(searched[0].display_name, "Yuuki")
+        search_call = self.transport.calls[-1]
+        self.assertTrue(str(search_call["url"]).endswith("/guilds/100/members/search"))
+        self.assertEqual(search_call["params"], {"query": "Yuu", "limit": "25"})
 
     def test_probe_rejects_channel_from_another_guild(self) -> None:
         with self.assertRaisesRegex(DiscordAcceptanceError, "does not belong"):

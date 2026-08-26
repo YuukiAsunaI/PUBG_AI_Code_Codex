@@ -20,6 +20,30 @@ PUBG API again.
 
 Initial parser version: `telemetry-parser-v1`.
 
+## Match Intake Exclusions
+
+The collector fetches match metadata first and applies `match_collection_policy` before writing raw match JSON,
+normalized match rows, participants, telemetry jobs, or replay inputs.
+
+Excluded matches are:
+
+- custom matches when the official match attribute `isCustomMatch` is `true`
+- AI Training Matches whose `matchType` is `airoyale`
+- legacy training/tutorial responses whose `matchType` is `trainingroom` or `tutorialatoz`
+- Camp Jackal training sessions whose map code is `Range_Main`
+- explicit training game-mode values recognized by the policy
+
+An excluded API job is completed successfully instead of being retried. Only a minimal row is kept in
+`excluded_matches`, including the match ID, shard, exclusion reason, matched rule, and policy version. Raw payloads,
+participants, telemetry, and replay artifacts are not stored. Discovery checks both `matches` and
+`excluded_matches`, so an excluded match ID is not queued again.
+
+The policy does not infer that a match is custom from a `normal-*` game-mode name. Official, competitive, casual,
+seasonal, lab, and team-deathmatch families remain eligible unless an explicit exclusion signal above is present.
+Schema migration 33 backfills matching historical rows into `excluded_matches`. The `analysis_matches` view removes
+those IDs from statistics, recommendations, rankings, match exploration, watchlist encounters, and replay generation
+without deleting `matches`, normalized records, or raw match and telemetry files.
+
 ## Raw File Retention
 
 Raw match and telemetry files are retained indefinitely by default.

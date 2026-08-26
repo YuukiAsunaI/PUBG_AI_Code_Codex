@@ -102,15 +102,15 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         body = format_alert_action_result(record, "acknowledged")
 
-        self.assertIn("PUBG AI alert acknowledged", body)
-        self.assertIn("- id: 7", body)
+        self.assertIn("PUBG AI 알림 확인 완료", body)
+        self.assertIn("- 알림 ID: 7", body)
         self.assertIn("collector worker failed", body)
-        self.assertIn("acknowledged_at_kst", body)
-        self.assertNotIn("local_detail", body)
+        self.assertIn("확인 시각 (KST)", body)
+        self.assertNotIn("로컬 앱 상세", body)
 
         linked = format_alert_action_result(record, "acknowledged", detail_base_url="http://127.0.0.1:8000/")
         self.assertIn(
-            "- local_detail: [detail](http://127.0.0.1:8000/?alert_id=7#alertHistoryDetail)",
+            "- 로컬 앱 상세: [상세](http://127.0.0.1:8000/?alert_id=7#alertHistoryDetail)",
             linked,
         )
 
@@ -126,17 +126,17 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         body = format_alert_note_result(note)
 
-        self.assertIn("PUBG AI alert resolution saved", body)
-        self.assertIn("- alert_id: 7", body)
-        self.assertIn("- note_id: 12", body)
-        self.assertIn("- type: resolution", body)
+        self.assertIn("PUBG AI 알림 해결 기록 저장 완료", body)
+        self.assertIn("- 알림 ID: 7", body)
+        self.assertIn("- 메모 ID: 12", body)
+        self.assertIn("- 종류: 해결 기록", body)
         self.assertIn("discord:987654321:123456789", body)
         self.assertIn("raw drive expanded and worker restarted", body)
-        self.assertNotIn("local_detail", body)
+        self.assertNotIn("로컬 앱 상세", body)
 
         linked = format_alert_note_result(note, detail_base_url="http://127.0.0.1:8000/")
         self.assertIn(
-            "- local_detail: [detail](http://127.0.0.1:8000/?alert_id=7#alertHistoryDetail)",
+            "- 로컬 앱 상세: [상세](http://127.0.0.1:8000/?alert_id=7#alertHistoryDetail)",
             linked,
         )
 
@@ -171,16 +171,16 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         body = format_alert_notes_result(record, notes)
 
-        self.assertIn("PUBG AI alert notes", body)
-        self.assertIn("- alert_id: 7", body)
-        self.assertIn("- shown/total: 1/2", body)
-        self.assertIn("#12 resolution 2026-06-30T10:05:00+09:00", body)
+        self.assertIn("PUBG AI 알림 메모 이력", body)
+        self.assertIn("- 알림 ID: 7", body)
+        self.assertIn("- 표시/전체: 1/2", body)
+        self.assertIn("#12 해결 기록 · 2026-06-30T10:05:00+09:00", body)
         self.assertIn("raw drive expanded worker restarted", body)
-        self.assertNotIn("local_detail", body)
+        self.assertNotIn("로컬 앱 상세", body)
 
         linked = format_alert_notes_result(record, notes, detail_base_url="http://127.0.0.1:8000/")
         self.assertIn(
-            "- local_detail: [detail](http://127.0.0.1:8000/?alert_id=7#alertHistoryDetail)",
+            "- 로컬 앱 상세: [상세](http://127.0.0.1:8000/?alert_id=7#alertHistoryDetail)",
             linked,
         )
 
@@ -201,7 +201,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         self.assertIn(message, linked)
         self.assertIn(
-            "- local_detail: [detail](http://127.0.0.1:8000/?alert_id=7#alertHistoryDetail)",
+            "- 로컬 앱 상세: [상세](http://127.0.0.1:8000/?alert_id=7#alertHistoryDetail)",
             linked,
         )
 
@@ -214,7 +214,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         self.assertIn(message, linked)
         self.assertIn(
-            "- current_alerts: [open](http://127.0.0.1:8000/?"
+            "- 로컬 앱의 현재 알림: [열기](http://127.0.0.1:8000/?"
             "alert_history_source=all&alert_history_state=current&alert_history_severity=all&"
             "alert_history_sort=severity&alert_history_search=&"
             "alert_history_limit=50&alert_history_offset=0#alerts)",
@@ -252,31 +252,31 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         body = format_alert_history_result(page)
 
-        self.assertIn("PUBG AI alert history", body)
-        self.assertIn("source=worker state=current severity=error sort=severity search=raw drive", body)
-        self.assertIn("shown/total: 1/3", body)
-        self.assertIn("#7 [worker/error/current]", body)
+        self.assertIn("PUBG AI 알림 이력", body)
+        self.assertIn("출처=자동 작업 상태=현재 발생 중 심각도=오류 정렬=심각도순 검색=raw drive", body)
+        self.assertIn("표시/전체: 1/3", body)
+        self.assertIn("#7 [자동 작업/오류/현재 발생 중]", body)
         self.assertIn("collector worker failed", body)
-        self.assertIn("next: `!pubg-alert-history", body)
+        self.assertIn("다음: `!pubg-alert-history", body)
         self.assertIn("offset=1", body)
-        self.assertNotIn("previous:", body)
-        self.assertNotIn("[detail]", body)
-        self.assertNotIn("filter_page", body)
-        self.assertNotIn("export_csv", body)
+        self.assertNotIn("이전:", body)
+        self.assertNotIn("[상세]", body)
+        self.assertNotIn("같은 필터를 로컬 앱에서 열기", body)
+        self.assertNotIn("CSV 내보내기", body)
 
         linked = format_alert_history_result(page, detail_base_url="http://127.0.0.1:8000/")
         self.assertIn(
-            "filter_page: [open](http://127.0.0.1:8000/?"
+            "같은 필터를 로컬 앱에서 열기: [열기](http://127.0.0.1:8000/?"
             "alert_history_source=worker&alert_history_state=current&alert_history_severity=error&"
             "alert_history_sort=severity&alert_history_search=raw+drive&alert_history_limit=1&alert_history_offset=0#alerts)",
             linked,
         )
         self.assertIn(
-            "export_csv: [download](http://127.0.0.1:8000/alerts/history/export.csv?"
+            "CSV 내보내기: [다운로드](http://127.0.0.1:8000/alerts/history/export.csv?"
             "source=worker&state=current&severity=error&sort=severity&search=raw+drive&limit=5000&offset=0)",
             linked,
         )
-        self.assertIn("[detail](http://127.0.0.1:8000/?alert_id=7#alertHistoryDetail)", linked)
+        self.assertIn("[상세](http://127.0.0.1:8000/?alert_id=7#alertHistoryDetail)", linked)
 
     def test_alert_history_command_reply_formats_filter_page_link(self) -> None:
         message = "PUBG AI alert history error: failed to read system_alert_history"
@@ -288,14 +288,14 @@ class DiscordBotFormattingTests(unittest.TestCase):
             detail_base_url="http://127.0.0.1:8000/",
         )
         self.assertIn(
-            "filter_page: [open](http://127.0.0.1:8000/?"
+            "같은 필터를 로컬 앱에서 열기: [열기](http://127.0.0.1:8000/?"
             "alert_history_source=all&alert_history_state=all&alert_history_severity=all&"
             "alert_history_sort=newest&alert_history_search=&"
             "alert_history_limit=5&alert_history_offset=0#alerts)",
             default_linked,
         )
         self.assertIn(
-            "export_csv: [download](http://127.0.0.1:8000/alerts/history/export.csv?"
+            "CSV 내보내기: [다운로드](http://127.0.0.1:8000/alerts/history/export.csv?"
             "source=all&state=all&severity=all&sort=newest&search=&limit=5000&offset=0)",
             default_linked,
         )
@@ -314,14 +314,14 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         self.assertIn(message, linked)
         self.assertIn(
-            "filter_page: [open](http://127.0.0.1:8000/?"
+            "같은 필터를 로컬 앱에서 열기: [열기](http://127.0.0.1:8000/?"
             "alert_history_source=storage&alert_history_state=resolved&alert_history_severity=warning&"
             "alert_history_sort=oldest&alert_history_search=disk+full&"
             "alert_history_limit=4&alert_history_offset=8#alerts)",
             linked,
         )
         self.assertIn(
-            "export_csv: [download](http://127.0.0.1:8000/alerts/history/export.csv?"
+            "CSV 내보내기: [다운로드](http://127.0.0.1:8000/alerts/history/export.csv?"
             "source=storage&state=resolved&severity=warning&sort=oldest&search=disk+full&limit=5000&offset=0)",
             linked,
         )
@@ -358,8 +358,8 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         body = format_alert_history_result(page, command_prefix="?")
 
-        self.assertIn("previous: `?pubg-alert-history", body)
-        self.assertIn("next: `?pubg-alert-history", body)
+        self.assertIn("이전: `?pubg-alert-history", body)
+        self.assertIn("다음: `?pubg-alert-history", body)
         self.assertIn("source=storage", body)
         self.assertIn("state=active", body)
         self.assertIn("severity=warning", body)
@@ -424,49 +424,49 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         body = format_worker_run_history_result(page)
 
-        self.assertIn("PUBG AI worker run history", body)
-        self.assertIn("worker=all status=all", body)
-        self.assertIn("shown/total: 2/3 offset=0 limit=2", body)
-        self.assertIn("#12 [collector/failed]", body)
-        self.assertIn("duration=3.2s errors=1", body)
+        self.assertIn("PUBG AI 자동 작업 실행 이력", body)
+        self.assertIn("작업=전체 상태=전체", body)
+        self.assertIn("표시/전체: 2/3 · 시작 위치 0 · 한 페이지 2개", body)
+        self.assertIn("#12 [매치 수집기/실패]", body)
+        self.assertIn("소요=3.2s 오류=1", body)
         self.assertIn("raw drive disconnected", body)
-        self.assertIn("detail: `!pubg-worker-run 12`", body)
-        self.assertNotIn("[detail](http://127.0.0.1:8000/?worker_run_id=12#workerRunDetail)", body)
-        self.assertIn("#11 [post_processing/succeeded]", body)
-        self.assertIn("duration=5.0s errors=0 last_error=-", body)
-        self.assertIn("detail: `!pubg-worker-run 11`", body)
-        self.assertIn("next: `!pubg-worker-runs worker=all status=all limit=2 offset=2`", body)
-        self.assertNotIn("previous:", body)
-        self.assertNotIn("filter_page", body)
-        self.assertNotIn("export_csv", body)
+        self.assertIn("상세: `!pubg-worker-run 12`", body)
+        self.assertNotIn("[상세](http://127.0.0.1:8000/?worker_run_id=12#workerRunDetail)", body)
+        self.assertIn("#11 [후처리기/성공]", body)
+        self.assertIn("소요=5.0s 오류=0 최근 오류=-", body)
+        self.assertIn("상세: `!pubg-worker-run 11`", body)
+        self.assertIn("다음: `!pubg-worker-runs worker=all status=all limit=2 offset=2`", body)
+        self.assertNotIn("이전:", body)
+        self.assertNotIn("같은 필터를 로컬 앱에서 열기", body)
+        self.assertNotIn("CSV 내보내기", body)
 
         linked_body = format_worker_run_history_result(page, detail_base_url="http://127.0.0.1:8000/")
         self.assertIn(
-            "filter_page: [open](http://127.0.0.1:8000/?"
+            "같은 필터를 로컬 앱에서 열기: [열기](http://127.0.0.1:8000/?"
             "worker_run_worker=all&worker_run_status=all&worker_run_range=custom&"
             "worker_run_from=&worker_run_to=&worker_run_limit=2&worker_run_offset=0#worker-runs)",
             linked_body,
         )
         self.assertIn(
-            "export_csv: [download](http://127.0.0.1:8000/workers/runs/export.csv?"
+            "CSV 내보내기: [다운로드](http://127.0.0.1:8000/workers/runs/export.csv?"
             "worker_name=&status=all&created_from_kst=&created_to_kst=&limit=5000&offset=0)",
             linked_body,
         )
-        self.assertIn("[detail](http://127.0.0.1:8000/?worker_run_id=12#workerRunDetail)", linked_body)
-        self.assertIn("[detail](http://127.0.0.1:8000/?worker_run_id=11#workerRunDetail)", linked_body)
-        self.assertIn("detail: `!pubg-worker-run 12`", linked_body)
+        self.assertIn("[상세](http://127.0.0.1:8000/?worker_run_id=12#workerRunDetail)", linked_body)
+        self.assertIn("[상세](http://127.0.0.1:8000/?worker_run_id=11#workerRunDetail)", linked_body)
+        self.assertIn("상세: `!pubg-worker-run 12`", linked_body)
 
         custom_prefix_body = format_worker_run_history_result(page, command_prefix="?")
-        self.assertIn("detail: `?pubg-worker-run 12`", custom_prefix_body)
-        self.assertIn("next: `?pubg-worker-runs worker=all status=all limit=2 offset=2`", custom_prefix_body)
+        self.assertIn("상세: `?pubg-worker-run 12`", custom_prefix_body)
+        self.assertIn("다음: `?pubg-worker-runs worker=all status=all limit=2 offset=2`", custom_prefix_body)
 
     def test_worker_run_history_result_formats_empty_state(self) -> None:
         page = WorkerRunPage(records=[], total=0, limit=3, offset=0, worker_name="collector", status="failed")
         body = format_worker_run_history_result(page)
 
-        self.assertIn("worker=collector status=failed", body)
-        self.assertIn("shown/total: 0/0 offset=0 limit=3", body)
-        self.assertIn("no worker runs yet", body)
+        self.assertIn("작업=매치 수집기 상태=실패", body)
+        self.assertIn("표시/전체: 0/0 · 시작 위치 0 · 한 페이지 3개", body)
+        self.assertIn("조건에 맞는 자동 작업 이력이 없습니다.", body)
 
     def test_worker_run_history_command_reply_formats_filter_page_link(self) -> None:
         message = "PUBG AI worker run history error: failed to read worker_run_history"
@@ -478,13 +478,13 @@ class DiscordBotFormattingTests(unittest.TestCase):
             detail_base_url="http://127.0.0.1:8000/",
         )
         self.assertIn(
-            "filter_page: [open](http://127.0.0.1:8000/?"
+            "같은 필터를 로컬 앱에서 열기: [열기](http://127.0.0.1:8000/?"
             "worker_run_worker=all&worker_run_status=all&worker_run_range=custom&"
             "worker_run_from=&worker_run_to=&worker_run_limit=5&worker_run_offset=0#worker-runs)",
             default_linked,
         )
         self.assertIn(
-            "export_csv: [download](http://127.0.0.1:8000/workers/runs/export.csv?"
+            "CSV 내보내기: [다운로드](http://127.0.0.1:8000/workers/runs/export.csv?"
             "worker_name=&status=all&created_from_kst=&created_to_kst=&limit=5000&offset=0)",
             default_linked,
         )
@@ -502,7 +502,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         self.assertIn(message, linked)
         self.assertIn(
-            "filter_page: [open](http://127.0.0.1:8000/?"
+            "같은 필터를 로컬 앱에서 열기: [열기](http://127.0.0.1:8000/?"
             "worker_run_worker=collector&worker_run_status=failed&worker_run_range=custom&"
             "worker_run_from=2026-07-01T09%3A00%3A00%2B09%3A00&"
             "worker_run_to=2026-07-01T10%3A00%3A00%2B09%3A00&"
@@ -510,7 +510,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
             linked,
         )
         self.assertIn(
-            "export_csv: [download](http://127.0.0.1:8000/workers/runs/export.csv?"
+            "CSV 내보내기: [다운로드](http://127.0.0.1:8000/workers/runs/export.csv?"
             "worker_name=collector&status=failed&created_from_kst=2026-07-01T09%3A00%3A00%2B09%3A00&"
             "created_to_kst=2026-07-01T10%3A00%3A00%2B09%3A00&limit=5000&offset=0)",
             linked,
@@ -543,9 +543,9 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         body = format_worker_run_history_result(page, command_prefix="?")
 
-        self.assertIn("created=2026-07-01T09:00:00+09:00..2026-07-01T10:00:00+09:00", body)
+        self.assertIn("기간=2026-07-01T09:00:00+09:00..2026-07-01T10:00:00+09:00", body)
         self.assertIn(
-            "previous: `?pubg-worker-runs worker=collector status=failed limit=1 offset=0 "
+            "이전: `?pubg-worker-runs worker=collector status=failed limit=1 offset=0 "
             "from=2026-07-01T09:00:00+09:00 to=2026-07-01T10:00:00+09:00`",
             body,
         )
@@ -563,7 +563,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("created_to_kst=2026-07-01T10%3A00%3A00%2B09%3A00", linked_body)
         self.assertIn("limit=5000&offset=0", linked_body)
         self.assertIn(
-            "next: `?pubg-worker-runs worker=collector status=failed limit=1 offset=2 "
+            "다음: `?pubg-worker-runs worker=collector status=failed limit=1 offset=2 "
             "from=2026-07-01T09:00:00+09:00 to=2026-07-01T10:00:00+09:00`",
             body,
         )
@@ -592,11 +592,11 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         body = format_worker_run_detail_result(run)
 
-        self.assertIn("PUBG AI worker run detail", body)
-        self.assertIn("- id: 12", body)
-        self.assertIn("worker/status: collector/failed", body)
-        self.assertIn("duration/errors: 3.2s / 2", body)
-        self.assertNotIn("local_detail", body)
+        self.assertIn("PUBG AI 자동 작업 실행 상세", body)
+        self.assertIn("- 실행 ID: 12", body)
+        self.assertIn("작업/상태: 매치 수집기/실패", body)
+        self.assertIn("소요 시간/오류: 3.2s / 2", body)
+        self.assertNotIn("로컬 앱 상세", body)
         self.assertIn("poll_interval_seconds=180", body)
         self.assertIn("collection.queued_match_jobs=2", body)
         self.assertIn("collection.existing_match_jobs=1", body)
@@ -605,7 +605,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("2. telemetry_jobs: RuntimeError: telemetry missing", body)
 
         linked_body = format_worker_run_detail_result(run, detail_base_url="http://127.0.0.1:8000/")
-        self.assertIn("- local_detail: [detail](http://127.0.0.1:8000/?worker_run_id=12#workerRunDetail)", linked_body)
+        self.assertIn("- 로컬 앱 상세: [상세](http://127.0.0.1:8000/?worker_run_id=12#workerRunDetail)", linked_body)
         self.assertIn("collection.queued_match_jobs=2", linked_body)
 
     def test_worker_run_command_reply_adds_detail_only_when_run_id_and_url_are_available(self) -> None:
@@ -625,7 +625,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         self.assertIn(message, linked)
         self.assertIn(
-            "- local_detail: [detail](http://127.0.0.1:8000/?worker_run_id=12#workerRunDetail)",
+            "- 로컬 앱 상세: [상세](http://127.0.0.1:8000/?worker_run_id=12#workerRunDetail)",
             linked,
         )
 
@@ -702,13 +702,13 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         body_with_list_link = format_player_list(players, detail_base_url="http://127.0.0.1:8000/")
         self.assertIn(
-            "- local_registered_players: [open](http://127.0.0.1:8000/#registered-players)",
+            "- 로컬 앱에서 관리: [열기](http://127.0.0.1:8000/#registered-players)",
             body_with_list_link,
         )
 
         body_with_single_link = format_player_list([players[0]], detail_base_url="http://127.0.0.1:8000/")
         self.assertIn(
-            "- local_registered_players: [open](http://127.0.0.1:8000/?registered_shard=steam&registered_account_id=account.1234567890abcdef&registered_name=Yuuki_Asuna---#registered-players)",
+            "- 로컬 앱에서 관리: [열기](http://127.0.0.1:8000/?registered_shard=steam&registered_account_id=account.1234567890abcdef&registered_name=Yuuki_Asuna---#registered-players)",
             body_with_single_link,
         )
 
@@ -724,7 +724,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         self.assertIn(message, linked)
         self.assertIn(
-            "- registered_players: [open](http://127.0.0.1:8000/#registered-players)",
+            "- 로컬 앱에서 관리: [열기](http://127.0.0.1:8000/#registered-players)",
             linked,
         )
 
@@ -748,7 +748,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
         )
         self.assertIn(message, linked)
         self.assertIn(
-            "- local_registered_players: [open](http://127.0.0.1:8000/?registered_shard=steam&registered_account_id=account.1234567890abcdef&registered_name=Yuuki_Asuna---#registered-players)",
+            "- 로컬 앱 상세: [열기](http://127.0.0.1:8000/?registered_shard=steam&registered_account_id=account.1234567890abcdef&registered_name=Yuuki_Asuna---#registered-players)",
             linked,
         )
 
@@ -763,9 +763,9 @@ class DiscordBotFormattingTests(unittest.TestCase):
         )
 
         self.assertIn("Discord 권한 부여 완료", body)
-        self.assertIn("- scope: guild:987654321098765432", body)
+        self.assertIn("- 적용 범위: 서버 987654321098765432", body)
         self.assertIn(
-            "- local_discord_permissions: [open](http://127.0.0.1:8000/?discord_permission_user_id=123456789012345678&discord_permission_group=register&discord_permission_guild_id=987654321098765432#discord-permissions)",
+            "- 로컬 앱 상세: [열기](http://127.0.0.1:8000/?discord_permission_user_id=123456789012345678&discord_permission_group=register&discord_permission_guild_id=987654321098765432#discord-permissions)",
             body,
         )
 
@@ -790,9 +790,9 @@ class DiscordBotFormattingTests(unittest.TestCase):
         )
 
         self.assertIn("Discord 랭킹 범위 저장 완료", body)
-        self.assertIn("- result: 이미 적용됨", body)
+        self.assertIn("- 처리 결과: 이미 적용됨", body)
         self.assertIn(
-            "- local_discord_scopes: [open](http://127.0.0.1:8000/?discord_scope_guild_id=987654321098765432&discord_scope_value=global#discord-scopes)",
+            "- 로컬 앱 상세: [열기](http://127.0.0.1:8000/?discord_scope_guild_id=987654321098765432&discord_scope_value=global#discord-scopes)",
             body,
         )
 
@@ -819,7 +819,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
         )
 
         self.assertIn("PUBG AI 안전 설정", body)
-        self.assertIn("- hidden: secrets, database, storage paths", body)
+        self.assertIn("- 보안상 숨김: 비밀키, 데이터베이스 접속 정보, 저장 경로", body)
         self.assertIn("#collector-settings", body)
         self.assertIn("#storage-settings", body)
         self.assertIn("#discord-scopes", body)
@@ -837,7 +837,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         self.assertIn("Discord 수집 설정 저장 완료", body)
         self.assertIn(
-            "- local_collector_settings: [open](http://127.0.0.1:8000/?collector_poll_interval_seconds=120&collector_cycle_player_limit=50&collector_player_lookup_chunk_size=5#collector-settings)",
+            "- 로컬 앱 상세: [열기](http://127.0.0.1:8000/?collector_poll_interval_seconds=120&collector_cycle_player_limit=50&collector_player_lookup_chunk_size=5#collector-settings)",
             body,
         )
 
@@ -847,9 +847,9 @@ class DiscordBotFormattingTests(unittest.TestCase):
             detail_base_url="http://127.0.0.1:8000/",
         )
 
-        self.assertIn("public_profile_default: private", body)
+        self.assertIn("기본 공개 상태: 비공개", body)
         self.assertIn(
-            "- local_discord_scopes: [open](http://127.0.0.1:8000/?discord_public_profile_default=false#discord-scopes)",
+            "- 로컬 앱 상세: [열기](http://127.0.0.1:8000/?discord_public_profile_default=false#discord-scopes)",
             body,
         )
 
@@ -876,10 +876,10 @@ class DiscordBotFormattingTests(unittest.TestCase):
         )
 
         self.assertIn("삭제 검토 요청 생성 완료", body)
-        self.assertIn("- status: pending", body)
-        self.assertIn("- execution: 실제 삭제 미실행", body)
+        self.assertIn("- 상태: 검토 대기", body)
+        self.assertIn("- 실행 상태: 실제 삭제 미실행", body)
         self.assertIn(
-            "- local_data_deletions: [open](http://127.0.0.1:8000/?deletion_request_id=17&deletion_shard=steam&deletion_target=account.1234567890abcdef#data-deletions)",
+            "- 로컬 앱 상세: [열기](http://127.0.0.1:8000/?deletion_request_id=17&deletion_shard=steam&deletion_target=account.1234567890abcdef#data-deletions)",
             body,
         )
 
@@ -906,7 +906,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         self.assertIn(message, linked)
         self.assertIn(
-            "- profile_lookup: [open](http://127.0.0.1:8000/?shard=steam&target=Yuuki_Asuna---#profile-lookup)",
+            "- 로컬 앱 상세: [열기](http://127.0.0.1:8000/?shard=steam&target=Yuuki_Asuna---#profile-lookup)",
             linked,
         )
 
@@ -988,7 +988,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         body_with_link = format_player_profile_stats(profile, detail_base_url="http://127.0.0.1:8000/")
         self.assertIn(
-            "- local_profile: [open](http://127.0.0.1:8000/?shard=steam&account_id=account.test#profile-lookup)",
+            "- 로컬 앱 상세 분석: [열기](http://127.0.0.1:8000/?shard=steam&account_id=account.test#profile-lookup)",
             body_with_link,
         )
 
@@ -1059,7 +1059,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         body_with_link = format_player_weapon_detail(detail, detail_base_url="http://127.0.0.1:8000/")
         self.assertIn(
-            "- local_weapon: [open](http://127.0.0.1:8000/?shard=steam&account_id=account.test&weapon=M416#weapon-lookup)",
+            "- 로컬 앱 무기 분석: [열기](http://127.0.0.1:8000/?shard=steam&account_id=account.test&weapon=M416#weapon-lookup)",
             body_with_link,
         )
 
@@ -1171,7 +1171,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         body_with_link = format_player_match_detail(detail, detail_base_url="http://127.0.0.1:8000/")
         self.assertIn(
-            "- local_match: [open](http://127.0.0.1:8000/?shard=steam&account_id=account.test&match_id=match-123456789#match-lookup)",
+            "- 로컬 앱 매치 상세: [열기](http://127.0.0.1:8000/?shard=steam&account_id=account.test&match_id=match-123456789#match-lookup)",
             body_with_link,
         )
 
@@ -1234,7 +1234,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
             limit=10,
         )
         self.assertIn(
-            "- local_ranking: [open](http://127.0.0.1:8000/?ranking_metric=kda&ranking_shard=steam&ranking_limit=10&ranking_guild_id=guild-1#ranking-lookup)",
+            "- 로컬 앱 랭킹: [열기](http://127.0.0.1:8000/?ranking_metric=kda&ranking_shard=steam&ranking_limit=10&ranking_guild_id=guild-1#ranking-lookup)",
             body_with_link,
         )
 
@@ -1280,13 +1280,13 @@ class DiscordBotFormattingTests(unittest.TestCase):
         body = format_replay_artifact_summary(artifact)
 
         self.assertIn("Yuuki_Asuna--- 최근 2D 스냅샷", body)
-        self.assertIn("- match: match-123", body)
-        self.assertIn("- map/mode: Erangel / squad-fpp", body)
-        self.assertIn("- size: 2.0 KB", body)
+        self.assertIn("- 매치 ID: match-123", body)
+        self.assertIn("- 맵/모드: Erangel / 1인칭 스쿼드", body)
+        self.assertIn("- 파일 크기: 2.0 KB", body)
 
         body_with_link = format_replay_artifact_summary(artifact, detail_base_url="http://127.0.0.1:8000/")
         self.assertIn(
-            "- local_replay: [open](http://127.0.0.1:8000/?shard=steam&match_id=match-123&account_id=account.1234567890abcdef&replay_artifact_id=10#replay-artifacts)",
+            "- 로컬 앱에서 재생: [열기](http://127.0.0.1:8000/?shard=steam&match_id=match-123&account_id=account.1234567890abcdef&replay_artifact_id=10#replay-artifacts)",
             body_with_link,
         )
 

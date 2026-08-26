@@ -33,6 +33,8 @@ class WebDiscordPermissionTests(unittest.TestCase):
                         "user_id": "user-1",
                         "group": "register",
                         "guild_id": "guild-1",
+                        "member_label": "아스나",
+                        "member_guild_id": "guild-1",
                     },
                 )
                 self.assertEqual(response.status_code, 200)
@@ -43,16 +45,18 @@ class WebDiscordPermissionTests(unittest.TestCase):
                 permission_payload = response.json()
                 settings = permission_payload["discord_permissions"]
                 self.assertEqual(settings["guild_user_grants"]["guild-1"]["user-1"], ["register"])
+                self.assertEqual(settings["guild_member_labels"]["guild-1"]["user-1"], "아스나")
                 self.assertIn("추천", [item["name"] for item in permission_payload["command_catalog"]])
                 self.assertIn("profile_read", permission_payload["reserved_groups"])
+                self.assertEqual(permission_payload["group_labels"]["profile_read"], "플레이어 분석 조회")
 
                 response = client.put(
-                    "/discord/permissions/groups/combat_reader",
+                    "/discord/permissions/groups/전투분석",
                     json={"commands": ["전적", "pubg-weapon"]},
                 )
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(
-                    set(response.json()["settings"]["command_groups"]["combat_reader"]),
+                    set(response.json()["settings"]["command_groups"]["전투분석"]),
                     {"전적", "무기"},
                 )
 
@@ -65,7 +69,7 @@ class WebDiscordPermissionTests(unittest.TestCase):
 
                 response = client.delete("/discord/permissions/aliases/my-stats")
                 self.assertEqual(response.status_code, 200)
-                response = client.delete("/discord/permissions/groups/combat_reader")
+                response = client.delete("/discord/permissions/groups/전투분석")
                 self.assertEqual(response.status_code, 200)
 
                 response = client.post("/discord/global-admins/add", json={"user_id": "admin-1"})

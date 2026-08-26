@@ -182,7 +182,7 @@ class DiscordAdminCommandTests(unittest.IsolatedAsyncioTestCase):
 
             settings = store.load_discord_scope_settings()
             self.assertFalse(settings.public_profile_default)
-            self.assertIn("public_profile_default: private", ctx.replies[-1])
+            self.assertIn("기본 공개 상태: 비공개", ctx.replies[-1])
             self.assertIn("#discord-scopes", ctx.replies[-1])
 
     async def test_discord_settings_refuses_secret_and_storage_path_surfaces(self) -> None:

@@ -10,9 +10,10 @@ from pubg_ai.local_settings import AlertSettings
 from pubg_ai.storage_alerts import StorageCapacityAlert, assess_storage_capacity
 from pubg_ai.time_utils import isoformat_kst
 from pubg_ai.worker_run_history import WorkerRunRecord, get_latest_worker_run_id, list_failed_worker_runs
+from pubg_ai.watchlist import pending_watchlist_alerts
 
 
-AlertSource = Literal["storage", "worker"]
+AlertSource = Literal["storage", "worker", "watchlist"]
 
 _STORAGE_ROLE_LABELS = {
     "raw_data_dir": "원본 매치 데이터",
@@ -91,6 +92,8 @@ def collect_system_alerts(
             ascending=after_worker_run_id is not None,
         )
         alerts.extend(worker_run_alert(run) for run in runs)
+
+    alerts.extend(pending_watchlist_alerts(connection, limit=100))
 
     return SystemAlertReport(
         alerts=alerts,

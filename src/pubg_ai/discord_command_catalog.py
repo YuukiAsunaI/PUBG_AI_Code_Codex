@@ -68,6 +68,16 @@ RESERVED_COMMAND_GROUPS = frozenset(
     if spec.permission_group is not None
 )
 
+COMMAND_GROUP_LABELS: dict[str, str] = {
+    "profile_read": "플레이어 분석 조회",
+    "ranking_read": "랭킹 조회",
+    "register": "추적 대상 등록",
+    "player_manage": "추적 대상 관리",
+    "replay_read": "2D 리플레이 조회",
+    "settings_write": "수집·공개 설정 관리",
+    "admin": "Discord·운영 관리자",
+}
+
 _SPEC_BY_NAME = {
     value.casefold(): spec
     for spec in DISCORD_COMMAND_SPECS
@@ -92,6 +102,10 @@ def default_command_groups() -> dict[str, list[str]]:
 
 def command_catalog_records() -> list[dict[str, object]]:
     return [spec.to_record() for spec in DISCORD_COMMAND_SPECS]
+
+
+def command_group_label(group: str) -> str:
+    return COMMAND_GROUP_LABELS.get(group, group)
 
 
 def canonical_command_name(value: str) -> str | None:

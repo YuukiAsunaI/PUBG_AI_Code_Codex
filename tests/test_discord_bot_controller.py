@@ -18,6 +18,7 @@ class _FakeBot:
         self.closed = False
         self.close_event: asyncio.Event | None = None
         self.pubg_sync_application_commands = self.sync_commands
+        self.pubg_fetch_application_commands = self.fetch_commands
 
     async def start(self, _token: str) -> None:
         self.close_event = asyncio.Event()
@@ -35,6 +36,9 @@ class _FakeBot:
     async def sync_commands(self, guild_ids=None):
         ids = guild_ids or ["100", "200"]
         return {guild_id: 3 for guild_id in ids}
+
+    async def fetch_commands(self, guild_ids):
+        return {guild_id: ["전적", "추천"] for guild_id in guild_ids}
 
 
 class _FailingBot(_FakeBot):
@@ -69,6 +73,18 @@ class DiscordBotControllerTests(unittest.TestCase):
             self.assertFalse(stopped.running)
             self.assertEqual(stopped.command_prefix, "?")
             self.assertIsNone(stopped.last_error)
+
+    def test_fetches_remote_command_names_for_one_guild(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store = LocalSettingsStore(Path(temp_dir) / "local_settings.json")
+            controller = self._controller(store, _FakeBot)
+
+            controller.start()
+            self._wait_until(lambda: controller.status().ready)
+            commands = controller.fetch_commands("100")
+            controller.stop()
+
+            self.assertEqual(commands, ["전적", "추천"])
 
     def test_completed_shutdown_does_not_keep_intermediate_close_timeout(self) -> None:
         with TemporaryDirectory() as temp_dir:

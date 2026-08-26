@@ -12,7 +12,7 @@ from pubg_ai.discord_command_catalog import (
 from pubg_ai.local_settings import DiscordPermissionSettings, LocalSettingsError, LocalSettingsStore
 
 
-CUSTOM_GROUP_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")
+CUSTOM_GROUP_PATTERN = re.compile(r"^[A-Za-z가-힣][A-Za-z0-9가-힣_-]{0,31}$")
 
 
 @dataclass(frozen=True)
@@ -34,10 +34,20 @@ class DiscordPermissionManager:
     def load(self) -> DiscordPermissionSettings:
         return self.store.load_discord_permission_settings()
 
-    def grant(self, *, user_id: str, group: str, guild_id: str | None = None) -> DiscordPermissionChange:
+    def grant(
+        self,
+        *,
+        user_id: str,
+        group: str,
+        guild_id: str | None = None,
+        member_label: str | None = None,
+        member_guild_id: str | None = None,
+    ) -> DiscordPermissionChange:
         user_id = _required_text(user_id, "user_id")
         group = _required_text(group, "group")
         guild_id = _optional_text(guild_id)
+        member_label = _optional_text(member_label)
+        member_guild_id = _optional_text(member_guild_id) or guild_id
         changed = False
 
         def update(settings: DiscordPermissionSettings) -> DiscordPermissionSettings:
@@ -45,6 +55,7 @@ class DiscordPermissionManager:
             _ensure_known_group(settings, group)
             user_grants = _copy_grants(settings.user_grants)
             guild_user_grants = _copy_guild_grants(settings.guild_user_grants)
+            guild_member_labels = _copy_member_labels(settings.guild_member_labels)
             if guild_id:
                 grants = guild_user_grants.setdefault(guild_id, {}).setdefault(user_id, [])
             else:
@@ -52,10 +63,16 @@ class DiscordPermissionManager:
             if group not in grants:
                 grants.append(group)
                 changed = True
+            if member_label and member_guild_id:
+                labels = guild_member_labels.setdefault(member_guild_id, {})
+                if labels.get(user_id) != member_label:
+                    labels[user_id] = member_label
+                    changed = True
             return _updated_settings(
                 settings,
                 user_grants=user_grants,
                 guild_user_grants=guild_user_grants,
+                guild_member_labels=guild_member_labels,
             )
 
         saved = self.store.update_discord_permission_settings(update)
@@ -98,8 +115,16 @@ class DiscordPermissionManager:
         saved = self.store.update_discord_permission_settings(update)
         return DiscordPermissionChange(changed=changed, settings=saved)
 
-    def add_global_admin(self, user_id: str) -> DiscordPermissionChange:
+    def add_global_admin(
+        self,
+        user_id: str,
+        *,
+        member_label: str | None = None,
+        member_guild_id: str | None = None,
+    ) -> DiscordPermissionChange:
         user_id = _required_text(user_id, "user_id")
+        member_label = _optional_text(member_label)
+        member_guild_id = _optional_text(member_guild_id)
         changed = False
 
         def update(settings: DiscordPermissionSettings) -> DiscordPermissionSettings:
@@ -108,7 +133,17 @@ class DiscordPermissionManager:
             changed = user_id not in admin_ids
             if changed:
                 admin_ids.append(user_id)
-            return _updated_settings(settings, global_admin_user_ids=admin_ids)
+            guild_member_labels = _copy_member_labels(settings.guild_member_labels)
+            if member_label and member_guild_id:
+                labels = guild_member_labels.setdefault(member_guild_id, {})
+                if labels.get(user_id) != member_label:
+                    labels[user_id] = member_label
+                    changed = True
+            return _updated_settings(
+                settings,
+                global_admin_user_ids=admin_ids,
+                guild_member_labels=guild_member_labels,
+            )
 
         saved = self.store.update_discord_permission_settings(update)
         return DiscordPermissionChange(changed=changed, settings=saved)
@@ -246,6 +281,7 @@ def _updated_settings(
     global_admin_user_ids: list[str] | None = None,
     command_groups: dict[str, list[str]] | None = None,
     command_aliases: dict[str, str] | None = None,
+    guild_member_labels: dict[str, dict[str, str]] | None = None,
 ) -> DiscordPermissionSettings:
     return DiscordPermissionSettings(
         command_groups=command_groups if command_groups is not None else settings.command_groups,
@@ -259,6 +295,11 @@ def _updated_settings(
         updated_at=settings.updated_at,
         command_aliases=dict(
             command_aliases if command_aliases is not None else settings.command_aliases
+        ),
+        guild_member_labels=_copy_member_labels(
+            guild_member_labels
+            if guild_member_labels is not None
+            else settings.guild_member_labels
         ),
     )
 
@@ -281,6 +322,13 @@ def _copy_guild_grants(value: dict[str, dict[str, list[str]]]) -> dict[str, dict
     return {
         guild_id: _copy_grants(grants)
         for guild_id, grants in value.items()
+    }
+
+
+def _copy_member_labels(value: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
+    return {
+        guild_id: dict(labels)
+        for guild_id, labels in value.items()
     }
 
 
@@ -315,10 +363,10 @@ def _optional_text(value: str | None) -> str | None:
 
 
 def _custom_group_name(value: str) -> str:
-    normalized = _required_text(value, "group").lower()
+    normalized = _required_text(value, "group")
     if not CUSTOM_GROUP_PATTERN.fullmatch(normalized):
         raise LocalSettingsError(
-            "group must be 2-32 lowercase letters, numbers, underscores, or hyphens and start with a letter."
+            "권한 그룹 키는 한글 또는 영문으로 시작하고, 1~32자의 한글·영문·숫자·밑줄·하이픈만 사용할 수 있습니다."
         )
     return normalized
 

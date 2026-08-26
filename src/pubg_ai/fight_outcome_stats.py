@@ -223,7 +223,7 @@ class FightOutcomeStatsService:
                     matches.game_mode,
                     matches.created_at_kst
                 FROM player_fight_outcomes outcomes
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = outcomes.match_id
                 WHERE outcomes.account_id = %s
                   AND matches.shard = %s

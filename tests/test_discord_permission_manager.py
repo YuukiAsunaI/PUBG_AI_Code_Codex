@@ -29,10 +29,17 @@ class DiscordPermissionManagerTests(unittest.TestCase):
         with TemporaryDirectory() as temp_dir:
             manager = _manager(Path(temp_dir))
 
-            manager.grant(user_id="user-1", group="register", guild_id="guild-1")
+            manager.grant(
+                user_id="user-1",
+                group="register",
+                guild_id="guild-1",
+                member_label="아스나",
+                member_guild_id="guild-1",
+            )
             loaded = manager.load()
 
             self.assertEqual(loaded.guild_user_grants["guild-1"]["user-1"], ["register"])
+            self.assertEqual(loaded.guild_member_labels["guild-1"]["user-1"], "아스나")
 
             manager.revoke(user_id="user-1", group="register", guild_id="guild-1")
             loaded = manager.load()
@@ -43,12 +50,20 @@ class DiscordPermissionManagerTests(unittest.TestCase):
         with TemporaryDirectory() as temp_dir:
             manager = _manager(Path(temp_dir))
 
-            added = manager.add_global_admin("admin-1")
+            added = manager.add_global_admin(
+                "admin-1",
+                member_label="관리자 닉네임",
+                member_guild_id="guild-1",
+            )
             added_again = manager.add_global_admin("admin-1")
 
             self.assertTrue(added.changed)
             self.assertFalse(added_again.changed)
             self.assertEqual(manager.load().global_admin_user_ids, ["admin-1"])
+            self.assertEqual(
+                manager.load().guild_member_labels["guild-1"]["admin-1"],
+                "관리자 닉네임",
+            )
 
             removed = manager.remove_global_admin("admin-1")
 
@@ -85,6 +100,19 @@ class DiscordPermissionManagerTests(unittest.TestCase):
 
             self.assertTrue(deleted.changed)
             self.assertNotIn("combat_reader", manager.load().command_groups)
+
+    def test_korean_custom_group_key_is_supported(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            manager = _manager(Path(temp_dir))
+
+            created = manager.upsert_command_group(
+                group="전투분석",
+                commands=["전적", "무기", "교전"],
+            )
+            manager.grant(user_id="user-1", group="전투분석")
+
+            self.assertTrue(created.changed)
+            self.assertEqual(manager.load().user_grants["user-1"], ["전투분석"])
 
     def test_built_in_group_is_read_only(self) -> None:
         with TemporaryDirectory() as temp_dir:

@@ -7,6 +7,13 @@ import json
 
 from pubg_ai.api_job_retry import decide_api_job_retry, stale_running_cutoff
 from pubg_ai.match_classification import classify_match_payload
+from pubg_ai.match_collection_policy import (
+    CUSTOM_MATCH_REASON,
+    MATCH_COLLECTION_POLICY_VERSION,
+    TRAINING_MATCH_REASON,
+    MatchCollectionDecision,
+    decide_match_collection,
+)
 from pubg_ai.match_population import detect_bot_player, summarize_match_population
 from pubg_ai.parser_policy import CURRENT_MATCH_METADATA_PARSER_VERSION
 from pubg_ai.pubg_client import PubgApiClient, PubgMatchDetails, PubgRateLimit
@@ -23,6 +30,9 @@ class MatchJobProcessingResult:
     picked_jobs: int
     fetched_matches: int
     stored_matches: int
+    excluded_matches: int
+    excluded_custom_matches: int
+    excluded_training_matches: int
     stored_participants: int
     queued_telemetry_jobs: int
     existing_telemetry_jobs: int
@@ -41,6 +51,7 @@ class ProcessedMatchJob:
     stored_participants: int
     telemetry_job_status: str
     rate_limit: PubgRateLimit
+    exclusion_reason: str | None = None
 
 
 class MatchJobProcessor:
@@ -61,6 +72,9 @@ class MatchJobProcessor:
 
         fetched_matches = 0
         stored_matches = 0
+        excluded_matches = 0
+        excluded_custom_matches = 0
+        excluded_training_matches = 0
         stored_participants = 0
         queued_telemetry_jobs = 0
         existing_telemetry_jobs = 0
@@ -85,6 +99,14 @@ class MatchJobProcessor:
                 continue
 
             fetched_matches += 1
+            if processed.exclusion_reason is not None:
+                excluded_matches += 1
+                if processed.exclusion_reason == CUSTOM_MATCH_REASON:
+                    excluded_custom_matches += 1
+                elif processed.exclusion_reason == TRAINING_MATCH_REASON:
+                    excluded_training_matches += 1
+                continue
+
             stored_matches += 1
             stored_participants += processed.stored_participants
             if processed.telemetry_job_status == "queued":
@@ -98,6 +120,9 @@ class MatchJobProcessor:
             picked_jobs=len(jobs),
             fetched_matches=fetched_matches,
             stored_matches=stored_matches,
+            excluded_matches=excluded_matches,
+            excluded_custom_matches=excluded_custom_matches,
+            excluded_training_matches=excluded_training_matches,
             stored_participants=stored_participants,
             queued_telemetry_jobs=queued_telemetry_jobs,
             existing_telemetry_jobs=existing_telemetry_jobs,
@@ -113,6 +138,20 @@ class MatchJobProcessor:
         match_id = _required_job_text(job.get("target_id"), "target_id")
 
         match = self.pubg_client.fetch_match(shard, match_id)
+        collection_decision = decide_match_collection(match)
+        if collection_decision.is_excluded:
+            self._upsert_excluded_match(
+                match=match,
+                decision=collection_decision,
+                detected_at=_mysql_kst_now(),
+            )
+            return ProcessedMatchJob(
+                stored_participants=0,
+                telemetry_job_status="excluded",
+                rate_limit=match.rate_limit,
+                exclusion_reason=collection_decision.exclusion_reason,
+            )
+
         created_at = _parse_pubg_datetime(match.created_at)
         stored = self.raw_store.write_json(
             "match",
@@ -155,6 +194,61 @@ class MatchJobProcessor:
             telemetry_job_status=telemetry_job_status,
             rate_limit=match.rate_limit,
         )
+
+    def _upsert_excluded_match(
+        self,
+        *,
+        match: PubgMatchDetails,
+        decision: MatchCollectionDecision,
+        detected_at: datetime,
+    ) -> None:
+        reason = decision.exclusion_reason
+        matched_rule = decision.matched_rule
+        if reason is None or matched_rule is None:
+            raise MatchJobProcessingError("excluded match decision is missing audit metadata")
+
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO excluded_matches (
+                    match_id,
+                    shard,
+                    exclusion_reason,
+                    matched_rule,
+                    policy_version,
+                    map_name,
+                    game_mode,
+                    match_type,
+                    is_custom_match,
+                    first_detected_at_kst,
+                    last_detected_at_kst
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    shard = VALUES(shard),
+                    exclusion_reason = VALUES(exclusion_reason),
+                    matched_rule = VALUES(matched_rule),
+                    policy_version = VALUES(policy_version),
+                    map_name = VALUES(map_name),
+                    game_mode = VALUES(game_mode),
+                    match_type = VALUES(match_type),
+                    is_custom_match = VALUES(is_custom_match),
+                    last_detected_at_kst = VALUES(last_detected_at_kst)
+                """,
+                (
+                    match.match_id,
+                    match.shard,
+                    reason,
+                    matched_rule,
+                    MATCH_COLLECTION_POLICY_VERSION,
+                    match.map_name,
+                    match.game_mode,
+                    match.match_type,
+                    int(match.is_custom_match),
+                    detected_at,
+                    detected_at,
+                ),
+            )
 
     def _list_queued_match_jobs(self, *, limit: int) -> list[dict[str, Any]]:
         with self.connection.cursor() as cursor:

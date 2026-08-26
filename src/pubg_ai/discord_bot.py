@@ -36,7 +36,8 @@ from pubg_ai.data_deletion_requests import (
 )
 from pubg_ai.database import connect_mysql
 from pubg_ai.discord_guild_catalog import sync_discord_guild_catalog
-from pubg_ai.discord_command_catalog import DISCORD_COMMAND_SPECS
+from pubg_ai.code_translator import DAMAGE_CAUSER_KO, translate_code
+from pubg_ai.discord_command_catalog import DISCORD_COMMAND_SPECS, command_group_label
 from pubg_ai.discord_permission_manager import DiscordPermissionManager
 from pubg_ai.discord_permissions import DiscordCommandIdentity, DiscordPermissionChecker
 from pubg_ai.fight_outcome_stats import FightOutcomeStatsService, PlayerFightOutcomeReport
@@ -54,6 +55,7 @@ from pubg_ai.player_trends import (
     parse_trend_date,
 )
 from pubg_ai.pubg_client import PubgApiClient, PubgApiError
+from pubg_ai.raw_storage import RawPayloadStore
 from pubg_ai.replay_artifact_catalog import ReplayArtifactRecord, list_replay_artifacts
 from pubg_ai.replay_storage import ReplayArtifactStore, ReplayStorageError
 from pubg_ai.system_alerts import (
@@ -63,6 +65,7 @@ from pubg_ai.system_alerts import (
     format_discord_alert,
 )
 from pubg_ai.time_utils import now_kst, to_kst
+from pubg_ai.watchlist import WatchlistService, mark_watchlist_alert_notified
 from pubg_ai.worker_run_history import (
     WORKER_RUN_EXPORT_LIMIT,
     WORKER_RUN_STATUSES,
@@ -73,6 +76,7 @@ from pubg_ai.worker_run_history import (
     get_worker_run,
     get_worker_run_page,
 )
+from pubg_ai.weapon_accuracy import is_ballistic_weapon
 
 
 DEFAULT_DISCORD_PREFIX = "!"
@@ -107,6 +111,35 @@ ALERT_HISTORY_PRESETS: dict[str, dict[str, str]] = {
     },
 }
 
+DISCORD_COMMAND_USAGE_KO: dict[str, str] = {
+    "배그도움말": "/배그도움말",
+    "유저조회": "/유저조회 [닉네임] [플랫폼]",
+    "전적": "/전적 닉네임 [플랫폼]",
+    "교전": "/교전 닉네임 [플랫폼]",
+    "추세": "/추세 닉네임 [옵션]",
+    "무기": "/무기 닉네임 무기 [플랫폼]",
+    "추천": "/추천 닉네임 [플랫폼]",
+    "매치": "/매치 매치_ID [닉네임] [플랫폼]",
+    "랭킹": "/랭킹 [지표] [플랫폼] [인원] [범위]",
+    "유저등록": "/유저등록 플랫폼 닉네임",
+    "유저삭제": "/유저삭제 플랫폼 닉네임",
+    "최근스냅샷": "/최근스냅샷 [매치_ID]",
+    "pubg-settings": "/pubg-settings [설정 종류] [값]",
+    "pubg-delete-data": "/pubg-delete-data 플랫폼 대상 범위 [사유]",
+    "pubg-delete-cancel": "/pubg-delete-cancel 요청_ID [사유]",
+    "pubg-permission": "/pubg-permission",
+    "pubg-ranking-scope": "/pubg-ranking-scope 범위 [서버_ID]",
+    "pubg-alerts": "/pubg-alerts",
+    "pubg-alert-ack": "/pubg-alert-ack 알림_ID",
+    "pubg-alert-snooze": "/pubg-alert-snooze 알림_ID [분]",
+    "pubg-alert-note": "/pubg-alert-note 알림_ID 메모",
+    "pubg-alert-resolution": "/pubg-alert-resolution 알림_ID 해결 기록",
+    "pubg-alert-notes": "/pubg-alert-notes 알림_ID [개수]",
+    "pubg-alert-history": "/pubg-alert-history [필터]",
+    "pubg-worker-runs": "/pubg-worker-runs [필터]",
+    "pubg-worker-run": "/pubg-worker-run 실행_ID",
+}
+
 
 def format_player_list(
     players: list[RegisteredPlayer],
@@ -130,7 +163,7 @@ def format_player_list(
         _registered_players_query_params(players),
     )
     if local_link:
-        lines.append(f"- local_registered_players: [open]({local_link})")
+        lines.append(f"- 로컬 앱에서 관리: [열기]({local_link})")
     return "\n".join(lines)
 
 
@@ -148,7 +181,7 @@ def _registered_players_query_params(players: list[RegisteredPlayer]) -> dict[st
 def format_unregister_command_reply(message: str, *, detail_base_url: str | None = None) -> str:
     lines = [message]
     if detail_base_url:
-        lines.append(f"- registered_players: [open]({detail_base_url.rstrip('/')}/#registered-players)")
+        lines.append(f"- 로컬 앱에서 관리: [열기]({detail_base_url.rstrip('/')}/#registered-players)")
     return "\n".join(lines)
 
 
@@ -163,7 +196,7 @@ def format_local_section_command_reply(
     lines = [message]
     section_url = _local_section_url(detail_base_url, section_anchor, query_params)
     if section_url:
-        lines.append(f"- {section_label}: [open]({section_url})")
+        lines.append(f"- 로컬 앱 상세: [열기]({section_url})")
     return "\n".join(lines)
 
 
@@ -213,16 +246,16 @@ def format_discord_permission_change_result(
     detail_base_url: str | None = None,
 ) -> str:
     action_label = "부여" if action == "grant" else "회수"
-    scope_label = "global" if guild_id is None else f"guild:{guild_id}"
+    scope_label = "모든 서버" if guild_id is None else f"서버 {guild_id}"
     result_label = "변경됨" if changed else "이미 적용됨"
     return format_discord_permission_command_reply(
         "\n".join(
             [
                 f"Discord 권한 {action_label} 완료",
-                f"- user_id: {user_id}",
-                f"- group: {group}",
-                f"- scope: {scope_label}",
-                f"- result: {result_label}",
+                f"- 사용자 ID: {user_id}",
+                f"- 권한 그룹: {command_group_label(group)} (`{group}`)",
+                f"- 적용 범위: {scope_label}",
+                f"- 처리 결과: {result_label}",
             ]
         ),
         user_id=user_id,
@@ -263,9 +296,9 @@ def format_discord_scope_change_result(
         "\n".join(
             [
                 "Discord 랭킹 범위 저장 완료",
-                f"- guild_id: {guild_id}",
-                f"- ranking_scope: {ranking_scope}",
-                f"- result: {result_label}",
+                f"- Discord 서버 ID: {guild_id}",
+                f"- 랭킹 범위: {'전체 서버' if ranking_scope == 'global' else '선택 서버'}",
+                f"- 처리 결과: {result_label}",
             ]
         ),
         guild_id=guild_id,
@@ -281,13 +314,13 @@ def format_discord_settings_command_reply(
 ) -> str:
     lines = [message]
     for label, anchor in [
-        ("local_collector_settings", "collector-settings"),
-        ("local_storage_settings", "storage-settings"),
-        ("local_discord_scopes", "discord-scopes"),
+        ("수집 설정", "collector-settings"),
+        ("저장 경로 설정", "storage-settings"),
+        ("Discord 범위 설정", "discord-scopes"),
     ]:
         local_link = _local_section_url(detail_base_url, anchor)
         if local_link:
-            lines.append(f"- {label}: [open]({local_link})")
+            lines.append(f"- {label}: [열기]({local_link})")
     return "\n".join(lines)
 
 
@@ -305,13 +338,13 @@ def format_discord_settings_summary(
         "\n".join(
             [
                 "PUBG AI 안전 설정",
-                f"- collector_poll_seconds: {poll_interval_seconds}",
-                f"- collector_player_limit: {cycle_player_limit}",
-                f"- player_lookup_chunk: {player_lookup_chunk_size}",
-                f"- raw_compression: {raw_compression}",
-                f"- public_profile_default: {'public' if public_profile_default else 'private'}",
-                f"- guild_ranking_scope: {guild_ranking_scope or '-'}",
-                "- hidden: secrets, database, storage paths",
+                f"- 수집 조회 주기: {poll_interval_seconds}초",
+                f"- 한 주기 최대 플레이어: {cycle_player_limit}명",
+                f"- 플레이어 조회 묶음: {player_lookup_chunk_size}명",
+                f"- 원본 압축 방식: {raw_compression}",
+                f"- 기본 프로필 공개: {'공개' if public_profile_default else '비공개'}",
+                f"- 현재 서버 랭킹 범위: {'전체 서버' if guild_ranking_scope == 'global' else '선택 서버' if guild_ranking_scope else '-'}",
+                "- 보안상 숨김: 비밀키, 데이터베이스 접속 정보, 저장 경로",
             ]
         ),
         detail_base_url=detail_base_url,
@@ -329,9 +362,9 @@ def format_discord_collector_settings_result(
         "\n".join(
             [
                 "Discord 수집 설정 저장 완료",
-                f"- poll_interval_seconds: {poll_interval_seconds}",
-                f"- cycle_player_limit: {cycle_player_limit}",
-                f"- player_lookup_chunk_size: {player_lookup_chunk_size}",
+                f"- 조회 주기: {poll_interval_seconds}초",
+                f"- 한 주기 최대 플레이어: {cycle_player_limit}명",
+                f"- API 조회 묶음: {player_lookup_chunk_size}명",
             ]
         ),
         "local_collector_settings",
@@ -350,9 +383,9 @@ def format_discord_public_profile_settings_result(
     public_profile_default: bool,
     detail_base_url: str | None = None,
 ) -> str:
-    value = "public" if public_profile_default else "private"
+    value = "공개" if public_profile_default else "비공개"
     return format_local_section_command_reply(
-        f"Discord 공개 프로필 기본값 저장 완료\n- public_profile_default: {value}",
+        f"Discord 공개 프로필 기본값 저장 완료\n- 기본 공개 상태: {value}",
         "local_discord_scopes",
         "discord-scopes",
         detail_base_url=detail_base_url,
@@ -392,13 +425,13 @@ def format_data_deletion_request_result(
         "\n".join(
             [
                 action_label,
-                f"- request_id: {request.id}",
-                f"- target: {request.player_name} ({request.shard})",
-                f"- account_id: {_short_account_id(request.account_id)}",
-                f"- scope: {request.deletion_scope}",
-                f"- status: {request.status}",
-                f"- expires_at_kst: {expires_at}",
-                "- execution: 실제 삭제 미실행",
+                f"- 요청 ID: {request.id}",
+                f"- 대상: {request.player_name} ({request.shard})",
+                f"- 계정 ID: {_short_account_id(request.account_id)}",
+                f"- 삭제 범위: {request.deletion_scope}",
+                f"- 상태: {_deletion_status_label(request.status)}",
+                f"- 만료 시각 (KST): {expires_at}",
+                "- 실행 상태: 실제 삭제 미실행",
             ]
         ),
         request_id=request.id,
@@ -424,6 +457,76 @@ def _local_section_url(
     return f"{detail_base_url.rstrip('/')}/{query}#{section_anchor}"
 
 
+def _deletion_status_label(value: str) -> str:
+    return {
+        "pending": "검토 대기",
+        "approved": "승인",
+        "rejected": "거절",
+        "cancelled": "취소",
+        "completed": "완료",
+        "expired": "만료",
+    }.get(str(value or ""), str(value or "-") )
+
+
+def _alert_source_label(value: str) -> str:
+    return {
+        "storage": "저장 공간",
+        "worker": "자동 작업",
+        "watchlist": "밴 플레이어",
+        "all": "전체",
+    }.get(str(value or ""), str(value or "-") )
+
+
+def _alert_severity_label(value: str) -> str:
+    return {
+        "error": "오류",
+        "warning": "경고",
+        "info": "정보",
+        "all": "전체",
+    }.get(str(value or ""), str(value or "-") )
+
+
+def _alert_state_label(value: str) -> str:
+    return {
+        "current": "현재 발생 중",
+        "active": "활성",
+        "acknowledged": "확인 완료",
+        "snoozed": "일시 숨김",
+        "resolved": "해결",
+        "all": "전체",
+    }.get(str(value or ""), str(value or "-") )
+
+
+def _alert_sort_label(value: str) -> str:
+    return {
+        "newest": "최신순",
+        "oldest": "오래된순",
+        "severity": "심각도순",
+    }.get(str(value or ""), str(value or "-") )
+
+
+def _worker_status_label(value: str) -> str:
+    return {
+        "running": "실행 중",
+        "succeeded": "성공",
+        "failed": "실패",
+        "cancelled": "취소",
+        "all": "전체",
+    }.get(str(value or ""), str(value or "-") )
+
+
+def _worker_name_label(value: str) -> str:
+    return {
+        "collector": "매치 수집기",
+        "post_processing": "후처리기",
+        "all": "전체",
+    }.get(str(value or ""), str(value or "-") )
+
+
+def _note_type_label(value: str) -> str:
+    return "해결 기록" if value == "resolution" else "메모"
+
+
 def format_replay_artifact_summary(
     artifact: ReplayArtifactRecord,
     *,
@@ -431,14 +534,14 @@ def format_replay_artifact_summary(
 ) -> str:
     player = artifact.player_name or _short_account_id(artifact.account_id or "")
     match_id = artifact.match_id
-    map_name = artifact.map_name or "unknown"
-    mode = artifact.game_mode or "-"
+    map_name = translate_code(artifact.map_name, "map") if artifact.map_name else "알 수 없음"
+    mode = translate_code(artifact.game_mode, "game_mode") if artifact.game_mode else "-"
     size_kb = artifact.size_bytes / 1024
     lines = [
         f"{player} 최근 2D 스냅샷",
-        f"- match: {match_id}",
-        f"- map/mode: {map_name} / {mode}",
-        f"- size: {size_kb:.1f} KB",
+        f"- 매치 ID: {match_id}",
+        f"- 맵/모드: {map_name} / {mode}",
+        f"- 파일 크기: {size_kb:.1f} KB",
     ]
     local_link = _local_section_url(
         detail_base_url,
@@ -451,7 +554,7 @@ def format_replay_artifact_summary(
         },
     )
     if local_link:
-        lines.append(f"- local_replay: [open]({local_link})")
+        lines.append(f"- 로컬 앱에서 재생: [열기]({local_link})")
     return "\n".join(lines)
 
 
@@ -461,39 +564,39 @@ def format_alert_action_result(
     *,
     detail_base_url: str | None = None,
 ) -> str:
-    status = "acknowledged" if action == "acknowledged" else "snoozed"
+    status = "확인 완료" if action == "acknowledged" else "일시 숨김"
     lines = [
-        f"PUBG AI alert {status}",
-        f"- id: {record.id}",
-        f"- title: {record.title}",
-        f"- source/severity: {record.source}/{record.severity}",
+        f"PUBG AI 알림 {status}",
+        f"- 알림 ID: {record.id}",
+        f"- 제목: {record.title}",
+        f"- 출처/심각도: {_alert_source_label(record.source)}/{_alert_severity_label(record.severity)}",
     ]
     detail_link = _alert_history_detail_markdown(record.id, detail_base_url)
     if detail_link:
-        lines.append(f"- local_detail: {detail_link}")
+        lines.append(f"- 로컬 앱 상세: {detail_link}")
     if action == "snoozed" and record.snoozed_until_kst:
-        lines.append(f"- snoozed_until_kst: {record.snoozed_until_kst}")
+        lines.append(f"- 숨김 종료 시각 (KST): {record.snoozed_until_kst}")
     if action == "acknowledged" and record.acknowledged_at_kst:
-        lines.append(f"- acknowledged_at_kst: {record.acknowledged_at_kst}")
+        lines.append(f"- 확인 시각 (KST): {record.acknowledged_at_kst}")
     return "\n".join(lines)
 
 
 def format_alert_note_result(note: AlertHistoryNote, *, detail_base_url: str | None = None) -> str:
-    label = "resolution" if note.note_type == "resolution" else "note"
+    label = _note_type_label(note.note_type)
     lines = [
-        f"PUBG AI alert {label} saved",
-        f"- alert_id: {note.alert_history_id}",
-        f"- note_id: {note.id}",
-        f"- type: {note.note_type}",
+        f"PUBG AI 알림 {label} 저장 완료",
+        f"- 알림 ID: {note.alert_history_id}",
+        f"- 메모 ID: {note.id}",
+        f"- 종류: {label}",
     ]
     detail_link = _alert_history_detail_markdown(note.alert_history_id, detail_base_url)
     if detail_link:
-        lines.append(f"- local_detail: {detail_link}")
+        lines.append(f"- 로컬 앱 상세: {detail_link}")
     if note.created_by:
-        lines.append(f"- created_by: {note.created_by}")
+        lines.append(f"- 작성자: {note.created_by}")
     if note.created_at_kst:
-        lines.append(f"- created_at_kst: {note.created_at_kst}")
-    lines.append(f"- text: {note.note_text}")
+        lines.append(f"- 작성 시각 (KST): {note.created_at_kst}")
+    lines.append(f"- 내용: {note.note_text}")
     return "\n".join(lines)
 
 
@@ -504,23 +607,23 @@ def format_alert_notes_result(
     detail_base_url: str | None = None,
 ) -> str:
     lines = [
-        "PUBG AI alert notes",
-        f"- alert_id: {record.id}",
-        f"- title: {_discord_single_line(record.title, 120)}",
+        "PUBG AI 알림 메모 이력",
+        f"- 알림 ID: {record.id}",
+        f"- 제목: {_discord_single_line(record.title, 120)}",
     ]
     detail_link = _alert_history_detail_markdown(record.id, detail_base_url)
     if detail_link:
-        lines.append(f"- local_detail: {detail_link}")
-    lines.append(f"- shown/total: {len(notes)}/{record.note_count}")
+        lines.append(f"- 로컬 앱 상세: {detail_link}")
+    lines.append(f"- 표시/전체: {len(notes)}/{record.note_count}")
     if not notes:
-        lines.append("- no notes or resolution comments")
+        lines.append("- 저장된 메모나 해결 기록이 없습니다.")
         return "\n".join(lines)
 
     for note in notes:
         created_at = note.created_at_kst or "-"
         created_by = note.created_by or "-"
         text = _discord_single_line(note.note_text, 180)
-        lines.append(f"- #{note.id} {note.note_type} {created_at} by {created_by}: {text}")
+        lines.append(f"- #{note.id} {_note_type_label(note.note_type)} · {created_at} · 작성자 {created_by}: {text}")
     return "\n".join(lines)
 
 
@@ -534,7 +637,7 @@ def format_alert_command_reply(
     if alert_id is not None:
         detail_link = _alert_history_detail_markdown(alert_id, detail_base_url)
         if detail_link:
-            lines.append(f"- local_detail: {detail_link}")
+            lines.append(f"- 로컬 앱 상세: {detail_link}")
     return "\n".join(lines)
 
 
@@ -542,7 +645,7 @@ def format_alerts_command_reply(message: str, *, detail_base_url: str | None = N
     lines = [message]
     alerts_link = current_alerts_url(detail_base_url)
     if alerts_link:
-        lines.append(f"- current_alerts: [open]({alerts_link})")
+        lines.append(f"- 로컬 앱의 현재 알림: [열기]({alerts_link})")
     return "\n".join(lines)
 
 
@@ -553,21 +656,22 @@ def format_alert_history_result(
     command_prefix: str = DEFAULT_DISCORD_PREFIX,
 ) -> str:
     lines = [
-        "PUBG AI alert history",
+        "PUBG AI 알림 이력",
         (
-            f"- filters: source={page.source} state={page.state} severity={page.severity} "
-            f"sort={page.sort} search={page.search or '-'}"
+            f"- 필터: 출처={_alert_source_label(page.source)} 상태={_alert_state_label(page.state)} "
+            f"심각도={_alert_severity_label(page.severity)} 정렬={_alert_sort_label(page.sort)} "
+            f"검색={page.search or '-'}"
         ),
-        f"- shown/total: {len(page.records)}/{page.total} offset={page.offset} limit={page.limit}",
+        f"- 표시/전체: {len(page.records)}/{page.total} · 시작 위치 {page.offset} · 한 페이지 {page.limit}개",
     ]
     filter_page_link = _alert_history_filter_page_link(page, detail_base_url)
     if filter_page_link:
-        lines.append(f"- filter_page: [open]({filter_page_link})")
+        lines.append(f"- 같은 필터를 로컬 앱에서 열기: [열기]({filter_page_link})")
     export_link = _alert_history_export_link(page, detail_base_url)
     if export_link:
-        lines.append(f"- export_csv: [download]({export_link})")
+        lines.append(f"- CSV 내보내기: [다운로드]({export_link})")
     if not page.records:
-        lines.append("- no alert history rows")
+        lines.append("- 조건에 맞는 알림 이력이 없습니다.")
         return "\n".join(lines)
 
     for record in page.records:
@@ -576,7 +680,7 @@ def format_alert_history_result(
         message = _discord_single_line(record.message, 100)
         last_seen = record.last_seen_at_kst or "-"
         lines.append(
-            f"- #{record.id} [{record.source}/{record.severity}/{state}] {last_seen} "
+            f"- #{record.id} [{_alert_source_label(record.source)}/{_alert_severity_label(record.severity)}/{_alert_state_label(state)}] {last_seen} "
             f"{title}: {message}{_alert_history_detail_link(record, detail_base_url)}"
         )
     lines.extend(_alert_history_navigation_hints(page, command_prefix=command_prefix))
@@ -609,10 +713,10 @@ def format_alert_history_command_reply(
     )
     filter_page_link = _alert_history_filter_page_link(page, detail_base_url)
     if filter_page_link:
-        lines.append(f"- filter_page: [open]({filter_page_link})")
+        lines.append(f"- 같은 필터를 로컬 앱에서 열기: [열기]({filter_page_link})")
     export_link = _alert_history_export_link(page, detail_base_url)
     if export_link:
-        lines.append(f"- export_csv: [download]({export_link})")
+        lines.append(f"- CSV 내보내기: [다운로드]({export_link})")
     return "\n".join(lines)
 
 
@@ -623,18 +727,18 @@ def format_worker_run_history_result(
     command_prefix: str = DEFAULT_DISCORD_PREFIX,
 ) -> str:
     lines = [
-        "PUBG AI worker run history",
-        "- filters: " + " ".join(_worker_run_history_filter_labels(page)),
-        f"- shown/total: {len(page.records)}/{page.total} offset={page.offset} limit={page.limit}",
+        "PUBG AI 자동 작업 실행 이력",
+        "- 필터: " + " ".join(_worker_run_history_filter_labels(page)),
+        f"- 표시/전체: {len(page.records)}/{page.total} · 시작 위치 {page.offset} · 한 페이지 {page.limit}개",
     ]
     filter_page_link = _worker_run_filter_page_link(page, detail_base_url)
     if filter_page_link:
-        lines.append(f"- filter_page: [open]({filter_page_link})")
+        lines.append(f"- 같은 필터를 로컬 앱에서 열기: [열기]({filter_page_link})")
     export_link = _worker_run_export_link(page, detail_base_url)
     if export_link:
-        lines.append(f"- export_csv: [download]({export_link})")
+        lines.append(f"- CSV 내보내기: [다운로드]({export_link})")
     if not page.records:
-        lines.append("- no worker runs yet")
+        lines.append("- 조건에 맞는 자동 작업 이력이 없습니다.")
         return "\n".join(lines)
 
     for run in page.records:
@@ -642,9 +746,9 @@ def format_worker_run_history_result(
         duration = _optional_duration_seconds(run.duration_seconds)
         last_error = _discord_single_line(run.last_error or "-", 120)
         lines.append(
-            f"- #{run.id} [{run.worker_name}/{run.status}] {created_at} "
-            f"duration={duration} errors={run.error_count} last_error={last_error} "
-            f"detail: `{command_prefix}pubg-worker-run {run.id}`{_worker_run_detail_link(run, detail_base_url)}"
+            f"- #{run.id} [{_worker_name_label(run.worker_name)}/{_worker_status_label(run.status)}] {created_at} "
+            f"소요={duration} 오류={run.error_count} 최근 오류={last_error} "
+            f"상세: `{command_prefix}pubg-worker-run {run.id}`{_worker_run_detail_link(run, detail_base_url)}"
         )
     lines.extend(_worker_run_navigation_hints(page, command_prefix=command_prefix))
     return "\n".join(lines)
@@ -674,40 +778,40 @@ def format_worker_run_history_command_reply(
     )
     filter_page_link = _worker_run_filter_page_link(page, detail_base_url)
     if filter_page_link:
-        lines.append(f"- filter_page: [open]({filter_page_link})")
+        lines.append(f"- 같은 필터를 로컬 앱에서 열기: [열기]({filter_page_link})")
     export_link = _worker_run_export_link(page, detail_base_url)
     if export_link:
-        lines.append(f"- export_csv: [download]({export_link})")
+        lines.append(f"- CSV 내보내기: [다운로드]({export_link})")
     return "\n".join(lines)
 
 
 def format_worker_run_detail_result(run: WorkerRunRecord, *, detail_base_url: str | None = None) -> str:
     lines = [
-        "PUBG AI worker run detail",
-        f"- id: {run.id}",
-        f"- worker/status: {run.worker_name}/{run.status}",
-        f"- started_at_kst: {run.started_at_kst or '-'}",
-        f"- finished_at_kst: {run.finished_at_kst or '-'}",
-        f"- duration/errors: {_optional_duration_seconds(run.duration_seconds)} / {run.error_count}",
-        f"- created_at_kst: {run.created_at_kst or '-'}",
+        "PUBG AI 자동 작업 실행 상세",
+        f"- 실행 ID: {run.id}",
+        f"- 작업/상태: {_worker_name_label(run.worker_name)}/{_worker_status_label(run.status)}",
+        f"- 시작 시각 (KST): {run.started_at_kst or '-'}",
+        f"- 종료 시각 (KST): {run.finished_at_kst or '-'}",
+        f"- 소요 시간/오류: {_optional_duration_seconds(run.duration_seconds)} / {run.error_count}",
+        f"- 기록 시각 (KST): {run.created_at_kst or '-'}",
     ]
     detail_link = _worker_run_detail_link(run, detail_base_url).strip()
     if detail_link:
-        lines.append(f"- local_detail: {detail_link}")
+        lines.append(f"- 로컬 앱 상세: {detail_link}")
 
     metrics = _worker_run_summary_metrics(run.summary)
     if metrics:
-        lines.append("- summary metrics:")
+        lines.append("- 요약 지표:")
         lines.extend(f"  - {metric}" for metric in metrics)
     else:
-        lines.append("- summary metrics: none")
+        lines.append("- 요약 지표: 없음")
 
     errors = _worker_run_summary_errors(run.summary)
-    lines.append("- errors:")
+    lines.append("- 오류:")
     if errors:
         lines.extend(f"  {index}. {_discord_single_line(error, 180)}" for index, error in enumerate(errors, start=1))
     else:
-        lines.append("  none")
+        lines.append("  없음")
     return "\n".join(lines)
 
 
@@ -721,7 +825,7 @@ def format_worker_run_command_reply(
     if run_id is not None:
         detail_link = _worker_run_detail_markdown(run_id, detail_base_url)
         if detail_link:
-            lines.append(f"- local_detail: {detail_link}")
+            lines.append(f"- 로컬 앱 상세: {detail_link}")
     return "\n".join(lines)
 
 
@@ -750,7 +854,8 @@ def format_player_profile_stats(profile: PlayerProfileStats, *, detail_base_url:
             lines.append(
                 f"- {_short_match_id(match.match_id)} {rank} "
                 f"{match.kills}킬/{_number(match.damage_dealt, 0)}딜 "
-                f"{match.map_name or '-'} {match.game_mode or '-'}"
+                    f"{translate_code(match.map_name, 'map') if match.map_name else '-'} "
+                    f"{translate_code(match.game_mode, 'game_mode') if match.game_mode else '-'}"
             )
 
     if totals.match_count == 0:
@@ -762,7 +867,7 @@ def format_player_profile_stats(profile: PlayerProfileStats, *, detail_base_url:
         {"shard": profile.player.shard, "account_id": profile.player.account_id},
     )
     if local_link:
-        lines.append(f"- local_profile: [open]({local_link})")
+        lines.append(f"- 로컬 앱 상세 분석: [열기]({local_link})")
 
     return "\n".join(lines)
 
@@ -811,27 +916,40 @@ def format_player_trends(
         query_params,
     )
     if local_link:
-        lines.append(f"- local_trends: [open]({local_link})")
+        lines.append(f"- 로컬 앱 추세 그래프: [열기]({local_link})")
     return "\n".join(lines)
 
 
 def _trend_filter_label(filters: PlayerTrendFilters) -> str:
     values = filters.to_record()
     labels = {
-        "game_mode": "mode",
-        "team_mode": "team",
-        "perspective": "view",
-        "match_type": "type",
-        "map_name": "map",
-        "is_custom_match": "custom",
-        "from_date_kst": "from",
-        "to_date_kst": "to",
+        "game_mode": "게임 모드",
+        "team_mode": "팀 모드",
+        "perspective": "시점",
+        "match_type": "매치 유형",
+        "map_name": "맵",
+        "is_custom_match": "커스텀",
+        "from_date_kst": "시작일",
+        "to_date_kst": "종료일",
     }
-    selected = [
-        f"{labels[key]}={str(value).lower() if isinstance(value, bool) else value}"
-        for key, value in values.items()
-        if value is not None
-    ]
+    categories = {
+        "game_mode": "game_mode",
+        "team_mode": "team_mode",
+        "perspective": "perspective",
+        "match_type": "match_type",
+        "map_name": "map",
+    }
+    selected: list[str] = []
+    for key, value in values.items():
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            display_value = "예" if value else "아니요"
+        elif key in categories:
+            display_value = translate_code(str(value), categories[key])
+        else:
+            display_value = str(value)
+        selected.append(f"{labels[key]}={display_value}")
     return ", ".join(selected) if selected else "전체"
 
 
@@ -950,7 +1068,7 @@ def format_player_fight_outcomes(
         {"shard": report.player.shard, "account_id": report.player.account_id},
     )
     if local_link:
-        lines.append(f"- local_profile: [open]({local_link})")
+        lines.append(f"- 로컬 앱 교전 분석: [열기]({local_link})")
     return "\n".join(lines)
 
 
@@ -1003,7 +1121,7 @@ def format_player_weapon_detail(detail: PlayerWeaponDetail, *, detail_base_url: 
         {"shard": detail.player.shard, "account_id": detail.player.account_id, "weapon": detail.weapon_name},
     )
     if local_link:
-        lines.append(f"- local_weapon: [open]({local_link})")
+        lines.append(f"- 로컬 앱 무기 분석: [열기]({local_link})")
 
     return "\n".join(lines)
 
@@ -1016,8 +1134,10 @@ def format_player_match_detail(detail: PlayerMatchDetail, *, detail_base_url: st
     result = "치킨" if detail.is_chicken else "치킨 아님"
     lines = [
         f"{detail.player.current_name} 매치 상세 ({detail.shard})",
-        f"- Match: {detail.match_id}",
-        f"- 맵/모드: {detail.map_name or '-'} / {detail.game_mode or '-'} / {detail.match_type or '-'}",
+        f"- 매치 ID: {detail.match_id}",
+        f"- 맵/모드: {translate_code(detail.map_name, 'map') if detail.map_name else '-'} / "
+        f"{translate_code(detail.game_mode, 'game_mode') if detail.game_mode else '-'} / "
+        f"{translate_code(detail.match_type, 'match_type') if detail.match_type else '-'}",
         f"- 결과/등수: {result} / {rank}",
         f"- 인원: 총 {total_players}명, 사람 {human_players}명, 봇 {bot_players}명",
         f"- K/D/A/기절: {detail.kills}/{detail.deaths}/{detail.assists}/{detail.dbnos_caused}"
@@ -1053,7 +1173,7 @@ def format_player_match_detail(detail: PlayerMatchDetail, *, detail_base_url: st
         {"shard": detail.shard, "account_id": detail.player.account_id, "match_id": detail.match_id},
     )
     if local_link:
-        lines.append(f"- local_match: [open]({local_link})")
+        lines.append(f"- 로컬 앱 매치 상세: [열기]({local_link})")
 
     return "\n".join(lines)
 
@@ -1087,7 +1207,7 @@ def format_player_ranking(
         },
     )
     if local_link:
-        lines.append(f"- local_ranking: [open]({local_link})")
+        lines.append(f"- 로컬 앱 랭킹: [열기]({local_link})")
     return "\n".join(lines)
 
 
@@ -1095,8 +1215,8 @@ def _drop_zone_location_label(item: Any) -> str:
     if item.region_display_name_ko:
         return str(item.region_display_name_ko)
     if item.region_status == "dynamic_map":
-        return f"동적 맵 grid {item.grid_x},{item.grid_y}"
-    return f"grid {item.grid_x},{item.grid_y}"
+        return f"동적 맵 격자 {item.grid_x},{item.grid_y}"
+    return f"격자 {item.grid_x},{item.grid_y}"
 
 
 def format_player_recommendations(
@@ -1121,23 +1241,42 @@ def format_player_recommendations(
         lines.append("- 추천 무기: 표본 없음")
 
     if report.loadouts:
-        lines.append("- 추천 2주무기: " + ", ".join(
-            f"{item.primary.weapon_name} + {item.secondary.weapon_name} "
-            f"(점수 {_number(item.score, 1)}, {item.inventory_burden.get('summary', '탄약 정보 없음')})"
-            for item in report.loadouts[:3]
-        ))
+        lines.append("- 추천 2주무기와 파츠 계획:")
+        for index, item in enumerate(report.loadouts[:3], start=1):
+            primary_parts = " / ".join(
+                translate_code(part.attachment_code, "item")
+                for part in item.primary_attachments
+            ) or "호환 파츠 실전 표본 부족"
+            secondary_parts = " / ".join(
+                translate_code(part.attachment_code, "item")
+                for part in item.secondary_attachments
+            ) or "호환 파츠 실전 표본 부족"
+            primary_plan = item.primary_attachment_plan or {}
+            secondary_plan = item.secondary_attachment_plan or {}
+            lines.extend(
+                [
+                    f"  {index}. {item.primary.weapon_name} + {item.secondary.weapon_name} "
+                    f"(점수 {_number(item.score, 1)}, {item.inventory_burden.get('summary', '탄약 정보 없음')})",
+                    f"     {item.primary.weapon_name}: {primary_parts} "
+                    f"· {primary_plan.get('basis', '무기별 파츠 성과 조합')} "
+                    f"· 신뢰도 {primary_plan.get('confidence', '낮음')}",
+                    f"     {item.secondary.weapon_name}: {secondary_parts} "
+                    f"· {secondary_plan.get('basis', '무기별 파츠 성과 조합')} "
+                    f"· 신뢰도 {secondary_plan.get('confidence', '낮음')}",
+                ]
+            )
 
     if report.attachment_combinations:
         lines.append("- 실전 파츠 조합: " + ", ".join(
-            f"{item.weapon_name} + {' + '.join(item.attachment_names)} "
+            f"{item.weapon_name} + {' + '.join(translate_code(code, 'item') for code in item.attachment_codes)} "
             f"({item.match_count}경기, 승률 {_percent(item.win_rate)})"
             for item in report.attachment_combinations[:3]
         ))
 
     if report.weapon_attachments:
         lines.append("- 파츠별 개별 성과: " + ", ".join(
-            f"{item.weapon_name} + {item.attachment_name} "
-            f"({_number(item.avg_damage_dealt, 1)} dmg, {_percent(item.win_rate)} win)"
+            f"{item.weapon_name} + {translate_code(item.attachment_code, 'item')} "
+            f"(평균 딜 {_number(item.avg_damage_dealt, 1)}, 승률 {_percent(item.win_rate)})"
             f"{_recommendation_evidence_link(report, item, evidence_base_url)}"
             for item in report.weapon_attachments[:3]
         ))
@@ -1147,7 +1286,7 @@ def format_player_recommendations(
     if report.weapon_ranges:
         lines.append("- 성과 발생 거리: " + ", ".join(
             f"{item.weapon_name} {item.bucket_label} "
-            f"({item.kills}K/{item.dbnos}DBNO)"
+            f"({item.kills}킬/{item.dbnos}기절)"
             for item in report.weapon_ranges[:3]
         ))
     else:
@@ -1155,7 +1294,7 @@ def format_player_recommendations(
 
     if report.attachments:
         lines.append("- 전체 파츠: " + ", ".join(
-            f"{item.item_name} ({item.attached_events}회 장착)"
+            f"{translate_code(item.item_code, 'item')} ({item.attached_events}회 장착)"
             for item in report.attachments[:3]
         ))
     else:
@@ -1191,7 +1330,7 @@ def format_player_recommendations(
         {"shard": report.player.shard, "account_id": report.player.account_id, "min_matches": report.min_matches},
     )
     if local_link:
-        lines.append(f"- 로컬 상세: [열기]({local_link})")
+        lines.append(f"- 로컬 앱 추천 상세: [열기]({local_link})")
 
     return "\n".join(lines)
 
@@ -1205,6 +1344,7 @@ def create_discord_bot(
     status_callback: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> Any:
     import discord
+    from discord import app_commands
     from discord.ext import commands
 
     intents = discord.Intents.default()
@@ -1212,11 +1352,11 @@ def create_discord_bot(
     bot = commands.Bot(command_prefix=command_prefix, intents=intents)
     permission_manager = DiscordPermissionManager(scope_settings_store) if scope_settings_store is not None else None
     alert_task_started = False
-    slash_commands_synced = False
     alert_last_worker_run_id: int | None = None
     sent_storage_alert_keys: set[str] = set()
     custom_prefix_aliases: dict[str, str] = {}
     application_command_templates: tuple[Any, ...] | None = None
+    application_command_sync_lock = asyncio.Lock()
 
     def notify_status(event: str, **details: Any) -> None:
         if status_callback is None:
@@ -1294,6 +1434,18 @@ def create_discord_bot(
             return "guild"
         return settings.guild_ranking_scopes.get(guild_id, "guild")
 
+    def guild_ranking_scope_ids(ctx: Any) -> list[str]:
+        guild_id = guild_id_for(ctx)
+        if guild_id is None:
+            return []
+        if scope_settings_store is None:
+            return [guild_id]
+        try:
+            settings = scope_settings_store.load_discord_scope_settings()
+        except LocalSettingsError:
+            return [guild_id]
+        return list(settings.guild_ranking_selected_guild_ids.get(guild_id) or [guild_id])
+
     def public_profile_default() -> bool:
         if scope_settings_store is None:
             return True
@@ -1324,7 +1476,12 @@ def create_discord_bot(
         await ctx.reply("이 명령어는 디스코드 서버 채널에서 사용해 주세요.", mention_author=False)
         return None
 
-    async def send_alert_to_channel(channel_id: str, message: str) -> bool:
+    async def send_alert_to_channel(
+        channel_id: str,
+        message: str,
+        *,
+        allowed_guild_ids: set[str] | None = None,
+    ) -> bool:
         try:
             numeric_channel_id = int(channel_id)
         except ValueError:
@@ -1334,6 +1491,9 @@ def create_discord_bot(
             channel = bot.get_channel(numeric_channel_id)
             if channel is None:
                 channel = await bot.fetch_channel(numeric_channel_id)
+            channel_guild_id = str(getattr(getattr(channel, "guild", None), "id", "") or "")
+            if allowed_guild_ids and channel_guild_id not in allowed_guild_ids:
+                return False
             await channel.send(message)
             return True
         except Exception as exc:
@@ -1351,11 +1511,28 @@ def create_discord_bot(
             print(f"failed to load PUBG AI alert settings: {exc}")
             return
 
-        if not alert_settings.discord_channel_ids:
-            return
-
         connection = connect_mysql(config.database)
         try:
+            watchlist = WatchlistService(connection)
+            try:
+                watchlist.scan_encounters(
+                    raw_store=RawPayloadStore(
+                        config.app.raw_data_dir,
+                        compression=config.app.raw_compression,  # type: ignore[arg-type]
+                    ),
+                    limit=100,
+                )
+            except Exception as exc:
+                print(f"failed to scan PUBG AI watchlist encounters: {exc}")
+            if config.secrets.pubg_api_key:
+                try:
+                    watchlist.refresh_identities(
+                        pubg_client=PubgApiClient(config.secrets.pubg_api_key),
+                        force=False,
+                        max_age_minutes=60,
+                    )
+                except Exception as exc:
+                    print(f"failed to refresh PUBG AI watchlist identities: {exc}")
             if alert_last_worker_run_id is None:
                 alert_last_worker_run_id = get_latest_worker_run_id(connection)
             report = collect_system_alerts(
@@ -1381,14 +1558,36 @@ def create_discord_bot(
                     worker_alert_count += 1
 
                 sent_alert = False
-                for channel_id in alert_settings.discord_channel_ids or []:
+                metadata = alert.metadata or {}
+                selected_channels = [
+                    str(value)
+                    for value in metadata.get("channel_ids", [])
+                    if str(value).strip().isdigit()
+                ]
+                target_channels = selected_channels or list(
+                    alert_settings.discord_channel_ids or []
+                )
+                allowed_guild_ids = None
+                if alert.source == "watchlist" and not selected_channels:
+                    scoped_guild_ids = {
+                        str(value)
+                        for value in metadata.get("guild_ids", [])
+                        if str(value).strip()
+                    }
+                    allowed_guild_ids = scoped_guild_ids or None
+                for channel_id in target_channels:
                     sent_alert = await send_alert_to_channel(
                         channel_id,
                         format_discord_alert(alert, detail_base_url=config.app.local_web_base_url),
+                        allowed_guild_ids=allowed_guild_ids,
                     ) or sent_alert
 
                 if sent_alert:
                     mark_alert_notified(connection, alert.id)
+                    if alert.source == "watchlist":
+                        event_id = metadata.get("watchlist_alert_event_id")
+                        if event_id is not None:
+                            mark_watchlist_alert_notified(connection, int(event_id))
                     if alert.source == "storage":
                         sent_storage_alert_keys.add(alert.alert_key)
                     if alert.source == "worker":
@@ -1448,56 +1647,113 @@ def create_discord_bot(
         return application_command_templates
 
     async def sync_application_commands(guild_ids: list[str] | None = None) -> dict[str, int]:
-        templates = restore_global_application_commands()
-        available_names = {str(command.name) for command in templates}
+        async with application_command_sync_lock:
+            templates = restore_global_application_commands()
+            available_names = {str(command.name) for command in templates}
+            requested_ids = set(guild_ids or [])
+            guilds = [
+                guild
+                for guild in bot.guilds
+                if not requested_ids or str(getattr(guild, "id", "")) in requested_ids
+            ]
+            found_ids = {str(getattr(guild, "id", "")) for guild in guilds}
+            missing_ids = sorted(requested_ids - found_ids)
+            if missing_ids:
+                raise RuntimeError(
+                    "Discord bot is not connected to requested guild(s): " + ", ".join(missing_ids)
+                )
+
+            # The application is guild-managed. Purge legacy global commands first;
+            # otherwise Discord combines them with the selected guild command list.
+            bot.tree.clear_commands(guild=None)
+            await bot.tree.sync()
+
+            synced_by_guild: dict[str, int] = {}
+            for guild in guilds:
+                guild_id = str(guild.id)
+                restore_global_application_commands()
+                bot.tree.clear_commands(guild=guild)
+                bot.tree.copy_global_to(guild=guild)
+                enabled = enabled_commands_for_guild(guild_id)
+                if enabled is not None:
+                    for command_name in sorted(available_names - enabled):
+                        bot.tree.remove_command(command_name, guild=guild)
+                synced = await bot.tree.sync(guild=guild)
+                synced_by_guild[guild_id] = len(synced)
+
+            bot.tree.clear_commands(guild=None)
+            notify_status(
+                "commands_synced",
+                guild_command_counts=synced_by_guild,
+                available_command_count=len(DISCORD_COMMAND_SPECS),
+            )
+            return synced_by_guild
+
+    bot.pubg_sync_application_commands = sync_application_commands
+
+    async def fetch_application_commands(guild_ids: list[str] | None = None) -> dict[str, list[str]]:
         requested_ids = set(guild_ids or [])
         guilds = [
             guild
             for guild in bot.guilds
             if not requested_ids or str(getattr(guild, "id", "")) in requested_ids
         ]
-        synced_by_guild: dict[str, int] = {}
-        for guild in guilds:
-            guild_id = str(guild.id)
-            restore_global_application_commands()
-            bot.tree.clear_commands(guild=guild)
-            bot.tree.copy_global_to(guild=guild)
-            enabled = enabled_commands_for_guild(guild_id)
-            if enabled is not None:
-                for command_name in sorted(available_names - enabled):
-                    bot.tree.remove_command(command_name, guild=guild)
-            synced = await bot.tree.sync(guild=guild)
-            synced_by_guild[guild_id] = len(synced)
+        found_ids = {str(getattr(guild, "id", "")) for guild in guilds}
+        missing_ids = sorted(requested_ids - found_ids)
+        if missing_ids:
+            raise RuntimeError(
+                "Discord bot is not connected to requested guild(s): " + ", ".join(missing_ids)
+            )
+        return {
+            str(guild.id): sorted(
+                str(command.name)
+                for command in await bot.tree.fetch_commands(guild=guild)
+            )
+            for guild in guilds
+        }
 
-        # This bot is managed per guild. Removing global registrations prevents
-        # disabled commands from lingering in a server's slash-command picker.
-        bot.tree.clear_commands(guild=None)
-        await bot.tree.sync()
-        notify_status(
-            "commands_synced",
-            guild_command_counts=synced_by_guild,
-            available_command_count=len(DISCORD_COMMAND_SPECS),
+    bot.pubg_fetch_application_commands = fetch_application_commands
+
+    async def fetch_application_command_exposure(guild_id: str) -> dict[str, list[str]]:
+        requested_id = str(guild_id or "").strip()
+        guild = next(
+            (
+                item
+                for item in bot.guilds
+                if str(getattr(item, "id", "")) == requested_id
+            ),
+            None,
         )
-        return synced_by_guild
+        if guild is None:
+            raise RuntimeError(f"Discord bot is not connected to requested guild: {requested_id}")
+        global_names = sorted(
+            str(command.name) for command in await bot.tree.fetch_commands()
+        )
+        guild_names = sorted(
+            str(command.name) for command in await bot.tree.fetch_commands(guild=guild)
+        )
+        return {
+            "global_commands": global_names,
+            "guild_commands": guild_names,
+            "visible_commands": sorted(set(global_names) | set(guild_names)),
+        }
 
-    bot.pubg_sync_application_commands = sync_application_commands
+    bot.pubg_fetch_application_command_exposure = fetch_application_command_exposure
 
     @bot.event
     async def on_ready() -> None:
-        nonlocal alert_task_started, slash_commands_synced
+        nonlocal alert_task_started
         print(f"PUBG AI Discord bot logged in as {bot.user}")
         refresh_permission_settings()
         try:
             sync_known_guilds(bot.guilds)
         except Exception as exc:
             print(f"failed to sync Discord guild catalog: {exc}")
-        if not slash_commands_synced:
-            try:
-                synced = await sync_application_commands()
-                slash_commands_synced = True
-                print(f"synced Discord application commands for {len(synced)} guilds")
-            except Exception as exc:
-                print(f"failed to sync Discord application commands: {exc}")
+        try:
+            synced = await sync_application_commands()
+            print(f"synced Discord application commands for {len(synced)} guilds")
+        except Exception as exc:
+            print(f"failed to sync Discord application commands: {exc}")
         if scope_settings_store is not None and not alert_task_started:
             alert_task_started = True
             bot.loop.create_task(alert_loop())
@@ -1544,10 +1800,177 @@ def create_discord_bot(
 
     @bot.event
     async def on_resumed() -> None:
+        try:
+            await sync_application_commands()
+        except Exception as exc:
+            print(f"failed to resync Discord application commands after resume: {exc}")
         notify_status("resumed", guild_count=len(bot.guilds))
+
+    class DiscordHelpView(discord.ui.View):
+        CATEGORY_LABELS = {
+            "all": "전체 명령",
+            "guide": "안내",
+            "profile_read": "플레이어 분석",
+            "ranking_read": "랭킹",
+            "management": "추적 대상 관리",
+            "replay_read": "2D 리플레이",
+            "settings_write": "수집 설정",
+            "admin": "운영 관리",
+        }
+
+        def __init__(self, *, owner_id: int, guild_id: str | None) -> None:
+            super().__init__(timeout=600.0)
+            self.owner_id = owner_id
+            enabled = enabled_commands_for_guild(guild_id) if guild_id else None
+            self.specs = [
+                spec
+                for spec in DISCORD_COMMAND_SPECS
+                if enabled is None or spec.name in enabled
+            ]
+            self.category = "all"
+            self.selected_command: str | None = None
+            self.rebuild()
+
+        @staticmethod
+        def category_for(spec: Any) -> str:
+            if spec.permission_group is None:
+                return "guide"
+            if spec.permission_group in {"register", "player_manage"}:
+                return "management"
+            return spec.permission_group
+
+        def filtered_specs(self) -> list[Any]:
+            if self.category == "all":
+                return list(self.specs)
+            return [spec for spec in self.specs if self.category_for(spec) == self.category]
+
+        def selected_spec(self) -> Any | None:
+            return next(
+                (spec for spec in self.specs if spec.name == self.selected_command),
+                None,
+            )
+
+        def make_embed(self) -> Any:
+            selected = self.selected_spec()
+            if selected is not None:
+                permission = (
+                    command_group_label(selected.permission_group)
+                    if selected.permission_group
+                    else "권한 없이 사용 가능"
+                )
+                aliases = ", ".join(f"`{value}`" for value in selected.aliases) or "없음"
+                description = (
+                    f"{selected.description}\n\n"
+                    f"**슬래시 사용법**\n`{DISCORD_COMMAND_USAGE_KO.get(selected.name, '/' + selected.name)}`\n\n"
+                    f"**필요 권한**\n{permission}\n\n"
+                    f"**접두사 별칭**\n{aliases}\n\n"
+                    "닉네임 입력란이 있는 슬래시 명령은 현재 서버의 등록 유저를 자동완성으로 보여줍니다."
+                )
+                title = f"PUBG AI · {selected.label}"
+            else:
+                rows = self.filtered_specs()
+                command_lines = [
+                    f"`/{spec.name}` · **{spec.label}** · {spec.description}"
+                    for spec in rows
+                ]
+                description = (
+                    "위 메뉴에서 분류를 고르고, 아래 메뉴에서 명령을 선택하면 사용법과 권한을 확인할 수 있습니다.\n\n"
+                    + ("\n".join(command_lines) if command_lines else "이 분류에 공개된 명령이 없습니다.")
+                )
+                title = f"PUBG AI 명령어 · {self.CATEGORY_LABELS[self.category]}"
+            embed = discord.Embed(title=title, description=description[:4096], colour=0x42D3AA)
+            embed.set_footer(text=f"현재 서버에 공개된 명령 {len(self.specs)}개 · 이 화면은 실행한 사용자만 조작할 수 있습니다.")
+            return embed
+
+        def rebuild(self) -> None:
+            self.clear_items()
+            categories = ["all"] + [
+                key
+                for key in self.CATEGORY_LABELS
+                if key != "all" and any(self.category_for(spec) == key for spec in self.specs)
+            ]
+            category_select = discord.ui.Select(
+                placeholder="명령 분류를 선택하세요",
+                min_values=1,
+                max_values=1,
+                options=[
+                    discord.SelectOption(
+                        label=self.CATEGORY_LABELS[key],
+                        value=key,
+                        description=f"{sum(1 for spec in self.specs if key == 'all' or self.category_for(spec) == key)}개 명령",
+                        default=self.category == key,
+                    )
+                    for key in categories
+                ],
+                row=0,
+            )
+
+            async def category_callback(interaction: Any) -> None:
+                self.category = category_select.values[0]
+                self.selected_command = None
+                self.rebuild()
+                await interaction.response.edit_message(embed=self.make_embed(), view=self)
+
+            category_select.callback = category_callback
+            self.add_item(category_select)
+
+            rows = self.filtered_specs()
+            if rows:
+                command_select = discord.ui.Select(
+                    placeholder="설명을 확인할 명령을 선택하세요",
+                    min_values=1,
+                    max_values=1,
+                    options=[
+                        discord.SelectOption(
+                            label=f"{spec.label} · /{spec.name}"[:100],
+                            value=spec.name,
+                            description=spec.description[:100],
+                            default=spec.name == self.selected_command,
+                        )
+                        for spec in rows[:25]
+                    ],
+                    row=1,
+                )
+
+                async def command_callback(interaction: Any) -> None:
+                    self.selected_command = command_select.values[0]
+                    self.rebuild()
+                    await interaction.response.edit_message(embed=self.make_embed(), view=self)
+
+                command_select.callback = command_callback
+                self.add_item(command_select)
+
+            close_button = discord.ui.Button(label="닫기", style=discord.ButtonStyle.danger, row=2)
+
+            async def close_callback(interaction: Any) -> None:
+                for item in self.children:
+                    item.disabled = True
+                await interaction.response.edit_message(embed=self.make_embed(), view=self)
+                self.stop()
+
+            close_button.callback = close_callback
+            self.add_item(close_button)
+
+        async def interaction_check(self, interaction: Any) -> bool:
+            if interaction.user.id == self.owner_id:
+                return True
+            await interaction.response.send_message(
+                "이 도움말 화면은 명령을 실행한 사용자만 조작할 수 있습니다.",
+                ephemeral=True,
+            )
+            return False
 
     @bot.hybrid_command(name="배그도움말", aliases=["pubg-help", "pubg-ai"])
     async def help_command(ctx: Any) -> None:
+        if getattr(ctx, "interaction", None) is not None:
+            view = DiscordHelpView(owner_id=int(ctx.author.id), guild_id=guild_id_for(ctx))
+            await ctx.reply(
+                embed=view.make_embed(),
+                view=view,
+                ephemeral=True,
+                mention_author=False,
+            )
+            return
         await ctx.reply(
             "\n".join(
                 [
@@ -1942,6 +2365,7 @@ def create_discord_bot(
             or (guild_id is not None and guild_ranking_scope(ctx) == "global")
         )
         ranking_guild_id = None if global_scope else guild_id
+        ranking_guild_ids = [] if global_scope else guild_ranking_scope_ids(ctx)
 
         connection = connect_mysql(config.database)
         try:
@@ -1949,6 +2373,7 @@ def create_discord_bot(
                 shard=shard,
                 metric=parsed_metric,
                 guild_id=ranking_guild_id,
+                guild_ids=ranking_guild_ids,
                 global_scope=global_scope,
                 limit=limit,
             )
@@ -2228,7 +2653,7 @@ def create_discord_bot(
             if None in {poll_interval_seconds, cycle_player_limit, player_lookup_chunk_size}:
                 await ctx.reply(
                     format_local_section_command_reply(
-                        f"Usage: `{command_prefix}pubg-settings collector poll_seconds player_limit chunk_size`",
+                        f"사용법: `{command_prefix}pubg-settings collector 조회주기 최대인원 묶음크기`",
                         "local_collector_settings",
                         "collector-settings",
                         detail_base_url=config.app.local_web_base_url,
@@ -2300,7 +2725,7 @@ def create_discord_bot(
             if public_profile_default is None:
                 await ctx.reply(
                     format_local_section_command_reply(
-                        f"Usage: `{command_prefix}pubg-settings public-profile public|private`",
+                        f"사용법: `{command_prefix}pubg-settings public-profile 공개|비공개`",
                         "local_discord_scopes",
                         "discord-scopes",
                         detail_base_url=config.app.local_web_base_url,
@@ -2341,7 +2766,7 @@ def create_discord_bot(
         await ctx.reply(
             format_discord_settings_command_reply(
                 (
-                    f"Usage: `{command_prefix}pubg-settings`, "
+                    f"사용법: `{command_prefix}pubg-settings`, "
                     f"`{command_prefix}pubg-settings collector 180 100 10`, or "
                     f"`{command_prefix}pubg-settings public-profile public|private`"
                 ),
@@ -2371,7 +2796,7 @@ def create_discord_bot(
             await ctx.reply(
                 format_data_deletion_command_reply(
                     (
-                        f"Usage: `{command_prefix}pubg-delete-data steam target "
+                        f"사용법: `{command_prefix}pubg-delete-data steam 대상 "
                         "registration|normalized|raw|replay|all [reason]`"
                     ),
                     shard=shard,
@@ -2385,7 +2810,7 @@ def create_discord_bot(
             await ctx.reply(
                 format_data_deletion_command_reply(
                     (
-                        f"Usage: `{command_prefix}pubg-delete-data steam target "
+                        f"사용법: `{command_prefix}pubg-delete-data steam 대상 "
                         "registration|normalized|raw|replay|all [reason]`"
                     ),
                     shard=shard,
@@ -2460,7 +2885,7 @@ def create_discord_bot(
         if parsed_request_id is None:
             await ctx.reply(
                 format_data_deletion_command_reply(
-                    f"Usage: `{command_prefix}pubg-delete-cancel request_id [reason]`",
+                    f"사용법: `{command_prefix}pubg-delete-cancel 요청_ID [사유]`",
                     detail_base_url=config.app.local_web_base_url,
                 ),
                 mention_author=False,
@@ -2520,6 +2945,241 @@ def create_discord_bot(
             mention_author=False,
         )
 
+    class DiscordPermissionView(discord.ui.View):
+        def __init__(
+            self,
+            *,
+            owner_id: int,
+            guild_id: str,
+            global_admin: bool,
+        ) -> None:
+            super().__init__(timeout=600.0)
+            self.owner_id = owner_id
+            self.guild_id = guild_id
+            self.global_admin = global_admin
+            self.selected_user_id: str | None = None
+            self.selected_user_label: str | None = None
+            self.selected_group: str | None = None
+            self.scope = "guild"
+            self.group_page = 0
+            self.last_result = "Discord 사용자와 권한 그룹을 선택하세요."
+            self.rebuild()
+
+        def groups(self) -> list[str]:
+            if not refresh_permission_settings():
+                return []
+            return sorted(
+                permission_checker.settings.command_groups,
+                key=lambda group: (command_group_label(group), group),
+            )
+
+        def make_embed(self) -> Any:
+            user = self.selected_user_label or "선택 안 함"
+            group = (
+                f"{command_group_label(self.selected_group)} (`{self.selected_group}`)"
+                if self.selected_group
+                else "선택 안 함"
+            )
+            scope = "모든 Discord 서버" if self.scope == "global" else "현재 Discord 서버"
+            description = (
+                "Discord ID를 직접 입력하지 않고 서버 멤버 목록에서 권한을 관리합니다.\n\n"
+                f"**대상 사용자**\n{user}\n\n"
+                f"**권한 그룹**\n{group}\n\n"
+                f"**적용 범위**\n{scope}\n\n"
+                f"**처리 결과**\n{self.last_result}"
+            )
+            embed = discord.Embed(
+                title="PUBG AI · Discord 사용자 권한 관리",
+                description=description,
+                colour=0x42D3AA,
+            )
+            embed.set_footer(text="이 화면은 명령을 실행한 사용자만 조작할 수 있습니다.")
+            return embed
+
+        def rebuild(self) -> None:
+            self.clear_items()
+            user_select = discord.ui.UserSelect(
+                placeholder="권한을 변경할 Discord 사용자를 선택하세요",
+                min_values=1,
+                max_values=1,
+                row=0,
+            )
+
+            async def user_callback(interaction: Any) -> None:
+                member = user_select.values[0]
+                self.selected_user_id = str(member.id)
+                display_name = str(getattr(member, "display_name", "") or getattr(member, "name", "") or member.id)
+                username = str(getattr(member, "name", "") or "")
+                self.selected_user_label = (
+                    f"{display_name} (@{username})"
+                    if username and display_name != username
+                    else display_name
+                )
+                self.last_result = "대상 사용자를 선택했습니다."
+                self.rebuild()
+                await interaction.response.edit_message(embed=self.make_embed(), view=self)
+
+            user_select.callback = user_callback
+            self.add_item(user_select)
+
+            groups = self.groups()
+            max_page = max(0, (len(groups) - 1) // 25)
+            self.group_page = min(max(0, self.group_page), max_page)
+            page_groups = groups[self.group_page * 25 : (self.group_page + 1) * 25]
+            if page_groups:
+                group_select = discord.ui.Select(
+                    placeholder="부여하거나 회수할 권한 그룹을 선택하세요",
+                    min_values=1,
+                    max_values=1,
+                    options=[
+                        discord.SelectOption(
+                            label=command_group_label(group)[:100],
+                            value=group,
+                            description=(
+                                f"키 {group} · "
+                                f"{len(permission_checker.settings.command_groups.get(group, []))}개 명령"
+                            )[:100],
+                            default=group == self.selected_group,
+                        )
+                        for group in page_groups
+                    ],
+                    row=1,
+                )
+
+                async def group_callback(interaction: Any) -> None:
+                    self.selected_group = group_select.values[0]
+                    self.last_result = "권한 그룹을 선택했습니다."
+                    self.rebuild()
+                    await interaction.response.edit_message(embed=self.make_embed(), view=self)
+
+                group_select.callback = group_callback
+                self.add_item(group_select)
+
+            if self.global_admin:
+                scope_select = discord.ui.Select(
+                    placeholder="권한 적용 범위를 선택하세요",
+                    min_values=1,
+                    max_values=1,
+                    options=[
+                        discord.SelectOption(
+                            label="현재 Discord 서버",
+                            value="guild",
+                            description="이 서버에서만 권한을 적용합니다.",
+                            default=self.scope == "guild",
+                        ),
+                        discord.SelectOption(
+                            label="모든 Discord 서버",
+                            value="global",
+                            description="앱 봇이 관리하는 모든 서버에 권한을 적용합니다.",
+                            default=self.scope == "global",
+                        ),
+                    ],
+                    row=2,
+                )
+
+                async def scope_callback(interaction: Any) -> None:
+                    self.scope = scope_select.values[0]
+                    self.last_result = "적용 범위를 선택했습니다."
+                    self.rebuild()
+                    await interaction.response.edit_message(embed=self.make_embed(), view=self)
+
+                scope_select.callback = scope_callback
+                self.add_item(scope_select)
+
+            grant_button = discord.ui.Button(label="권한 부여", style=discord.ButtonStyle.success, row=3)
+            revoke_button = discord.ui.Button(label="권한 회수", style=discord.ButtonStyle.secondary, row=3)
+            close_button = discord.ui.Button(label="닫기", style=discord.ButtonStyle.danger, row=3)
+
+            async def apply_change(interaction: Any, action: str) -> None:
+                if permission_manager is None:
+                    await interaction.response.send_message("Discord 권한 저장소를 사용할 수 없습니다.", ephemeral=True)
+                    return
+                if not self.selected_user_id or not self.selected_group:
+                    await interaction.response.send_message("Discord 사용자와 권한 그룹을 먼저 선택하세요.", ephemeral=True)
+                    return
+                target_guild_id = None if self.scope == "global" else self.guild_id
+                try:
+                    if action == "grant":
+                        change = permission_manager.grant(
+                            user_id=self.selected_user_id,
+                            group=self.selected_group,
+                            guild_id=target_guild_id,
+                            member_label=self.selected_user_label,
+                            member_guild_id=self.guild_id,
+                        )
+                    else:
+                        change = permission_manager.revoke(
+                            user_id=self.selected_user_id,
+                            group=self.selected_group,
+                            guild_id=target_guild_id,
+                        )
+                except LocalSettingsError as exc:
+                    await interaction.response.send_message(f"권한 변경 실패: {exc}", ephemeral=True)
+                    return
+                permission_checker.settings = change.settings
+                action_label = "부여" if action == "grant" else "회수"
+                result_label = "변경 완료" if change.changed else "이미 같은 상태"
+                self.last_result = f"{self.selected_user_label} · {command_group_label(self.selected_group)} · {action_label} {result_label}"
+                self.rebuild()
+                await interaction.response.edit_message(embed=self.make_embed(), view=self)
+
+            async def grant_callback(interaction: Any) -> None:
+                await apply_change(interaction, "grant")
+
+            async def revoke_callback(interaction: Any) -> None:
+                await apply_change(interaction, "revoke")
+
+            async def close_callback(interaction: Any) -> None:
+                for item in self.children:
+                    item.disabled = True
+                await interaction.response.edit_message(embed=self.make_embed(), view=self)
+                self.stop()
+
+            grant_button.callback = grant_callback
+            revoke_button.callback = revoke_callback
+            close_button.callback = close_callback
+            self.add_item(grant_button)
+            self.add_item(revoke_button)
+            self.add_item(close_button)
+
+            if max_page:
+                previous_button = discord.ui.Button(
+                    label="이전 그룹",
+                    style=discord.ButtonStyle.secondary,
+                    disabled=self.group_page == 0,
+                    row=4,
+                )
+                next_button = discord.ui.Button(
+                    label="다음 그룹",
+                    style=discord.ButtonStyle.secondary,
+                    disabled=self.group_page >= max_page,
+                    row=4,
+                )
+
+                async def previous_callback(interaction: Any) -> None:
+                    self.group_page -= 1
+                    self.rebuild()
+                    await interaction.response.edit_message(embed=self.make_embed(), view=self)
+
+                async def next_callback(interaction: Any) -> None:
+                    self.group_page += 1
+                    self.rebuild()
+                    await interaction.response.edit_message(embed=self.make_embed(), view=self)
+
+                previous_button.callback = previous_callback
+                next_button.callback = next_callback
+                self.add_item(previous_button)
+                self.add_item(next_button)
+
+        async def interaction_check(self, interaction: Any) -> bool:
+            if interaction.user.id == self.owner_id:
+                return True
+            await interaction.response.send_message(
+                "이 권한 관리 화면은 명령을 실행한 사용자만 조작할 수 있습니다.",
+                ephemeral=True,
+            )
+            return False
+
     @bot.hybrid_command(name="pubg-permission")
     async def discord_permission_command(
         ctx: Any,
@@ -2531,6 +3191,33 @@ def create_discord_bot(
         if not await require_permission(ctx, "admin"):
             return
 
+        if (
+            getattr(ctx, "interaction", None) is not None
+            and user_id is None
+            and group is None
+            and action is None
+            and target_scope is None
+        ):
+            current_guild_id = guild_id_for(ctx)
+            if current_guild_id is None:
+                await ctx.reply("권한 관리 화면은 Discord 서버 채널에서 열어 주세요.", ephemeral=True, mention_author=False)
+                return
+            if permission_manager is None:
+                await ctx.reply("Discord 권한 설정 저장소를 사용할 수 없습니다.", ephemeral=True, mention_author=False)
+                return
+            view = DiscordPermissionView(
+                owner_id=int(ctx.author.id),
+                guild_id=current_guild_id,
+                global_admin=has_global_scope(ctx),
+            )
+            await ctx.reply(
+                embed=view.make_embed(),
+                view=view,
+                ephemeral=True,
+                mention_author=False,
+            )
+            return
+
         parsed_user_id = _discord_user_id(user_id)
         parsed_action = _discord_permission_action(action)
         requested_scope = (target_scope or "").strip()
@@ -2538,8 +3225,8 @@ def create_discord_bot(
             await ctx.reply(
                 format_discord_permission_command_reply(
                     (
-                        f"Usage: `{command_prefix}pubg-permission "
-                        "user_id group allow|deny [guild_id|global]`"
+                        f"사용법: `{command_prefix}pubg-permission "
+                        "사용자_ID 권한_그룹 허용|회수 [서버_ID|전체]`"
                     ),
                     user_id=parsed_user_id,
                     group=group,
@@ -2562,7 +3249,7 @@ def create_discord_bot(
             if target_guild_id is None:
                 await ctx.reply(
                     format_discord_permission_command_reply(
-                        "Guild ID를 지정하거나 Discord 서버 채널에서 사용해 주세요.",
+                        "Discord 서버 ID를 지정하거나 서버 채널에서 사용해 주세요.",
                         user_id=parsed_user_id,
                         group=group,
                         detail_base_url=config.app.local_web_base_url,
@@ -2573,7 +3260,7 @@ def create_discord_bot(
             if not target_guild_id.isdigit():
                 await ctx.reply(
                     format_discord_permission_command_reply(
-                        "Guild ID는 숫자여야 합니다.",
+                        "Discord 서버 ID는 숫자여야 합니다.",
                         user_id=parsed_user_id,
                         group=group,
                         detail_base_url=config.app.local_web_base_url,
@@ -2603,10 +3290,23 @@ def create_discord_bot(
 
         try:
             if parsed_action == "grant":
+                get_member = getattr(getattr(ctx, "guild", None), "get_member", None)
+                member = get_member(int(parsed_user_id)) if callable(get_member) else None
+                member_label = None
+                if member is not None:
+                    display_name = str(getattr(member, "display_name", "") or getattr(member, "name", ""))
+                    username = str(getattr(member, "name", "") or "")
+                    member_label = (
+                        f"{display_name} (@{username})"
+                        if display_name and username and display_name != username
+                        else display_name or username or None
+                    )
                 change = permission_manager.grant(
                     user_id=parsed_user_id,
                     group=group,
                     guild_id=target_guild_id,
+                    member_label=member_label,
+                    member_guild_id=current_guild_id,
                 )
             else:
                 change = permission_manager.revoke(
@@ -2657,7 +3357,7 @@ def create_discord_bot(
         if parsed_scope is None or not target_guild_id or not target_guild_id.isdigit():
             await ctx.reply(
                 format_discord_scope_command_reply(
-                    f"Usage: `{command_prefix}pubg-ranking-scope guild|global [guild_id]`",
+                    f"사용법: `{command_prefix}pubg-ranking-scope 선택서버|전체서버 [서버_ID]`",
                     guild_id=target_guild_id if target_guild_id.isdigit() else None,
                     ranking_scope=parsed_scope,
                     detail_base_url=config.app.local_web_base_url,
@@ -2716,7 +3416,7 @@ def create_discord_bot(
         if scope_settings_store is None:
             await ctx.reply(
                 format_alerts_command_reply(
-                    "PUBG AI alert settings are unavailable.",
+                    "PUBG AI 알림 설정을 사용할 수 없습니다.",
                     detail_base_url=config.app.local_web_base_url,
                 ),
                 mention_author=False,
@@ -2728,7 +3428,7 @@ def create_discord_bot(
         except LocalSettingsError as exc:
             await ctx.reply(
                 format_alerts_command_reply(
-                    f"PUBG AI alert settings error: {exc}",
+                    f"PUBG AI 알림 설정 오류: {exc}",
                     detail_base_url=config.app.local_web_base_url,
                 ),
                 mention_author=False,
@@ -2766,7 +3466,7 @@ def create_discord_bot(
         if parsed_alert_id is None:
             await ctx.reply(
                 format_alert_command_reply(
-                    f"Usage: `{command_prefix}pubg-alert-ack alert_id`",
+                    f"사용법: `{command_prefix}pubg-alert-ack 알림_ID`",
                     parsed_alert_id,
                     detail_base_url=config.app.local_web_base_url,
                 ),
@@ -2781,7 +3481,7 @@ def create_discord_bot(
             except AlertHistoryError as exc:
                 await ctx.reply(
                     format_alert_command_reply(
-                        f"PUBG AI alert not found: {exc}",
+                        f"PUBG AI 알림을 찾지 못했습니다: {exc}",
                         parsed_alert_id,
                         detail_base_url=config.app.local_web_base_url,
                     ),
@@ -2813,7 +3513,7 @@ def create_discord_bot(
         if parsed_alert_id is None or parsed_minutes is None:
             await ctx.reply(
                 format_alert_command_reply(
-                    f"Usage: `{command_prefix}pubg-alert-snooze alert_id [minutes]`",
+                    f"사용법: `{command_prefix}pubg-alert-snooze 알림_ID [숨길_분]`",
                     parsed_alert_id,
                     detail_base_url=config.app.local_web_base_url,
                 ),
@@ -2828,7 +3528,7 @@ def create_discord_bot(
             except AlertHistoryError as exc:
                 await ctx.reply(
                     format_alert_command_reply(
-                        f"PUBG AI alert not found: {exc}",
+                        f"PUBG AI 알림을 찾지 못했습니다: {exc}",
                         parsed_alert_id,
                         detail_base_url=config.app.local_web_base_url,
                     ),
@@ -2860,7 +3560,7 @@ def create_discord_bot(
         if parsed_alert_id is None or not note_text or not note_text.strip():
             await ctx.reply(
                 format_alert_command_reply(
-                    f"Usage: `{command_prefix}pubg-alert-note alert_id note`",
+                    f"사용법: `{command_prefix}pubg-alert-note 알림_ID 메모`",
                     parsed_alert_id,
                     detail_base_url=config.app.local_web_base_url,
                 ),
@@ -2881,7 +3581,7 @@ def create_discord_bot(
             except AlertHistoryError as exc:
                 await ctx.reply(
                     format_alert_command_reply(
-                        f"PUBG AI alert note error: {exc}",
+                        f"PUBG AI 알림 메모 저장 오류: {exc}",
                         parsed_alert_id,
                         detail_base_url=config.app.local_web_base_url,
                     ),
@@ -2909,7 +3609,7 @@ def create_discord_bot(
         if parsed_alert_id is None or not note_text or not note_text.strip():
             await ctx.reply(
                 format_alert_command_reply(
-                    f"Usage: `{command_prefix}pubg-alert-resolution alert_id resolution`",
+                    f"사용법: `{command_prefix}pubg-alert-resolution 알림_ID 해결_기록`",
                     parsed_alert_id,
                     detail_base_url=config.app.local_web_base_url,
                 ),
@@ -2930,7 +3630,7 @@ def create_discord_bot(
             except AlertHistoryError as exc:
                 await ctx.reply(
                     format_alert_command_reply(
-                        f"PUBG AI alert resolution error: {exc}",
+                        f"PUBG AI 알림 해결 기록 저장 오류: {exc}",
                         parsed_alert_id,
                         detail_base_url=config.app.local_web_base_url,
                     ),
@@ -2958,7 +3658,7 @@ def create_discord_bot(
         if parsed_alert_id is None or parsed_limit is None:
             await ctx.reply(
                 format_alert_command_reply(
-                    f"Usage: `{command_prefix}pubg-alert-notes alert_id [limit]`",
+                    f"사용법: `{command_prefix}pubg-alert-notes 알림_ID [표시_개수]`",
                     parsed_alert_id,
                     detail_base_url=config.app.local_web_base_url,
                 ),
@@ -2974,7 +3674,7 @@ def create_discord_bot(
             except AlertHistoryError as exc:
                 await ctx.reply(
                     format_alert_command_reply(
-                        f"PUBG AI alert notes error: {exc}",
+                        f"PUBG AI 알림 메모 조회 오류: {exc}",
                         parsed_alert_id,
                         detail_base_url=config.app.local_web_base_url,
                     ),
@@ -3003,7 +3703,7 @@ def create_discord_bot(
             await ctx.reply(
                 format_alert_history_command_reply(
                     (
-                        f"Usage: `{command_prefix}pubg-alert-history "
+                        f"사용법: `{command_prefix}pubg-alert-history "
                         "[current-errors|worker-failures|storage-pressure|all-history] "
                         "source=all|storage|worker state=all|current|active|acknowledged|snoozed|resolved "
                         "severity=all|error|warning|info|ok search=text limit=5`"
@@ -3031,7 +3731,7 @@ def create_discord_bot(
             except AlertHistoryError as exc:
                 await ctx.reply(
                     format_alert_history_command_reply(
-                        f"PUBG AI alert history error: {exc}",
+                        f"PUBG AI 알림 이력 조회 오류: {exc}",
                         source=str(parsed["source"]),
                         state=str(parsed["state"]),
                         severity=str(parsed["severity"]),
@@ -3066,7 +3766,7 @@ def create_discord_bot(
             await ctx.reply(
                 format_worker_run_history_command_reply(
                     (
-                        f"Usage: `{command_prefix}pubg-worker-runs [collector|post_processing|all] "
+                        f"사용법: `{command_prefix}pubg-worker-runs [collector|post_processing|all] "
                         "status=succeeded|failed|all [limit] offset=0 range=last24h|today|yesterday|last7d "
                         "from=2026-07-01T00:00 to=2026-07-02T00:00`"
                         f"\nError: {exc}"
@@ -3100,7 +3800,7 @@ def create_discord_bot(
             except WorkerRunHistoryError as exc:
                 await ctx.reply(
                     format_worker_run_history_command_reply(
-                        f"PUBG AI worker run history error: {exc}",
+                        f"PUBG AI 자동 작업 이력 조회 오류: {exc}",
                         worker_name=worker_name,
                         status=status,
                         limit=limit,
@@ -3132,7 +3832,7 @@ def create_discord_bot(
         if parsed_run_id is None:
             await ctx.reply(
                 format_worker_run_command_reply(
-                    f"Usage: `{command_prefix}pubg-worker-run run_id`",
+                    f"사용법: `{command_prefix}pubg-worker-run 실행_ID`",
                     parsed_run_id,
                     detail_base_url=config.app.local_web_base_url,
                 ),
@@ -3147,7 +3847,7 @@ def create_discord_bot(
             except WorkerRunHistoryError as exc:
                 await ctx.reply(
                     format_worker_run_command_reply(
-                        f"PUBG AI worker run detail error: {exc}",
+                        f"PUBG AI 자동 작업 상세 조회 오류: {exc}",
                         parsed_run_id,
                         detail_base_url=config.app.local_web_base_url,
                     ),
@@ -3162,6 +3862,126 @@ def create_discord_bot(
             mention_author=False,
         )
 
+    async def registered_player_autocomplete(interaction: Any, current: str) -> list[Any]:
+        refresh_permission_settings()
+        guild_id = str(interaction.guild_id) if interaction.guild_id else None
+        identity = DiscordCommandIdentity(user_id=str(interaction.user.id), guild_id=guild_id)
+        global_scope = permission_checker.is_global_admin(identity)
+        if guild_id is None and not global_scope:
+            return []
+        namespace = getattr(interaction, "namespace", None)
+        shard = str(getattr(namespace, "shard", "") or "").strip().lower()
+        if shard not in {"steam", "kakao", "xbox", "psn", "console"}:
+            shard = None
+        connection = connect_mysql(config.database)
+        try:
+            players = PlayerRegistry(connection).list_players(
+                shard=shard,
+                registered_guild_id=None if global_scope else guild_id,
+                active_only=False,
+                limit=500,
+            )
+        except Exception:
+            return []
+        finally:
+            connection.close()
+        query = str(current or "").strip().casefold()
+        matches = [
+            player
+            for player in players
+            if not query
+            or query in player.current_name.casefold()
+            or query in player.account_id.casefold()
+        ]
+        matches.sort(
+            key=lambda player: (
+                not player.current_name.casefold().startswith(query) if query else False,
+                not player.active,
+                player.current_name.casefold(),
+            )
+        )
+        return [
+            app_commands.Choice(
+                name=(
+                    f"{player.current_name} · {translate_code(player.shard, 'shard')} · "
+                    f"{'수집 중' if player.active else '수집 중지'} · ID …{player.account_id[-6:]}"
+                )[:100],
+                value=player.current_name[:100],
+            )
+            for player in matches[:25]
+        ]
+
+    async def weapon_autocomplete(_interaction: Any, current: str) -> list[Any]:
+        query = str(current or "").strip().casefold()
+        candidates = [
+            (code, label)
+            for code, label in DAMAGE_CAUSER_KO.items()
+            if code.startswith("Weap") and is_ballistic_weapon(code)
+        ]
+        candidates = [
+            (code, label)
+            for code, label in candidates
+            if not query or query in code.casefold() or query in label.casefold()
+        ]
+        candidates.sort(
+            key=lambda item: (
+                not item[1].casefold().startswith(query) if query else False,
+                item[1].casefold(),
+            )
+        )
+        return [
+            app_commands.Choice(name=f"{label} · {code}"[:100], value=label[:100])
+            for code, label in candidates[:25]
+        ]
+
+    async def permission_group_autocomplete(_interaction: Any, current: str) -> list[Any]:
+        refresh_permission_settings()
+        query = str(current or "").strip().casefold()
+        groups = [
+            group
+            for group in permission_checker.settings.command_groups
+            if not query
+            or query in group.casefold()
+            or query in command_group_label(group).casefold()
+        ]
+        groups.sort(key=lambda group: (command_group_label(group), group))
+        return [
+            app_commands.Choice(
+                name=f"{command_group_label(group)} · 키 {group}"[:100],
+                value=group[:100],
+            )
+            for group in groups[:25]
+        ]
+
+    for player_command, parameter_name in (
+        (list_players_command, "name"),
+        (player_stats_command, "name"),
+        (player_fight_outcomes_command, "name"),
+        (player_trends_command, "name"),
+        (player_weapon_command, "name"),
+        (player_recommendations_command, "name"),
+        (player_match_command, "name"),
+        (unregister_player_command, "target"),
+    ):
+        player_command.autocomplete(parameter_name)(registered_player_autocomplete)
+    player_weapon_command.autocomplete("weapon")(weapon_autocomplete)
+    discord_permission_command.autocomplete("group")(permission_group_autocomplete)
+
+    for spec in DISCORD_COMMAND_SPECS:
+        command = bot.get_command(spec.name)
+        if command is not None and command.app_command is not None:
+            command.app_command.description = spec.description[:100]
+
+    application_command_templates = tuple(bot.tree.get_commands())
+    expected_template_names = {spec.name for spec in DISCORD_COMMAND_SPECS}
+    actual_template_names = {str(command.name) for command in application_command_templates}
+    if actual_template_names != expected_template_names:
+        missing = sorted(expected_template_names - actual_template_names)
+        unexpected = sorted(actual_template_names - expected_template_names)
+        raise RuntimeError(
+            "Discord application command catalog mismatch "
+            f"(missing={missing}, unexpected={unexpected})."
+        )
     return bot
 
 
@@ -3239,7 +4059,7 @@ def _recommendation_evidence_link(
             "attachment_code": item.attachment_code,
         }
     )
-    return f" [evidence]({base_url.rstrip('/')}/players/recommendations/weapon-attachment-evidence?{query})"
+    return f" [근거]({base_url.rstrip('/')}/players/recommendations/weapon-attachment-evidence?{query})"
 
 
 def _alert_history_detail_link(record: AlertHistoryRecord, base_url: str | None) -> str:
@@ -3250,7 +4070,7 @@ def _alert_history_detail_link(record: AlertHistoryRecord, base_url: str | None)
 def _alert_history_detail_markdown(alert_id: int, base_url: str | None) -> str:
     if not base_url:
         return ""
-    return f"[detail]({base_url.rstrip('/')}/?{urlencode({'alert_id': alert_id})}#alertHistoryDetail)"
+    return f"[상세]({base_url.rstrip('/')}/?{urlencode({'alert_id': alert_id})}#alertHistoryDetail)"
 
 
 def _alert_history_filter_page_link(page: AlertHistoryPage, base_url: str | None) -> str:
@@ -3295,7 +4115,7 @@ def _worker_run_detail_link(run: WorkerRunRecord, base_url: str | None) -> str:
 def _worker_run_detail_markdown(run_id: int, base_url: str | None) -> str:
     if not base_url:
         return ""
-    return f"[detail]({base_url.rstrip('/')}/?{urlencode({'worker_run_id': run_id})}#workerRunDetail)"
+    return f"[상세]({base_url.rstrip('/')}/?{urlencode({'worker_run_id': run_id})}#workerRunDetail)"
 
 
 def _worker_run_filter_page_link(page: WorkerRunPage, base_url: str | None) -> str:
@@ -3336,14 +4156,14 @@ def _alert_history_navigation_hints(page: AlertHistoryPage, *, command_prefix: s
     if page.offset > 0:
         previous_offset = max(0, page.offset - page.limit)
         hints.append(
-            "- previous: `"
+            "- 이전: `"
             + _alert_history_command_for_page(page, offset=previous_offset, command_prefix=command_prefix)
             + "`"
         )
     if page.offset + len(page.records) < page.total:
         next_offset = page.offset + page.limit
         hints.append(
-            "- next: `"
+            "- 다음: `"
             + _alert_history_command_for_page(page, offset=next_offset, command_prefix=command_prefix)
             + "`"
         )
@@ -3374,14 +4194,14 @@ def _worker_run_navigation_hints(page: WorkerRunPage, *, command_prefix: str) ->
     if page.offset > 0:
         previous_offset = max(0, page.offset - page.limit)
         hints.append(
-            "- previous: `"
+            "- 이전: `"
             + _worker_run_history_command_for_page(page, offset=previous_offset, command_prefix=command_prefix)
             + "`"
         )
     if page.offset + len(page.records) < page.total:
         next_offset = page.offset + page.limit
         hints.append(
-            "- next: `"
+            "- 다음: `"
             + _worker_run_history_command_for_page(page, offset=next_offset, command_prefix=command_prefix)
             + "`"
         )
@@ -3390,12 +4210,12 @@ def _worker_run_navigation_hints(page: WorkerRunPage, *, command_prefix: str) ->
 
 def _worker_run_history_filter_labels(page: WorkerRunPage) -> list[str]:
     labels = [
-        f"worker={page.worker_name or 'all'}",
-        f"status={page.status}",
+        f"작업={_worker_name_label(page.worker_name or 'all')}",
+        f"상태={_worker_status_label(page.status)}",
     ]
     if page.created_from_kst or page.created_to_kst:
         labels.append(
-            f"created={_worker_run_date_filter_value(page.created_from_kst)}.."
+            f"기간={_worker_run_date_filter_value(page.created_from_kst)}.."
             f"{_worker_run_date_filter_value(page.created_to_kst)}"
         )
     return labels

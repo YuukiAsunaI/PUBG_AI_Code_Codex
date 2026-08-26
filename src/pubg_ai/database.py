@@ -9,7 +9,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 29
+SCHEMA_VERSION = 33
 
 
 class DatabaseError(RuntimeError):
@@ -84,7 +84,11 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 applied += 1
             if _ensure_combat_vehicle_hit_columns(cursor, config.database):
                 applied += 1
+            if _ensure_watchlist_encounter_columns(cursor, config.database):
+                applied += 1
             if _backfill_player_discord_registrations(cursor):
+                applied += 1
+            if _backfill_excluded_historical_matches(cursor):
                 applied += 1
             cursor.execute(
                 """
@@ -94,7 +98,7 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 """,
                 (
                     SCHEMA_VERSION,
-                    "vehicle-hit-aware combat accuracy and damage evidence",
+                    "exclude historical custom and training matches from analysis",
                 ),
             )
             applied += 1
@@ -150,6 +154,98 @@ def schema_statements() -> list[str]:
             CONSTRAINT fk_player_aliases_registered_player
                 FOREIGN KEY (registered_player_id) REFERENCES registered_players(id)
                 ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS watched_players (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            account_id VARCHAR(128) NOT NULL,
+            shard VARCHAR(32) NOT NULL,
+            current_name VARCHAR(191) NOT NULL,
+            active TINYINT(1) NOT NULL DEFAULT 1,
+            notify_name_change TINYINT(1) NOT NULL DEFAULT 1,
+            notify_kill TINYINT(1) NOT NULL DEFAULT 1,
+            notify_repeated_engagement TINYINT(1) NOT NULL DEFAULT 1,
+            engagement_threshold INT NOT NULL DEFAULT 3,
+            notification_channel_ids_json JSON NULL,
+            last_identity_checked_at_kst DATETIME(6) NULL,
+            created_at_kst DATETIME(6) NOT NULL,
+            updated_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_watched_players_account_shard (account_id, shard),
+            KEY idx_watched_players_name_shard (current_name, shard),
+            KEY idx_watched_players_active_check (active, last_identity_checked_at_kst)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS watched_player_aliases (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            watched_player_id BIGINT UNSIGNED NOT NULL,
+            account_id VARCHAR(128) NOT NULL,
+            shard VARCHAR(32) NOT NULL,
+            name VARCHAR(191) NOT NULL,
+            source VARCHAR(64) NOT NULL,
+            first_seen_at_kst DATETIME(6) NOT NULL,
+            last_seen_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_watched_player_alias (watched_player_id, name),
+            KEY idx_watched_player_alias_name (shard, name),
+            CONSTRAINT fk_watched_player_alias_player
+                FOREIGN KEY (watched_player_id) REFERENCES watched_players(id)
+                ON DELETE RESTRICT
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS watched_player_encounters (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            watched_player_id BIGINT UNSIGNED NOT NULL,
+            match_id VARCHAR(191) NOT NULL,
+            registered_account_id VARCHAR(128) NOT NULL,
+            watched_name VARCHAR(191) NOT NULL,
+            registered_name VARCHAR(191) NOT NULL,
+            engagement_count INT NOT NULL DEFAULT 0,
+            damage_events_by_watched INT NOT NULL DEFAULT 0,
+            damage_events_by_registered INT NOT NULL DEFAULT 0,
+            dbnos_by_watched INT NOT NULL DEFAULT 0,
+            dbnos_by_registered INT NOT NULL DEFAULT 0,
+            kills_by_watched INT NOT NULL DEFAULT 0,
+            kills_by_registered INT NOT NULL DEFAULT 0,
+            first_interaction_at_kst DATETIME(6) NULL,
+            last_interaction_at_kst DATETIME(6) NULL,
+            analyzed_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_watched_player_encounter (
+                watched_player_id,
+                match_id,
+                registered_account_id
+            ),
+            KEY idx_watched_encounter_match (match_id, watched_player_id),
+            KEY idx_watched_encounter_registered (
+                registered_account_id,
+                analyzed_at_kst
+            ),
+            CONSTRAINT fk_watched_encounter_player
+                FOREIGN KEY (watched_player_id) REFERENCES watched_players(id)
+                ON DELETE RESTRICT
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS watchlist_alert_events (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            watched_player_id BIGINT UNSIGNED NOT NULL,
+            match_id VARCHAR(191) NULL,
+            registered_account_id VARCHAR(128) NULL,
+            alert_type VARCHAR(64) NOT NULL,
+            severity VARCHAR(16) NOT NULL,
+            title VARCHAR(255) NOT NULL,
+            message TEXT NOT NULL,
+            metadata_json JSON NULL,
+            dedupe_key CHAR(64) NOT NULL,
+            created_at_kst DATETIME(6) NOT NULL,
+            notified_at_kst DATETIME(6) NULL,
+            UNIQUE KEY uq_watchlist_alert_dedupe (dedupe_key),
+            KEY idx_watchlist_alert_pending (notified_at_kst, created_at_kst),
+            KEY idx_watchlist_alert_player (watched_player_id, created_at_kst),
+            CONSTRAINT fk_watchlist_alert_player
+                FOREIGN KEY (watched_player_id) REFERENCES watched_players(id)
+                ON DELETE RESTRICT
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """,
         """
@@ -947,6 +1043,23 @@ def schema_statements() -> list[str]:
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """,
         """
+        CREATE TABLE IF NOT EXISTS excluded_matches (
+            match_id VARCHAR(191) NOT NULL PRIMARY KEY,
+            shard VARCHAR(32) NOT NULL,
+            exclusion_reason VARCHAR(64) NOT NULL,
+            matched_rule VARCHAR(128) NOT NULL,
+            policy_version VARCHAR(64) NOT NULL,
+            map_name VARCHAR(64) NULL,
+            game_mode VARCHAR(64) NULL,
+            match_type VARCHAR(64) NULL,
+            is_custom_match TINYINT(1) NOT NULL DEFAULT 0,
+            first_detected_at_kst DATETIME(6) NOT NULL,
+            last_detected_at_kst DATETIME(6) NOT NULL,
+            KEY idx_excluded_matches_reason_time (exclusion_reason, last_detected_at_kst),
+            KEY idx_excluded_matches_shard_time (shard, last_detected_at_kst)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
         CREATE TABLE IF NOT EXISTS raw_match_payloads (
             id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
             match_id VARCHAR(191) NOT NULL,
@@ -1619,6 +1732,14 @@ def schema_statements() -> list[str]:
                 ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """,
+        """
+        CREATE OR REPLACE VIEW analysis_matches AS
+        SELECT matches.*
+        FROM matches
+        LEFT JOIN excluded_matches
+            ON excluded_matches.match_id = matches.match_id
+        WHERE excluded_matches.match_id IS NULL
+        """,
     ]
 
 
@@ -1886,6 +2007,28 @@ def _ensure_combat_vehicle_hit_columns(cursor: Any, database: str) -> bool:
     return changed
 
 
+def _ensure_watchlist_encounter_columns(cursor: Any, database: str) -> bool:
+    cursor.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = %s
+          AND table_name = 'watched_player_encounters'
+          AND column_name = 'engagement_count'
+        """,
+        (database,),
+    )
+    if cursor.fetchone():
+        return False
+    cursor.execute(
+        """
+        ALTER TABLE watched_player_encounters
+        ADD COLUMN engagement_count INT NOT NULL DEFAULT 0 AFTER registered_name
+        """
+    )
+    return True
+
+
 def _backfill_player_discord_registrations(cursor: Any) -> bool:
     cursor.execute(
         """
@@ -1915,6 +2058,75 @@ def _backfill_player_discord_registrations(cursor: Any) -> bool:
                 player_discord_registrations.registered_by_discord_user_id,
                 VALUES(registered_by_discord_user_id)
             )
+        """
+    )
+    return bool(getattr(cursor, "rowcount", 0))
+
+
+def _backfill_excluded_historical_matches(cursor: Any) -> bool:
+    cursor.execute(
+        """
+        INSERT INTO excluded_matches (
+            match_id,
+            shard,
+            exclusion_reason,
+            matched_rule,
+            policy_version,
+            map_name,
+            game_mode,
+            match_type,
+            is_custom_match,
+            first_detected_at_kst,
+            last_detected_at_kst
+        )
+        SELECT
+            matches.match_id,
+            matches.shard,
+            CASE
+                WHEN matches.is_custom_match = 1 THEN 'custom_match'
+                ELSE 'training_match'
+            END,
+            CASE
+                WHEN matches.is_custom_match = 1 THEN 'isCustomMatch'
+                WHEN LOWER(REPLACE(TRIM(COALESCE(matches.match_type, '')), '_', '-'))
+                    IN ('airoyale', 'trainingroom', 'tutorialatoz')
+                    THEN CONCAT(
+                        'matchType:',
+                        LOWER(REPLACE(TRIM(COALESCE(matches.match_type, '')), '_', '-'))
+                    )
+                WHEN LOWER(REPLACE(TRIM(COALESCE(matches.game_mode, '')), '_', '-'))
+                    IN ('basic-training', 'basictraining', 'practice', 'training', 'tutorial')
+                    THEN CONCAT(
+                        'gameMode:',
+                        LOWER(REPLACE(TRIM(COALESCE(matches.game_mode, '')), '_', '-'))
+                    )
+                ELSE CONCAT(
+                    'mapName:',
+                    LOWER(REPLACE(TRIM(COALESCE(matches.map_name, '')), '_', '-'))
+                )
+            END,
+            'exclude-custom-training-v2',
+            matches.map_name,
+            matches.game_mode,
+            matches.match_type,
+            matches.is_custom_match,
+            NOW(6),
+            NOW(6)
+        FROM matches
+        WHERE matches.is_custom_match = 1
+           OR LOWER(REPLACE(TRIM(COALESCE(matches.match_type, '')), '_', '-'))
+                IN ('airoyale', 'trainingroom', 'tutorialatoz')
+           OR LOWER(REPLACE(TRIM(COALESCE(matches.game_mode, '')), '_', '-'))
+                IN ('basic-training', 'basictraining', 'practice', 'training', 'tutorial')
+           OR LOWER(REPLACE(TRIM(COALESCE(matches.map_name, '')), '_', '-')) = 'range-main'
+        ON DUPLICATE KEY UPDATE
+            exclusion_reason = VALUES(exclusion_reason),
+            matched_rule = VALUES(matched_rule),
+            policy_version = VALUES(policy_version),
+            map_name = VALUES(map_name),
+            game_mode = VALUES(game_mode),
+            match_type = VALUES(match_type),
+            is_custom_match = VALUES(is_custom_match)
         """
     )
     return bool(getattr(cursor, "rowcount", 0))

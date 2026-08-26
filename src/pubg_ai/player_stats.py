@@ -867,7 +867,7 @@ class PlayerStatsService:
                     registered_players.registered_guild_id,
                     registered_players.registered_channel_id
                 FROM player_match_combat_summaries summaries
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = summaries.match_id
                 INNER JOIN registered_players
                     ON registered_players.account_id = summaries.account_id
@@ -934,7 +934,7 @@ class PlayerStatsService:
                     movement.landing_distance_m,
                     movement.in_game_sampled_distance_m
                 FROM player_match_combat_summaries summaries
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = summaries.match_id
                 LEFT JOIN match_participants participants
                     ON participants.match_id = summaries.match_id
@@ -1251,7 +1251,7 @@ class PlayerStatsService:
                     MIN(matches.created_at_kst) AS first_match_at_kst,
                     MAX(matches.created_at_kst) AS last_match_at_kst
                 FROM player_match_combat_summaries summaries
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = summaries.match_id
                 LEFT JOIN match_participants participants
                     ON participants.match_id = summaries.match_id
@@ -1337,7 +1337,7 @@ class PlayerStatsService:
                     COALESCE(SUM(weapon_stats.shots_fired), 0) AS shots_fired,
                     COALESCE(SUM(weapon_stats.shots_hit), 0) AS shots_hit
                 FROM player_weapon_match_stats weapon_stats
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = weapon_stats.match_id
                 WHERE weapon_stats.account_id = %s
                   AND matches.shard = %s
@@ -1372,7 +1372,7 @@ class PlayerStatsService:
                     COALESCE(SUM(weapon_stats.headshot_hits), 0) AS headshot_hits,
                     COALESCE(SUM(weapon_stats.headshot_kills), 0) AS headshot_kills
                 FROM player_weapon_match_stats weapon_stats
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = weapon_stats.match_id
                 WHERE weapon_stats.account_id = %s
                   AND matches.shard = %s
@@ -1423,7 +1423,7 @@ class PlayerStatsService:
                     weapon_stats.weapon_code,
                     COUNT(DISTINCT weapon_stats.match_id) AS match_count
                 FROM player_weapon_match_stats weapon_stats
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = weapon_stats.match_id
                 WHERE weapon_stats.account_id = %s
                   AND matches.shard = %s
@@ -1477,7 +1477,7 @@ class PlayerStatsService:
                     summaries.dbnos_caused,
                     summaries.damage_dealt
                 FROM player_match_combat_summaries summaries
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = summaries.match_id
                 LEFT JOIN match_participants participants
                     ON participants.match_id = summaries.match_id
@@ -1520,7 +1520,7 @@ class PlayerStatsService:
                 """
                 SELECT weapon_stats.weapon_code
                 FROM player_weapon_match_stats weapon_stats
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = weapon_stats.match_id
                 WHERE weapon_stats.account_id = %s
                   AND matches.shard = %s
@@ -1602,7 +1602,7 @@ class PlayerStatsService:
                     matches.season_state,
                     participants.win_place
                 FROM player_weapon_match_stats weapon_stats
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = weapon_stats.match_id
                 LEFT JOIN match_participants participants
                     ON participants.match_id = weapon_stats.match_id
@@ -1639,7 +1639,7 @@ class PlayerStatsService:
                     outcomes.outcome_type,
                     outcomes.distance_m
                 FROM player_fight_outcomes outcomes
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = outcomes.match_id
                 WHERE
                 """
@@ -1672,7 +1672,7 @@ class PlayerStatsService:
                     summaries.damage_dealt,
                     movement.in_game_sampled_distance_m
                 FROM player_match_combat_summaries summaries
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = summaries.match_id
                 LEFT JOIN match_participants participants
                     ON participants.match_id = summaries.match_id

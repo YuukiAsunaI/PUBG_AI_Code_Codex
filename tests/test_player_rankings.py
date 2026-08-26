@@ -56,6 +56,22 @@ class PlayerRankingServiceTests(unittest.TestCase):
         self.assertAlmostEqual(ranking.rows[1].score, 300.0)
         self.assertEqual(connection.executed[0][1], ["steam", "guild-1", 1])
 
+    def test_scoped_ranking_accepts_multiple_selected_guilds(self) -> None:
+        connection = FakeConnection([[], []])
+
+        ranking = PlayerRankingService(connection).get_player_ranking(
+            shard="steam",
+            metric="kda",
+            guild_id="100",
+            guild_ids=["300", "200", "200"],
+            global_scope=False,
+            limit=10,
+        )
+
+        self.assertEqual(ranking.scope_guild_ids, ["200", "300"])
+        self.assertEqual(connection.executed[0][1], ["steam", "200", "300", 1])
+        self.assertIn("guild_id IN (%s, %s)", connection.executed[0][0])
+
     def test_global_ranking_does_not_require_guild_scope(self) -> None:
         connection = FakeConnection(
             [

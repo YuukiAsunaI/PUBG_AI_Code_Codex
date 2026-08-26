@@ -290,7 +290,7 @@ class MapSnapshotProcessor:
                     matches.created_at_kst,
                     registered_players.current_name
                 FROM player_movement_summaries summaries
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = summaries.match_id
                 LEFT JOIN registered_players
                     ON registered_players.account_id = summaries.account_id

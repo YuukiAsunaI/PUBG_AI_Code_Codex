@@ -379,7 +379,7 @@ class PlayerTrendService:
                         ELSE COALESCE(movement.in_game_sampled_distance_m, 0)
                     END AS movement_distance_m
                 FROM player_match_combat_summaries summaries
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = summaries.match_id
                 LEFT JOIN match_participants participants
                     ON participants.match_id = summaries.match_id
@@ -408,7 +408,7 @@ class PlayerTrendService:
                     COALESCE(SUM(weapon_stats.shots_fired), 0) AS shots_fired,
                     COALESCE(SUM(weapon_stats.shots_hit), 0) AS shots_hit
                 FROM player_weapon_match_stats weapon_stats
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = weapon_stats.match_id
                 WHERE weapon_stats.account_id = %s
                   AND matches.shard = %s
@@ -436,7 +436,7 @@ class PlayerTrendService:
                     COALESCE(SUM(outcomes.outcome_type = 'win'), 0) AS fight_wins,
                     COALESCE(SUM(outcomes.outcome_type = 'loss'), 0) AS fight_losses
                 FROM player_fight_outcomes outcomes
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = outcomes.match_id
                 WHERE outcomes.account_id = %s
                   AND matches.shard = %s

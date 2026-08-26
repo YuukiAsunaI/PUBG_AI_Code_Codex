@@ -9,6 +9,7 @@ from urllib.parse import urljoin, urlsplit
 import gzip
 
 from pubg_ai.api_job_retry import decide_api_job_retry, stale_running_cutoff
+from pubg_ai.match_collection_policy import decide_match_collection_attributes
 from pubg_ai.parser_policy import CURRENT_TELEMETRY_PARSER_VERSION
 from pubg_ai.raw_storage import RawPayloadStore
 from pubg_ai.time_utils import now_kst, to_kst
@@ -57,6 +58,7 @@ class TelemetryJobProcessingResult:
     downloaded_telemetry: int
     stored_telemetry: int
     skipped_existing: int
+    excluded_matches: int
     failed_jobs: int
     downloaded_bytes: int
     stored_bytes: int
@@ -99,6 +101,7 @@ class TelemetryJobProcessor:
         downloaded_telemetry = 0
         stored_telemetry = 0
         skipped_existing = 0
+        excluded_matches = 0
         failed_jobs = 0
         downloaded_bytes = 0
         stored_bytes = 0
@@ -122,6 +125,8 @@ class TelemetryJobProcessor:
 
             if processed.status == "existing":
                 skipped_existing += 1
+            elif processed.status == "excluded":
+                excluded_matches += 1
             else:
                 downloaded_telemetry += 1
                 stored_telemetry += 1
@@ -133,6 +138,7 @@ class TelemetryJobProcessor:
             downloaded_telemetry=downloaded_telemetry,
             stored_telemetry=stored_telemetry,
             skipped_existing=skipped_existing,
+            excluded_matches=excluded_matches,
             failed_jobs=failed_jobs,
             downloaded_bytes=downloaded_bytes,
             stored_bytes=stored_bytes,
@@ -162,6 +168,15 @@ class TelemetryJobProcessor:
         match_id = _required_job_text(job.get("target_id"), "target_id")
 
         match = self._load_match_for_telemetry(match_id=match_id, shard=shard)
+        decision = decide_match_collection_attributes(
+            is_custom_match=bool(match.get("is_custom_match")),
+            match_type=_optional_text(match.get("match_type")),
+            game_mode=_optional_text(match.get("game_mode")),
+            map_name=_optional_text(match.get("map_name")),
+        )
+        if decision.is_excluded:
+            return ProcessedTelemetryJob(status="excluded", downloaded_bytes=0, stored_bytes=0)
+
         if self._telemetry_payload_exists(match_id):
             return ProcessedTelemetryJob(status="existing", downloaded_bytes=0, stored_bytes=0)
 
@@ -385,7 +400,8 @@ class TelemetryJobProcessor:
         with self.connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT match_id, shard, telemetry_url, created_at_kst
+                SELECT match_id, shard, telemetry_url, created_at_kst,
+                       map_name, game_mode, match_type, is_custom_match
                 FROM matches
                 WHERE match_id = %s AND shard = %s
                 LIMIT 1

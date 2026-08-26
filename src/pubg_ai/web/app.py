@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import csv
-from datetime import datetime
+from datetime import date, datetime
 import io
 import json
 import os
@@ -101,6 +101,7 @@ from pubg_ai.discord_bot_controller import (
 from pubg_ai.discord_command_catalog import (
     RESERVED_COMMAND_GROUPS,
     command_catalog_records,
+    command_group_label,
 )
 from pubg_ai.discord_guild_catalog import (
     list_discord_guild_catalog,
@@ -124,6 +125,8 @@ from pubg_ai.operational_drills import (
     run_operational_drills,
 )
 from pubg_ai.match_collection import RegisteredPlayerMatchCollector
+from pubg_ai.match_explorer import MatchExplorerError, MatchExplorerService
+from pubg_ai.match_replay_builder import MatchReplayError, MatchReplayProcessor
 from pubg_ai.match_job_processor import MatchJobProcessor
 from pubg_ai.metric_catalog import metric_catalog_records
 from pubg_ai.player_intelligence import PlayerIntelligenceService
@@ -163,6 +166,7 @@ from pubg_ai.worker_run_history import (
     get_worker_run_page,
     list_worker_runs,
 )
+from pubg_ai.watchlist import WatchlistError, WatchlistService
 
 
 _ASSET_DIR = Path(__file__).resolve().parent.parent / "assets"
@@ -242,6 +246,35 @@ class GenerateReplayTimelinesRequest(BaseModel):
     force: bool = False
 
 
+class GenerateMatchReplayRequest(BaseModel):
+    force: bool = False
+
+
+class RegisterWatchedPlayerRequest(BaseModel):
+    shard: str = Field(default="steam", min_length=1)
+    player_name: str = Field(min_length=1, max_length=191)
+    notify_name_change: bool = True
+    notify_kill: bool = True
+    notify_repeated_engagement: bool = True
+    engagement_threshold: int = Field(default=3, ge=1, le=100)
+    notification_channel_ids: list[str] = Field(default_factory=list)
+
+
+class UpdateWatchedPlayerRequest(BaseModel):
+    active: bool = True
+    notify_name_change: bool = True
+    notify_kill: bool = True
+    notify_repeated_engagement: bool = True
+    engagement_threshold: int = Field(default=3, ge=1, le=100)
+    notification_channel_ids: list[str] = Field(default_factory=list)
+
+
+class ScanWatchlistRequest(BaseModel):
+    limit: int = Field(default=100, ge=1, le=500)
+    force: bool = False
+    refresh_identity: bool = True
+
+
 class GenerateLoadoutSnapshotsRequest(BaseModel):
     limit: int = Field(default=10, ge=1, le=500)
     force: bool = False
@@ -251,10 +284,14 @@ class DiscordPermissionGrantRequest(BaseModel):
     user_id: str = Field(min_length=1)
     group: str = Field(min_length=1)
     guild_id: str | None = None
+    member_label: str | None = Field(default=None, max_length=128)
+    member_guild_id: str | None = Field(default=None, max_length=32)
 
 
 class DiscordGlobalAdminRequest(BaseModel):
     user_id: str = Field(min_length=1)
+    member_label: str | None = Field(default=None, max_length=128)
+    member_guild_id: str | None = Field(default=None, max_length=32)
 
 
 class DiscordCommandGroupRequest(BaseModel):
@@ -267,6 +304,7 @@ class DiscordCommandAliasRequest(BaseModel):
 
 class DiscordScopeSettingsRequest(BaseModel):
     guild_ranking_scopes: dict[str, str] = Field(default_factory=dict)
+    guild_ranking_selected_guild_ids: dict[str, list[str]] = Field(default_factory=dict)
     public_profile_default: bool = True
 
 
@@ -286,6 +324,12 @@ class DiscordBotSettingsRequest(BaseModel):
 
 class DiscordCommandSyncRequest(BaseModel):
     guild_id: str | None = Field(default=None, max_length=32)
+
+
+class DiscordGuildCommandsRequest(BaseModel):
+    guild_id: str = Field(pattern=r"^\d{1,32}$")
+    use_default: bool = False
+    commands: list[str] = Field(default_factory=list)
 
 
 class DiscordGuildCatalogSyncRequest(BaseModel):
@@ -1370,6 +1414,102 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
             "bot": discord_bot_controller.status().to_record(),
         }
 
+    @app.post("/discord/bot/guild-commands")
+    def save_discord_bot_guild_commands(
+        request: DiscordGuildCommandsRequest,
+    ) -> dict[str, Any]:
+        current = settings_store.load_discord_bot_settings()
+        if current.managed_guild_ids and request.guild_id not in current.managed_guild_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="현재 앱 관리 봇이 참여 중인 Discord 서버만 설정할 수 있습니다.",
+            )
+        try:
+            settings = settings_store.save_discord_guild_commands(
+                guild_id=request.guild_id,
+                commands=None if request.use_default else request.commands,
+            )
+        except LocalSettingsError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        state = discord_bot_controller.status()
+        synchronized = False
+        verification_error: str | None = None
+        actual_commands: list[str] | None = None
+        guild_commands: list[str] | None = None
+        global_commands: list[str] | None = None
+        if state.ready:
+            try:
+                state = discord_bot_controller.sync_commands(request.guild_id)
+                synchronized = True
+                exposure = discord_bot_controller.fetch_command_exposure(request.guild_id)
+                actual_commands = exposure["visible_commands"]
+                guild_commands = exposure["guild_commands"]
+                global_commands = exposure["global_commands"]
+            except DiscordBotControllerError as exc:
+                verification_error = str(exc)
+
+        expected_commands = (
+            sorted(record["name"] for record in command_catalog_records())
+            if request.use_default
+            else sorted(settings.guild_enabled_commands.get(request.guild_id, []))
+        )
+        return {
+            "discord_bot": settings.to_record(),
+            "bot": state.to_record(),
+            "guild_id": request.guild_id,
+            "use_default": request.use_default,
+            "expected_commands": expected_commands,
+            "actual_commands": actual_commands,
+            "guild_commands": guild_commands,
+            "global_commands": global_commands,
+            "synchronized": synchronized,
+            "in_sync": (
+                sorted(actual_commands) == expected_commands and not global_commands
+                if actual_commands is not None
+                else None
+            ),
+            "verification_error": verification_error,
+        }
+
+    @app.get("/discord/bot/guild-commands/{guild_id}")
+    def discord_bot_guild_commands(guild_id: str) -> dict[str, Any]:
+        if not guild_id.isdigit() or len(guild_id) > 32:
+            raise HTTPException(status_code=400, detail="Discord 서버 ID 형식이 올바르지 않습니다.")
+        settings = settings_store.load_discord_bot_settings()
+        configured = settings.guild_enabled_commands.get(guild_id)
+        expected_commands = (
+            sorted(record["name"] for record in command_catalog_records())
+            if configured is None
+            else sorted(configured)
+        )
+        actual_commands: list[str] | None = None
+        guild_commands: list[str] | None = None
+        global_commands: list[str] | None = None
+        verification_error: str | None = None
+        if discord_bot_controller.status().ready:
+            try:
+                exposure = discord_bot_controller.fetch_command_exposure(guild_id)
+                actual_commands = exposure["visible_commands"]
+                guild_commands = exposure["guild_commands"]
+                global_commands = exposure["global_commands"]
+            except DiscordBotControllerError as exc:
+                verification_error = str(exc)
+        return {
+            "guild_id": guild_id,
+            "use_default": configured is None,
+            "expected_commands": expected_commands,
+            "actual_commands": actual_commands,
+            "guild_commands": guild_commands,
+            "global_commands": global_commands,
+            "in_sync": (
+                sorted(actual_commands) == expected_commands and not global_commands
+                if actual_commands is not None
+                else None
+            ),
+            "verification_error": verification_error,
+        }
+
     @app.post("/discord/bot/start")
     def start_discord_bot() -> dict[str, Any]:
         try:
@@ -1404,6 +1544,10 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
                 "discord_permissions": permission_manager.load().to_record(),
                 "command_catalog": command_catalog_records(),
                 "reserved_groups": sorted(RESERVED_COMMAND_GROUPS),
+                "group_labels": {
+                    group: command_group_label(group)
+                    for group in sorted(RESERVED_COMMAND_GROUPS)
+                },
             }
         except LocalSettingsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1522,6 +1666,40 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
             "channels": [channel.to_record() for channel in guild.channels],
         }
 
+    @app.get("/discord/guild-members")
+    def discord_guild_members(
+        guild_id: str = Query(pattern=r"^\d{1,32}$"),
+        search: str = Query(default="", max_length=100),
+        limit: int = Query(default=100, ge=1, le=500),
+        include_bots: bool = False,
+    ) -> dict[str, Any]:
+        runtime_config = current_config()
+        token = runtime_config.secrets.discord_bot_token
+        if not token:
+            raise HTTPException(status_code=400, detail="Discord 봇 토큰이 설정되지 않았습니다.")
+        try:
+            members = DiscordAcceptanceClient(token).list_guild_members(
+                guild_id=guild_id,
+                search=search,
+                limit=limit,
+            )
+        except DiscordAcceptanceError as exc:
+            if exc.status_code == 403:
+                detail = (
+                    "Discord 서버 멤버를 조회할 권한이 없습니다. Discord Developer Portal에서 "
+                    "Server Members Intent를 활성화했는지 확인해 주세요."
+                )
+            else:
+                detail = str(exc)
+            status_code = exc.status_code if exc.status_code and 400 <= exc.status_code < 500 else 502
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+        visible = [member for member in members if include_bots or not member.is_bot]
+        return {
+            "guild_id": guild_id,
+            "search": search,
+            "members": [member.to_record() for member in visible],
+        }
+
     @app.post("/discord/permissions/grant")
     def grant_discord_permission(request: DiscordPermissionGrantRequest) -> dict[str, Any]:
         try:
@@ -1529,6 +1707,8 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
                 user_id=request.user_id,
                 group=request.group,
                 guild_id=request.guild_id,
+                member_label=request.member_label,
+                member_guild_id=request.member_guild_id,
             ).to_record()
         except LocalSettingsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1587,7 +1767,11 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
     @app.post("/discord/global-admins/add")
     def add_discord_global_admin(request: DiscordGlobalAdminRequest) -> dict[str, Any]:
         try:
-            return permission_manager.add_global_admin(request.user_id).to_record()
+            return permission_manager.add_global_admin(
+                request.user_id,
+                member_label=request.member_label,
+                member_guild_id=request.member_guild_id,
+            ).to_record()
         except LocalSettingsError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1610,6 +1794,7 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
         try:
             settings = settings_store.save_discord_scope_settings(
                 guild_ranking_scopes=request.guild_ranking_scopes,
+                guild_ranking_selected_guild_ids=request.guild_ranking_selected_guild_ids,
                 public_profile_default=request.public_profile_default,
             )
         except LocalSettingsError as exc:
@@ -3037,6 +3222,281 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
         finally:
             connection.close()
 
+    @app.get("/watchlist/players")
+    def watched_players(
+        include_inactive: bool = True,
+        search: str | None = None,
+        limit: int = Query(default=500, ge=1, le=1000),
+    ) -> dict[str, Any]:
+        connection = connect_mysql(config.database)
+        try:
+            players = WatchlistService(connection).list_players(
+                include_inactive=include_inactive,
+                search=search,
+                limit=limit,
+            )
+            return {"players": [player.to_record() for player in players]}
+        finally:
+            connection.close()
+
+    @app.post("/watchlist/players")
+    def register_watched_player(
+        request: RegisterWatchedPlayerRequest,
+    ) -> dict[str, Any]:
+        runtime_config = current_config()
+        if not runtime_config.secrets.pubg_api_key:
+            raise HTTPException(status_code=500, detail="PUBG API 키가 설정되지 않았습니다.")
+        connection = connect_mysql(config.database)
+        try:
+            try:
+                player = WatchlistService(connection).register_by_name(
+                    pubg_client=PubgApiClient(runtime_config.secrets.pubg_api_key),
+                    shard=request.shard,
+                    player_name=request.player_name,
+                    notify_name_change=request.notify_name_change,
+                    notify_kill=request.notify_kill,
+                    notify_repeated_engagement=request.notify_repeated_engagement,
+                    engagement_threshold=request.engagement_threshold,
+                    notification_channel_ids=request.notification_channel_ids,
+                )
+            except PubgApiError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            except WatchlistError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return {"player": player.to_record()}
+        finally:
+            connection.close()
+
+    @app.put("/watchlist/players/{shard}/{account_id}")
+    def update_watched_player(
+        shard: str,
+        account_id: str,
+        request: UpdateWatchedPlayerRequest,
+    ) -> dict[str, Any]:
+        connection = connect_mysql(config.database)
+        try:
+            try:
+                player = WatchlistService(connection).update(
+                    account_id=account_id,
+                    shard=shard,
+                    active=request.active,
+                    notify_name_change=request.notify_name_change,
+                    notify_kill=request.notify_kill,
+                    notify_repeated_engagement=request.notify_repeated_engagement,
+                    engagement_threshold=request.engagement_threshold,
+                    notification_channel_ids=request.notification_channel_ids,
+                )
+            except WatchlistError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            return {"player": player.to_record()}
+        finally:
+            connection.close()
+
+    @app.post("/watchlist/scan")
+    def scan_watchlist(request: ScanWatchlistRequest) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(config.database)
+        try:
+            service = WatchlistService(connection)
+            identity = {"checked": 0, "changed": 0, "alerts_created": 0}
+            if request.refresh_identity:
+                if not runtime_config.secrets.pubg_api_key:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="닉네임 재확인에 필요한 PUBG API 키가 설정되지 않았습니다.",
+                    )
+                try:
+                    identity = service.refresh_identities(
+                        pubg_client=PubgApiClient(runtime_config.secrets.pubg_api_key),
+                        force=request.force,
+                    )
+                except (PubgApiError, WatchlistError) as exc:
+                    raise HTTPException(status_code=502, detail=str(exc)) from exc
+            encounters = service.scan_encounters(
+                raw_store=RawPayloadStore(
+                    runtime_config.app.raw_data_dir,
+                    compression=runtime_config.app.raw_compression,  # type: ignore[arg-type]
+                ),
+                limit=request.limit,
+                force=request.force,
+            )
+            return {
+                "identity": identity,
+                "encounters": encounters.to_record(),
+            }
+        finally:
+            connection.close()
+
+    @app.get("/watchlist/encounters")
+    def watched_player_encounters(
+        watched_player_id: int | None = None,
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> dict[str, Any]:
+        connection = connect_mysql(config.database)
+        try:
+            return {
+                "encounters": WatchlistService(connection).list_encounters(
+                    watched_player_id=watched_player_id,
+                    limit=limit,
+                )
+            }
+        finally:
+            connection.close()
+
+    @app.get("/matches/explorer")
+    def explore_matches(
+        shard: str | None = None,
+        search: str | None = None,
+        map_name: str | None = None,
+        game_mode: str | None = None,
+        match_type: str | None = None,
+        created_from_kst: date | None = None,
+        created_to_kst: date | None = None,
+        telemetry_only: bool = False,
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+    ) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(config.database)
+        try:
+            return MatchExplorerService(
+                connection,
+                RawPayloadStore(
+                    runtime_config.app.raw_data_dir,
+                    compression=runtime_config.app.raw_compression,  # type: ignore[arg-type]
+                ),
+            ).list_matches(
+                shard=shard,
+                search=search,
+                map_name=map_name,
+                game_mode=game_mode,
+                match_type=match_type,
+                created_from_kst=created_from_kst,
+                created_to_kst=created_to_kst,
+                telemetry_only=telemetry_only,
+                limit=limit,
+                offset=offset,
+            )
+        finally:
+            connection.close()
+
+    @app.get("/matches/{match_id}/detail")
+    def explore_match_detail(match_id: str) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(config.database)
+        try:
+            try:
+                detail = MatchExplorerService(
+                    connection,
+                    RawPayloadStore(
+                        runtime_config.app.raw_data_dir,
+                        compression=runtime_config.app.raw_compression,  # type: ignore[arg-type]
+                    ),
+                ).get_match_detail(match_id)
+            except MatchExplorerError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            if detail is None:
+                raise HTTPException(status_code=404, detail="저장된 매치를 찾을 수 없습니다.")
+            return {"detail": detail}
+        finally:
+            connection.close()
+
+    @app.get("/matches/{match_id}/events")
+    def explore_match_events(
+        match_id: str,
+        domain: str | None = None,
+        event_type: str | None = None,
+        account_id: str | None = None,
+        team_id: int | None = None,
+        search: str | None = None,
+        include_positions: bool = False,
+        limit: int = Query(default=100, ge=1, le=500),
+        offset: int = Query(default=0, ge=0),
+    ) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(config.database)
+        try:
+            try:
+                return MatchExplorerService(
+                    connection,
+                    RawPayloadStore(
+                        runtime_config.app.raw_data_dir,
+                        compression=runtime_config.app.raw_compression,  # type: ignore[arg-type]
+                    ),
+                ).list_events(
+                    match_id=match_id,
+                    domain=domain,
+                    event_type=event_type,
+                    account_id=account_id,
+                    team_id=team_id,
+                    search=search,
+                    include_positions=include_positions,
+                    limit=limit,
+                    offset=offset,
+                )
+            except MatchExplorerError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        finally:
+            connection.close()
+
+    @app.get("/matches/{match_id}/events/{sequence}")
+    def explore_match_event(
+        match_id: str,
+        sequence: int,
+    ) -> dict[str, Any]:
+        if sequence < 0:
+            raise HTTPException(status_code=400, detail="이벤트 순번은 0 이상이어야 합니다.")
+        runtime_config = current_config()
+        connection = connect_mysql(config.database)
+        try:
+            try:
+                event = MatchExplorerService(
+                    connection,
+                    RawPayloadStore(
+                        runtime_config.app.raw_data_dir,
+                        compression=runtime_config.app.raw_compression,  # type: ignore[arg-type]
+                    ),
+                ).get_event(match_id=match_id, sequence=sequence)
+            except MatchExplorerError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            if event is None:
+                raise HTTPException(status_code=404, detail="매치 이벤트를 찾을 수 없습니다.")
+            return {"event": event}
+        finally:
+            connection.close()
+
+    @app.post("/matches/{match_id}/replay")
+    def generate_match_replay(
+        match_id: str,
+        request: GenerateMatchReplayRequest,
+    ) -> dict[str, Any]:
+        runtime_config = current_config()
+        connection = connect_mysql(config.database)
+        try:
+            try:
+                result = MatchReplayProcessor(
+                    connection,
+                    RawPayloadStore(
+                        runtime_config.app.raw_data_dir,
+                        compression=runtime_config.app.raw_compression,  # type: ignore[arg-type]
+                    ),
+                    ReplayArtifactStore(runtime_config.app.replay_data_dir),
+                ).generate(match_id=match_id, force=request.force)
+            except MatchReplayError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            artifact = get_replay_artifact(connection, result.artifact_id)
+            if artifact is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail="생성된 리플레이 메타데이터를 찾을 수 없습니다.",
+                )
+            return {
+                "result": result.to_record(),
+                "artifact": artifact.to_record(),
+            }
+        finally:
+            connection.close()
+
     @app.get("/rankings/players")
     def player_ranking(
         metric: str = "kda",
@@ -3048,11 +3508,15 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
     ) -> dict[str, Any]:
         connection = connect_mysql(config.database)
         try:
-            global_scope = _ranking_global_scope(settings_store, guild_id)
+            global_scope, scope_guild_ids = _ranking_scope(
+                settings_store,
+                guild_id,
+            )
             ranking = PlayerRankingService(connection).get_player_ranking(
                 shard=shard,
                 metric=metric,
                 guild_id=None if global_scope else guild_id,
+                guild_ids=scope_guild_ids,
                 global_scope=global_scope,
                 active_only=active_only,
                 min_matches=min_matches,
@@ -3727,14 +4191,20 @@ def _json_dumps_compact(value: Any) -> str:
     return json.dumps(value or {}, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
-def _ranking_global_scope(settings_store: LocalSettingsStore, guild_id: str | None) -> bool:
+def _ranking_scope(
+    settings_store: LocalSettingsStore,
+    guild_id: str | None,
+) -> tuple[bool, list[str]]:
     if guild_id is None:
-        return True
+        return True, []
     try:
         settings = settings_store.load_discord_scope_settings()
     except LocalSettingsError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return settings.guild_ranking_scopes.get(guild_id) == "global"
+    if settings.guild_ranking_scopes.get(guild_id) == "global":
+        return True, []
+    selected = settings.guild_ranking_selected_guild_ids.get(guild_id)
+    return False, list(selected or [guild_id])
 
 
 def _public_profile_default(settings_store: LocalSettingsStore) -> bool:
@@ -4077,6 +4547,23 @@ _INDEX_HTML = """<!doctype html>
     .discord-command-group-form {
       grid-template-columns: minmax(180px, 0.7fr) minmax(220px, 1fr) auto auto;
     }
+    .section-note { margin: 2px 0 10px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+    .discord-member-permission-form {
+      grid-template-columns: minmax(210px, 1fr) minmax(210px, 1fr) minmax(180px, 0.8fr) minmax(180px, 0.8fr) auto;
+    }
+    .discord-member-permission-form .checkbox-field {
+      display: flex;
+      min-height: 57px;
+      justify-content: flex-end;
+    }
+    .discord-member-permission-form .checkbox-field span {
+      display: inline-flex;
+      align-items: center;
+      min-height: 36px;
+      gap: 7px;
+      color: var(--text);
+    }
+    .discord-member-permission-form .checkbox-field input { width: auto; min-height: 0; }
     .bot-state-strip {
       display: grid;
       grid-template-columns: repeat(4, minmax(120px, 1fr));
@@ -4172,6 +4659,31 @@ _INDEX_HTML = """<!doctype html>
     .command-choice small { display: block; overflow-wrap: anywhere; }
     .command-choice strong { color: var(--text); font-size: 11px; }
     .command-choice small { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.4; }
+    .discord-ranking-selection {
+      grid-column: 1 / -1;
+      min-width: 0;
+      margin: 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+    }
+    .discord-ranking-selection legend { padding: 0 6px; color: var(--muted); font-size: 11px; }
+    .discord-ranking-guild-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 6px;
+    }
+    .discord-ranking-guild-grid label {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      align-items: center;
+      gap: 8px;
+      min-height: 42px;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--panel-soft);
+    }
     .discord-group-table { min-width: 760px; table-layout: auto; }
     .discord-group-table th:nth-child(1) { width: 150px; }
     .discord-group-table th:nth-child(3) { width: 80px; }
@@ -4974,6 +5486,7 @@ _INDEX_HTML = """<!doctype html>
       .replay-detail-layout { grid-template-columns: 1fr; }
       .alert-settings-form,
       .alert-channel-picker,
+      .discord-member-permission-form,
       .discord-command-group-form,
       .discord-alias-form,
       .discord-bot-settings-form,
@@ -5668,6 +6181,46 @@ _INDEX_HTML = """<!doctype html>
       gap: 6px;
     }
     .path-picker { min-width: 48px; padding: 7px 9px; }
+    .checkbox-line {
+      display: flex;
+      min-height: 34px;
+      align-items: center;
+      gap: 7px;
+      color: var(--text);
+    }
+    .checkbox-line input { width: 16px; height: 16px; margin: 0; }
+    .match-explorer-pager { margin-top: 10px; }
+    .match-explorer-detail {
+      min-width: 0;
+      margin-top: 18px;
+      padding-top: 16px;
+      border-top: 1px solid var(--line);
+    }
+    .match-detail-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .match-detail-heading h3 { margin: 3px 0 0; font-size: 16px; }
+    .match-detail-panel { min-width: 0; margin-top: 12px; }
+    .match-event-filter { margin-bottom: 10px; }
+    .match-explorer-detail table { min-width: 760px; table-layout: auto; }
+    .match-explorer-detail td { vertical-align: top; }
+    .json-detail {
+      min-height: 260px;
+      margin: 12px 0 0;
+      padding: 12px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: #080b0d;
+      color: #cbd5dd;
+      font: 11px/1.55 Consolas, monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
     @media (max-width: 1180px) {
       .app-shell { grid-template-columns: 190px minmax(0, 1fr); }
       .system-rail { display: none; }
@@ -5707,6 +6260,10 @@ _INDEX_HTML = """<!doctype html>
         overscroll-behavior: contain;
         scrollbar-width: thin;
       }
+      .match-explorer-list,
+      .match-explorer-detail .dense-table-wrap { display: block; }
+      .match-detail-heading { flex-direction: column; }
+      .match-detail-heading .actions { width: 100%; justify-content: flex-start; }
     }
     @media (max-width: 520px) {
       .app-header { padding: 8px 10px; }
@@ -5948,6 +6505,7 @@ _INDEX_HTML = """<!doctype html>
             <option value="all">전체</option>
             <option value="storage">저장소</option>
             <option value="worker">자동 작업</option>
+            <option value="watchlist">밴 플레이어</option>
           </select>
         </label>
         <label>상태
@@ -5993,6 +6551,7 @@ _INDEX_HTML = """<!doctype html>
         <button class="secondary" type="button" data-alert-history-preset="current-errors">현재 오류</button>
         <button class="secondary" type="button" data-alert-history-preset="worker-failures">자동 작업 실패</button>
         <button class="secondary" type="button" data-alert-history-preset="storage-pressure">저장 공간 부족</button>
+        <button class="secondary" type="button" data-alert-history-preset="watchlist-alerts">밴 플레이어 알림</button>
         <button class="secondary" type="button" data-alert-history-preset="all-history">전체 이력</button>
         <button class="secondary" type="button" id="alertHistoryExport">CSV 내보내기</button>
         <button class="secondary" type="button" id="alertHistoryCopyFilterLink">조회 링크 복사</button>
@@ -6152,36 +6711,52 @@ _INDEX_HTML = """<!doctype html>
       <div id="discordBotCommandCatalog" class="command-catalog-grid"></div>
       <div class="actions" style="margin-top: 10px;">
         <button type="button" id="discordBotCommandsSave">저장 후 동기화</button>
+        <button class="secondary" type="button" id="discordBotCommandsVerify">현재 공개 상태 확인</button>
       </div>
       <div class="status" id="discordBotCommandsStatus" style="margin-top: 10px;">서버를 선택하세요.</div>
     </section>
     <section id="discord-permissions" data-view="discord">
       <h2>앱 봇 사용자 권한</h2>
-      <form id="discordGrantForm">
-        <label>Discord 사용자 ID
-          <input name="user_id" autocomplete="off" required>
+      <p class="section-note">봇이 참여한 서버와 멤버를 선택하면 Discord ID를 직접 찾을 필요가 없습니다. 닉네임과 ID를 함께 보존합니다.</p>
+      <form id="discordGrantForm" class="discord-member-permission-form">
+        <label>사용자 소속 서버
+          <select name="guild_id" id="discordGrantMemberGuild" class="discord-guild-select" data-empty-label="서버 선택" required>
+            <option value="">서버 선택</option>
+          </select>
+        </label>
+        <label>Discord 사용자
+          <input name="member_query" id="discordGrantMemberQuery" list="discordGrantMemberOptions" autocomplete="off" placeholder="닉네임 일부 입력" required>
+          <input name="user_id" type="hidden">
         </label>
         <label>권한 그룹
           <select name="group" id="discordPermissionGroup" required></select>
         </label>
-        <label>서버 범위
-          <select name="guild_id" class="discord-guild-select" data-empty-label="전체 서버 권한">
-            <option value="">전체 서버 권한</option>
-          </select>
+        <label class="checkbox-field">적용 범위
+          <span><input name="global_scope" type="checkbox"> 모든 Discord 서버에 적용</span>
         </label>
         <button type="submit">권한 추가</button>
       </form>
-      <form id="discordAdminForm" style="margin-top: 10px;">
-        <label>전역 관리자 사용자 ID
-          <input name="user_id" autocomplete="off" required>
+      <datalist id="discordGrantMemberOptions"></datalist>
+      <div class="status" id="discordGrantMemberStatus">사용자 소속 서버를 선택하세요.</div>
+      <form id="discordAdminForm" class="discord-member-permission-form" style="margin-top: 10px;">
+        <label>관리자 소속 서버
+          <select name="member_guild_id" id="discordAdminMemberGuild" class="discord-guild-select" data-empty-label="서버 선택" required>
+            <option value="">서버 선택</option>
+          </select>
+        </label>
+        <label>전역 관리자
+          <input name="member_query" id="discordAdminMemberQuery" list="discordAdminMemberOptions" autocomplete="off" placeholder="닉네임 일부 입력" required>
+          <input name="user_id" type="hidden">
         </label>
         <button type="submit">전역 관리자 추가</button>
       </form>
+      <datalist id="discordAdminMemberOptions"></datalist>
+      <div class="status" id="discordAdminMemberStatus">관리자 소속 서버를 선택하세요.</div>
       <table style="margin-top: 12px;">
         <thead>
           <tr>
             <th>범위</th>
-            <th>Discord 사용자 ID</th>
+            <th>Discord 사용자</th>
             <th>권한</th>
             <th></th>
           </tr>
@@ -6196,9 +6771,10 @@ _INDEX_HTML = """<!doctype html>
           <input
             name="group"
             autocomplete="off"
-            minlength="2"
+            minlength="1"
             maxlength="32"
-            pattern="[a-z][a-z0-9_-]{1,31}"
+            pattern="[A-Za-z가-힣][A-Za-z0-9가-힣_-]{0,31}"
+            placeholder="예: 전적조회, 운영자, 분석팀"
             required
           >
         </label>
@@ -6247,18 +6823,24 @@ _INDEX_HTML = """<!doctype html>
     <section id="discord-scopes" data-view="discord">
       <h2>앱 봇 서버 관리</h2>
       <form id="discordScopeForm">
-        <label>서버
+        <label>설정 대상 서버
           <select name="guild_id" class="discord-guild-select" data-empty-label="서버 선택" required>
             <option value="">서버 선택</option>
           </select>
         </label>
         <label>랭킹 범위
-          <select name="scope">
-            <option value="guild">선택한 서버</option>
+          <select name="scope" id="discordScopeMode">
             <option value="global">전체 서버</option>
+            <option value="guild">선택한 서버들</option>
           </select>
         </label>
+        <fieldset id="discordRankingGuildSelection" class="discord-ranking-selection" hidden>
+          <legend>랭킹에 포함할 서버</legend>
+          <div id="discordRankingGuildCheckboxes" class="discord-ranking-guild-grid"></div>
+          <div id="discordRankingGuildStatus" class="status" style="margin-top: 8px;">서버를 선택하세요.</div>
+        </fieldset>
         <button type="submit">저장</button>
+        <button type="button" class="secondary" id="discordScopeReset">초기화</button>
       </form>
       <form id="publicProfileDefaultForm" style="margin-top: 10px;">
         <label>기본 전적 공개 범위
@@ -6332,6 +6914,84 @@ _INDEX_HTML = """<!doctype html>
         </table>
       </div>
     </section>
+    <section id="watchlist-management" data-view="players">
+      <h2>밴 플레이어</h2>
+      <form id="watchlistRegisterForm" class="analysis-form">
+        <div class="query-primary">
+          <label>플랫폼
+            <select name="shard"><option value="steam">steam</option><option value="kakao">kakao</option></select>
+          </label>
+          <label>닉네임
+            <input name="player_name" autocomplete="off" placeholder="정확한 PUBG 닉네임" required>
+          </label>
+          <label>반복 교전 알림 기준
+            <input name="engagement_threshold" type="number" min="1" max="100" value="3" required>
+          </label>
+          <button type="submit">등록</button>
+          <button class="secondary" type="button" id="watchlistRegisterReset">초기화</button>
+        </div>
+        <details class="advanced-filters" open>
+          <summary>알림 설정</summary>
+          <div class="filter-grid">
+            <label class="checkbox-line"><input name="notify_name_change" type="checkbox" checked> 닉네임 변경</label>
+            <label class="checkbox-line"><input name="notify_kill" type="checkbox" checked> 등록 유저 처치</label>
+            <label class="checkbox-line"><input name="notify_repeated_engagement" type="checkbox" checked> 등록 유저와 반복 교전</label>
+            <label>Discord 서버
+              <select id="watchlistGuildSelect" class="discord-guild-select" data-empty-label="서버 선택"><option value="">서버 선택</option></select>
+            </label>
+            <label>알림 채널
+              <select id="watchlistChannelSelect" disabled><option value="">서버 선택 필요</option></select>
+            </label>
+            <div class="actions"><button class="secondary" type="button" id="watchlistChannelAdd" disabled>채널 추가</button></div>
+          </div>
+          <div id="watchlistChannelSelection" class="selected-channel-list"><span class="result-caption">개별 채널 미지정 · 운영 알림 기본 채널 사용</span></div>
+          <div id="watchlistChannelStatus" class="status">Discord 서버를 선택하세요.</div>
+        </details>
+      </form>
+      <div class="actions" style="margin: 12px 0 8px;">
+        <input id="watchlistSearch" type="search" autocomplete="off" placeholder="닉네임·이전 닉네임·Account ID 검색">
+        <label class="checkbox-line"><input id="watchlistIncludeInactive" type="checkbox" checked> 중지 포함</label>
+        <button class="secondary" type="button" id="watchlistReload">새로고침</button>
+        <button type="button" id="watchlistScan">닉네임·조우 지금 확인</button>
+      </div>
+      <div id="watchlistStatus" class="status">밴 플레이어 목록 확인 중</div>
+      <div class="table-scroll dense-table-wrap" style="margin-top: 8px;">
+        <table>
+          <thead><tr><th>플레이어</th><th>상태</th><th>알림</th><th>Discord 채널</th><th>조우</th><th></th></tr></thead>
+          <tbody id="watchlistBody"></tbody>
+        </table>
+      </div>
+      <h3>등록 유저와의 최근 조우</h3>
+      <div id="watchlistEncounterStatus" class="status">조우 이력 확인 중</div>
+      <div class="table-scroll dense-table-wrap" style="margin-top: 8px;">
+        <table>
+          <thead><tr><th>KST·매치</th><th>밴 플레이어</th><th>등록 유저</th><th>교전·피해</th><th>기절</th><th>처치</th><th></th></tr></thead>
+          <tbody id="watchlistEncounterBody"></tbody>
+        </table>
+      </div>
+    </section>
+    <dialog id="watchlistEditDialog" class="app-dialog" aria-labelledby="watchlistEditTitle">
+      <form id="watchlistEditForm" class="app-dialog-shell">
+        <header class="app-dialog-header"><h3 id="watchlistEditTitle">밴 플레이어 설정</h3><button class="secondary app-dialog-close" type="button" id="watchlistEditClose" aria-label="밴 플레이어 설정 창 닫기">×</button></header>
+        <div class="app-dialog-content">
+          <input name="shard" type="hidden"><input name="account_id" type="hidden>
+          <div id="watchlistEditIdentity" class="result-summary"></div>
+          <div class="filter-grid">
+            <label>감시 상태<select name="active"><option value="true">감시 중</option><option value="false">감시 중지</option></select></label>
+            <label>반복 교전 기준<input name="engagement_threshold" type="number" min="1" max="100" required></label>
+            <label class="checkbox-line"><input name="notify_name_change" type="checkbox"> 닉네임 변경 알림</label>
+            <label class="checkbox-line"><input name="notify_kill" type="checkbox"> 등록 유저 처치 알림</label>
+            <label class="checkbox-line"><input name="notify_repeated_engagement" type="checkbox"> 반복 교전 알림</label>
+            <label>Discord 서버<select id="watchlistEditGuildSelect" class="discord-guild-select" data-empty-label="서버 선택"><option value="">서버 선택</option></select></label>
+            <label>알림 채널<select id="watchlistEditChannelSelect" disabled><option value="">서버 선택 필요</option></select></label>
+            <div class="actions"><button class="secondary" type="button" id="watchlistEditChannelAdd" disabled>채널 추가</button></div>
+          </div>
+          <div id="watchlistEditChannelSelection" class="selected-channel-list"></div>
+          <div id="watchlistEditChannelStatus" class="status"></div>
+        </div>
+        <footer class="app-dialog-footer"><button type="submit">저장</button><button class="secondary" type="button" id="watchlistEditCancel">취소</button></footer>
+      </form>
+    </dialog>
     <section id="data-deletions" data-view="operations">
       <h2>데이터 삭제 검토</h2>
       <form id="dataDeletionFilterForm">
@@ -6856,6 +7516,92 @@ _INDEX_HTML = """<!doctype html>
       </form>
       <div class="status" id="matchBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
+    <section id="match-explorer" data-view="players">
+      <h2>매치 상세 조회</h2>
+      <form id="matchExplorerForm" class="analysis-form">
+        <div class="query-primary">
+          <label>플랫폼
+            <select name="shard"><option value="">전체</option><option value="steam">steam</option><option value="kakao">kakao</option></select>
+          </label>
+          <label>매치·참가자 검색
+            <input name="search" type="search" autocomplete="off" placeholder="닉네임, 매치, 맵, 모드">
+          </label>
+          <label>표시 수
+            <select name="limit"><option value="25">25개</option><option value="50" selected>50개</option><option value="100">100개</option><option value="200">200개</option></select>
+          </label>
+          <label class="checkbox-line"><input name="telemetry_only" type="checkbox" checked> 2D·이벤트 원본 저장 완료만</label>
+          <button type="submit">조회</button>
+          <button class="secondary" type="button" id="matchExplorerReset">초기화</button>
+        </div>
+        <details class="advanced-filters">
+          <summary>상세 필터</summary>
+          <div class="filter-grid">
+            <label>맵<select name="map_name" data-catalog-facet="maps"><option value="">전체</option></select></label>
+            <label>게임 모드<select name="game_mode" data-catalog-facet="game_modes"><option value="">전체</option></select></label>
+            <label>매치 유형<select name="match_type" data-catalog-facet="match_types"><option value="">전체</option></select></label>
+            <label>시작일 (KST)<input name="created_from_kst" type="date"></label>
+            <label>종료일 (KST)<input name="created_to_kst" type="date"></label>
+          </div>
+        </details>
+      </form>
+      <div class="status" id="matchExplorerStatus" style="margin-top: 12px;">저장된 매치 조회 대기 중</div>
+      <div class="table-scroll dense-table-wrap match-explorer-list" style="margin-top: 10px;">
+        <table>
+          <thead><tr><th>KST</th><th>맵·모드</th><th>인원</th><th>등록 유저</th><th>원본</th><th></th></tr></thead>
+          <tbody id="matchExplorerBody"></tbody>
+        </table>
+      </div>
+      <div class="actions match-explorer-pager">
+        <button class="secondary" type="button" id="matchExplorerPrev">이전</button>
+        <button class="secondary" type="button" id="matchExplorerNext">다음</button>
+      </div>
+
+      <div id="matchExplorerDetail" class="match-explorer-detail" hidden>
+        <div class="match-detail-heading">
+          <div><span class="result-caption">선택한 매치</span><h3 id="matchExplorerDetailTitle">-</h3></div>
+          <div class="actions">
+            <button class="secondary" type="button" id="matchExplorerReplay">전체 참가자 2D 재생</button>
+            <button class="secondary" type="button" id="matchExplorerDetailClose">닫기</button>
+          </div>
+        </div>
+        <div id="matchExplorerSummary"></div>
+        <div class="segmented-control" id="matchExplorerDetailViews" role="group" aria-label="매치 상세 보기">
+          <button type="button" class="active" data-match-detail-view="participants">참가자</button>
+          <button type="button" data-match-detail-view="teams">팀</button>
+          <button type="button" data-match-detail-view="events">이벤트</button>
+        </div>
+        <div id="matchExplorerParticipants" class="match-detail-panel"></div>
+        <div id="matchExplorerTeams" class="match-detail-panel" hidden></div>
+        <div id="matchExplorerEvents" class="match-detail-panel" hidden>
+          <form id="matchEventFilterForm" class="query-form match-event-filter">
+            <label>종류
+              <select name="domain">
+                <option value="">전체</option><option value="combat" selected>전투</option><option value="loot">아이템 획득·사용</option><option value="loadout">장비·파츠</option><option value="support">회복·부활</option><option value="utility">투척·특수 사용</option><option value="mobility">차량·이동</option><option value="vehicle">차량 피해</option><option value="movement">위치·착지</option><option value="map">지도·페이즈</option><option value="match">매치</option><option value="environment">환경</option><option value="participant">참가자</option><option value="session">접속</option><option value="unclassified">미분류</option>
+              </select>
+            </label>
+            <label>세부 이벤트<select name="event_type"><option value="">전체</option></select></label>
+            <label>플레이어<select name="account_id"><option value="">전체 참가자</option></select></label>
+            <label>팀<select name="team_id"><option value="">전체 팀</option></select></label>
+            <label>내용 검색<input name="search" type="search" autocomplete="off" placeholder="닉네임, 무기, 아이템"></label>
+            <label>표시 수<select name="limit"><option value="50">50개</option><option value="100" selected>100개</option><option value="250">250개</option><option value="500">500개</option></select></label>
+            <label class="checkbox-line"><input name="include_positions" type="checkbox"> 위치 주기 이벤트 포함</label>
+            <button type="submit">적용</button>
+            <button class="secondary" type="button" id="matchEventFilterReset">초기화</button>
+          </form>
+          <div class="status" id="matchEventStatus">이벤트 조회 대기 중</div>
+          <div class="table-scroll dense-table-wrap">
+            <table><thead><tr><th>경과</th><th>종류</th><th>내용</th><th>위치</th><th></th></tr></thead><tbody id="matchEventBody"></tbody></table>
+          </div>
+          <div class="actions"><button class="secondary" type="button" id="matchEventPrev">이전</button><button class="secondary" type="button" id="matchEventNext">다음</button></div>
+        </div>
+      </div>
+    </section>
+    <dialog id="matchEventDialog" class="app-dialog" aria-labelledby="matchEventDialogTitle">
+      <div class="app-dialog-shell">
+        <header class="app-dialog-header"><h3 id="matchEventDialogTitle">이벤트 상세</h3><button class="secondary app-dialog-close" type="button" id="matchEventDialogClose" aria-label="이벤트 상세 창 닫기">×</button></header>
+        <div class="app-dialog-content"><div id="matchEventDialogSummary"></div><pre id="matchEventDialogRaw" class="json-detail"></pre></div>
+      </div>
+    </dialog>
     <section id="ranking-lookup" data-view="players">
       <h2>랭킹 조회</h2>
       <form id="rankingForm" class="query-form ranking-form">
@@ -7475,6 +8221,32 @@ _INDEX_HTML = """<!doctype html>
     const recommendationForm = document.querySelector("#recommendationForm");
     const dropZoneForm = document.querySelector("#dropZoneForm");
     const matchForm = document.querySelector("#matchForm");
+    const matchExplorerForm = document.querySelector("#matchExplorerForm");
+    const matchExplorerReset = document.querySelector("#matchExplorerReset");
+    const matchExplorerStatus = document.querySelector("#matchExplorerStatus");
+    const matchExplorerBody = document.querySelector("#matchExplorerBody");
+    const matchExplorerPrev = document.querySelector("#matchExplorerPrev");
+    const matchExplorerNext = document.querySelector("#matchExplorerNext");
+    const matchExplorerDetail = document.querySelector("#matchExplorerDetail");
+    const matchExplorerDetailTitle = document.querySelector("#matchExplorerDetailTitle");
+    const matchExplorerDetailClose = document.querySelector("#matchExplorerDetailClose");
+    const matchExplorerReplay = document.querySelector("#matchExplorerReplay");
+    const matchExplorerSummary = document.querySelector("#matchExplorerSummary");
+    const matchExplorerDetailViews = document.querySelector("#matchExplorerDetailViews");
+    const matchExplorerParticipants = document.querySelector("#matchExplorerParticipants");
+    const matchExplorerTeams = document.querySelector("#matchExplorerTeams");
+    const matchExplorerEvents = document.querySelector("#matchExplorerEvents");
+    const matchEventFilterForm = document.querySelector("#matchEventFilterForm");
+    const matchEventFilterReset = document.querySelector("#matchEventFilterReset");
+    const matchEventStatus = document.querySelector("#matchEventStatus");
+    const matchEventBody = document.querySelector("#matchEventBody");
+    const matchEventPrev = document.querySelector("#matchEventPrev");
+    const matchEventNext = document.querySelector("#matchEventNext");
+    const matchEventDialog = document.querySelector("#matchEventDialog");
+    const matchEventDialogClose = document.querySelector("#matchEventDialogClose");
+    const matchEventDialogTitle = document.querySelector("#matchEventDialogTitle");
+    const matchEventDialogSummary = document.querySelector("#matchEventDialogSummary");
+    const matchEventDialogRaw = document.querySelector("#matchEventDialogRaw");
     const analysisForms = [intelligenceForm, profileForm, trendForm, timeInsightForm, comparisonForm, weaponForm, recommendationForm, dropZoneForm, matchForm];
     const rankingForm = document.querySelector("#rankingForm");
     const rankingGuildSelect = document.querySelector("#rankingGuildSelect");
@@ -7570,10 +8342,20 @@ _INDEX_HTML = """<!doctype html>
     const discordBotCommandsNone = document.querySelector("#discordBotCommandsNone");
     const discordBotCommandsDefault = document.querySelector("#discordBotCommandsDefault");
     const discordBotCommandsSave = document.querySelector("#discordBotCommandsSave");
+    const discordBotCommandsVerify = document.querySelector("#discordBotCommandsVerify");
     const discordBotCommandsStatus = document.querySelector("#discordBotCommandsStatus");
     const discordGrantForm = document.querySelector("#discordGrantForm");
     const discordPermissionsBody = document.querySelector("#discordPermissionsBody");
     const discordPermissionGroup = document.querySelector("#discordPermissionGroup");
+    const discordGrantMemberGuild = document.querySelector("#discordGrantMemberGuild");
+    const discordGrantMemberQuery = document.querySelector("#discordGrantMemberQuery");
+    const discordGrantMemberOptions = document.querySelector("#discordGrantMemberOptions");
+    const discordGrantMemberStatus = document.querySelector("#discordGrantMemberStatus");
+    const discordAdminForm = document.querySelector("#discordAdminForm");
+    const discordAdminMemberGuild = document.querySelector("#discordAdminMemberGuild");
+    const discordAdminMemberQuery = document.querySelector("#discordAdminMemberQuery");
+    const discordAdminMemberOptions = document.querySelector("#discordAdminMemberOptions");
+    const discordAdminMemberStatus = document.querySelector("#discordAdminMemberStatus");
     const discordCommandGroupForm = document.querySelector("#discordCommandGroupForm");
     const discordCommandSearch = document.querySelector("#discordCommandSearch");
     const discordCommandGroupReset = document.querySelector("#discordCommandGroupReset");
@@ -7585,9 +8367,40 @@ _INDEX_HTML = """<!doctype html>
     const discordCommandAliasReset = document.querySelector("#discordCommandAliasReset");
     const discordCommandAliasesBody = document.querySelector("#discordCommandAliasesBody");
     const discordScopeForm = document.querySelector("#discordScopeForm");
+    const discordScopeMode = document.querySelector("#discordScopeMode");
+    const discordRankingGuildSelection = document.querySelector("#discordRankingGuildSelection");
+    const discordRankingGuildCheckboxes = document.querySelector("#discordRankingGuildCheckboxes");
+    const discordRankingGuildStatus = document.querySelector("#discordRankingGuildStatus");
+    const discordScopeReset = document.querySelector("#discordScopeReset");
     const publicProfileDefaultForm = document.querySelector("#publicProfileDefaultForm");
     const discordScopesBody = document.querySelector("#discordScopesBody");
     const registerForm = document.querySelector("#registerForm");
+    const watchlistRegisterForm = document.querySelector("#watchlistRegisterForm");
+    const watchlistRegisterReset = document.querySelector("#watchlistRegisterReset");
+    const watchlistGuildSelect = document.querySelector("#watchlistGuildSelect");
+    const watchlistChannelSelect = document.querySelector("#watchlistChannelSelect");
+    const watchlistChannelAdd = document.querySelector("#watchlistChannelAdd");
+    const watchlistChannelSelection = document.querySelector("#watchlistChannelSelection");
+    const watchlistChannelStatus = document.querySelector("#watchlistChannelStatus");
+    const watchlistSearch = document.querySelector("#watchlistSearch");
+    const watchlistIncludeInactive = document.querySelector("#watchlistIncludeInactive");
+    const watchlistReload = document.querySelector("#watchlistReload");
+    const watchlistScan = document.querySelector("#watchlistScan");
+    const watchlistStatus = document.querySelector("#watchlistStatus");
+    const watchlistBody = document.querySelector("#watchlistBody");
+    const watchlistEncounterStatus = document.querySelector("#watchlistEncounterStatus");
+    const watchlistEncounterBody = document.querySelector("#watchlistEncounterBody");
+    const watchlistEditDialog = document.querySelector("#watchlistEditDialog");
+    const watchlistEditForm = document.querySelector("#watchlistEditForm");
+    const watchlistEditTitle = document.querySelector("#watchlistEditTitle");
+    const watchlistEditIdentity = document.querySelector("#watchlistEditIdentity");
+    const watchlistEditClose = document.querySelector("#watchlistEditClose");
+    const watchlistEditCancel = document.querySelector("#watchlistEditCancel");
+    const watchlistEditGuildSelect = document.querySelector("#watchlistEditGuildSelect");
+    const watchlistEditChannelSelect = document.querySelector("#watchlistEditChannelSelect");
+    const watchlistEditChannelAdd = document.querySelector("#watchlistEditChannelAdd");
+    const watchlistEditChannelSelection = document.querySelector("#watchlistEditChannelSelection");
+    const watchlistEditChannelStatus = document.querySelector("#watchlistEditChannelStatus");
     const storageSettingsForm = document.querySelector("#storageSettingsForm");
     const storageSettingsStatus = document.querySelector("#storageSettingsStatus");
     const alertSettingsForm = document.querySelector("#alertSettingsForm");
@@ -7716,6 +8529,10 @@ _INDEX_HTML = """<!doctype html>
     let activeRecommendationChartMetric = "score";
     let activeRankingReport = null;
     let activeRankingView = "table";
+    let activeMatchExplorerDetail = null;
+    let activeMatchExplorerView = "participants";
+    let matchExplorerPage = { total: 0, limit: 50, offset: 0, has_previous: false, has_next: false };
+    let matchEventPage = { total: 0, limit: 100, offset: 0, has_previous: false, has_next: false };
     let activeNumberFormat = ["grouped", "korean_units", "plain"].includes("__PUBG_AI_NUMBER_FORMAT__")
       ? "__PUBG_AI_NUMBER_FORMAT__"
       : "grouped";
@@ -7729,8 +8546,11 @@ _INDEX_HTML = """<!doctype html>
       command_aliases: {},
     };
     let activeDiscordCommandCatalog = [];
+    let activeDiscordGroupLabels = {};
     let reservedDiscordCommandGroups = new Set();
     let selectedDiscordGroupCommands = new Set();
+    const discordMemberCatalogByForm = new WeakMap();
+    const discordMemberLoadTimerByForm = new WeakMap();
     let activeDiscordBotSettings = {
       auto_start: false,
       command_prefix: "!",
@@ -7745,8 +8565,13 @@ _INDEX_HTML = """<!doctype html>
     };
     let selectedDiscordBotCommands = new Set();
     let discordBotGuildUsesDefault = true;
+    let editedDiscordRankingGuildIds = new Set();
     let activeAlertChannelIds = new Set();
     const alertChannelCatalog = new Map();
+    let watchedPlayers = [];
+    let watchlistRegisterChannelIds = new Set();
+    let watchlistEditChannelIds = new Set();
+    let watchlistSearchTimer = null;
     let rankingGuildPrefill = "";
     const playerCatalogCache = new Map();
     const catalogByForm = new WeakMap();
@@ -7794,6 +8619,7 @@ _INDEX_HTML = """<!doctype html>
     let alertHistoryRecords = [];
     let activeDiscordScopes = {
       guild_ranking_scopes: {},
+      guild_ranking_selected_guild_ids: {},
       public_profile_default: true,
       updated_at: null,
     };
@@ -7846,9 +8672,11 @@ _INDEX_HTML = """<!doctype html>
         { key: "weapons", label: "무기", ids: ["weapon-lookup"] },
         { key: "recommendations", label: "추천", ids: ["recommendation-lookup"] },
         { key: "landing", label: "낙하", ids: ["landing-analysis"] },
-        { key: "matches", label: "매치", ids: ["match-lookup"] },
+        { key: "matches", label: "플레이어 매치", ids: ["match-lookup"] },
+        { key: "match-detail", label: "매치 상세", ids: ["match-explorer"] },
         { key: "ranking", label: "랭킹", ids: ["ranking-lookup"] },
         { key: "registry", label: "유저 관리", ids: ["player-registration", "registered-players"] },
+        { key: "watchlist", label: "밴 플레이어", ids: ["watchlist-management"] },
       ],
       replay: [
         { key: "player", label: "2D 재생", ids: ["replay-player"] },
@@ -8039,7 +8867,12 @@ _INDEX_HTML = """<!doctype html>
       const activeView = document.body.dataset.activeView || "overview";
       const refreshers = {
         overview: () => Promise.all([loadStatus(), loadAlerts({ renderHistory: false })]),
-        players: () => Promise.all([loadPlayers(), loadDiscordGuilds()]),
+        players: () => Promise.all([
+          loadPlayers(),
+          loadDiscordGuilds(),
+          loadWatchlistPlayers(),
+          loadWatchlistEncounters(),
+        ]),
         replay: () => loadReplayArtifacts(),
         collection: () => Promise.all([
           loadCollectorWorkerStatus(),
@@ -8396,6 +9229,13 @@ _INDEX_HTML = """<!doctype html>
           sort: "severity",
           search: "",
         },
+        "watchlist-alerts": {
+          source: "watchlist",
+          state: "all",
+          severity: "all",
+          sort: "newest",
+          search: "",
+        },
         "all-history": {
           source: "all",
           state: "all",
@@ -8488,6 +9328,160 @@ _INDEX_HTML = """<!doctype html>
       alertDiscordChannelAdd.disabled = true;
       alertDiscordChannelsStatus.textContent = `${payload.guild?.guild_name || discordGuildName(guildId)} · 전송 가능 ${formatInteger(channels.length)}개`;
       renderSelectedAlertChannels();
+    }
+
+    function renderWatchlistChannelSelection(kind) {
+      const editing = kind === "edit";
+      const ids = Array.from(editing ? watchlistEditChannelIds : watchlistRegisterChannelIds);
+      const container = editing ? watchlistEditChannelSelection : watchlistChannelSelection;
+      const status = editing ? watchlistEditChannelStatus : watchlistChannelStatus;
+      const removeAttribute = editing
+        ? "data-watchlist-edit-channel-remove"
+        : "data-watchlist-channel-remove";
+      container.innerHTML = ids.length
+        ? ids.map((channelId) => `
+          <span class="result-chip selected-channel-chip">
+            <span title="${attr(channelId)}">${escapeHtml(alertChannelLabel(channelId))}</span>
+            <button type="button" ${removeAttribute}="${attr(channelId)}" title="알림 채널 제거" aria-label="${attr(alertChannelLabel(channelId))} 제거">×</button>
+          </span>
+        `).join("")
+        : '<span class="result-caption">개별 채널 미지정 · 운영 알림 기본 채널 사용</span>';
+      status.textContent = ids.length
+        ? `개별 알림 채널 ${formatInteger(ids.length)}개`
+        : "운영 알림 기본 채널로 전송";
+    }
+
+    async function loadWatchlistChannelOptions(kind) {
+      const editing = kind === "edit";
+      const guildSelect = editing ? watchlistEditGuildSelect : watchlistGuildSelect;
+      const channelSelect = editing ? watchlistEditChannelSelect : watchlistChannelSelect;
+      const addButton = editing ? watchlistEditChannelAdd : watchlistChannelAdd;
+      const status = editing ? watchlistEditChannelStatus : watchlistChannelStatus;
+      const guildId = String(guildSelect.value || "");
+      channelSelect.disabled = true;
+      addButton.disabled = true;
+      if (!guildId) {
+        channelSelect.innerHTML = '<option value="">서버 선택 필요</option>';
+        renderWatchlistChannelSelection(kind);
+        return;
+      }
+      status.textContent = "전송 가능한 Discord 채널 확인 중";
+      const payload = await requestJson(`/discord/channels?guild_id=${encodeURIComponent(guildId)}&limit=50`, "GET");
+      const channels = payload.channels || [];
+      for (const channel of channels) alertChannelCatalog.set(String(channel.channel_id), channel);
+      channelSelect.innerHTML = channels.length
+        ? '<option value="">채널 선택</option>' + channels.map((channel) => (
+          `<option value="${attr(channel.channel_id)}">#${escapeHtml(channel.channel_name)}${channel.can_send_messages === false ? " · 전송 불가" : ""}</option>`
+        )).join("")
+        : '<option value="">전송 가능한 채널 없음</option>';
+      channelSelect.disabled = !channels.length;
+      renderWatchlistChannelSelection(kind);
+    }
+
+    function watchlistAlertLabel(player) {
+      const labels = [];
+      if (player.notify_name_change) labels.push("닉네임 변경");
+      if (player.notify_kill) labels.push("등록 유저 처치");
+      if (player.notify_repeated_engagement) labels.push(`반복 교전 ${formatInteger(player.engagement_threshold)}회`);
+      return labels.join(" · ") || "알림 없음";
+    }
+
+    function renderWatchlistPlayers() {
+      watchlistBody.innerHTML = watchedPlayers.map((player) => {
+        const aliases = (player.aliases || []).filter((name) => name !== player.current_name);
+        const channels = (player.notification_channel_ids || []).map(alertChannelLabel);
+        return `
+          <tr>
+            <td><strong>${escapeHtml(player.current_name)}</strong> · ${escapeHtml(player.shard)}<br><span class="result-caption" title="${attr(player.account_id)}">${escapeHtml(compactIdentifier(player.account_id, 14, 7))}</span>${aliases.length ? `<br><span class="result-caption">이전 이름: ${escapeHtml(aliases.slice(0, 4).join(", "))}</span>` : ""}</td>
+            <td>${player.active ? '<span class="result-badge success">감시 중</span>' : '<span class="result-badge muted">감시 중지</span>'}<br><span class="result-caption">확인 ${escapeHtml(formatKstShort(player.last_identity_checked_at_kst))}</span></td>
+            <td>${escapeHtml(watchlistAlertLabel(player))}</td>
+            <td>${channels.length ? escapeHtml(channels.join(", ")) : '<span class="result-caption">운영 기본 채널</span>'}</td>
+            <td>${formatInteger(player.encounter_count)}건<br><span class="result-caption">${escapeHtml(formatKstShort(player.latest_encounter_at_kst))}</span></td>
+            <td><button class="secondary" type="button" data-watchlist-edit="${attr(player.id)}">설정</button></td>
+          </tr>
+        `;
+      }).join("") || '<tr><td colspan="6">등록된 밴 플레이어가 없습니다.</td></tr>';
+    }
+
+    async function loadWatchlistPlayers() {
+      const params = new URLSearchParams({
+        include_inactive: String(Boolean(watchlistIncludeInactive.checked)),
+        limit: "500",
+      });
+      const search = String(watchlistSearch.value || "").trim();
+      if (search) params.set("search", search);
+      watchlistStatus.textContent = "밴 플레이어 목록을 조회하는 중입니다.";
+      const payload = await requestJson(`/watchlist/players?${params.toString()}`, "GET");
+      watchedPlayers = payload.players || [];
+      renderWatchlistPlayers();
+      watchlistStatus.textContent = `${formatInteger(watchedPlayers.length)}명 · Account ID 기준 동일 계정 추적`;
+      return watchedPlayers;
+    }
+
+    async function loadWatchlistEncounters(watchedPlayerId = null) {
+      const params = new URLSearchParams({ limit: "200" });
+      if (watchedPlayerId) params.set("watched_player_id", String(watchedPlayerId));
+      watchlistEncounterStatus.textContent = "등록 유저와의 조우 이력을 조회하는 중입니다.";
+      const payload = await requestJson(`/watchlist/encounters?${params.toString()}`, "GET");
+      const encounters = payload.encounters || [];
+      watchlistEncounterBody.innerHTML = encounters.map((encounter) => `
+        <tr>
+          <td>${escapeHtml(formatKstShort(encounter.created_at_kst))}<br><span class="result-caption" title="${attr(encounter.match_id)}">${escapeHtml(compactIdentifier(encounter.match_id, 10, 6))}</span><br><span class="result-caption">${escapeHtml(displayCode(encounter.map_name, "map"))} · ${escapeHtml(displayCode(encounter.game_mode, "game_mode"))}</span></td>
+          <td><strong>${escapeHtml(encounter.watched_name)}</strong></td>
+          <td><strong>${escapeHtml(encounter.registered_name)}</strong><br><span class="result-caption" title="${attr(encounter.registered_account_id)}">${escapeHtml(compactIdentifier(encounter.registered_account_id, 12, 6))}</span></td>
+          <td><strong>${formatInteger(encounter.engagement_count)}회</strong><br><span class="result-caption">피해 가함 ${formatInteger(encounter.damage_events_by_watched)} / 받음 ${formatInteger(encounter.damage_events_by_registered)}</span></td>
+          <td>가함 ${formatInteger(encounter.dbnos_by_watched)} / 당함 ${formatInteger(encounter.dbnos_by_registered)}</td>
+          <td>가함 ${formatInteger(encounter.kills_by_watched)} / 당함 ${formatInteger(encounter.kills_by_registered)}</td>
+          <td><div class="actions"><button class="secondary" type="button" data-watchlist-match="${attr(encounter.match_id)}">매치 상세</button><button class="secondary" type="button" data-watchlist-replay="${attr(encounter.match_id)}">2D 재생</button></div></td>
+        </tr>
+      `).join("") || '<tr><td colspan="7">분석된 조우 이력이 없습니다.</td></tr>';
+      watchlistEncounterStatus.textContent = `최근 조우 ${formatInteger(encounters.length)}건 표시`;
+      return encounters;
+    }
+
+    function openWatchlistEditor(playerId) {
+      const player = watchedPlayers.find((item) => Number(item.id) === Number(playerId));
+      if (!player) throw new Error("밴 플레이어 정보를 찾을 수 없습니다.");
+      watchlistEditTitle.textContent = `${player.current_name} 알림 설정`;
+      watchlistEditIdentity.innerHTML = `<strong>${escapeHtml(player.current_name)}</strong> · ${escapeHtml(player.shard)}<br><span class="result-caption" title="${attr(player.account_id)}">${escapeHtml(player.account_id)}</span>`;
+      watchlistEditForm.elements.shard.value = player.shard;
+      watchlistEditForm.elements.account_id.value = player.account_id;
+      watchlistEditForm.elements.active.value = String(Boolean(player.active));
+      watchlistEditForm.elements.engagement_threshold.value = String(player.engagement_threshold || 3);
+      watchlistEditForm.elements.notify_name_change.checked = Boolean(player.notify_name_change);
+      watchlistEditForm.elements.notify_kill.checked = Boolean(player.notify_kill);
+      watchlistEditForm.elements.notify_repeated_engagement.checked = Boolean(player.notify_repeated_engagement);
+      watchlistEditGuildSelect.value = "";
+      watchlistEditChannelIds = new Set((player.notification_channel_ids || []).map(String));
+      renderWatchlistChannelSelection("edit");
+      watchlistEditDialog.showModal();
+    }
+
+    async function saveWatchlistEditor() {
+      const form = new FormData(watchlistEditForm);
+      const shard = String(form.get("shard") || "");
+      const accountId = String(form.get("account_id") || "");
+      const payload = await requestJson(
+        `/watchlist/players/${encodeURIComponent(shard)}/${encodeURIComponent(accountId)}`,
+        "PUT",
+        {
+          active: form.get("active") === "true",
+          notify_name_change: Boolean(form.get("notify_name_change")),
+          notify_kill: Boolean(form.get("notify_kill")),
+          notify_repeated_engagement: Boolean(form.get("notify_repeated_engagement")),
+          engagement_threshold: Number(form.get("engagement_threshold") || 3),
+          notification_channel_ids: Array.from(watchlistEditChannelIds),
+        },
+      );
+      watchlistEditDialog.close();
+      await Promise.all([loadWatchlistPlayers(), loadWatchlistEncounters()]);
+      banner.textContent = `${payload.player.current_name} 밴 플레이어 설정 저장 완료`;
+    }
+
+    async function openWatchlistMatch(matchId, replay = false) {
+      activateWorkspace("players", { focusId: "match-explorer", updateUrl: true, smooth: true });
+      await loadMatchExplorerDetail(matchId);
+      if (replay) await generateAndOpenMatchReplay();
     }
 
     function alertDisplayTitle(alert) {
@@ -8668,7 +9662,7 @@ _INDEX_HTML = """<!doctype html>
     }
 
     function alertSourceLabel(source) {
-      return { storage: "저장소", worker: "자동 작업" }[String(source || "")] || String(source || "-");
+      return { storage: "저장소", worker: "자동 작업", watchlist: "밴 플레이어" }[String(source || "")] || String(source || "-");
     }
 
     function alertStateFilterLabel(state) {
@@ -8788,7 +9782,7 @@ _INDEX_HTML = """<!doctype html>
       ];
       if (!filterKeys.some((key) => params.has(key))) return false;
 
-      const source = alertHistoryUrlChoice(params.get("alert_history_source") || params.get("alert_source"), ["all", "storage", "worker"], "all");
+      const source = alertHistoryUrlChoice(params.get("alert_history_source") || params.get("alert_source"), ["all", "storage", "worker", "watchlist"], "all");
       const state = alertHistoryUrlChoice(params.get("alert_history_state") || params.get("alert_state"), ["all", "active", "current", "acknowledged", "snoozed", "resolved"], "all");
       const severity = alertHistoryUrlChoice(params.get("alert_history_severity") || params.get("alert_severity"), ["all", "error", "warning", "info", "ok"], "all");
       const sort = alertHistoryUrlChoice(params.get("alert_history_sort") || params.get("alert_sort"), ["newest", "oldest", "severity"], "newest");
@@ -9125,6 +10119,7 @@ _INDEX_HTML = """<!doctype html>
         `).join("") || '<span class="result-caption">조건에 맞는 명령이 없습니다.</span>'
         : '<span class="result-caption">Discord 서버를 선택하세요.</span>';
       discordBotCommandsSave.disabled = !guildId;
+      discordBotCommandsVerify.disabled = !guildId || !activeDiscordBotState.ready;
       discordBotCommandsStatus.textContent = guildId
         ? [
             discordGuildName(guildId),
@@ -9135,6 +10130,152 @@ _INDEX_HTML = """<!doctype html>
         : "서버를 선택하세요.";
     }
 
+    async function verifyDiscordBotGuildCommands() {
+      const guildId = String(discordBotGuildSelect.value || "");
+      if (!guildId) return null;
+      if (!activeDiscordBotState.ready) {
+        discordBotCommandsStatus.textContent = "봇을 실행한 뒤 Discord 공개 상태를 확인할 수 있습니다.";
+        return null;
+      }
+      discordBotCommandsVerify.disabled = true;
+      discordBotCommandsStatus.textContent = "Discord의 실제 공개 명령 목록을 확인하는 중입니다.";
+      try {
+        const payload = await requestJson(`/discord/bot/guild-commands/${encodeURIComponent(guildId)}`, "GET");
+        const globalCount = payload.global_commands?.length || 0;
+        const visibleCount = payload.actual_commands?.length || 0;
+        const expectedCount = payload.expected_commands?.length || 0;
+        if (payload.in_sync === true) {
+          discordBotCommandsStatus.textContent = `${discordGuildName(guildId)} · 설정 ${formatInteger(expectedCount)}개 · Discord 공개 ${formatInteger(visibleCount)}개 · 일치`;
+        } else if (globalCount) {
+          discordBotCommandsStatus.textContent = `${discordGuildName(guildId)} · 전역 잔존 명령 ${formatInteger(globalCount)}개 때문에 서버별 공개 설정과 다릅니다. 저장 후 동기화를 실행하세요.`;
+        } else if (payload.actual_commands) {
+          discordBotCommandsStatus.textContent = `${discordGuildName(guildId)} · 설정 ${formatInteger(expectedCount)}개 / Discord 공개 ${formatInteger(visibleCount)}개 · 불일치`;
+        } else {
+          discordBotCommandsStatus.textContent = `Discord 공개 상태 확인 실패: ${payload.verification_error || "알 수 없는 오류"}`;
+        }
+        return payload;
+      } finally {
+        discordBotCommandsVerify.disabled = !activeDiscordBotState.ready || !discordBotGuildSelect.value;
+      }
+    }
+
+    function discordGroupLabel(group) {
+      return activeDiscordGroupLabels[group] || group;
+    }
+
+    function discordMemberOptionValue(member) {
+      const username = member.username && member.username !== member.display_name
+        ? ` · @${member.username}`
+        : "";
+      return `${member.display_name || member.username || "이름 없음"}${username} · ID …${String(member.user_id).slice(-6)}`;
+    }
+
+    function storedDiscordMemberLabel(userId, preferredGuildId = "") {
+      const labels = activeDiscordPermissions.guild_member_labels || {};
+      if (preferredGuildId && labels[preferredGuildId]?.[userId]) {
+        return labels[preferredGuildId][userId];
+      }
+      for (const guildLabels of Object.values(labels)) {
+        if (guildLabels?.[userId]) return guildLabels[userId];
+      }
+      return "";
+    }
+
+    function selectDiscordMemberFromInput(form, input) {
+      const value = String(input.value || "").trim();
+      const catalog = discordMemberCatalogByForm.get(form) || [];
+      const selected = catalog.find((member) => member.option_value === value);
+      form.elements.user_id.value = selected?.user_id || "";
+      return selected || null;
+    }
+
+    function resolveDiscordMemberSelection(form, input) {
+      const selected = selectDiscordMemberFromInput(form, input);
+      if (selected) return selected;
+      const directId = String(input.value || "").trim();
+      if (/^\\d{1,32}$/.test(directId)) {
+        form.elements.user_id.value = directId;
+        return {
+          user_id: directId,
+          display_name: storedDiscordMemberLabel(directId) || "ID 직접 입력 사용자",
+        };
+      }
+      throw new Error("Discord 멤버 검색 목록에서 사용자를 선택하세요. 필요한 경우 사용자 ID를 직접 입력할 수도 있습니다.");
+    }
+
+    async function loadDiscordMembersForForm(form, guildSelect, input, datalist, status, search = "") {
+      const guildId = String(guildSelect.value || "").trim();
+      if (!guildId) {
+        discordMemberCatalogByForm.set(form, []);
+        datalist.innerHTML = "";
+        form.elements.user_id.value = "";
+        status.textContent = "사용자 소속 서버를 선택하세요.";
+        return [];
+      }
+      const params = new URLSearchParams({ guild_id: guildId, limit: "100" });
+      const normalizedSearch = String(search || "").trim();
+      if (normalizedSearch) params.set("search", normalizedSearch);
+      status.textContent = `${discordGuildName(guildId)} 멤버를 조회하는 중입니다.`;
+      try {
+        const payload = await requestJson(`/discord/guild-members?${params.toString()}`, "GET");
+        const members = (payload.members || []).map((member) => ({
+          ...member,
+          option_value: discordMemberOptionValue(member),
+        }));
+        discordMemberCatalogByForm.set(form, members);
+        datalist.innerHTML = members.map((member) => (
+          `<option value="${attr(member.option_value)}" label="${attr(member.nickname ? `서버 닉네임 · ${member.username}` : member.username)}"></option>`
+        )).join("");
+        selectDiscordMemberFromInput(form, input);
+        status.textContent = normalizedSearch
+          ? `검색 결과 ${formatInteger(members.length)}명 · 목록에서 사용자를 선택하세요.`
+          : `${discordGuildName(guildId)} 멤버 ${formatInteger(members.length)}명 · 닉네임 일부를 입력해 검색할 수 있습니다.`;
+        return members;
+      } catch (error) {
+        discordMemberCatalogByForm.set(form, []);
+        datalist.innerHTML = "";
+        form.elements.user_id.value = "";
+        status.textContent = `멤버 조회 실패: ${error.message}`;
+        return [];
+      }
+    }
+
+    function setupDiscordMemberPicker(form, guildSelect, input, datalist, status) {
+      guildSelect.addEventListener("change", () => {
+        input.value = "";
+        form.elements.user_id.value = "";
+        void loadDiscordMembersForForm(form, guildSelect, input, datalist, status);
+      });
+      input.addEventListener("input", () => {
+        if (selectDiscordMemberFromInput(form, input)) return;
+        form.elements.user_id.value = "";
+        const previous = discordMemberLoadTimerByForm.get(form);
+        if (previous) clearTimeout(previous);
+        const query = String(input.value || "").trim();
+        if (query.length < 2) return;
+        const timer = setTimeout(() => {
+          void loadDiscordMembersForForm(form, guildSelect, input, datalist, status, query);
+        }, 300);
+        discordMemberLoadTimerByForm.set(form, timer);
+      });
+      input.addEventListener("change", () => selectDiscordMemberFromInput(form, input));
+    }
+
+    setupDiscordMemberPicker(
+      discordGrantForm,
+      discordGrantMemberGuild,
+      discordGrantMemberQuery,
+      discordGrantMemberOptions,
+      discordGrantMemberStatus,
+    );
+    setupDiscordMemberPicker(
+      discordAdminForm,
+      discordAdminMemberGuild,
+      discordAdminMemberQuery,
+      discordAdminMemberOptions,
+      discordAdminMemberStatus,
+    );
+
     async function loadDiscordPermissions() {
       const response = await fetch("/discord/permissions");
       const payload = await response.json();
@@ -9142,10 +10283,11 @@ _INDEX_HTML = """<!doctype html>
       const settings = payload.discord_permissions || {};
       activeDiscordPermissions = settings;
       activeDiscordCommandCatalog = payload.command_catalog || [];
+      activeDiscordGroupLabels = payload.group_labels || {};
       reservedDiscordCommandGroups = new Set(payload.reserved_groups || []);
       const groupNames = Object.keys(settings.command_groups || {}).sort();
       discordPermissionGroup.innerHTML = groupNames.map((group) => (
-        `<option value="${attr(group)}">${escapeHtml(group)} · ${formatInteger(canonicalCommandsForGroup(group).length)}개 명령</option>`
+        `<option value="${attr(group)}">${escapeHtml(discordGroupLabel(group))} · ${formatInteger(canonicalCommandsForGroup(group).length)}개 명령</option>`
       )).join("");
       if (discordSettingsPrefill.permission_group) {
         setFormElementValue(discordGrantForm, "group", discordSettingsPrefill.permission_group);
@@ -9160,6 +10302,7 @@ _INDEX_HTML = """<!doctype html>
           group: "all",
           action: "remove-global-admin",
           guildId: "",
+          memberLabel: storedDiscordMemberLabel(userId),
         });
       }
       for (const [userId, groups] of Object.entries(settings.user_grants || {})) {
@@ -9170,6 +10313,7 @@ _INDEX_HTML = """<!doctype html>
             group,
             action: "revoke-permission",
             guildId: "",
+            memberLabel: storedDiscordMemberLabel(userId),
           });
         }
       }
@@ -9182,6 +10326,7 @@ _INDEX_HTML = """<!doctype html>
               group,
               action: "revoke-permission",
               guildId,
+              memberLabel: storedDiscordMemberLabel(userId, guildId),
             });
           }
         }
@@ -9197,8 +10342,8 @@ _INDEX_HTML = """<!doctype html>
         return `
         <tr>
           <td>${escapeHtml(scopeLabel)}${row.guildId ? `<br><span class="result-caption">${escapeHtml(row.guildId)}</span>` : ""}</td>
-          <td>${escapeHtml(row.userId)}</td>
-          <td><strong>${escapeHtml(row.group)}</strong><br><span class="result-caption">${formatInteger(commandCount)}개 명령</span></td>
+          <td><strong>${escapeHtml(row.memberLabel || "닉네임 미확인")}</strong><br><span class="result-caption">ID ${escapeHtml(row.userId)}</span></td>
+          <td><strong>${escapeHtml(row.group === "all" ? "모든 권한" : discordGroupLabel(row.group))}</strong>${row.group === "all" ? "" : `<br><span class="result-caption">키 ${escapeHtml(row.group)} · ${formatInteger(commandCount)}개 명령</span>`}</td>
           <td>
             <div class="actions">
               <button
@@ -9282,7 +10427,7 @@ _INDEX_HTML = """<!doctype html>
         )).join("");
         return `
           <tr>
-            <td><strong>${escapeHtml(group)}</strong><br><span class="result-caption">${reserved ? "기본 · 읽기 전용" : "사용자 정의"}</span></td>
+            <td><strong>${escapeHtml(discordGroupLabel(group))}</strong><br><span class="result-caption">키 ${escapeHtml(group)} · ${reserved ? "기본 · 읽기 전용" : "사용자 정의"}</span></td>
             <td><div class="result-chip-list">${commandChips || '<span class="result-caption">명령 없음</span>'}</div></td>
             <td>${formatInteger(discordGroupGrantCount(group))}명</td>
             <td><div class="actions">
@@ -9338,13 +10483,18 @@ _INDEX_HTML = """<!doctype html>
       const payload = await requestJson("/discord/scopes", "GET");
       activeDiscordScopes = payload.discord_scopes || {
         guild_ranking_scopes: {},
+        guild_ranking_selected_guild_ids: {},
         public_profile_default: true,
         updated_at: null,
       };
       if (!activeDiscordScopes.guild_ranking_scopes) {
         activeDiscordScopes.guild_ranking_scopes = {};
       }
+      if (!activeDiscordScopes.guild_ranking_selected_guild_ids) {
+        activeDiscordScopes.guild_ranking_selected_guild_ids = {};
+      }
       renderDiscordScopes();
+      loadDiscordScopeSelection();
       applyPublicProfileDefault();
       if (discordSettingsPrefill.public_profile_default) {
         setFormElementValue(
@@ -9409,7 +10559,26 @@ _INDEX_HTML = """<!doctype html>
       discordSettingsPrefill.permission_guild_id = "";
       discordSettingsPrefill.scope_guild_id = "";
       renderDiscordScopes();
+      loadDiscordScopeSelection();
       loadDiscordBotGuildSelection();
+      if (discordGrantMemberGuild.value) {
+        void loadDiscordMembersForForm(
+          discordGrantForm,
+          discordGrantMemberGuild,
+          discordGrantMemberQuery,
+          discordGrantMemberOptions,
+          discordGrantMemberStatus,
+        );
+      }
+      if (discordAdminMemberGuild.value) {
+        void loadDiscordMembersForForm(
+          discordAdminForm,
+          discordAdminMemberGuild,
+          discordAdminMemberQuery,
+          discordAdminMemberOptions,
+          discordAdminMemberStatus,
+        );
+      }
       if (registeredPlayers.length) renderPlayersTable();
       return syncResult;
     }
@@ -9417,10 +10586,15 @@ _INDEX_HTML = """<!doctype html>
     function renderDiscordScopes() {
       const entries = Object.entries(activeDiscordScopes.guild_ranking_scopes || {})
         .sort(([left], [right]) => left.localeCompare(right));
-      discordScopesBody.innerHTML = entries.map(([guildId, scope]) => `
+      discordScopesBody.innerHTML = entries.map(([guildId, scope]) => {
+        const selectedGuildIds = activeDiscordScopes.guild_ranking_selected_guild_ids?.[guildId] || [guildId];
+        const scopeLabel = scope === "global"
+          ? "전체 서버"
+          : selectedGuildIds.map((selectedGuildId) => discordGuildName(selectedGuildId)).join(", ");
+        return `
         <tr>
           <td>${escapeHtml(discordGuildName(guildId))}<br><span class="result-caption">${escapeHtml(guildId)}</span></td>
-          <td>${scope === "global" ? "전체 서버" : "선택한 서버"}</td>
+          <td>${escapeHtml(scopeLabel)}${scope === "global" ? "" : `<br><span class="result-caption">${formatInteger(selectedGuildIds.length)}개 서버 포함</span>`}</td>
           <td>
             <div class="actions">
               <button
@@ -9432,7 +10606,37 @@ _INDEX_HTML = """<!doctype html>
             </div>
           </td>
         </tr>
-      `).join("") || `<tr><td colspan="3">별도 랭킹 범위 설정이 없습니다.</td></tr>`;
+      `;
+      }).join("") || `<tr><td colspan="3">별도 랭킹 범위 설정이 없습니다.</td></tr>`;
+    }
+
+    function loadDiscordScopeSelection() {
+      const sourceGuildId = String(discordScopeForm.elements.guild_id.value || "");
+      const scope = activeDiscordScopes.guild_ranking_scopes?.[sourceGuildId] || "guild";
+      discordScopeMode.value = scope;
+      const configured = activeDiscordScopes.guild_ranking_selected_guild_ids?.[sourceGuildId];
+      editedDiscordRankingGuildIds = new Set(
+        configured?.length ? configured.map(String) : (sourceGuildId ? [sourceGuildId] : []),
+      );
+      renderDiscordRankingGuildSelection();
+    }
+
+    function renderDiscordRankingGuildSelection() {
+      const sourceGuildId = String(discordScopeForm.elements.guild_id.value || "");
+      const selectedMode = discordScopeMode.value === "global" ? "global" : "guild";
+      discordRankingGuildSelection.hidden = selectedMode === "global";
+      discordRankingGuildCheckboxes.innerHTML = activeDiscordGuilds.map((guild) => `
+        <label class="command-choice">
+          <input type="checkbox" value="${attr(guild.guild_id)}" ${editedDiscordRankingGuildIds.has(String(guild.guild_id)) ? "checked" : ""}>
+          <span>
+            <strong>${escapeHtml(guild.name || `이름 미확인 서버 · ${String(guild.guild_id).slice(-6)}`)}</strong>
+            <small>등록 ${formatInteger(guild.registered_player_count || 0)}명 · ${escapeHtml(guild.guild_id)}</small>
+          </span>
+        </label>
+      `).join("") || '<span class="result-caption">앱 봇이 참여 중인 Discord 서버가 없습니다.</span>';
+      discordRankingGuildStatus.textContent = sourceGuildId
+        ? `랭킹에 포함할 서버 ${formatInteger(editedDiscordRankingGuildIds.size)}개 선택`
+        : "먼저 설정 대상 서버를 선택하세요.";
     }
 
     function applyPublicProfileDefault() {
@@ -9444,10 +10648,14 @@ _INDEX_HTML = """<!doctype html>
     async function saveDiscordScopes(nextScopes) {
       const payload = await postJson("/discord/scopes", {
         guild_ranking_scopes: nextScopes.guild_ranking_scopes || {},
+        guild_ranking_selected_guild_ids: nextScopes.guild_ranking_selected_guild_ids
+          || activeDiscordScopes.guild_ranking_selected_guild_ids
+          || {},
         public_profile_default: nextScopes.public_profile_default !== false,
       });
       activeDiscordScopes = payload.discord_scopes;
       renderDiscordScopes();
+      loadDiscordScopeSelection();
       applyPublicProfileDefault();
     }
 
@@ -11494,6 +12702,7 @@ _INDEX_HTML = """<!doctype html>
 
       if (shouldPrefillSection(hash, "discord-permissions")) {
         setFormElementValue(discordGrantForm, "user_id", discordPermissionUserId);
+        setFormElementValue(discordGrantForm, "member_query", discordPermissionUserId);
         discordSettingsPrefill.permission_group = discordPermissionGroupValue;
         discordSettingsPrefill.permission_guild_id = discordPermissionGuildId;
       }
@@ -13156,10 +14365,21 @@ _INDEX_HTML = """<!doctype html>
       const loadouts = (report.loadouts || []).slice(0, 5).map((item) => {
         const primaryCombo = item.primary_attachment_combination;
         const secondaryCombo = item.secondary_attachment_combination;
-        const primaryParts = primaryCombo?.attachment_names || (item.primary_attachments || []).map((part) => part.attachment_name);
-        const secondaryParts = secondaryCombo?.attachment_names || (item.secondary_attachments || []).map((part) => part.attachment_name);
+        const primaryPlan = item.primary_attachment_plan || {};
+        const secondaryPlan = item.secondary_attachment_plan || {};
+        const primaryParts = (item.primary_attachments || []).map((part) => part.attachment_name);
+        const secondaryParts = (item.secondary_attachments || []).map((part) => part.attachment_name);
         const burden = item.inventory_burden || {};
         const score = item.score_components || {};
+        const planCaption = (plan, combo) => {
+          const coverage = plan.known_slot_count
+            ? `확인 슬롯 ${formatInteger(plan.selected_slot_count)}/${formatInteger(plan.known_slot_count)}`
+            : "호환 파츠 표본 부족";
+          const evidence = combo
+            ? `${formatInteger(combo.match_count)}경기 · ${formatInteger(combo.event_count)}교전 · 승률 ${percent(combo.win_rate)} · 평균 딜 ${formatNumber(combo.avg_damage_dealt, 1)}`
+            : `${formatInteger(plan.evidence_match_count || 0)}경기 근거`;
+          return `${plan.basis || "무기별 파츠 성과 조합"} · ${coverage} · 신뢰도 ${plan.confidence || "낮음"} · ${evidence}`;
+        };
         const ammoProfiles = (burden.weapon_profiles || []).map((profile) => (
           `${profile.weapon_name} · ${profile.ammo_type} ${formatInteger(profile.recommended_reserve_rounds)}발 · ` +
           `인벤토리 ${formatNumber(profile.reserve_inventory_weight, 1)}단위 · 경기당 발사 ${formatNumber(profile.observed_shots_per_match, 1)}발`
@@ -13174,8 +14394,8 @@ _INDEX_HTML = """<!doctype html>
             <div><span class="loadout-role">중·장거리</span><strong>${escapeHtml(item.secondary.weapon_name)}</strong></div>
           </div>
           <div class="loadout-parts">
-            <div><span class="loadout-role">${escapeHtml(item.primary.weapon_name)} ${primaryCombo ? "실전 관측 파츠 조합" : "슬롯별 추천 파츠"}</span>${resultChips(primaryParts, "추천 표본 부족")}${primaryCombo ? `<span class="result-caption">${formatInteger(primaryCombo.match_count)}경기 · ${formatInteger(primaryCombo.event_count)}교전 · 승률 ${percent(primaryCombo.win_rate)} · 평균 딜 ${formatNumber(primaryCombo.avg_damage_dealt, 1)}</span>` : ""}</div>
-            <div><span class="loadout-role">${escapeHtml(item.secondary.weapon_name)} ${secondaryCombo ? "실전 관측 파츠 조합" : "슬롯별 추천 파츠"}</span>${resultChips(secondaryParts, "추천 표본 부족")}${secondaryCombo ? `<span class="result-caption">${formatInteger(secondaryCombo.match_count)}경기 · ${formatInteger(secondaryCombo.event_count)}교전 · 승률 ${percent(secondaryCombo.win_rate)} · 평균 딜 ${formatNumber(secondaryCombo.avg_damage_dealt, 1)}</span>` : ""}</div>
+            <div><span class="loadout-role">${escapeHtml(item.primary.weapon_name)} 추천 파츠 계획</span>${resultChips(primaryParts, "호환 파츠 실전 표본 부족")}<span class="result-caption">${escapeHtml(planCaption(primaryPlan, primaryCombo))}</span></div>
+            <div><span class="loadout-role">${escapeHtml(item.secondary.weapon_name)} 추천 파츠 계획</span>${resultChips(secondaryParts, "호환 파츠 실전 표본 부족")}<span class="result-caption">${escapeHtml(planCaption(secondaryPlan, secondaryCombo))}</span></div>
             <div><span class="loadout-role">무기별 예비탄 기준</span>${resultChips(ammoProfiles, "탄종 확인 불가")}</div>
             <div><span class="loadout-role">실제 휴대 계산</span>${resultChips(carriedAmmo, "탄종 확인 불가")}</div>
             <div><span class="loadout-role">인벤토리 고려사항</span>${resultChips(burden.tradeoffs || [], "추가 고려사항 없음")}</div>
@@ -13643,6 +14863,220 @@ _INDEX_HTML = """<!doctype html>
           ["파츠 부착 / 해제", `${formatInteger(itemSummary.attached_events)} / ${formatInteger(itemSummary.detached_events)}회`],
         ])}${itemDetail}`)}
       </div>`;
+    }
+
+    async function loadMatchExplorer({ offset = 0 } = {}) {
+      const form = new FormData(matchExplorerForm);
+      const params = new URLSearchParams();
+      for (const key of ["shard", "search", "map_name", "game_mode", "match_type", "created_from_kst", "created_to_kst", "limit"]) {
+        const value = String(form.get(key) || "").trim();
+        if (value) params.set(key, value);
+      }
+      params.set("telemetry_only", String(Boolean(matchExplorerForm.elements.telemetry_only.checked)));
+      params.set("offset", String(Math.max(0, Number(offset || 0))));
+      matchExplorerStatus.textContent = "저장된 매치를 조회하는 중입니다.";
+      const payload = await requestJson(`/matches/explorer?${params.toString()}`, "GET");
+      matchExplorerPage = {
+        total: Number(payload.total || 0),
+        limit: Number(payload.limit || 50),
+        offset: Number(payload.offset || 0),
+        has_previous: Boolean(payload.has_previous),
+        has_next: Boolean(payload.has_next),
+      };
+      matchExplorerBody.innerHTML = (payload.matches || []).map((match) => `
+        <tr>
+          <td>${escapeHtml(formatKstShort(match.created_at_kst))}<br><span class="result-caption">${escapeHtml(compactIdentifier(match.match_id, 10, 6))}</span></td>
+          <td><strong>${escapeHtml(match.map_label || match.map_name || "-")}</strong><br><span class="result-caption">${escapeHtml([match.game_mode_label || match.game_mode, match.match_type_label || match.match_type].filter(Boolean).join(" · "))}</span></td>
+          <td>${formatInteger(match.total_players ?? match.participant_count)}명<br><span class="result-caption">사람 ${formatInteger(match.human_players)} · 봇 ${formatInteger(match.bot_players)}</span></td>
+          <td>${formatInteger(match.registered_participant_count)}명</td>
+          <td>${match.has_telemetry ? `<span class="result-badge success">저장 완료</span><br><span class="result-caption">${escapeHtml(formatBytes(Number(match.telemetry_size_bytes || 0)))}</span>` : '<span class="result-badge warning">대기</span>'}</td>
+          <td><button type="button" class="secondary" data-match-explorer-open="${attr(match.match_id)}">상세</button></td>
+        </tr>
+      `).join("") || '<tr><td colspan="6">조건에 맞는 저장 매치가 없습니다.</td></tr>';
+      const end = Math.min(matchExplorerPage.total, matchExplorerPage.offset + (payload.matches || []).length);
+      matchExplorerStatus.textContent = `${formatInteger(matchExplorerPage.total)}개 중 ${formatInteger(matchExplorerPage.offset + ((payload.matches || []).length ? 1 : 0))}-${formatInteger(end)} 표시`;
+      matchExplorerPrev.disabled = !matchExplorerPage.has_previous;
+      matchExplorerNext.disabled = !matchExplorerPage.has_next;
+    }
+
+    async function loadMatchExplorerDetail(matchId) {
+      matchExplorerDetail.hidden = false;
+      matchExplorerDetailTitle.textContent = "매치 상세를 불러오는 중입니다.";
+      matchExplorerSummary.innerHTML = '<span class="status">참가자와 원본 이벤트를 확인하는 중입니다.</span>';
+      const payload = await requestJson(`/matches/${encodeURIComponent(matchId)}/detail`, "GET");
+      activeMatchExplorerDetail = payload.detail;
+      renderMatchExplorerDetail();
+      setMatchExplorerDetailView("participants");
+      matchExplorerDetail.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    function renderMatchExplorerDetail() {
+      const detail = activeMatchExplorerDetail;
+      if (!detail) return;
+      const match = detail.match || {};
+      const summary = detail.summary || {};
+      const telemetry = detail.telemetry || {};
+      matchExplorerDetailTitle.textContent = [
+        formatKstShort(match.created_at_kst),
+        match.map_label || match.map_name || "맵 미상",
+        match.game_mode_label || match.game_mode || "모드 미상",
+      ].join(" · ");
+      matchExplorerSummary.innerHTML = `<div class="result-shell">
+        ${resultMetricGrid([
+          ["전체 / 사람 / 봇", `${formatInteger(summary.participants)} / ${formatInteger(summary.humans)} / ${formatInteger(summary.bots)}`],
+          ["팀 / 등록 유저", `${formatInteger(summary.teams)}팀 / ${formatInteger(summary.registered_players)}명`],
+          ["전체 킬 / 어시", `${formatInteger(summary.kills)} / ${formatInteger(summary.assists)}`],
+          ["전체 피해", formatNumber(summary.damage_dealt, 1)],
+          ["경기 시간", minutes(match.duration_seconds)],
+          ["원본 이벤트", telemetry.available ? `${formatInteger(telemetry.event_count)}건 · ${formatBytes(Number(telemetry.size_bytes || 0))}` : "미저장"],
+        ])}
+        <p class="result-caption">${escapeHtml(match.match_id || "-")} · ${escapeHtml([match.team_mode_label, match.perspective_label, match.season_state_label].filter(Boolean).join(" · "))}</p>
+      </div>`;
+      matchExplorerParticipants.innerHTML = renderMatchParticipants(detail.participants || []);
+      matchExplorerTeams.innerHTML = renderMatchTeams(detail.teams || []);
+      const playerOptions = (detail.participants || []).map((player) => (
+        `<option value="${attr(player.account_id)}">${escapeHtml(player.name || player.account_id)}${player.is_ai_or_bot ? " · 봇" : ""}${player.is_registered ? " · 등록" : ""}</option>`
+      )).join("");
+      matchEventFilterForm.elements.account_id.innerHTML = `<option value="">전체 참가자</option>${playerOptions}`;
+      const teamIds = [...new Set((detail.teams || []).map((team) => team.team_id).filter((value) => value !== null && value !== undefined))].sort((left, right) => Number(left) - Number(right));
+      matchEventFilterForm.elements.team_id.innerHTML = `<option value="">전체 팀</option>${teamIds.map((teamId) => `<option value="${attr(teamId)}">${formatInteger(teamId)}팀</option>`).join("")}`;
+      matchExplorerReplay.disabled = !telemetry.available;
+    }
+
+    function renderMatchParticipants(participants) {
+      const rows = participants.map((player) => `
+        <tr${player.is_registered ? ' class="linked-row"' : ""}>
+          <td><strong>${escapeHtml(player.name || "이름 미상")}</strong><br><span class="result-caption">${escapeHtml(compactIdentifier(player.account_id, 10, 6))}</span></td>
+          <td>${player.is_ai_or_bot ? '<span class="result-badge warning">봇</span>' : '<span class="result-badge success">사람</span>'}${player.is_registered ? ' <span class="result-badge info">등록</span>' : ""}</td>
+          <td>${formatInteger(player.team_id)}</td>
+          <td>${player.win_place ? `${formatInteger(player.win_place)}위` : "-"}</td>
+          <td>${formatInteger(player.kills)} / ${formatInteger(player.assists)}</td>
+          <td>${formatNumber(player.damage_dealt, 1)}</td>
+          <td>${escapeHtml(displayCode(player.death_type, "death_type"))}</td>
+          <td><button type="button" class="secondary" data-match-event-player="${attr(player.account_id)}">이벤트</button></td>
+        </tr>
+      `).join("");
+      return `<div class="table-scroll dense-table-wrap"><table class="detail-table"><thead><tr><th>플레이어</th><th>구분</th><th>팀</th><th>등수</th><th>킬 / 어시</th><th>피해</th><th>결과</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="8">참가자 정보가 없습니다.</td></tr>'}</tbody></table></div>`;
+    }
+
+    function renderMatchTeams(teams) {
+      const rows = teams.map((team) => `
+        <tr${team.registered_count ? ' class="linked-row"' : ""}>
+          <td><strong>${team.team_id === null || team.team_id === undefined ? "팀 미상" : `${formatInteger(team.team_id)}팀`}</strong></td>
+          <td>${team.win_place ? `${formatInteger(team.win_place)}위` : "-"}</td>
+          <td>${formatInteger(team.member_count)}명<br><span class="result-caption">사람 ${formatInteger(team.human_count)} · 봇 ${formatInteger(team.bot_count)}</span></td>
+          <td>${formatInteger(team.registered_count)}명</td>
+          <td>${formatInteger(team.kills)} / ${formatInteger(team.assists)}</td>
+          <td>${formatNumber(team.damage_dealt, 1)}</td>
+          <td>${escapeHtml((team.members || []).map((member) => member.name || member.account_id).join(", "))}</td>
+          <td>${team.team_id === null || team.team_id === undefined ? "" : `<button type="button" class="secondary" data-match-event-team="${attr(team.team_id)}">이벤트</button>`}</td>
+        </tr>
+      `).join("");
+      return `<div class="table-scroll dense-table-wrap"><table class="detail-table"><thead><tr><th>팀</th><th>등수</th><th>구성</th><th>등록</th><th>킬 / 어시</th><th>피해</th><th>팀원</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="8">팀 정보가 없습니다.</td></tr>'}</tbody></table></div>`;
+    }
+
+    function setMatchExplorerDetailView(view) {
+      activeMatchExplorerView = ["participants", "teams", "events"].includes(view) ? view : "participants";
+      matchExplorerDetailViews.querySelectorAll("[data-match-detail-view]").forEach((button) => {
+        button.classList.toggle("active", button.dataset.matchDetailView === activeMatchExplorerView);
+      });
+      matchExplorerParticipants.hidden = activeMatchExplorerView !== "participants";
+      matchExplorerTeams.hidden = activeMatchExplorerView !== "teams";
+      matchExplorerEvents.hidden = activeMatchExplorerView !== "events";
+      if (activeMatchExplorerView === "events" && activeMatchExplorerDetail) {
+        loadMatchExplorerEvents({ offset: 0 }).catch((error) => {
+          matchEventStatus.textContent = `오류: ${error.message}`;
+        });
+      }
+    }
+
+    async function loadMatchExplorerEvents({ offset = 0 } = {}) {
+      const matchId = activeMatchExplorerDetail?.match?.match_id;
+      if (!matchId) return;
+      const form = new FormData(matchEventFilterForm);
+      const params = new URLSearchParams({
+        limit: String(form.get("limit") || "100"),
+        offset: String(Math.max(0, Number(offset || 0))),
+        include_positions: String(Boolean(matchEventFilterForm.elements.include_positions.checked)),
+      });
+      for (const key of ["domain", "event_type", "account_id", "team_id", "search"]) {
+        const value = String(form.get(key) || "").trim();
+        if (value) params.set(key, value);
+      }
+      matchEventStatus.textContent = "전체 참가자 이벤트를 조회하는 중입니다.";
+      const payload = await requestJson(`/matches/${encodeURIComponent(matchId)}/events?${params.toString()}`, "GET");
+      matchEventPage = {
+        total: Number(payload.total || 0),
+        limit: Number(payload.limit || 100),
+        offset: Number(payload.offset || 0),
+        has_previous: Boolean(payload.has_previous),
+        has_next: Boolean(payload.has_next),
+      };
+      renderMatchEventTypeOptions(payload.available_event_types || []);
+      matchEventBody.innerHTML = (payload.events || []).map((event) => {
+        const location = event.location && event.location.x !== null && event.location.y !== null
+          ? `${formatNumber(Number(event.location.x) / 100, 0)}, ${formatNumber(Number(event.location.y) / 100, 0)}m`
+          : "-";
+        const elapsed = formatMatchElapsed(event.elapsed_seconds);
+        return `<tr>
+          <td>${escapeHtml(elapsed)}<br><span class="result-caption">${escapeHtml(formatKstShort(event.timestamp_kst))}</span></td>
+          <td><strong>${escapeHtml(event.event_label || event.event_type)}</strong><br><span class="result-caption">${escapeHtml(event.domain || "-")}</span></td>
+          <td>${escapeHtml(event.summary || "-")}${event.is_headshot ? ' <span class="result-badge warning">헤드샷</span>' : ""}</td>
+          <td>${escapeHtml(location)}</td>
+          <td><button type="button" class="secondary" data-match-event-open="${attr(event.sequence)}">상세</button></td>
+        </tr>`;
+      }).join("") || '<tr><td colspan="5">조건에 맞는 이벤트가 없습니다.</td></tr>';
+      const end = Math.min(matchEventPage.total, matchEventPage.offset + (payload.events || []).length);
+      matchEventStatus.textContent = `${formatInteger(matchEventPage.total)}건 중 ${formatInteger(matchEventPage.offset + ((payload.events || []).length ? 1 : 0))}-${formatInteger(end)} 표시 · 위치 주기 이벤트 ${matchEventFilterForm.elements.include_positions.checked ? "포함" : "제외"}`;
+      matchEventPrev.disabled = !matchEventPage.has_previous;
+      matchEventNext.disabled = !matchEventPage.has_next;
+    }
+
+    function renderMatchEventTypeOptions(eventTypes) {
+      const select = matchEventFilterForm.elements.event_type;
+      const selected = select.value;
+      const domain = matchEventFilterForm.elements.domain.value;
+      const visible = eventTypes.filter((event) => !domain || event.domain === domain);
+      select.innerHTML = `<option value="">전체</option>${visible.map((event) => (
+        `<option value="${attr(event.event_type)}">${escapeHtml(event.label || event.event_type)} · ${formatInteger(event.count)}건</option>`
+      )).join("")}`;
+      if (visible.some((event) => event.event_type === selected)) select.value = selected;
+    }
+
+    function formatMatchElapsed(value) {
+      const seconds = Math.max(0, Number(value || 0));
+      const hours = Math.floor(seconds / 3600);
+      const minutesValue = Math.floor((seconds % 3600) / 60);
+      const secondsValue = Math.floor(seconds % 60);
+      return hours > 0
+        ? `${String(hours).padStart(2, "0")}:${String(minutesValue).padStart(2, "0")}:${String(secondsValue).padStart(2, "0")}`
+        : `${String(minutesValue).padStart(2, "0")}:${String(secondsValue).padStart(2, "0")}`;
+    }
+
+    async function openMatchEventDetail(sequence) {
+      const matchId = activeMatchExplorerDetail?.match?.match_id;
+      if (!matchId) return;
+      matchEventDialogTitle.textContent = `이벤트 #${formatInteger(sequence)}`;
+      matchEventDialogSummary.innerHTML = '<span class="status">원본 이벤트를 불러오는 중입니다.</span>';
+      matchEventDialogRaw.textContent = "";
+      matchEventDialog.showModal();
+      try {
+        const payload = await requestJson(`/matches/${encodeURIComponent(matchId)}/events/${encodeURIComponent(sequence)}`, "GET");
+        const event = payload.event || {};
+        const summary = event.summary || {};
+        matchEventDialogTitle.textContent = `${summary.event_label || summary.event_type || "이벤트"} · #${formatInteger(sequence)}`;
+        matchEventDialogSummary.innerHTML = resultMetricGrid([
+          ["경과 시간", formatMatchElapsed(summary.elapsed_seconds)],
+          ["발생 시각", formatKstShort(summary.timestamp_kst)],
+          ["행위자", summary.actor?.name || summary.actor?.account_id || "-"],
+          ["대상", summary.target?.name || summary.target?.account_id || "-"],
+          ["무기·아이템", summary.weapon_name || summary.item_name || "-"],
+          ["피해·거리", `${summary.damage === null || summary.damage === undefined ? "-" : formatNumber(summary.damage, 1)} / ${summary.distance_m === null || summary.distance_m === undefined ? "-" : `${formatNumber(summary.distance_m, 1)}m`}`],
+        ]) + `<p class="result-caption">${escapeHtml(summary.summary || "")}</p>`;
+        matchEventDialogRaw.textContent = JSON.stringify(event.raw_event || {}, null, 2);
+      } catch (error) {
+        matchEventDialogSummary.textContent = `오류: ${error.message}`;
+      }
     }
 
     async function loadPlayerRanking(metric, shard, guildId, limit, minMatches = 1, activeOnly = true) {
@@ -14919,7 +16353,9 @@ _INDEX_HTML = """<!doctype html>
       timelineSelect.disabled = false;
       timelineSelect.innerHTML = replayTimelineArtifacts.map((artifact) => {
         const label = [
-          artifact.player_name || "알 수 없음",
+          artifact.artifact_name === "match-timeline"
+            ? "전체 참가자"
+            : (artifact.player_name || "알 수 없음"),
           formatKstShort(artifact.match_created_at_kst),
           artifact.map_name || "-",
           displayCode(artifact.game_mode, "game_mode"),
@@ -14998,6 +16434,40 @@ _INDEX_HTML = """<!doctype html>
       renderTimelineEventDetail(null);
       renderTimelineNowEvent(null);
       renderReplayFrame();
+    }
+
+    async function generateAndOpenMatchReplay() {
+      const matchId = activeMatchExplorerDetail?.match?.match_id;
+      if (!matchId) throw new Error("먼저 상세 조회할 매치를 선택하세요.");
+      matchExplorerReplay.disabled = true;
+      matchExplorerReplay.textContent = "리플레이 생성 중";
+      banner.textContent = "전체 참가자 2D 리플레이 생성 중";
+      try {
+        const payload = await requestJson(
+          `/matches/${encodeURIComponent(matchId)}/replay`,
+          "POST",
+          { force: false },
+        );
+        const artifact = payload.artifact;
+        activeReplayPlayer = null;
+        timelinePlayerInput.value = "";
+        delete timelinePlayerInput.dataset.accountId;
+        updateTimelineOptions([artifact], String(artifact.id));
+        activateWorkspace("replay", {
+          focusId: "replay-player",
+          updateUrl: true,
+          smooth: true,
+        });
+        await loadSelectedTimeline();
+        const result = payload.result || {};
+        replayPlayerStatus.textContent = `전체 참가자 ${formatInteger(result.tracked_participant_count || 0)}명 · 위치 ${formatInteger(result.position_sample_count || 0)}개 · 전투 ${formatInteger(result.combat_event_count || 0)}개`;
+        banner.textContent = result.generated
+          ? "전체 참가자 2D 리플레이 생성 완료"
+          : "저장된 전체 참가자 2D 리플레이를 열었습니다.";
+      } finally {
+        matchExplorerReplay.disabled = !activeMatchExplorerDetail?.telemetry?.available;
+        matchExplorerReplay.textContent = "전체 참가자 2D 재생";
+      }
     }
 
     function timelineSchemaVersion(value) {
@@ -15456,7 +16926,7 @@ _INDEX_HTML = """<!doctype html>
       const members = activeTimeline?.team?.members || [];
       const options = [
         { value: "focus", label: `선택 유저${activeTimeline?.player?.name ? ` · ${activeTimeline.player.name}` : ""}` },
-        { value: "all", label: "전체 팀" },
+        { value: "all", label: activeTimeline?.scope === "match" ? "전체 참가자" : "전체 팀" },
         ...members.filter((member) => !member.is_self && member.account_id).map((member) => ({
           value: member.account_id,
           label: `${member.name || compactIdentifier(member.account_id)}${member.registered ? " · 등록 유저" : ""}`,
@@ -17109,6 +18579,136 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
+    watchlistRegisterForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      try {
+        const payload = await postJson("/watchlist/players", {
+          shard: String(form.get("shard") || "steam"),
+          player_name: String(form.get("player_name") || "").trim(),
+          notify_name_change: Boolean(form.get("notify_name_change")),
+          notify_kill: Boolean(form.get("notify_kill")),
+          notify_repeated_engagement: Boolean(form.get("notify_repeated_engagement")),
+          engagement_threshold: Number(form.get("engagement_threshold") || 3),
+          notification_channel_ids: Array.from(watchlistRegisterChannelIds),
+        });
+        event.currentTarget.reset();
+        watchlistRegisterChannelIds = new Set();
+        watchlistGuildSelect.value = "";
+        await loadWatchlistChannelOptions("register");
+        await Promise.all([loadWatchlistPlayers(), loadWatchlistEncounters()]);
+        banner.textContent = `${payload.player.current_name} 밴 플레이어 등록 완료 · Account ID 확인됨`;
+      } catch (error) {
+        watchlistStatus.textContent = `등록 오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+    watchlistRegisterReset.addEventListener("click", () => {
+      watchlistRegisterForm.reset();
+      watchlistRegisterChannelIds = new Set();
+      watchlistGuildSelect.value = "";
+      loadWatchlistChannelOptions("register").catch(() => {});
+    });
+    watchlistGuildSelect.addEventListener("change", () => {
+      loadWatchlistChannelOptions("register").catch((error) => {
+        watchlistChannelStatus.textContent = `오류: ${error.message}`;
+      });
+    });
+    watchlistChannelSelect.addEventListener("change", () => {
+      watchlistChannelAdd.disabled = !watchlistChannelSelect.value;
+    });
+    watchlistChannelAdd.addEventListener("click", () => {
+      if (!watchlistChannelSelect.value) return;
+      watchlistRegisterChannelIds.add(String(watchlistChannelSelect.value));
+      watchlistChannelSelect.value = "";
+      watchlistChannelAdd.disabled = true;
+      renderWatchlistChannelSelection("register");
+    });
+    watchlistChannelSelection.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-watchlist-channel-remove]");
+      if (!button) return;
+      watchlistRegisterChannelIds.delete(button.dataset.watchlistChannelRemove || "");
+      renderWatchlistChannelSelection("register");
+    });
+    watchlistSearch.addEventListener("input", () => {
+      window.clearTimeout(watchlistSearchTimer);
+      watchlistSearchTimer = window.setTimeout(() => {
+        loadWatchlistPlayers().catch((error) => { watchlistStatus.textContent = `오류: ${error.message}`; });
+      }, 250);
+    });
+    watchlistIncludeInactive.addEventListener("change", () => {
+      loadWatchlistPlayers().catch((error) => { watchlistStatus.textContent = `오류: ${error.message}`; });
+    });
+    watchlistReload.addEventListener("click", () => {
+      Promise.all([loadWatchlistPlayers(), loadWatchlistEncounters()]).catch((error) => {
+        watchlistStatus.textContent = `오류: ${error.message}`;
+      });
+    });
+    watchlistScan.addEventListener("click", async () => {
+      watchlistScan.disabled = true;
+      watchlistStatus.textContent = "닉네임 동일 계정 확인과 저장 매치 조우 분석 중입니다.";
+      try {
+        const payload = await postJson("/watchlist/scan", { limit: 500, force: false, refresh_identity: true });
+        await Promise.all([loadWatchlistPlayers(), loadWatchlistEncounters()]);
+        watchlistStatus.textContent = `닉네임 ${formatInteger(payload.identity.checked)}명 확인 · 변경 ${formatInteger(payload.identity.changed)}명 · 조우 ${formatInteger(payload.encounters.analyzed_encounters)}건 분석 · 알림 ${formatInteger(payload.identity.alerts_created + payload.encounters.alerts_created)}건 생성`;
+        banner.textContent = "밴 플레이어 확인 완료";
+      } catch (error) {
+        watchlistStatus.textContent = `확인 오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      } finally {
+        watchlistScan.disabled = false;
+      }
+    });
+    watchlistBody.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-watchlist-edit]");
+      if (!button) return;
+      try { openWatchlistEditor(button.dataset.watchlistEdit); }
+      catch (error) { banner.textContent = `오류: ${error.message}`; }
+    });
+    watchlistEncounterBody.addEventListener("click", (event) => {
+      const matchButton = event.target.closest("button[data-watchlist-match]");
+      const replayButton = event.target.closest("button[data-watchlist-replay]");
+      if (!matchButton && !replayButton) return;
+      const matchId = (replayButton || matchButton).dataset.watchlistReplay
+        || (replayButton || matchButton).dataset.watchlistMatch
+        || "";
+      openWatchlistMatch(matchId, Boolean(replayButton)).catch((error) => {
+        banner.textContent = `매치 열기 오류: ${error.message}`;
+      });
+    });
+    watchlistEditGuildSelect.addEventListener("change", () => {
+      loadWatchlistChannelOptions("edit").catch((error) => {
+        watchlistEditChannelStatus.textContent = `오류: ${error.message}`;
+      });
+    });
+    watchlistEditChannelSelect.addEventListener("change", () => {
+      watchlistEditChannelAdd.disabled = !watchlistEditChannelSelect.value;
+    });
+    watchlistEditChannelAdd.addEventListener("click", () => {
+      if (!watchlistEditChannelSelect.value) return;
+      watchlistEditChannelIds.add(String(watchlistEditChannelSelect.value));
+      watchlistEditChannelSelect.value = "";
+      watchlistEditChannelAdd.disabled = true;
+      renderWatchlistChannelSelection("edit");
+    });
+    watchlistEditChannelSelection.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-watchlist-edit-channel-remove]");
+      if (!button) return;
+      watchlistEditChannelIds.delete(button.dataset.watchlistEditChannelRemove || "");
+      renderWatchlistChannelSelection("edit");
+    });
+    watchlistEditForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      saveWatchlistEditor().catch((error) => {
+        watchlistEditChannelStatus.textContent = `저장 오류: ${error.message}`;
+      });
+    });
+    watchlistEditClose.addEventListener("click", () => watchlistEditDialog.close());
+    watchlistEditCancel.addEventListener("click", () => watchlistEditDialog.close());
+    watchlistEditDialog.addEventListener("click", (event) => {
+      if (event.target === watchlistEditDialog) watchlistEditDialog.close();
+    });
+
     intelligenceForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       try {
@@ -17348,6 +18948,112 @@ _INDEX_HTML = """<!doctype html>
         matchBody.textContent = `오류: ${error.message}`;
         banner.textContent = `오류: ${error.message}`;
       }
+    });
+
+    matchExplorerForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        await loadMatchExplorer({ offset: 0 });
+        banner.textContent = "저장된 전체 매치 조회 완료";
+      } catch (error) {
+        matchExplorerStatus.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+    matchExplorerReset.addEventListener("click", async () => {
+      matchExplorerForm.reset();
+      matchExplorerForm.elements.telemetry_only.checked = true;
+      activeMatchExplorerDetail = null;
+      matchExplorerDetail.hidden = true;
+      try {
+        await loadMatchExplorer({ offset: 0 });
+      } catch (error) {
+        matchExplorerStatus.textContent = `오류: ${error.message}`;
+      }
+    });
+    matchExplorerPrev.addEventListener("click", () => {
+      loadMatchExplorer({ offset: Math.max(0, matchExplorerPage.offset - matchExplorerPage.limit) }).catch((error) => {
+        matchExplorerStatus.textContent = `오류: ${error.message}`;
+      });
+    });
+    matchExplorerNext.addEventListener("click", () => {
+      loadMatchExplorer({ offset: matchExplorerPage.offset + matchExplorerPage.limit }).catch((error) => {
+        matchExplorerStatus.textContent = `오류: ${error.message}`;
+      });
+    });
+    matchExplorerBody.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-match-explorer-open]");
+      if (!button) return;
+      loadMatchExplorerDetail(button.dataset.matchExplorerOpen || "").catch((error) => {
+        matchExplorerSummary.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      });
+    });
+    matchExplorerDetailClose.addEventListener("click", () => {
+      matchExplorerDetail.hidden = true;
+      activeMatchExplorerDetail = null;
+    });
+    matchExplorerReplay.addEventListener("click", () => {
+      generateAndOpenMatchReplay().catch((error) => {
+        matchExplorerSummary.insertAdjacentHTML(
+          "afterbegin",
+          `<div class="inline-notice danger">리플레이 오류: ${escapeHtml(error.message)}</div>`,
+        );
+        banner.textContent = `오류: ${error.message}`;
+      });
+    });
+    matchExplorerDetailViews.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-match-detail-view]");
+      if (button) setMatchExplorerDetailView(button.dataset.matchDetailView || "participants");
+    });
+    for (const panel of [matchExplorerParticipants, matchExplorerTeams]) {
+      panel.addEventListener("click", (event) => {
+        const playerButton = event.target.closest("button[data-match-event-player]");
+        const teamButton = event.target.closest("button[data-match-event-team]");
+        if (!playerButton && !teamButton) return;
+        if (playerButton) matchEventFilterForm.elements.account_id.value = playerButton.dataset.matchEventPlayer || "";
+        if (teamButton) matchEventFilterForm.elements.team_id.value = teamButton.dataset.matchEventTeam || "";
+        setMatchExplorerDetailView("events");
+      });
+    }
+    matchEventFilterForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      loadMatchExplorerEvents({ offset: 0 }).catch((error) => {
+        matchEventStatus.textContent = `오류: ${error.message}`;
+      });
+    });
+    matchEventFilterForm.elements.domain.addEventListener("change", () => {
+      matchEventFilterForm.elements.event_type.value = "";
+      loadMatchExplorerEvents({ offset: 0 }).catch((error) => {
+        matchEventStatus.textContent = `오류: ${error.message}`;
+      });
+    });
+    matchEventFilterReset.addEventListener("click", () => {
+      matchEventFilterForm.reset();
+      matchEventFilterForm.elements.domain.value = "combat";
+      matchEventFilterForm.elements.limit.value = "100";
+      loadMatchExplorerEvents({ offset: 0 }).catch((error) => {
+        matchEventStatus.textContent = `오류: ${error.message}`;
+      });
+    });
+    matchEventPrev.addEventListener("click", () => {
+      loadMatchExplorerEvents({ offset: Math.max(0, matchEventPage.offset - matchEventPage.limit) }).catch((error) => {
+        matchEventStatus.textContent = `오류: ${error.message}`;
+      });
+    });
+    matchEventNext.addEventListener("click", () => {
+      loadMatchExplorerEvents({ offset: matchEventPage.offset + matchEventPage.limit }).catch((error) => {
+        matchEventStatus.textContent = `오류: ${error.message}`;
+      });
+    });
+    matchEventBody.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-match-event-open]");
+      if (!button) return;
+      openMatchEventDetail(Number(button.dataset.matchEventOpen || 0));
+    });
+    matchEventDialogClose.addEventListener("click", () => matchEventDialog.close());
+    matchEventDialog.addEventListener("click", (event) => {
+      if (event.target === matchEventDialog) matchEventDialog.close();
     });
 
     rankingForm.addEventListener("submit", async (event) => {
@@ -17968,7 +19674,12 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
-    discordBotGuildSelect.addEventListener("change", loadDiscordBotGuildSelection);
+    discordBotGuildSelect.addEventListener("change", () => {
+      loadDiscordBotGuildSelection();
+      verifyDiscordBotGuildCommands().catch((error) => {
+        discordBotCommandsStatus.textContent = `공개 상태 확인 오류: ${error.message}`;
+      });
+    });
     discordBotCommandSearch.addEventListener("input", renderDiscordBotCommandCatalog);
     discordBotCommandCatalog.addEventListener("change", (event) => {
       const checkbox = event.target instanceof HTMLInputElement && event.target.type === "checkbox"
@@ -17995,26 +19706,46 @@ _INDEX_HTML = """<!doctype html>
       selectedDiscordBotCommands = new Set(activeDiscordCommandCatalog.map((command) => command.name));
       renderDiscordBotCommandCatalog();
     });
+    discordBotCommandsVerify.addEventListener("click", () => {
+      verifyDiscordBotGuildCommands().catch((error) => {
+        discordBotCommandsStatus.textContent = `공개 상태 확인 오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      });
+    });
     discordBotCommandsSave.addEventListener("click", async () => {
       const guildId = String(discordBotGuildSelect.value || "");
       if (!guildId) {
         banner.textContent = "Discord 서버를 선택하세요.";
         return;
       }
-      const guildEnabledCommands = { ...(activeDiscordBotSettings.guild_enabled_commands || {}) };
-      if (discordBotGuildUsesDefault) delete guildEnabledCommands[guildId];
-      else guildEnabledCommands[guildId] = Array.from(selectedDiscordBotCommands).sort();
       discordBotCommandsSave.disabled = true;
       try {
-        await saveActiveDiscordBotSettings({
-          ...activeDiscordBotSettings,
-          guild_enabled_commands: guildEnabledCommands,
+        discordBotCommandsStatus.textContent = "설정을 저장하고 Discord 공개 목록을 확인하는 중입니다.";
+        const payload = await postJson("/discord/bot/guild-commands", {
+          guild_id: guildId,
+          use_default: discordBotGuildUsesDefault,
+          commands: Array.from(selectedDiscordBotCommands).sort(),
         });
-        if (activeDiscordBotState.ready) {
-          await postJson("/discord/bot/sync", { guild_id: guildId });
+        activeDiscordBotSettings = payload.discord_bot || activeDiscordBotSettings;
+        renderDiscordBotState({ bot: payload.bot || activeDiscordBotState });
+        loadDiscordBotGuildSelection();
+        if (payload.in_sync === true) {
+          const message = `${discordGuildName(guildId)} 명령 ${formatInteger(payload.actual_commands?.length || 0)}개 공개 확인 완료`;
+          discordBotCommandsStatus.textContent = message;
+          banner.textContent = message;
+        } else if (payload.global_commands?.length) {
+          discordBotCommandsStatus.textContent = `전역 잔존 명령 ${formatInteger(payload.global_commands.length)}개가 확인되었습니다. Discord 전파 후 다시 확인하세요.`;
+          banner.textContent = "서버별 명령은 저장됐지만 전역 잔존 명령이 아직 제거되지 않았습니다.";
+        } else if (payload.verification_error) {
+          discordBotCommandsStatus.textContent = `설정은 저장됐지만 Discord 확인 실패: ${payload.verification_error}`;
+          banner.textContent = "명령 설정은 저장됐습니다. Discord 연결 상태를 확인한 뒤 다시 동기화하세요.";
+        } else if (payload.synchronized) {
+          discordBotCommandsStatus.textContent = "Discord 동기화는 완료됐지만 실제 공개 목록이 설정과 다릅니다.";
+          banner.textContent = "Discord 공개 명령 목록 불일치를 확인했습니다.";
+        } else {
+          discordBotCommandsStatus.textContent = "설정 저장 완료 · 봇이 연결되면 자동으로 동기화됩니다.";
+          banner.textContent = `${discordGuildName(guildId)} 명령 공개 설정 저장 완료`;
         }
-        await loadDiscordBot();
-        banner.textContent = `${discordGuildName(guildId)} 명령 공개 설정 저장 완료`;
       } catch (error) {
         discordBotCommandsStatus.textContent = `오류: ${error.message}`;
         banner.textContent = `오류: ${error.message}`;
@@ -18028,14 +19759,19 @@ _INDEX_HTML = """<!doctype html>
       const formElement = event.currentTarget;
       const form = new FormData(formElement);
       try {
+        const member = resolveDiscordMemberSelection(formElement, discordGrantMemberQuery);
+        const memberGuildId = String(form.get("guild_id") || "");
         await postJson("/discord/permissions/grant", {
-          user_id: form.get("user_id"),
+          user_id: member.user_id,
           group: form.get("group"),
-          guild_id: form.get("guild_id") || null,
+          guild_id: form.get("global_scope") ? null : memberGuildId,
+          member_label: member.display_name,
+          member_guild_id: memberGuildId,
         });
-        formElement.reset();
+        discordGrantMemberQuery.value = "";
+        formElement.elements.user_id.value = "";
         await loadDiscordPermissions();
-        banner.textContent = "Discord 권한이 추가되었습니다.";
+        banner.textContent = `${member.display_name} 사용자에게 Discord 권한을 추가했습니다.`;
       } catch (error) {
         banner.textContent = `오류: ${error.message}`;
       }
@@ -18140,18 +19876,41 @@ _INDEX_HTML = """<!doctype html>
       }
     });
 
-    document.querySelector("#discordAdminForm").addEventListener("submit", async (event) => {
+    discordAdminForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const formElement = event.currentTarget;
       const form = new FormData(formElement);
       try {
-        await postJson("/discord/global-admins/add", { user_id: form.get("user_id") });
-        formElement.reset();
+        const member = resolveDiscordMemberSelection(formElement, discordAdminMemberQuery);
+        await postJson("/discord/global-admins/add", {
+          user_id: member.user_id,
+          member_label: member.display_name,
+          member_guild_id: form.get("member_guild_id"),
+        });
+        discordAdminMemberQuery.value = "";
+        formElement.elements.user_id.value = "";
         await loadDiscordPermissions();
-        banner.textContent = "Discord 전역 관리자가 추가되었습니다.";
+        banner.textContent = `${member.display_name} 사용자를 Discord 전역 관리자로 추가했습니다.`;
       } catch (error) {
         banner.textContent = `오류: ${error.message}`;
       }
+    });
+
+    discordScopeForm.elements.guild_id.addEventListener("change", loadDiscordScopeSelection);
+    discordScopeMode.addEventListener("change", renderDiscordRankingGuildSelection);
+    discordRankingGuildCheckboxes.addEventListener("change", (event) => {
+      const checkbox = event.target instanceof HTMLInputElement && event.target.type === "checkbox"
+        ? event.target
+        : null;
+      if (!checkbox) return;
+      if (checkbox.checked) editedDiscordRankingGuildIds.add(checkbox.value);
+      else editedDiscordRankingGuildIds.delete(checkbox.value);
+      discordRankingGuildStatus.textContent = `랭킹에 포함할 서버 ${formatInteger(editedDiscordRankingGuildIds.size)}개 선택`;
+    });
+    discordScopeReset.addEventListener("click", () => {
+      discordScopeForm.reset();
+      editedDiscordRankingGuildIds = new Set();
+      renderDiscordRankingGuildSelection();
     });
 
     discordScopeForm.addEventListener("submit", async (event) => {
@@ -18164,15 +19923,27 @@ _INDEX_HTML = """<!doctype html>
         banner.textContent = "서버를 선택하세요.";
         return;
       }
+      if (scope === "guild" && !editedDiscordRankingGuildIds.size) {
+        banner.textContent = "랭킹에 포함할 Discord 서버를 한 개 이상 선택하세요.";
+        return;
+      }
       try {
+        const selectedGuilds = {
+          ...(activeDiscordScopes.guild_ranking_selected_guild_ids || {}),
+        };
+        if (scope === "guild") selectedGuilds[guildId] = Array.from(editedDiscordRankingGuildIds).sort();
+        else delete selectedGuilds[guildId];
         await saveDiscordScopes({
           guild_ranking_scopes: {
             ...(activeDiscordScopes.guild_ranking_scopes || {}),
             [guildId]: scope,
           },
+          guild_ranking_selected_guild_ids: selectedGuilds,
           public_profile_default: activeDiscordScopes.public_profile_default !== false,
         });
         formElement.reset();
+        editedDiscordRankingGuildIds = new Set();
+        renderDiscordRankingGuildSelection();
         banner.textContent = "Discord 랭킹 범위를 저장했습니다.";
       } catch (error) {
         banner.textContent = `오류: ${error.message}`;
@@ -18185,6 +19956,7 @@ _INDEX_HTML = """<!doctype html>
       try {
         await saveDiscordScopes({
           guild_ranking_scopes: activeDiscordScopes.guild_ranking_scopes || {},
+          guild_ranking_selected_guild_ids: activeDiscordScopes.guild_ranking_selected_guild_ids || {},
           public_profile_default: form.get("public_profile_default") === "true",
         });
         banner.textContent = "공개 프로필 기본값 저장 완료";
@@ -18201,10 +19973,13 @@ _INDEX_HTML = """<!doctype html>
 
       const guildId = button.dataset.guildId || "";
       const nextGuildScopes = { ...(activeDiscordScopes.guild_ranking_scopes || {}) };
+      const nextSelectedGuilds = { ...(activeDiscordScopes.guild_ranking_selected_guild_ids || {}) };
       delete nextGuildScopes[guildId];
+      delete nextSelectedGuilds[guildId];
       try {
         await saveDiscordScopes({
           guild_ranking_scopes: nextGuildScopes,
+          guild_ranking_selected_guild_ids: nextSelectedGuilds,
           public_profile_default: activeDiscordScopes.public_profile_default !== false,
         });
         banner.textContent = "Discord 서버 범위 삭제 완료";
@@ -18772,7 +20547,7 @@ _INDEX_HTML = """<!doctype html>
     const initialAlertHistoryFilterFromUrl = loadInitialAlertHistoryFiltersFromUrl();
     loadInitialWorkerRunFiltersFromUrl();
 
-    Promise.all([loadStatus(), loadAlerts(), loadDiscordBot(), loadDiscordPermissions(), loadDiscordScopes(), loadDiscordGuilds(), loadCollectorWorkerStatus(), loadPostProcessingWorkerStatus(), loadOperationalDrills(), loadWorkerRuns(), loadPlayers(), loadDataDeletionRequests(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts(), loadFlightPathMapCatalog()])
+    Promise.all([loadStatus(), loadAlerts(), loadDiscordBot(), loadDiscordPermissions(), loadDiscordScopes(), loadDiscordGuilds(), loadCollectorWorkerStatus(), loadPostProcessingWorkerStatus(), loadOperationalDrills(), loadWorkerRuns(), loadPlayers(), loadWatchlistPlayers(), loadWatchlistEncounters(), loadDataDeletionRequests(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts(), loadFlightPathMapCatalog()])
       .then(() => initialAlertHistoryFilterFromUrl ? loadAlertHistory(alertHistoryPage) : null)
       .then(() => loadInitialAlertDetailFromUrl())
       .then(() => loadInitialWorkerRunDetailFromUrl())

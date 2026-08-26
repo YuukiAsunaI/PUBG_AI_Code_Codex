@@ -226,7 +226,7 @@ class PlayerIntelligenceService:
                     movement.in_game_sampled_distance_m,
                     movement.landing_distance_m
                 FROM match_participants participants
-                INNER JOIN matches ON matches.match_id = participants.match_id
+                INNER JOIN analysis_matches AS matches ON matches.match_id = participants.match_id
                 LEFT JOIN raw_telemetry_payloads raw_telemetry
                     ON raw_telemetry.match_id = participants.match_id
                 LEFT JOIN player_telemetry_processing_states activity_state
@@ -456,7 +456,7 @@ class PlayerIntelligenceService:
                     SUM(counts.normalized_event_count) AS normalized_event_count,
                     MAX(counts.updated_at_kst) AS updated_at_kst
                 FROM match_telemetry_event_counts counts
-                INNER JOIN matches ON matches.match_id = counts.match_id
+                INNER JOIN analysis_matches AS matches ON matches.match_id = counts.match_id
                 INNER JOIN match_participants participants
                     ON participants.match_id = counts.match_id
                 WHERE

@@ -314,6 +314,8 @@ class WeaponLoadoutRecommendation:
     inventory_burden: dict[str, Any] = field(default_factory=dict)
     primary_attachment_combination: WeaponAttachmentCombinationRecommendation | None = None
     secondary_attachment_combination: WeaponAttachmentCombinationRecommendation | None = None
+    primary_attachment_plan: dict[str, Any] = field(default_factory=dict)
+    secondary_attachment_plan: dict[str, Any] = field(default_factory=dict)
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -335,6 +337,8 @@ class WeaponLoadoutRecommendation:
                 if self.secondary_attachment_combination
                 else None
             ),
+            "primary_attachment_plan": self.primary_attachment_plan,
+            "secondary_attachment_plan": self.secondary_attachment_plan,
         }
 
 
@@ -701,7 +705,7 @@ class PlayerRecommendationService:
                     COALESCE(SUM(outcomes.outcome_type = 'win'), 0) AS fight_wins,
                     COALESCE(SUM(outcomes.outcome_type = 'loss'), 0) AS fight_losses
                 FROM player_fight_outcomes outcomes
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = outcomes.match_id
                 WHERE outcomes.account_id = %s
                   AND matches.shard = %s
@@ -730,7 +734,7 @@ class PlayerRecommendationService:
                     COALESCE(SUM(weapon_stats.vehicle_damage_dealt), 0) AS vehicle_damage_dealt,
                     COALESCE(SUM(weapon_stats.headshot_hits), 0) AS headshot_hits
                 FROM player_weapon_match_stats weapon_stats
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = weapon_stats.match_id
                 LEFT JOIN match_participants participants
                     ON participants.match_id = weapon_stats.match_id
@@ -861,7 +865,7 @@ class PlayerRecommendationService:
                     location_events.related_x,
                     location_events.related_y
                 FROM player_combat_location_events location_events
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = location_events.match_id
                 WHERE location_events.account_id = %s
                   AND matches.shard = %s
@@ -987,7 +991,7 @@ class PlayerRecommendationService:
                     CASE WHEN participants.win_place = 1 THEN 1 ELSE 0 END AS win,
                     COALESCE(summaries.damage_dealt, 0) AS damage_dealt
                 FROM player_combat_loadout_snapshots snapshots
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = snapshots.match_id
                 LEFT JOIN player_match_combat_summaries summaries
                     ON summaries.match_id = snapshots.match_id
@@ -1148,7 +1152,7 @@ class PlayerRecommendationService:
                     MAX(COALESCE(summaries.dbnos_caused, 0)) AS dbnos,
                     MAX(COALESCE(summaries.damage_dealt, 0)) AS damage_dealt
                 FROM player_item_events item_events
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = item_events.match_id
                 LEFT JOIN player_match_combat_summaries summaries
                     ON summaries.match_id = item_events.match_id
@@ -1281,7 +1285,7 @@ class PlayerRecommendationService:
                     COALESCE(summaries.dbnos_caused, 0) AS player_dbnos,
                     COALESCE(summaries.damage_dealt, 0) AS player_damage_dealt
                 FROM player_combat_loadout_snapshots snapshots
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = snapshots.match_id
                 LEFT JOIN match_participants participants
                     ON participants.match_id = snapshots.match_id
@@ -1357,7 +1361,7 @@ class PlayerRecommendationService:
                     COALESCE(SUM(CASE WHEN participants.win_place = 1 THEN 1 ELSE 0 END), 0) AS wins,
                     COALESCE(SUM(summaries.damage_dealt), 0) AS damage_dealt
                 FROM player_item_match_stats item_stats
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = item_stats.match_id
                 LEFT JOIN player_match_combat_summaries summaries
                     ON summaries.match_id = item_stats.match_id
@@ -1441,7 +1445,7 @@ class PlayerRecommendationService:
                         )
                     ), 0) AS avg_survival_seconds
                 FROM player_match_combat_summaries summaries
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = summaries.match_id
                 LEFT JOIN match_participants participants
                     ON participants.match_id = summaries.match_id
@@ -1519,7 +1523,7 @@ class PlayerRecommendationService:
                     COALESCE(SUM(summaries.dbnos_caused), 0) AS dbnos,
                     COALESCE(SUM(summaries.damage_dealt), 0) AS damage_dealt
                 FROM player_match_combat_summaries summaries
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = summaries.match_id
                 INNER JOIN match_participants self_participant
                     ON self_participant.match_id = summaries.match_id
@@ -1608,7 +1612,7 @@ class PlayerRecommendationService:
                     movement.landing_x,
                     movement.landing_y
                 FROM player_movement_summaries movement
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = movement.match_id
                 LEFT JOIN match_participants participants
                     ON participants.match_id = movement.match_id
@@ -2010,9 +2014,21 @@ def _build_weapon_loadouts(
         if any(_attachment_slot(existing) == slot for existing in selected):
             continue
         selected.append(attachment)
-    best_combination_by_weapon: dict[str, WeaponAttachmentCombinationRecommendation] = {}
-    for combination in _top(attachment_combinations, len(attachment_combinations)):
-        best_combination_by_weapon.setdefault(combination.weapon_code, combination)
+    combinations_by_weapon: dict[str, list[WeaponAttachmentCombinationRecommendation]] = {}
+    for combination in attachment_combinations:
+        combinations_by_weapon.setdefault(combination.weapon_code, []).append(combination)
+    best_combination_by_weapon = {
+        weapon_code: max(
+            candidates,
+            key=lambda item: (
+                len({_attachment_slot_from_code(code) for code in item.attachment_codes}),
+                item.match_count,
+                item.score,
+                item.event_count,
+            ),
+        )
+        for weapon_code, candidates in combinations_by_weapon.items()
+    }
     attachment_by_weapon_code = {
         (attachment.weapon_code, attachment.attachment_code): attachment
         for attachment in attachments
@@ -2021,22 +2037,78 @@ def _build_weapon_loadouts(
     def selected_attachments(
         weapon_code: str,
         combination: WeaponAttachmentCombinationRecommendation | None,
-    ) -> list[WeaponAttachmentRecommendation]:
+    ) -> tuple[list[WeaponAttachmentRecommendation], dict[str, Any]]:
+        candidates = attachments_by_weapon.get(weapon_code, [])[:5]
+        selected: list[WeaponAttachmentRecommendation] = []
+        selected_slots: set[str] = set()
+        observed_slots: set[str] = set()
         if combination:
             observed = [
                 attachment_by_weapon_code[(weapon_code, code)]
                 for code in combination.attachment_codes
                 if (weapon_code, code) in attachment_by_weapon_code
             ]
-            if observed:
-                return observed
-        return attachments_by_weapon.get(weapon_code, [])[:5]
+            for attachment in observed:
+                slot = _attachment_slot(attachment)
+                observed_slots.add(slot)
+                if slot in selected_slots:
+                    continue
+                selected.append(attachment)
+                selected_slots.add(slot)
+
+        supplemented = False
+        for attachment in candidates:
+            slot = _attachment_slot(attachment)
+            if slot in selected_slots:
+                continue
+            selected.append(attachment)
+            selected_slots.add(slot)
+            supplemented = supplemented or bool(combination)
+
+        selected.sort(key=lambda item: _attachment_slot_sort_key(_attachment_slot(item)))
+        known_slots = {_attachment_slot(item) for item in candidates} | observed_slots
+        if combination and supplemented:
+            basis = "실전 관측 조합의 빈 슬롯을 무기별 성과 1위 파츠로 보완"
+        elif combination:
+            basis = "실전에서 함께 사용한 파츠 조합"
+        elif selected:
+            basis = "무기별 슬롯 성과 1위 파츠 조합"
+        else:
+            basis = "호환 파츠 실전 표본 부족"
+        evidence_matches = combination.match_count if combination else max(
+            (item.match_count for item in selected),
+            default=0,
+        )
+        confidence = "높음" if evidence_matches >= 15 else "보통" if evidence_matches >= 5 else "낮음"
+        plan = {
+            "basis": basis,
+            "confidence": confidence,
+            "evidence_match_count": evidence_matches,
+            "known_slot_count": len(known_slots),
+            "selected_slot_count": len(selected_slots),
+            "observed_combination_slot_count": len(observed_slots),
+            "is_complete_for_observed_slots": bool(known_slots) and known_slots <= selected_slots,
+            "supplemented": supplemented,
+            "slot_labels": [
+                _attachment_slot_label(slot)
+                for slot in sorted(selected_slots, key=_attachment_slot_sort_key)
+            ],
+        }
+        return selected, plan
 
     loadouts: list[WeaponLoadoutRecommendation] = []
     for primary in close_range:
         for secondary in long_range:
             primary_combination = best_combination_by_weapon.get(primary.weapon_code)
             secondary_combination = best_combination_by_weapon.get(secondary.weapon_code)
+            primary_attachments, primary_attachment_plan = selected_attachments(
+                primary.weapon_code,
+                primary_combination,
+            )
+            secondary_attachments, secondary_attachment_plan = selected_attachments(
+                secondary.weapon_code,
+                secondary_combination,
+            )
             inventory_burden = _inventory_burden(primary, secondary)
             primary_component = primary.score * 0.55
             secondary_component = secondary.score * 0.45
@@ -2046,8 +2118,8 @@ def _build_weapon_loadouts(
                 WeaponLoadoutRecommendation(
                     primary=primary,
                     secondary=secondary,
-                    primary_attachments=selected_attachments(primary.weapon_code, primary_combination),
-                    secondary_attachments=selected_attachments(secondary.weapon_code, secondary_combination),
+                    primary_attachments=primary_attachments,
+                    secondary_attachments=secondary_attachments,
                     score=score,
                     reason=(
                         f"근·중거리 {primary.weapon_name} + 중·장거리 {secondary.weapon_name} · "
@@ -2062,6 +2134,8 @@ def _build_weapon_loadouts(
                     inventory_burden=inventory_burden,
                     primary_attachment_combination=primary_combination,
                     secondary_attachment_combination=secondary_combination,
+                    primary_attachment_plan=primary_attachment_plan,
+                    secondary_attachment_plan=secondary_attachment_plan,
                 )
             )
     return _top(loadouts, max(1, min(int(limit), 20)))
@@ -2197,11 +2271,38 @@ def _inventory_burden(
 
 
 def _attachment_slot(item: WeaponAttachmentRecommendation) -> str:
-    code = item.attachment_code.lower()
+    return _attachment_slot_from_code(
+        item.attachment_code,
+        fallback=item.attachment_sub_category or item.attachment_category or item.attachment_code,
+    )
+
+
+def _attachment_slot_from_code(code: str, *, fallback: str | None = None) -> str:
+    normalized = str(code or "").lower()
     for marker in ("upper", "lower", "muzzle", "magazine", "stock"):
-        if f"_{marker}_" in code:
+        if f"_{marker}_" in normalized:
             return marker
-    return str(item.attachment_sub_category or item.attachment_category or item.attachment_code).lower()
+    return str(fallback or code or "unknown").lower()
+
+
+_ATTACHMENT_SLOT_ORDER = ("muzzle", "lower", "magazine", "stock", "upper")
+
+
+def _attachment_slot_sort_key(slot: str) -> tuple[int, str]:
+    try:
+        return (_ATTACHMENT_SLOT_ORDER.index(slot), slot)
+    except ValueError:
+        return (len(_ATTACHMENT_SLOT_ORDER), slot)
+
+
+def _attachment_slot_label(slot: str) -> str:
+    return {
+        "muzzle": "총구",
+        "lower": "손잡이",
+        "magazine": "탄창",
+        "stock": "개머리판",
+        "upper": "조준경",
+    }.get(slot, slot)
 
 
 def _round_up_to_ten(value: float) -> int:

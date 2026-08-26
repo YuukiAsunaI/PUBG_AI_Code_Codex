@@ -205,6 +205,26 @@ class PlayerRecommendationServiceTests(unittest.TestCase):
                         "win": 0,
                         "damage_dealt": 300.0,
                     },
+                    {
+                        "match_id": "match-4",
+                        "weapon_code": "WeapHK416_C",
+                        "weapon_name_ko": "M416",
+                        "attachment_codes": [
+                            "Item_Attach_Weapon_Lower_Foregrip_C",
+                            "Item_Attach_Weapon_Muzzle_AR_MuzzleBrake_C",
+                            "Item_Attach_Weapon_Upper_DotSight_01_C",
+                        ],
+                        "attachment_names_ko": [
+                            "Vertical Grip",
+                            "Muzzle Brake",
+                            "Red Dot Sight",
+                        ],
+                        "combat_action": "kill",
+                        "distance_m": 35.0,
+                        "is_headshot": 0,
+                        "win": 0,
+                        "damage_dealt": 180.0,
+                    },
                 ],
                 [
                     {
@@ -316,9 +336,9 @@ class PlayerRecommendationServiceTests(unittest.TestCase):
             if item.attachment_name == "수직 손잡이"
         )
         self.assertEqual(vertical_grip.weapon_code, "WeapHK416_C")
-        self.assertEqual(vertical_grip.match_count, 2)
-        self.assertEqual(vertical_grip.event_count, 2)
-        self.assertEqual(vertical_grip.kills, 1)
+        self.assertEqual(vertical_grip.match_count, 3)
+        self.assertEqual(vertical_grip.event_count, 3)
+        self.assertEqual(vertical_grip.kills, 2)
         self.assertEqual(vertical_grip.dbnos, 1)
         self.assertEqual(vertical_grip.source, "loadout_snapshots")
         self.assertEqual(report.attachment_combinations[0].weapon_code, "WeapHK416_C")
@@ -336,14 +356,16 @@ class PlayerRecommendationServiceTests(unittest.TestCase):
             report.loadouts[0].secondary.weapon_code,
         )
         self.assertEqual(
-            report.loadouts[0].primary_attachments[0].attachment_name,
-            "수직 손잡이",
+            {item.attachment_name for item in report.loadouts[0].primary_attachments},
+            {"총구 제동기", "수직 손잡이", "레드 도트 사이트"},
         )
         self.assertIsNotNone(report.loadouts[0].primary_attachment_combination)
         self.assertEqual(
             report.loadouts[0].primary_attachment_combination.attachment_names,
-            ("수직 손잡이", "레드 도트 사이트"),
+            ("수직 손잡이", "총구 제동기", "레드 도트 사이트"),
         )
+        self.assertTrue(report.loadouts[0].primary_attachment_plan["is_complete_for_observed_slots"])
+        self.assertEqual(report.loadouts[0].primary_attachment_plan["selected_slot_count"], 3)
         burden = report.loadouts[0].inventory_burden
         self.assertEqual(burden["model_version"], "inventory-weight-v3")
         self.assertEqual(burden["carried_rounds_by_ammo"], {"5.56mm": 150, "7.62mm": 45})

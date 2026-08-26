@@ -38,6 +38,59 @@ class DiscordBotSettingsTests(unittest.TestCase):
 
             self.assertEqual(saved.guild_enabled_commands, {"100": []})
 
+    def test_single_guild_command_update_preserves_other_guilds(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store = LocalSettingsStore(Path(temp_dir) / "local_settings.json")
+            store.save_discord_bot_settings(
+                auto_start=True,
+                command_prefix="?",
+                guild_enabled_commands={"100": ["전적"], "200": ["추천"]},
+            )
+
+            updated = store.save_discord_guild_commands(
+                guild_id="100",
+                commands=["무기", "전적"],
+            )
+            restored_default = store.save_discord_guild_commands(
+                guild_id="100",
+                commands=None,
+            )
+
+            self.assertEqual(updated.guild_enabled_commands["100"], ["무기", "전적"])
+            self.assertEqual(updated.guild_enabled_commands["200"], ["추천"])
+            self.assertNotIn("100", restored_default.guild_enabled_commands)
+            self.assertEqual(restored_default.guild_enabled_commands["200"], ["추천"])
+            self.assertTrue(restored_default.auto_start)
+            self.assertEqual(restored_default.command_prefix, "?")
+
+    def test_multi_guild_ranking_scope_round_trip_and_prune(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store = LocalSettingsStore(Path(temp_dir) / "local_settings.json")
+            saved = store.save_discord_scope_settings(
+                guild_ranking_scopes={"100": "guild"},
+                guild_ranking_selected_guild_ids={"100": ["300", "200", "200"]},
+            )
+
+            self.assertEqual(
+                saved.guild_ranking_selected_guild_ids,
+                {"100": ["200", "300"]},
+            )
+            loaded = store.load_discord_scope_settings()
+            self.assertEqual(loaded.guild_ranking_selected_guild_ids, {"100": ["200", "300"]})
+
+            store.reconcile_managed_discord_bot(
+                bot_user_id="42",
+                bot_username="PUBG Metrics",
+                guild_ids=["100", "200"],
+            )
+            pruned = store.reconcile_managed_discord_bot(
+                bot_user_id="42",
+                bot_username="PUBG Metrics",
+                guild_ids=["100", "200"],
+                prune_stale=True,
+            )
+            self.assertEqual(pruned.scopes.guild_ranking_selected_guild_ids, {"100": ["200"]})
+
     def test_rejects_invalid_prefix_guild_and_command(self) -> None:
         with TemporaryDirectory() as temp_dir:
             store = LocalSettingsStore(Path(temp_dir) / "local_settings.json")

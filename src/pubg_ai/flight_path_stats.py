@@ -264,7 +264,7 @@ class FlightPathStatsService:
                     matches.map_name,
                     matches.created_at_kst
                 FROM match_plane_routes routes
-                INNER JOIN matches
+                INNER JOIN analysis_matches AS matches
                     ON matches.match_id = routes.match_id
                 WHERE """
                 + " AND ".join(conditions)

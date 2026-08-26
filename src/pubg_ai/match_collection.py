@@ -243,7 +243,18 @@ class RegisteredPlayerMatchCollector:
 
     def _match_exists(self, match_id: str) -> bool:
         with self.connection.cursor() as cursor:
-            cursor.execute("SELECT 1 FROM matches WHERE match_id = %s LIMIT 1", (match_id,))
+            cursor.execute(
+                """
+                SELECT 1
+                FROM (
+                    SELECT match_id FROM matches WHERE match_id = %s
+                    UNION ALL
+                    SELECT match_id FROM excluded_matches WHERE match_id = %s
+                ) AS handled_matches
+                LIMIT 1
+                """,
+                (match_id, match_id),
+            )
             return cursor.fetchone() is not None
 
     def _match_job_exists(self, shard: str, match_id: str) -> bool:

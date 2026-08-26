@@ -81,7 +81,11 @@ class WebRecommendationTests(unittest.TestCase):
             "clearRegisteredPlayerSearch(event.currentTarget)",
             body,
         )
-        self.assertNotIn("event.currentTarget.reset()", body)
+        handler_start = body.index('recommendationForm.addEventListener("submit"')
+        recommendation_handler = body[
+            handler_start : body.index('dropZoneForm.addEventListener("submit"', handler_start)
+        ]
+        self.assertNotIn("event.currentTarget.reset()", recommendation_handler)
 
     def test_drop_zone_view_limits_default_chart_without_hiding_detail_rows(self) -> None:
         body = TestClient(create_app()).get("/").text

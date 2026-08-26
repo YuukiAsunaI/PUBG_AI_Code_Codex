@@ -89,6 +89,7 @@ class DiscordPermissionSettings:
     global_admin_user_ids: list[str]
     updated_at: str | None = None
     command_aliases: dict[str, str] = field(default_factory=dict)
+    guild_member_labels: dict[str, dict[str, str]] = field(default_factory=dict)
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -97,6 +98,7 @@ class DiscordPermissionSettings:
             "guild_user_grants": self.guild_user_grants,
             "global_admin_user_ids": self.global_admin_user_ids,
             "command_aliases": self.command_aliases,
+            "guild_member_labels": self.guild_member_labels,
             "updated_at": self.updated_at,
         }
 
@@ -104,12 +106,14 @@ class DiscordPermissionSettings:
 @dataclass(frozen=True)
 class DiscordScopeSettings:
     guild_ranking_scopes: dict[str, str]
+    guild_ranking_selected_guild_ids: dict[str, list[str]] = field(default_factory=dict)
     public_profile_default: bool = True
     updated_at: str | None = None
 
     def to_record(self) -> dict[str, Any]:
         return {
             "guild_ranking_scopes": self.guild_ranking_scopes,
+            "guild_ranking_selected_guild_ids": self.guild_ranking_selected_guild_ids,
             "public_profile_default": self.public_profile_default,
             "updated_at": self.updated_at,
         }
@@ -413,6 +417,7 @@ class LocalSettingsStore:
         guild_user_grants: dict[str, dict[str, list[str]]] | None = None,
         global_admin_user_ids: list[str] | None = None,
         command_aliases: dict[str, str] | None = None,
+        guild_member_labels: dict[str, dict[str, str]] | None = None,
     ) -> DiscordPermissionSettings:
         settings = DiscordPermissionSettings(
             command_groups=_normalize_groups(command_groups),
@@ -421,6 +426,7 @@ class LocalSettingsStore:
             global_admin_user_ids=_normalize_id_list(global_admin_user_ids or []),
             updated_at=isoformat_kst(),
             command_aliases=_normalize_command_aliases(command_aliases or {}),
+            guild_member_labels=_normalize_guild_member_labels(guild_member_labels or {}),
         )
         _validate_discord_permission_settings(settings)
         self._update_settings_section("discord_permissions", settings.to_record())
@@ -452,6 +458,7 @@ class LocalSettingsStore:
                 global_admin_user_ids=_normalize_id_list(candidate.global_admin_user_ids),
                 updated_at=isoformat_kst(),
                 command_aliases=_normalize_command_aliases(candidate.command_aliases),
+                guild_member_labels=_normalize_guild_member_labels(candidate.guild_member_labels),
             )
             _validate_discord_permission_settings(settings)
             payload["discord_permissions"] = settings.to_record()
@@ -463,14 +470,32 @@ class LocalSettingsStore:
         self,
         guild_ranking_scopes: dict[str, str],
         public_profile_default: bool = True,
+        guild_ranking_selected_guild_ids: dict[str, list[str]] | None = None,
     ) -> DiscordScopeSettings:
-        settings = DiscordScopeSettings(
-            guild_ranking_scopes=_normalize_scope_map(guild_ranking_scopes),
-            public_profile_default=public_profile_default,
-            updated_at=isoformat_kst(),
-        )
-        self._update_settings_section("discord_scopes", settings.to_record())
-        return settings
+        normalized_scopes = _normalize_scope_map(guild_ranking_scopes)
+
+        def mutate(payload: dict[str, Any]) -> DiscordScopeSettings:
+            current_record = payload.get("discord_scopes")
+            current = (
+                _discord_scopes_from_record(current_record)
+                if isinstance(current_record, dict)
+                else DiscordScopeSettings(guild_ranking_scopes={})
+            )
+            selected = (
+                current.guild_ranking_selected_guild_ids
+                if guild_ranking_selected_guild_ids is None
+                else _normalize_ranking_selected_guild_ids(guild_ranking_selected_guild_ids)
+            )
+            settings = DiscordScopeSettings(
+                guild_ranking_scopes=normalized_scopes,
+                guild_ranking_selected_guild_ids=selected,
+                public_profile_default=bool(public_profile_default),
+                updated_at=isoformat_kst(),
+            )
+            payload["discord_scopes"] = settings.to_record()
+            return settings
+
+        return self._mutate_settings(mutate)
 
     def save_discord_bot_settings(
         self,
@@ -493,6 +518,43 @@ class LocalSettingsStore:
                 auto_start=bool(auto_start),
                 command_prefix=normalized_prefix,
                 guild_enabled_commands=normalized_commands,
+                managed_bot_user_id=current.managed_bot_user_id,
+                managed_bot_username=current.managed_bot_username,
+                managed_guild_ids=list(current.managed_guild_ids),
+                updated_at=isoformat_kst(),
+            )
+            payload["discord_bot"] = settings.to_record()
+            return settings
+
+        return self._mutate_settings(mutate)
+
+    def save_discord_guild_commands(
+        self,
+        *,
+        guild_id: str,
+        commands: list[str] | None,
+    ) -> DiscordBotSettings:
+        normalized_guild_id = _normalize_discord_snowflake(guild_id, "Discord guild id")
+
+        def mutate(payload: dict[str, Any]) -> DiscordBotSettings:
+            current_record = payload.get("discord_bot")
+            current = (
+                _discord_bot_settings_from_record(current_record)
+                if isinstance(current_record, dict)
+                else DiscordBotSettings()
+            )
+            next_commands = dict(current.guild_enabled_commands)
+            if commands is None:
+                next_commands.pop(normalized_guild_id, None)
+            else:
+                try:
+                    next_commands[normalized_guild_id] = normalize_command_selection(commands)
+                except ValueError as exc:
+                    raise LocalSettingsError(str(exc)) from exc
+            settings = DiscordBotSettings(
+                auto_start=current.auto_start,
+                command_prefix=current.command_prefix,
+                guild_enabled_commands=dict(sorted(next_commands.items())),
                 managed_bot_user_id=current.managed_bot_user_id,
                 managed_bot_username=current.managed_bot_username,
                 managed_guild_ids=list(current.managed_guild_ids),
@@ -550,7 +612,14 @@ class LocalSettingsStore:
                 set(current_bot.managed_guild_ids)
                 | set(current_bot.guild_enabled_commands)
                 | set(current_permissions.guild_user_grants)
+                | set(current_permissions.guild_member_labels)
                 | set(current_scopes.guild_ranking_scopes)
+                | set(current_scopes.guild_ranking_selected_guild_ids)
+                | {
+                    selected_guild_id
+                    for guild_ids in current_scopes.guild_ranking_selected_guild_ids.values()
+                    for selected_guild_id in guild_ids
+                }
             )
             removed_guild_ids = sorted(configured_guild_ids - managed_guild_set)
             updated_at = isoformat_kst()
@@ -588,6 +657,15 @@ class LocalSettingsStore:
                 global_admin_user_ids=current_permissions.global_admin_user_ids,
                 updated_at=updated_at,
                 command_aliases=current_permissions.command_aliases,
+                guild_member_labels=(
+                    {
+                        guild_id: labels
+                        for guild_id, labels in current_permissions.guild_member_labels.items()
+                        if guild_id in managed_guild_set
+                    }
+                    if prune_stale
+                    else current_permissions.guild_member_labels
+                ),
             )
             guild_ranking_scopes = (
                 {
@@ -598,8 +676,22 @@ class LocalSettingsStore:
                 if prune_stale
                 else current_scopes.guild_ranking_scopes
             )
+            guild_ranking_selected_guild_ids = (
+                {
+                    guild_id: [
+                        selected_guild_id
+                        for selected_guild_id in selected_guild_ids
+                        if selected_guild_id in managed_guild_set
+                    ]
+                    for guild_id, selected_guild_ids in current_scopes.guild_ranking_selected_guild_ids.items()
+                    if guild_id in managed_guild_set
+                }
+                if prune_stale
+                else current_scopes.guild_ranking_selected_guild_ids
+            )
             scopes = DiscordScopeSettings(
                 guild_ranking_scopes=guild_ranking_scopes,
+                guild_ranking_selected_guild_ids=guild_ranking_selected_guild_ids,
                 public_profile_default=current_scopes.public_profile_default,
                 updated_at=updated_at,
             )
@@ -926,6 +1018,11 @@ def _discord_permissions_from_record(record: dict[str, Any]) -> DiscordPermissio
         command_aliases=_normalize_command_aliases(
             record.get("command_aliases") if isinstance(record.get("command_aliases"), dict) else {}
         ),
+        guild_member_labels=_normalize_guild_member_labels(
+            record.get("guild_member_labels")
+            if isinstance(record.get("guild_member_labels"), dict)
+            else {}
+        ),
     )
     _validate_discord_permission_settings(settings)
     return settings
@@ -1037,8 +1134,43 @@ def _normalize_scope_map(value: dict[str, Any]) -> dict[str, str]:
     return normalized
 
 
+def _normalize_guild_member_labels(value: dict[str, Any]) -> dict[str, dict[str, str]]:
+    normalized: dict[str, dict[str, str]] = {}
+    for guild_id, raw_labels in value.items():
+        if not isinstance(guild_id, str) or not guild_id.strip():
+            raise LocalSettingsError("Discord member label guild ids must be non-empty strings.")
+        if not isinstance(raw_labels, dict):
+            raise LocalSettingsError(f"Discord guild {guild_id} member labels must be an object.")
+        labels: dict[str, str] = {}
+        for user_id, raw_label in raw_labels.items():
+            if not isinstance(user_id, str) or not user_id.strip():
+                raise LocalSettingsError("Discord member label user ids must be non-empty strings.")
+            label = str(raw_label or "").strip()
+            if label:
+                labels[user_id.strip()] = label[:128]
+        if labels:
+            normalized[guild_id.strip()] = dict(sorted(labels.items()))
+    return dict(sorted(normalized.items()))
+
+
+def _normalize_ranking_selected_guild_ids(value: dict[str, Any]) -> dict[str, list[str]]:
+    normalized: dict[str, list[str]] = {}
+    for raw_source_guild_id, raw_selected_guild_ids in value.items():
+        source_guild_id = _normalize_discord_snowflake(raw_source_guild_id, "Discord guild id")
+        if not isinstance(raw_selected_guild_ids, list):
+            raise LocalSettingsError(
+                f"Discord guild {source_guild_id} ranking selection must be a list."
+            )
+        normalized[source_guild_id] = _normalize_discord_snowflake_list(
+            raw_selected_guild_ids,
+            "Discord ranking guild id",
+        )
+    return dict(sorted(normalized.items()))
+
+
 def _discord_scopes_from_record(record: dict[str, Any]) -> DiscordScopeSettings:
     guild_ranking_scopes = record.get("guild_ranking_scopes")
+    guild_ranking_selected_guild_ids = record.get("guild_ranking_selected_guild_ids")
     public_profile_default = record.get("public_profile_default", True)
     if not isinstance(public_profile_default, bool):
         public_profile_default = True
@@ -1046,6 +1178,11 @@ def _discord_scopes_from_record(record: dict[str, Any]) -> DiscordScopeSettings:
     return DiscordScopeSettings(
         guild_ranking_scopes=_normalize_scope_map(
             guild_ranking_scopes if isinstance(guild_ranking_scopes, dict) else {}
+        ),
+        guild_ranking_selected_guild_ids=_normalize_ranking_selected_guild_ids(
+            guild_ranking_selected_guild_ids
+            if isinstance(guild_ranking_selected_guild_ids, dict)
+            else {}
         ),
         public_profile_default=public_profile_default,
         updated_at=_optional_str(record.get("updated_at")),

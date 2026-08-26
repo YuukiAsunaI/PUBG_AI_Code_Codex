@@ -14,7 +14,7 @@ class AlertHistoryError(RuntimeError):
     """Raised when alert history cannot be updated or read."""
 
 
-ALERT_HISTORY_SOURCES = {"all", "storage", "worker"}
+ALERT_HISTORY_SOURCES = {"all", "storage", "worker", "watchlist"}
 ALERT_HISTORY_STATES = {"all", "active", "current", "acknowledged", "snoozed", "resolved"}
 ALERT_HISTORY_SORTS = {"newest", "oldest", "severity"}
 ALERT_HISTORY_SEVERITIES = {"all", "error", "warning", "info", "ok"}
