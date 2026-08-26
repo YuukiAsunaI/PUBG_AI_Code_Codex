@@ -161,6 +161,18 @@ class DesktopApiTests(unittest.TestCase):
 
 
 class DesktopLauncherTests(unittest.TestCase):
+    def test_repository_launcher_prefers_current_source_over_packaged_executable(self) -> None:
+        launcher = (Path(__file__).resolve().parents[1] / "run_desktop.cmd").read_text(
+            encoding="utf-8"
+        )
+
+        source_launch = launcher.index("python -m pubg_ai.cli")
+        executable_fallback = launcher.index("dist\\PUBG_AI_Manager.exe")
+        self.assertLess(source_launch, executable_fallback)
+        self.assertIn('set "PYTHONPATH=%~dp0src;%PYTHONPATH%"', launcher)
+        self.assertIn('--base-dir "%~dp0." run-desktop --maximized', launcher)
+        self.assertIn("if errorlevel 1 goto launch_failed", launcher)
+
     def test_existing_manager_port_is_never_reused(self) -> None:
         server = LocalManagerServer(
             endpoint=DesktopEndpoint("127.0.0.1", 8018),

@@ -676,7 +676,10 @@ python -m pip install -e ".[desktop]"
 python -m pubg_ai.cli run-desktop --maximized
 ```
 
-After the desktop dependency is installed, `run_desktop.cmd` provides the same maximized launch by double-click.
+After the desktop dependency is installed, `run_desktop.cmd` provides the same maximized launch by double-click. In a
+repository checkout it always runs the current `src` tree first, so an older packaged executable cannot hide newer
+local-manager changes. `dist/PUBG_AI_Manager.exe` is used only when Python or the source tree is unavailable. A source
+startup error is reported instead of being hidden by a fallback to an older executable.
 Desktop mode always starts its own FastAPI manager. If the configured localhost port is already occupied, it scans
 forward for an available local port instead of attaching a new window to a stale or older manager build. The header
 shows the active release identifier and the native window exposes Windows folder pickers for Raw, Replay,
@@ -697,9 +700,9 @@ python -m pip install -e ".[desktop-build]"
 python -m PyInstaller --clean --noconfirm pubg_ai_desktop.spec
 ```
 
-The result is `dist/PUBG_AI_Manager.exe`. The repository-root `run_desktop.cmd` launches that executable when it
-exists and otherwise falls back to the Python desktop command. The executable searches its parent directories for
-the project `.env` and `config` directory; `PUBG_AI_BASE_DIR` can override that location explicitly.
+The result is `dist/PUBG_AI_Manager.exe`. The repository-root `run_desktop.cmd` prefers the current source and keeps
+that executable as its fallback. The executable searches its parent directories for the project `.env` and `config`
+directory; `PUBG_AI_BASE_DIR` can override that location explicitly.
 
 Run the browser-only local manager instead:
 

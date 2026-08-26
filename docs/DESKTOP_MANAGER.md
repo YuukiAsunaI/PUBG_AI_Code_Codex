@@ -105,7 +105,10 @@ python -m pip install -e ".[desktop]"
 python -m pubg_ai.cli run-desktop --maximized
 ```
 
-The repository-root `run_desktop.cmd` provides a double-click launcher after installation. The configured
+The repository-root `run_desktop.cmd` provides a double-click launcher after installation. A repository checkout
+always launches its current `src` tree first; the packaged executable is only a fallback when Python is unavailable
+or the source tree is absent. A source startup error is reported instead of being hidden by an older executable. This
+prevents a stale `dist` build from hiding newer manager changes. The configured
 `local_web_base_url` supplies the preferred desktop port, with `8000` used when no local URL is configured. If that
 port is occupied, the launcher selects the next available localhost port and displays it in the runtime badge tooltip.
 
