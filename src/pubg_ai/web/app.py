@@ -5741,7 +5741,13 @@ _INDEX_HTML = """<!doctype html>
       overflow-x: auto;
       scrollbar-width: thin;
     }
-    .workspace-section-tabs.visible { display: flex; }
+    .workspace-section-tabs.visible {
+      position: sticky;
+      z-index: 9;
+      top: 92px;
+      display: flex;
+      background: rgba(10, 12, 14, 0.98);
+    }
     .workspace-section-tabs button {
       min-height: 34px;
       flex: 0 0 auto;
@@ -6242,6 +6248,7 @@ _INDEX_HTML = """<!doctype html>
       main { padding: 0 12px 18px; overflow: visible; }
       .workspace-heading { margin: 0 -12px 12px; padding: 14px 12px; }
       .workspace-section-tabs { margin-top: 0; }
+      .workspace-section-tabs.visible { position: static; }
       .analysis-player-context { align-items: flex-start; }
       .intelligence-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .intelligence-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -6974,7 +6981,7 @@ _INDEX_HTML = """<!doctype html>
       <form id="watchlistEditForm" class="app-dialog-shell">
         <header class="app-dialog-header"><h3 id="watchlistEditTitle">밴 플레이어 설정</h3><button class="secondary app-dialog-close" type="button" id="watchlistEditClose" aria-label="밴 플레이어 설정 창 닫기">×</button></header>
         <div class="app-dialog-content">
-          <input name="shard" type="hidden"><input name="account_id" type="hidden>
+          <input name="shard" type="hidden"><input name="account_id" type="hidden">
           <div id="watchlistEditIdentity" class="result-summary"></div>
           <div class="filter-grid">
             <label>감시 상태<select name="active"><option value="true">감시 중</option><option value="false">감시 중지</option></select></label>
@@ -8439,8 +8446,11 @@ _INDEX_HTML = """<!doctype html>
     const displaySettingsStatus = document.querySelector("#displaySettingsStatus");
     const displayNumberPreview = document.querySelector("#displayNumberPreview");
     const banner = document.querySelector("#banner");
+    const workspaceMain = document.querySelector("#workspace");
+    const sidePanel = document.querySelector(".side-panel");
     const workspaceNav = document.querySelector("#workspaceNav");
     const workspaceSections = document.querySelector("#workspaceSections");
+    const workspaceHeading = document.querySelector(".workspace-heading");
     const workspaceTitle = document.querySelector("#workspaceTitle");
     const workspaceEyebrow = document.querySelector("#workspaceEyebrow");
     const workspaceDescription = document.querySelector("#workspaceDescription");
@@ -8737,6 +8747,78 @@ _INDEX_HTML = """<!doctype html>
       return formatBytes(Number(status.free_bytes || 0)) + " 여유";
     }
 
+    function resetDocumentViewport() {
+      window.scrollTo(0, 0);
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+    }
+
+    function enforceDesktopAppShellOrigin() {
+      if (window.matchMedia("(max-width: 820px)").matches) return;
+      if (window.scrollY || document.documentElement.scrollTop || document.body.scrollTop) {
+        resetDocumentViewport();
+      }
+    }
+
+    function revealActiveWorkspaceSection() {
+      const active = workspaceSections.querySelector("button.active");
+      if (!active) return;
+      const visibleLeft = workspaceSections.scrollLeft;
+      const visibleRight = visibleLeft + workspaceSections.clientWidth;
+      const activeLeft = active.offsetLeft;
+      const activeRight = activeLeft + active.offsetWidth;
+      let nextLeft = visibleLeft;
+      if (activeLeft < visibleLeft) nextLeft = activeLeft;
+      if (activeRight > visibleRight) nextLeft = activeRight - workspaceSections.clientWidth;
+      if (nextLeft !== visibleLeft) {
+        workspaceSections.scrollTo({ left: Math.max(0, nextLeft), behavior: "auto" });
+      }
+    }
+
+    function resetWorkspaceViewport() {
+      resetDocumentViewport();
+      sidePanel?.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      workspaceMain?.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      revealActiveWorkspaceSection();
+      requestAnimationFrame(resetDocumentViewport);
+    }
+
+    function scrollWithinWorkspace(element, { behavior = "smooth", block = "start" } = {}) {
+      if (!element || !workspaceMain) return;
+      sidePanel?.scrollTo({ top: 0, left: 0, behavior: "auto" });
+
+      if (window.matchMedia("(max-width: 820px)").matches) {
+        const top = window.scrollY + element.getBoundingClientRect().top - 12;
+        window.scrollTo({ top: Math.max(0, top), behavior });
+        return;
+      }
+
+      resetDocumentViewport();
+      const workspaceRect = workspaceMain.getBoundingClientRect();
+      const elementRect = element.getBoundingClientRect();
+      const headingBottom = Math.max(
+        workspaceRect.top,
+        workspaceHeading?.getBoundingClientRect().bottom || workspaceRect.top,
+      );
+      const visibleTop = workspaceSections.classList.contains("visible")
+        ? Math.max(headingBottom, workspaceSections.getBoundingClientRect().bottom) + 8
+        : headingBottom + 8;
+      const visibleBottom = workspaceRect.bottom - 8;
+      let delta = 0;
+      if (block === "start") {
+        delta = elementRect.top - visibleTop;
+      } else if (elementRect.top < visibleTop) {
+        delta = elementRect.top - visibleTop;
+      } else if (elementRect.bottom > visibleBottom) {
+        delta = elementRect.bottom - visibleBottom;
+      }
+      workspaceMain.scrollTo({
+        top: Math.max(0, workspaceMain.scrollTop + delta),
+        behavior,
+      });
+      requestAnimationFrame(resetDocumentViewport);
+    }
+
     function workspaceViewFromLocation() {
       const hash = decodeURIComponent(window.location.hash.replace(/^#/, ""));
       if (hash.startsWith("workspace-")) {
@@ -8806,13 +8888,8 @@ _INDEX_HTML = """<!doctype html>
         url.hash = "workspace-" + nextView;
         window.history.pushState({}, "", url);
       }
-      if (options.focusId) {
-        requestAnimationFrame(() => {
-          document.getElementById(options.focusId)?.scrollIntoView({ block: "start" });
-        });
-      } else {
-        document.querySelector("main")?.scrollTo({ top: 0, behavior: options.smooth ? "smooth" : "auto" });
-      }
+      resetWorkspaceViewport();
+      requestAnimationFrame(resetWorkspaceViewport);
     }
 
     function syncWorkspaceToLocation() {
@@ -14301,7 +14378,7 @@ _INDEX_HTML = """<!doctype html>
         if (mapSelect) mapSelect.value = button.dataset.dropRegionMap || "";
         setDropView("map");
         renderMap(button.dataset.dropRegionMap || "", button.dataset.dropRegionKey || "");
-        mapPanel?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        scrollWithinWorkspace(mapPanel, { behavior: "smooth", block: "nearest" });
       }));
       setDropView("map");
       renderMap(initialMap);
@@ -14907,7 +14984,7 @@ _INDEX_HTML = """<!doctype html>
       activeMatchExplorerDetail = payload.detail;
       renderMatchExplorerDetail();
       setMatchExplorerDetailView("participants");
-      matchExplorerDetail.scrollIntoView({ behavior: "smooth", block: "start" });
+      scrollWithinWorkspace(matchExplorerDetail, { behavior: "smooth", block: "start" });
     }
 
     function renderMatchExplorerDetail() {
@@ -15809,7 +15886,7 @@ _INDEX_HTML = """<!doctype html>
         updateWorkerRunDetailUrl(payload.run.id);
       }
       if (options.scroll) {
-        workerRunDetail.scrollIntoView({ block: "start" });
+        scrollWithinWorkspace(workerRunDetail, { behavior: "auto", block: "start" });
       }
     }
 
@@ -20532,16 +20609,22 @@ _INDEX_HTML = """<!doctype html>
     }
     window.addEventListener("hashchange", syncWorkspaceToLocation);
     window.addEventListener("popstate", syncWorkspaceToLocation);
+    window.addEventListener("scroll", enforceDesktopAppShellOrigin, { passive: true });
+    window.addEventListener("resize", enforceDesktopAppShellOrigin);
     window.addEventListener("pywebviewready", enableDesktopFeatures);
     new MutationObserver(() => {
       railActivity.textContent = banner.textContent || "대기 중";
     }).observe(banner, { childList: true, characterData: true, subtree: true });
 
+    if ("scrollRestoration" in window.history) {
+      window.history.scrollRestoration = "manual";
+    }
     applyDisplaySettings();
     syncWorkspaceToLocation();
     updateKstClock();
     setInterval(updateKstClock, 1000);
     enableDesktopFeatures();
+    window.addEventListener("load", resetWorkspaceViewport, { once: true });
     clearReplayTimeline();
     loadInitialLookupPrefillFromUrl();
     const initialAlertHistoryFilterFromUrl = loadInitialAlertHistoryFiltersFromUrl();

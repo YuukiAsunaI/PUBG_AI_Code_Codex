@@ -42,7 +42,7 @@ async function openManager(page) {
 }
 
 async function runPlayerAnalysis(page) {
-  await page.locator('[data-view-target="players"]').click();
+  await openWorkspaceSection(page, "players", "intelligence");
   const form = page.locator("#intelligenceForm");
   try {
     const target = form.locator('[name="target"]');
@@ -118,6 +118,63 @@ async function openWorkspaceSection(page, view, section) {
   await page.locator(`[data-workspace-section="${section}"]`).click();
 }
 
+async function runWorkspaceContentCheck(page) {
+  const views = await page.locator("[data-view-target]").evaluateAll((items) => (
+    [...new Set(items.map((item) => item.dataset.viewTarget).filter(Boolean))]
+  ));
+  const checks = [];
+
+  for (const view of views) {
+    await page.locator(`[data-view-target="${view}"]`).first().click();
+    await page.waitForTimeout(100);
+    const tabs = await page.locator("#workspaceSections [data-workspace-section]").evaluateAll(
+      (items) => items.map((item) => item.dataset.workspaceSection).filter(Boolean),
+    );
+    const targets = tabs.length ? tabs : [""];
+    for (const tab of targets) {
+      if (tab) {
+        await page.locator(`#workspaceSections [data-workspace-section="${tab}"]`).click();
+        await page.waitForTimeout(100);
+      }
+      checks.push(await page.evaluate(({ expectedView, expectedTab }) => {
+        const allSections = [...document.querySelectorAll(`section[data-view="${expectedView}"]`)];
+        const workspaceSections = allSections.filter((section) => section.parentElement?.id === "workspace");
+        const visibleSections = workspaceSections.filter((section) => {
+          const style = getComputedStyle(section);
+          const box = section.getBoundingClientRect();
+          return !section.hidden && style.display !== "none" && box.width > 0 && box.height > 0;
+        });
+        return {
+          view: expectedView,
+          tab: expectedTab || "default",
+          activeView: document.body.dataset.activeView || "",
+          activeTab:
+            document.querySelector("#workspaceSections [data-workspace-section].active")
+              ?.dataset.workspaceSection || "",
+          sectionCount: allSections.length,
+          workspaceSectionCount: workspaceSections.length,
+          visibleSectionIds: visibleSections.map((section) => section.id),
+          hasVisibleContent: visibleSections.some((section) => section.innerText.trim().length > 0),
+        };
+      }, { expectedView: view, expectedTab: tab }));
+    }
+    if (tabs.length) {
+      await page.locator(`#workspaceSections [data-workspace-section="${tabs[0]}"]`).click();
+    }
+  }
+  await page.locator('[data-view-target="overview"]').first().click();
+
+  const failures = checks.filter((check) => (
+    check.activeView !== check.view
+    || (check.tab !== "default" && check.activeTab !== check.tab)
+    || check.sectionCount < 1
+    || check.workspaceSectionCount !== check.sectionCount
+    || check.visibleSectionIds.length < 1
+    || !check.hasVisibleContent
+  ));
+  return { checked: checks.length, valid: failures.length === 0, failures };
+}
+
 async function runRegistryAndDimensionChecks(page) {
   await openWorkspaceSection(page, "players", "registry");
   await page.locator("#playersBody tr").first().waitFor({ timeout: 30000 });
@@ -175,6 +232,50 @@ async function runMobileRegistryCheck(page) {
     rows: await page.locator("#playersBody tr").count(),
     editors: await page.locator("#playersBody [data-player-discord-add]").count(),
     screenshot,
+  };
+}
+
+async function runWorkspaceNavigationCheck(page) {
+  const snapshot = (label) => page.evaluate((label) => {
+    const main = document.querySelector("main");
+    const side = document.querySelector(".side-panel");
+    const header = document.querySelector(".app-header");
+    const heading = document.querySelector(".workspace-heading");
+    const firstMenu = document.querySelector('[data-view-target="overview"]');
+    return {
+      label,
+      documentTop: document.scrollingElement.scrollTop,
+      windowY: window.scrollY,
+      mainTop: main.scrollTop,
+      sideTop: side.scrollTop,
+      headerTop: Math.round(header.getBoundingClientRect().top),
+      headingTop: Math.round(heading.getBoundingClientRect().top),
+      firstMenuTop: Math.round(firstMenu.getBoundingClientRect().top),
+    };
+  }, label);
+
+  await page.locator('[data-view-target="operations"]').click();
+  await page.waitForTimeout(100);
+  const results = [await snapshot("operations")];
+  for (const section of ["alerts", "runs"]) {
+    await page.locator(`[data-workspace-section="${section}"]`).click();
+    await page.waitForTimeout(250);
+    results.push(await snapshot(section));
+  }
+  await page.evaluate(() => window.scrollTo(0, 5000));
+  await page.waitForTimeout(100);
+  results.push(await snapshot("forced-document-scroll"));
+  return {
+    results,
+    stable: results.every((item) => (
+      item.documentTop === 0
+      && item.windowY === 0
+      && item.mainTop === 0
+      && item.sideTop === 0
+      && item.headerTop === 0
+      && item.headingTop >= 0
+      && item.firstMenuTop >= 0
+    )),
   };
 }
 
@@ -405,12 +506,14 @@ async function layoutDiagnostics(page) {
     const desktopPage = await desktopContext.newPage();
     const desktopMonitor = monitorPage(desktopPage);
     const desktopResponse = await openManager(desktopPage);
+    const workspaceContent = await runWorkspaceContentCheck(desktopPage);
     const player = await runPlayerAnalysis(desktopPage);
     const playerScreenshot = path.join(outputDir, "player-intelligence-desktop.png");
     await desktopPage.screenshot({ path: playerScreenshot, fullPage: false });
     const features = await runExpandedFeatureChecks(desktopPage);
     const registryDimensions = await runRegistryAndDimensionChecks(desktopPage);
     const audit = await runDataQualityAudit(desktopPage);
+    const workspaceNavigation = await runWorkspaceNavigationCheck(desktopPage);
     const auditScreenshot = path.join(outputDir, "data-quality-desktop.png");
     await desktopPage.screenshot({ path: auditScreenshot, fullPage: false });
     const desktopLayout = await layoutDiagnostics(desktopPage);
@@ -437,9 +540,11 @@ async function layoutDiagnostics(page) {
       desktop: {
         status: desktopResponse?.status(),
         player,
+        workspaceContent,
         features,
         registryDimensions,
         audit,
+        workspaceNavigation,
         layout: desktopLayout,
         ...desktopMonitor,
       },
@@ -464,6 +569,7 @@ async function layoutDiagnostics(page) {
       result.desktop.status !== 200,
       result.mobile.status !== 200,
       !result.desktop.player.hasPlayer,
+      !result.desktop.workspaceContent.valid,
       !result.mobile.player.hasPlayer,
       !result.desktop.features.numberFormat.koreanUnitsRendered,
       !result.desktop.features.match.hasSummary,
@@ -500,6 +606,7 @@ async function layoutDiagnostics(page) {
       result.mobile.registry.rows < 1,
       result.mobile.registry.editors < result.mobile.registry.rows,
       result.desktop.audit.failedRows > 0,
+      !result.desktop.workspaceNavigation.stable,
       result.desktop.consoleErrors.length > 0,
       result.mobile.consoleErrors.length > 0,
       result.desktop.requestFailures.length > 0,
