@@ -418,11 +418,12 @@ Initial commands are:
 !유저조회 [닉네임] [shard]
 !전적 닉네임 [shard]
 !교전 닉네임 [shard]
-!추세 닉네임 [hour|date|week|month] [shard] [team=squad view=tpp mode=squad type=official map=Baltic_Main from=YYYY-MM-DD to=YYYY-MM-DD custom=false limit=12]
+!추세 닉네임 [집계단위] [shard] [팀모드] [시점] [맵] [게임모드] [매치유형] [시작일] [종료일] [표시구간]
 !무기 닉네임 무기명 [shard]
-!매치 match_id [닉네임|accountId] [shard]
-!랭킹 [지표] [shard] [limit] [전체]
-!최근스냅샷 [match_id]
+!추천 닉네임 [shard] [최소표본경기] [결과수]
+!매치 닉네임 [match_id] [shard]
+!랭킹 [지표] [shard] [표시인원] [configured|guild|global] [최소경기]
+!최근스냅샷 닉네임 [match_id] [shard]
 !pubg-alerts
 !pubg-alert-ack alert_id
 !pubg-alert-snooze alert_id [minutes]
@@ -443,13 +444,19 @@ Initial commands are:
 !유저삭제 steam 닉네임또는accountId
 ```
 
-Command access is checked through local Discord permission settings in `config/local_settings.json`.
-Recommendation lookup is available through `!추천 닉네임 [shard]` and `!pubg-recommend nickname [shard]`.
+Command access is checked through local Discord permission settings in `config/local_settings.json`. Slash commands are
+the recommended interactive surface: every option has a Korean name and description, finite values use choices, and
+players are searched only from registrations in the current Discord guild. Discord returns at most 25 autocomplete
+rows per request, so the bot searches MySQL by the typed nickname fragment before applying that response limit; the
+registered-player count itself is not capped at 25. Match and replay commands show recent matches as KST date, Korean
+map/mode, placement, kills, and damage while retaining the match ID only as the hidden option value.
+Recommendation lookup is available through `!추천 닉네임 [shard] [최소표본경기] [결과수]` and the equivalent slash
+command; minimum sample size is caller-selectable from 1 to 100,000.
 Named drop-zone rows show the Korean region when matched and preserve a map/grid fallback otherwise.
-Fight win/loss lookup uses `!교전 닉네임 [shard]` or `!pubg-fights nickname [shard]`. KST trends use
-`!추세 닉네임 [month|week|date|hour] [shard] [key=value filters]` or `!pubg-trends`; both share the
-`profile_read` permission group. When `PUBG_LOCAL_WEB_BASE_URL` is set, trend replies include a prefilled local
-manager link.
+Fight win/loss lookup uses `!교전 닉네임 [shard]` or `!pubg-fights nickname [shard]`. `/추세` exposes separate
+controls for granularity, team mode, perspective, map, game mode, match type, KST start/end dates, and bucket count;
+there is no opaque catch-all option. It shares the `profile_read` permission group with `!pubg-trends`. When
+`PUBG_LOCAL_WEB_BASE_URL` is set, trend replies include a prefilled local manager link.
 
 The local player-analysis view also provides KST time-of-day analysis and player, weapon, and map comparison. Time
 rows separate match share, chicken/win rate, fights per match, accuracy, headshot share among hits, and average
@@ -703,6 +710,16 @@ python -m PyInstaller --clean --noconfirm pubg_ai_desktop.spec
 The result is `dist/PUBG_AI_Manager.exe`. The repository-root `run_desktop.cmd` prefers the current source and keeps
 that executable as its fallback. The executable searches its parent directories for the project `.env` and `config`
 directory; `PUBG_AI_BASE_DIR` can override that location explicitly.
+
+With the local manager and app-managed bot running, verify the command definitions that Discord actually stores:
+
+```powershell
+python scripts\verify_discord_command_deployment.py
+```
+
+The verifier reads the token through the existing `.env` loader without printing it, checks every managed guild
+through Discord's API, and fails when command counts, Korean option descriptions, autocomplete flags, or static-choice
+limits do not match the expected deployment.
 
 Run the browser-only local manager instead:
 

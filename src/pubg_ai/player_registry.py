@@ -254,6 +254,7 @@ class PlayerRegistry:
         *,
         shard: str | None = None,
         registered_guild_id: str | None = None,
+        search: str | None = None,
         active_only: bool = True,
         limit: int = 100,
     ) -> list[RegisteredPlayer]:
@@ -275,12 +276,29 @@ class PlayerRegistry:
         if active_only:
             conditions.append("active = 1")
 
+        normalized_search = str(search or "").strip()
+        if normalized_search:
+            conditions.append(
+                "(current_name LIKE %s ESCAPE '=' OR account_id LIKE %s ESCAPE '=')"
+            )
+            escaped_search = _escape_like_literal(normalized_search)
+            search_pattern = f"%{escaped_search}%"
+            params.extend((search_pattern, search_pattern))
+
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        if normalized_search:
+            order_sql = (
+                "CASE WHEN current_name LIKE %s ESCAPE '=' THEN 0 ELSE 1 END, "
+                "shard ASC, current_name ASC"
+            )
+            params.append(f"{escaped_search}%")
+        else:
+            order_sql = "shard ASC, current_name ASC"
         query = (
             "SELECT id, account_id, shard, current_name, active, public_profile, "
             "registered_by_discord_user_id, registered_guild_id, registered_channel_id "
             f"FROM registered_players {where} "
-            "ORDER BY shard ASC, current_name ASC LIMIT %s"
+            f"ORDER BY {order_sql} LIMIT %s"
         )
         params.append(limit)
 
@@ -524,6 +542,10 @@ def _optional_text(value: str | None) -> str | None:
         return None
     text = value.strip()
     return text or None
+
+
+def _escape_like_literal(value: str) -> str:
+    return value.replace("=", "==").replace("%", "=%").replace("_", "=_")
 
 
 def _datetime_record(value: datetime | None) -> str | None:

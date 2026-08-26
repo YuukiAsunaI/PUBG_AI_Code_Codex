@@ -182,7 +182,7 @@ class DiscordRecommendationFormattingTests(unittest.TestCase):
 
         body = format_player_recommendations(report)
 
-        self.assertIn("Yuuki_Asuna--- 추천 분석", body)
+        self.assertIn("Yuuki_Asuna--- 추천 분석 (스팀)", body)
         self.assertIn("M416", body)
         self.assertIn("추정 30.0%", body)
         self.assertIn("헤드샷 명중 20.0%", body)
@@ -190,9 +190,9 @@ class DiscordRecommendationFormattingTests(unittest.TestCase):
         self.assertIn("수직 손잡이", body)
         self.assertIn("M416 + 수직 손잡이", body)
         self.assertIn("M416 10-15m", body)
-        self.assertIn("Erangel", body)
+        self.assertIn("에란겔", body)
         self.assertIn("Friend (등록 유저)", body)
-        self.assertIn("Taego 용천", body)
+        self.assertIn("태이고 용천", body)
         self.assertNotIn("/players/recommendations/weapon-attachment-evidence", body)
 
         body_with_links = format_player_recommendations(

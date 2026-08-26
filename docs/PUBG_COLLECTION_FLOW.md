@@ -363,12 +363,16 @@ The Discord command surface reuses the same local MySQL and file stores and is o
   average survival/movement, top weapons, and recent match rows.
 - `!무기 닉네임 무기명 [shard]` resolves common names such as `M416` to PUBG weapon codes and returns weapon-specific
   usage matches, chickens, kills, assists, DBNOs, damage, the weapon-family hit metric, body-part hits, and recent weapon rows.
-- `!매치 match_id [닉네임|accountId] [shard]` reads one completed-match summary for a registered target, including
+- `/매치` selects a current-guild registered player and then autocompletes that player's recent completed matches
+  with KST date, Korean map/mode, placement, kills, and damage. Leaving the match option empty selects the latest
+  completed match. `!매치 닉네임 [match_id] [shard]` remains the prefix equivalent. The result includes
   map/mode/type, chicken/non-chicken, total/human/bot player counts, kills, deaths, assists, caused/taken DBNOs,
   damage, class-aware hit metrics, survival/movement/landing distance, top weapons, hit parts, and generated 2D snapshot status.
-- `!랭킹 [지표] [shard] [limit] [전체]` ranks registered targets from completed-match summary tables. Server channels
-  default to that `guild_id` scope; global admins can request the full local ranking with `전체`.
-- `!추천 닉네임 [shard]` reads parsed summary tables and returns recommendations for weapons, distance-weighted
+- `/랭킹` autocompletes the Korean metric name and exposes platform, display count, configured/current/global scope,
+  and minimum completed-match count as separate described options. Server channels default to the app-configured
+  guild scope; global admins can explicitly request the full local ranking.
+- `/추천` exposes the current-guild player, platform, minimum sample size (1 to 100,000), and result count as separate
+  options. It reads parsed summary tables and returns recommendations for weapons, distance-weighted
   weapon ranges, weapon+attachment pairs from combat loadout snapshots when available, attachments, maps, teammates,
   and coordinate-clustered drop zones. The local manager additionally presents role-aware two-weapon combinations:
   one close/mid weapon plus one DMR/SR/Crossbow, with weapon-specific observed attachment combinations. Score details
@@ -379,8 +383,19 @@ The Discord command surface reuses the same local MySQL and file stores and is o
   supporting kill, DBNO-caused, and finish snapshots can be opened from Discord. The local manager can save or clear
   this base URL in `config/local_settings.json`.
 - `!유저삭제 steam 닉네임또는accountId` stops future collection by setting the registered target inactive.
-- `!최근스냅샷 [match_id]` sends the latest generated `map_snapshot` JPEG artifact, or the latest snapshot for the
-  requested match ID.
+- `/최근스냅샷` first selects a current-guild registered player, then optionally selects one of that player's recent
+  matches with the same friendly autocomplete labels as `/매치`. Leaving the match option empty sends that player's
+  latest generated `map_snapshot` JPEG artifact.
+- Discord autocomplete has a protocol response limit of 25 rows, but the bot does not preload or cap the registration
+  catalog at 25. It applies the typed nickname fragment and current `guild_id` in MySQL first, then returns the best
+  25 matches. Users beyond the first page remain searchable by any nickname fragment.
+  MySQL LIKE wildcard characters in nicknames (`_`, `%`, and the escape marker) are treated as literal text.
+- Recent-match autocomplete reads at most the latest 500 completed matches for the selected player and uses a
+  60-second, 128-entry bounded cache so long-running bots do not accumulate stale match catalogs.
+- Core query results use bounded Discord embeds with named fields and caller-only previous/next controls instead of
+  unstructured text walls. Every application-command option has a non-placeholder Korean description.
+  Platform, map, attachment, deletion-scope, and ranking-row labels are translated for display while stored codes
+  remain unchanged for queries.
 - `!pubg-alerts` returns current storage and worker alerts for admins. When alert channel IDs are configured in the
   local manager, the running bot also sends new worker failures and active storage-capacity alerts automatically.
   Alert records acknowledged or snoozed in the local manager are skipped by both automatic alert delivery and the

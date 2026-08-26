@@ -13,6 +13,7 @@ from pubg_ai.discord_bot import (
     _parse_alert_history_filters,
     _parse_worker_run_filters,
     _player_visible_to_scope,
+    build_discord_report_pages,
     format_alert_action_result,
     format_alert_command_reply,
     format_alerts_command_reply,
@@ -695,8 +696,8 @@ class DiscordBotFormattingTests(unittest.TestCase):
         body = format_player_list(players)
 
         self.assertIn("등록 유저", body)
-        self.assertIn("Yuuki_Asuna--- (steam) / 수집중 / 공개", body)
-        self.assertIn("StoppedPlayer (kakao) / 중지 / 비공개", body)
+        self.assertIn("Yuuki_Asuna--- (스팀) / 수집중 / 공개", body)
+        self.assertIn("StoppedPlayer (카카오) / 중지 / 비공개", body)
         self.assertIn("account.1234567...cdef", body)
         self.assertNotIn("account.1234567890abcdef", body)
 
@@ -979,7 +980,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         body = format_player_profile_stats(profile)
 
-        self.assertIn("Yuuki_Asuna--- 전적 (steam)", body)
+        self.assertIn("Yuuki_Asuna--- 전적 (스팀)", body)
         self.assertIn("10전 2치킨 (20.0%)", body)
         self.assertIn("25/8/5", body)
         self.assertIn("KDA 3.75", body)
@@ -1161,13 +1162,13 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         body = format_player_match_detail(detail)
 
-        self.assertIn("Yuuki_Asuna--- 매치 상세 (steam)", body)
-        self.assertIn("match-123456789", body)
+        self.assertIn("Yuuki_Asuna--- 매치 상세 (스팀)", body)
+        self.assertIn("경기 식별값: …23456789", body)
         self.assertIn("총 100명, 사람 96명, 봇 4명", body)
         self.assertIn("4/1/1/5", body)
         self.assertIn("200/50/일반 탄환 추정 25.0%", body)
         self.assertIn("M416 3킬/4기절/420딜/추정 30.0%", body)
-        self.assertIn("!최근스냅샷 match-123456789", body)
+        self.assertIn("`/최근스냅샷`에서 이 플레이어와 경기를 선택", body)
 
         body_with_link = format_player_match_detail(detail, detail_base_url="http://127.0.0.1:8000/")
         self.assertIn(
@@ -1223,10 +1224,11 @@ class DiscordBotFormattingTests(unittest.TestCase):
 
         body = format_player_ranking(ranking)
 
-        self.assertIn("KDA 랭킹 (steam, 서버 guild-1)", body)
+        self.assertIn("KDA 랭킹 (스팀, 서버 guild-1)", body)
+        self.assertIn("집계 기준: 최소 1경기", body)
         self.assertIn("#1 Yuuki_Asuna---: 3.75", body)
         self.assertIn("10전 2치킨", body)
-        self.assertIn("25K/8D/5A", body)
+        self.assertIn("25킬/8사망/5어시", body)
 
         body_with_link = format_player_ranking(
             ranking,
@@ -1280,7 +1282,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
         body = format_replay_artifact_summary(artifact)
 
         self.assertIn("Yuuki_Asuna--- 최근 2D 스냅샷", body)
-        self.assertIn("- 매치 ID: match-123", body)
+        self.assertIn("- 경기 식별값: …atch-123", body)
         self.assertIn("- 맵/모드: Erangel / 1인칭 스쿼드", body)
         self.assertIn("- 파일 크기: 2.0 KB", body)
 
@@ -1289,6 +1291,26 @@ class DiscordBotFormattingTests(unittest.TestCase):
             "- 로컬 앱에서 재생: [열기](http://127.0.0.1:8000/?shard=steam&match_id=match-123&account_id=account.1234567890abcdef&replay_artifact_id=10#replay-artifacts)",
             body_with_link,
         )
+
+    def test_discord_report_pages_bound_fields_and_preserve_sections(self) -> None:
+        report = "분석 결과\n" + "\n".join(
+            f"- 지표 {index}: 값 {index}"
+            for index in range(12)
+        )
+
+        pages = build_discord_report_pages(report)
+
+        self.assertEqual(len(pages), 3)
+        self.assertTrue(all(len(page["fields"]) <= 5 for page in pages))
+        self.assertEqual(pages[0]["title"], "분석 결과")
+        self.assertEqual(pages[0]["fields"][0], ("지표 0", "값 0"))
+
+        long_pages = build_discord_report_pages(
+            "상세 분석\n- 긴 항목: " + ("데이터 " * 400)
+        )
+        long_fields = [field for page in long_pages for field in page["fields"]]
+        self.assertGreater(len(long_fields), 1)
+        self.assertTrue(all(len(body) <= 950 for _, body in long_fields))
 
 
 if __name__ == "__main__":

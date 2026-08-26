@@ -64,7 +64,7 @@ class DiscordFightOutcomeFormattingTests(unittest.TestCase):
                     weapon_code="WeapHK416_C",
                     weapon_name="M416",
                     attachment_codes=("Item_Attach_Weapon_Upper_DotSight_01_C",),
-                    attachment_names=("레드도트",),
+                    attachment_names=("Red Dot Sight",),
                     fight_count=6,
                     wins=5,
                     losses=1,
@@ -79,11 +79,11 @@ class DiscordFightOutcomeFormattingTests(unittest.TestCase):
             detail_base_url="http://127.0.0.1:8018/",
         )
 
-        self.assertIn("Yuuki_Asuna--- 교전 승패 (steam)", body)
+        self.assertIn("Yuuki_Asuna--- 교전 승패 (스팀)", body)
         self.assertIn("12승/8패 (60.0%)", body)
         self.assertIn("킬 7 / 기절 5", body)
         self.assertIn("M416 7승/3패 70.0%", body)
-        self.assertIn("M416 + 레드도트: 5승/1패 83.3%", body)
+        self.assertIn("M416 + 레드 도트 사이트: 5승/1패 83.3%", body)
         self.assertIn("아군 피해 제외: 2건", body)
         self.assertIn("총기 순위 제외: 비총기 장비 3건", body)
         self.assertIn("#profile-lookup", body)

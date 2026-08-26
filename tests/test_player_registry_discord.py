@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import unittest
+from unittest.mock import MagicMock
 
 from pubg_ai.player_registry import PlayerRegistry
 
@@ -86,6 +87,63 @@ class PlayerRegistryDiscordTests(unittest.TestCase):
             if query.startswith("INSERT INTO registered_players")
         )
         self.assertNotIn("public_profile = VALUES(public_profile)", registration_sql)
+
+    def test_list_players_filters_by_search_before_applying_discord_limit(self) -> None:
+        cursor = MagicMock()
+        cursor.__enter__.return_value = cursor
+        cursor.fetchall.return_value = []
+        connection = MagicMock()
+        connection.cursor.return_value = cursor
+
+        players = PlayerRegistry(connection).list_players(
+            shard="steam",
+            registered_guild_id="100",
+            search="ki",
+            active_only=False,
+            limit=25,
+        )
+
+        self.assertEqual(players, [])
+        query, params = cursor.execute.call_args.args
+        normalized_query = " ".join(query.split())
+        self.assertIn(
+            "current_name LIKE %s ESCAPE '=' OR account_id LIKE %s ESCAPE '='",
+            normalized_query,
+        )
+        self.assertIn("registrations.guild_id = %s", normalized_query)
+        self.assertIn(
+            "CASE WHEN current_name LIKE %s ESCAPE '=' THEN 0 ELSE 1 END",
+            normalized_query,
+        )
+        self.assertEqual(params, ["steam", "100", "%ki%", "%ki%", "ki%", 25])
+
+    def test_list_players_treats_pubg_nickname_wildcards_as_literal_text(self) -> None:
+        cursor = MagicMock()
+        cursor.__enter__.return_value = cursor
+        cursor.fetchall.return_value = []
+        connection = MagicMock()
+        connection.cursor.return_value = cursor
+
+        PlayerRegistry(connection).list_players(
+            shard="steam",
+            registered_guild_id="100",
+            search="Yuuki_%=",
+            active_only=False,
+            limit=25,
+        )
+
+        _query, params = cursor.execute.call_args.args
+        self.assertEqual(
+            params,
+            [
+                "steam",
+                "100",
+                "%Yuuki=_=%==%",
+                "%Yuuki=_=%==%",
+                "Yuuki=_=%==%",
+                25,
+            ],
+        )
 
 
 def _registration(identifier: int, guild_id: str, *, active: bool = True) -> dict[str, object]:

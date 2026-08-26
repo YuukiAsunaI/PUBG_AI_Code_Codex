@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 import unittest
 
-from pubg_ai.discord_bot import format_player_trends, parse_player_trend_command_options
+from pubg_ai.discord_bot import format_player_trends
 from pubg_ai.player_registry import RegisteredPlayer
 from pubg_ai.weapon_accuracy import summarize_accuracy_rows
 from pubg_ai.player_trends import (
@@ -77,37 +77,12 @@ class DiscordPlayerTrendTests(unittest.TestCase):
 
         body = format_player_trends(report, detail_base_url="http://127.0.0.1:8018/")
 
-        self.assertIn("Player KST 월별 추세 (steam)", body)
+        self.assertIn("Player KST 월별 추세 (스팀)", body)
         self.assertIn("10전 2치킨/8비치킨 (20.0%)", body)
         self.assertIn("일반 탄환 추정 10.0%", body)
         self.assertIn("팀 모드=스쿼드, 시점=1인칭, 시작일=2026-07-01", body)
         self.assertIn("2026년 08월: 10전 2치킨 20.0%", body)
         self.assertIn("#trend-lookup", body)
-
-    def test_parses_positional_period_shard_and_all_filters(self) -> None:
-        granularity, shard, filters, limit = parse_player_trend_command_options(
-            "week steam team=squad view=fpp mode=squad-fpp type=official "
-            "map=Baltic_Main from=2026-07-01 to=2026-08-02 custom=false limit=6"
-        )
-
-        self.assertEqual(granularity, "week")
-        self.assertEqual(shard, "steam")
-        self.assertEqual(filters.team_mode, "squad")
-        self.assertEqual(filters.perspective, "fpp")
-        self.assertEqual(filters.game_mode, "squad-fpp")
-        self.assertEqual(filters.match_type, "official")
-        self.assertEqual(filters.map_name, "Baltic_Main")
-        self.assertFalse(filters.is_custom_match)
-        self.assertEqual(filters.from_date_kst, date(2026, 7, 1))
-        self.assertEqual(filters.to_date_kst, date(2026, 8, 2))
-        self.assertEqual(limit, 6)
-
-    def test_rejects_unknown_or_out_of_range_options(self) -> None:
-        with self.assertRaises(ValueError):
-            parse_player_trend_command_options("season=2026")
-        with self.assertRaises(ValueError):
-            parse_player_trend_command_options("limit=25")
-
 
 if __name__ == "__main__":
     unittest.main()

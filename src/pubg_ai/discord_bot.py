@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
+import re
 import shlex
 from typing import Any, Callable
 from urllib.parse import urlencode
@@ -42,7 +43,12 @@ from pubg_ai.discord_permission_manager import DiscordPermissionManager
 from pubg_ai.discord_permissions import DiscordCommandIdentity, DiscordPermissionChecker
 from pubg_ai.fight_outcome_stats import FightOutcomeStatsService, PlayerFightOutcomeReport
 from pubg_ai.local_settings import CollectorSettings, LocalSettingsError, LocalSettingsStore
-from pubg_ai.player_rankings import PlayerRanking, PlayerRankingService
+from pubg_ai.player_rankings import (
+    RANKING_METRIC_ALIASES,
+    RANKING_METRICS,
+    PlayerRanking,
+    PlayerRankingService,
+)
 from pubg_ai.player_recommendations import PlayerRecommendationReport, PlayerRecommendationService
 from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry, RegisteredPlayer
 from pubg_ai.player_stats import PlayerMatchDetail, PlayerProfileStats, PlayerStatsService, PlayerWeaponDetail
@@ -51,7 +57,6 @@ from pubg_ai.player_trends import (
     PlayerTrendReport,
     PlayerTrendService,
     normalize_trend_granularity,
-    parse_optional_bool,
     parse_trend_date,
 )
 from pubg_ai.pubg_client import PubgApiClient, PubgApiError
@@ -80,6 +85,9 @@ from pubg_ai.weapon_accuracy import is_ballistic_weapon
 
 
 DEFAULT_DISCORD_PREFIX = "!"
+DISCORD_MATCH_AUTOCOMPLETE_CATALOG_LIMIT = 500
+DISCORD_MATCH_AUTOCOMPLETE_CACHE_TTL_SECONDS = 60.0
+DISCORD_MATCH_AUTOCOMPLETE_CACHE_MAX_ENTRIES = 128
 ALERT_HISTORY_PRESETS: dict[str, dict[str, str]] = {
     "current-errors": {
         "source": "all",
@@ -116,14 +124,14 @@ DISCORD_COMMAND_USAGE_KO: dict[str, str] = {
     "유저조회": "/유저조회 [닉네임] [플랫폼]",
     "전적": "/전적 닉네임 [플랫폼]",
     "교전": "/교전 닉네임 [플랫폼]",
-    "추세": "/추세 닉네임 [옵션]",
+    "추세": "/추세 닉네임 [집계] [플랫폼] [팀·시점·맵·기간 필터]",
     "무기": "/무기 닉네임 무기 [플랫폼]",
-    "추천": "/추천 닉네임 [플랫폼]",
-    "매치": "/매치 매치_ID [닉네임] [플랫폼]",
-    "랭킹": "/랭킹 [지표] [플랫폼] [인원] [범위]",
+    "추천": "/추천 닉네임 [플랫폼] [최소 표본 경기] [결과 수]",
+    "매치": "/매치 닉네임 [최근 매치] [플랫폼]",
+    "랭킹": "/랭킹 [지표] [플랫폼] [인원] [범위] [최소 경기]",
     "유저등록": "/유저등록 플랫폼 닉네임",
     "유저삭제": "/유저삭제 플랫폼 닉네임",
-    "최근스냅샷": "/최근스냅샷 [매치_ID]",
+    "최근스냅샷": "/최근스냅샷 닉네임 [최근 매치] [플랫폼]",
     "pubg-settings": "/pubg-settings [설정 종류] [값]",
     "pubg-delete-data": "/pubg-delete-data 플랫폼 대상 범위 [사유]",
     "pubg-delete-cancel": "/pubg-delete-cancel 요청_ID [사유]",
@@ -141,6 +149,76 @@ DISCORD_COMMAND_USAGE_KO: dict[str, str] = {
 }
 
 
+def build_discord_report_pages(
+    text: str,
+    *,
+    max_fields_per_page: int = 5,
+    max_field_chars: int = 950,
+) -> list[dict[str, Any]]:
+    """Convert the existing report text into bounded Discord embed pages."""
+    lines = [line.rstrip() for line in str(text or "").splitlines() if line.strip()]
+    if not lines:
+        return [{"title": "PUBG AI", "description": "표시할 내용이 없습니다.", "fields": []}]
+
+    title = lines[0].strip()[:256]
+    sections: list[tuple[str, str]] = []
+
+    def append_section(label: str, body: str) -> None:
+        clean_label = label.strip()[:256] or "상세"
+        clean_body = body.strip() or "-"
+        chunks = _split_discord_field_text(clean_body, max_chars=max_field_chars)
+        for index, chunk in enumerate(chunks):
+            suffix = " (계속)" if index else ""
+            sections.append(((clean_label + suffix)[:256], chunk))
+
+    for raw_line in lines[1:]:
+        stripped = raw_line.strip()
+        if raw_line[:1].isspace() and sections:
+            label, body = sections.pop()
+            append_section(label, f"{body}\n{stripped}")
+            continue
+        if stripped.startswith("- "):
+            content = stripped[2:].strip()
+            if ":" in content:
+                label, body = content.split(":", 1)
+                append_section(label, body)
+            else:
+                append_section("상세", content)
+            continue
+        append_section(stripped, "-")
+
+    if not sections:
+        return [{"title": "PUBG AI", "description": title[:4096], "fields": []}]
+
+    page_size = max(1, min(int(max_fields_per_page), 25))
+    pages: list[dict[str, Any]] = []
+    for offset in range(0, len(sections), page_size):
+        pages.append(
+            {
+                "title": title,
+                "description": None,
+                "fields": sections[offset : offset + page_size],
+            }
+        )
+    return pages
+
+
+def _split_discord_field_text(value: str, *, max_chars: int) -> list[str]:
+    remaining = str(value or "-").strip() or "-"
+    chunks: list[str] = []
+    max_chars = max(100, min(int(max_chars), 1024))
+    while len(remaining) > max_chars:
+        split_at = remaining.rfind("\n", 0, max_chars + 1)
+        if split_at < max_chars // 2:
+            split_at = remaining.rfind(" ", 0, max_chars + 1)
+        if split_at < max_chars // 2:
+            split_at = max_chars
+        chunks.append(remaining[:split_at].strip())
+        remaining = remaining[split_at:].strip()
+    chunks.append(remaining)
+    return chunks
+
+
 def format_player_list(
     players: list[RegisteredPlayer],
     *,
@@ -154,7 +232,8 @@ def format_player_list(
             status = "수집중" if player.active else "중지"
             visibility = "공개" if player.public_profile else "비공개"
             lines.append(
-                f"- {player.current_name} ({player.shard}) / {status} / {visibility} / {_short_account_id(player.account_id)}"
+                f"- {player.current_name} ({translate_code(player.shard, 'shard')}) / "
+                f"{status} / {visibility} / {_short_account_id(player.account_id)}"
             )
 
     local_link = _local_section_url(
@@ -426,9 +505,9 @@ def format_data_deletion_request_result(
             [
                 action_label,
                 f"- 요청 ID: {request.id}",
-                f"- 대상: {request.player_name} ({request.shard})",
+                f"- 대상: {request.player_name} ({translate_code(request.shard, 'shard')})",
                 f"- 계정 ID: {_short_account_id(request.account_id)}",
-                f"- 삭제 범위: {request.deletion_scope}",
+                f"- 삭제 범위: {_deletion_scope_label(request.deletion_scope)}",
                 f"- 상태: {_deletion_status_label(request.status)}",
                 f"- 만료 시각 (KST): {expires_at}",
                 "- 실행 상태: 실제 삭제 미실행",
@@ -466,6 +545,16 @@ def _deletion_status_label(value: str) -> str:
         "completed": "완료",
         "expired": "만료",
     }.get(str(value or ""), str(value or "-") )
+
+
+def _deletion_scope_label(value: str) -> str:
+    return {
+        "registration": "Discord 등록 연결",
+        "normalized": "분석 데이터",
+        "raw": "원본 매치 데이터",
+        "replay": "2D 리플레이",
+        "all": "전체 데이터",
+    }.get(str(value or ""), str(value or "-"))
 
 
 def _alert_source_label(value: str) -> str:
@@ -539,7 +628,7 @@ def format_replay_artifact_summary(
     size_kb = artifact.size_bytes / 1024
     lines = [
         f"{player} 최근 2D 스냅샷",
-        f"- 매치 ID: {match_id}",
+        f"- 경기 식별값: …{match_id[-8:]}",
         f"- 맵/모드: {map_name} / {mode}",
         f"- 파일 크기: {size_kb:.1f} KB",
     ]
@@ -832,7 +921,7 @@ def format_worker_run_command_reply(
 def format_player_profile_stats(profile: PlayerProfileStats, *, detail_base_url: str | None = None) -> str:
     totals = profile.totals
     lines = [
-        f"{profile.player.current_name} 전적 ({profile.player.shard})",
+        f"{profile.player.current_name} 전적 ({translate_code(profile.player.shard, 'shard')})",
         f"- 경기/치킨: {totals.match_count}전 {totals.wins}치킨 ({_percent(totals.win_rate)})",
         f"- K/D/A: {totals.kills}/{totals.deaths}/{totals.assists} · KDA {_number(totals.kda, 2)}",
         f"- 평균 딜/받은 딜: {_number(totals.avg_damage_dealt, 1)} / {_number(totals.avg_damage_taken, 1)}",
@@ -878,10 +967,25 @@ def format_player_trends(
     *,
     detail_base_url: str | None = None,
 ) -> str:
-    granularity_names = {"hour": "시간대별", "date": "일자별", "week": "주별", "month": "월별"}
+    granularity_names = {
+        "hour": "시간대별",
+        "date": "일자별",
+        "week": "주별",
+        "month": "월별",
+        "quarter": "분기별",
+        "year": "연도별",
+        "map": "맵별",
+        "weapon": "무기별",
+        "game_mode": "게임 모드별",
+        "team_mode": "팀 모드별",
+        "perspective": "시점별",
+        "match_type": "매치 유형별",
+        "season_state": "시즌 상태별",
+    }
     totals = report.totals
     lines = [
-        f"{report.player.current_name} KST {granularity_names[report.granularity]} 추세 ({report.player.shard})",
+        f"{report.player.current_name} KST {granularity_names.get(report.granularity, report.granularity)} 추세 "
+        f"({translate_code(report.player.shard, 'shard')})",
         f"- 합계: {totals.match_count}전 {totals.wins}치킨/{totals.non_wins}비치킨 ({_percent(totals.win_rate)})",
         f"- K/D/A: {totals.kills}/{totals.deaths}/{totals.assists} · KDA {totals.kda:.2f}",
         f"- 평균 딜/받은 딜: {totals.avg_damage_dealt:.1f}/{totals.avg_damage_taken:.1f}",
@@ -953,76 +1057,6 @@ def _trend_filter_label(filters: PlayerTrendFilters) -> str:
     return ", ".join(selected) if selected else "전체"
 
 
-def parse_player_trend_command_options(
-    raw_options: str,
-) -> tuple[str, str, PlayerTrendFilters, int]:
-    granularity = "month"
-    shard = "steam"
-    values: dict[str, str] = {}
-    key_aliases = {
-        "period": "granularity",
-        "granularity": "granularity",
-        "shard": "shard",
-        "platform": "shard",
-        "mode": "game_mode",
-        "game_mode": "game_mode",
-        "team": "team_mode",
-        "team_mode": "team_mode",
-        "view": "perspective",
-        "perspective": "perspective",
-        "type": "match_type",
-        "match_type": "match_type",
-        "map": "map_name",
-        "map_name": "map_name",
-        "custom": "custom",
-        "from": "from_date",
-        "from_date": "from_date",
-        "to": "to_date",
-        "to_date": "to_date",
-        "limit": "limit",
-    }
-    for token in shlex.split(raw_options):
-        if "=" in token:
-            raw_key, value = token.split("=", 1)
-            key = key_aliases.get(raw_key.strip().lower())
-            if key is None:
-                raise ValueError(f"unknown trend filter: {raw_key}")
-            values[key] = value.strip()
-            continue
-        lowered = token.lower()
-        if lowered in {"steam", "kakao"}:
-            shard = lowered
-            continue
-        try:
-            granularity = normalize_trend_granularity(token)
-        except ValueError as exc:
-            raise ValueError(f"unknown trend option: {token}") from exc
-
-    if "granularity" in values:
-        granularity = normalize_trend_granularity(values["granularity"])
-    if "shard" in values:
-        shard = values["shard"].lower()
-    if shard not in {"steam", "kakao"}:
-        raise ValueError("shard must be steam or kakao.")
-    try:
-        limit = int(values.get("limit", "12"))
-    except ValueError as exc:
-        raise ValueError("limit must be an integer.") from exc
-    if not 1 <= limit <= 24:
-        raise ValueError("limit must be between 1 and 24.")
-    filters = PlayerTrendFilters(
-        game_mode=values.get("game_mode"),
-        team_mode=values.get("team_mode"),
-        perspective=values.get("perspective"),
-        match_type=values.get("match_type"),
-        map_name=values.get("map_name"),
-        is_custom_match=parse_optional_bool(values.get("custom"), "custom"),
-        from_date_kst=parse_trend_date(values.get("from_date"), "from_date"),
-        to_date_kst=parse_trend_date(values.get("to_date"), "to_date"),
-    ).normalized()
-    return granularity, shard, filters, limit
-
-
 def format_player_fight_outcomes(
     report: PlayerFightOutcomeReport,
     *,
@@ -1030,7 +1064,7 @@ def format_player_fight_outcomes(
 ) -> str:
     totals = report.totals
     lines = [
-        f"{report.player.current_name} 교전 승패 ({report.player.shard})",
+        f"{report.player.current_name} 교전 승패 ({translate_code(report.player.shard, 'shard')})",
         f"- 전체: {totals.wins}승/{totals.losses}패 ({_percent(totals.fight_win_rate)})",
         f"- 승리: 킬 {totals.kill_wins} / 기절 {totals.dbno_wins}",
         f"- 패배: 사망 {totals.death_losses} / 기절 {totals.dbno_losses}",
@@ -1053,7 +1087,11 @@ def format_player_fight_outcomes(
     if report.loadouts:
         lines.append("상위 무기 + 파츠")
         for item in report.loadouts[:3]:
-            parts = " + ".join(item.attachment_names) if item.attachment_names else "파츠 없음"
+            parts = (
+                " + ".join(translate_code(code, "item") for code in item.attachment_codes)
+                if item.attachment_codes
+                else "파츠 없음"
+            )
             lines.append(
                 f"- {item.weapon_name} + {parts}: "
                 f"{item.wins}승/{item.losses}패 {_percent(item.fight_win_rate)}"
@@ -1133,8 +1171,9 @@ def format_player_match_detail(detail: PlayerMatchDetail, *, detail_base_url: st
     bot_players = _optional_number(detail.bot_players)
     result = "치킨" if detail.is_chicken else "치킨 아님"
     lines = [
-        f"{detail.player.current_name} 매치 상세 ({detail.shard})",
-        f"- 매치 ID: {detail.match_id}",
+        f"{detail.player.current_name} 매치 상세 ({translate_code(detail.shard, 'shard')})",
+        f"- 경기 시각(KST): {detail.created_at_kst.strftime('%Y-%m-%d %H:%M') if detail.created_at_kst else '-'}",
+        f"- 경기 식별값: …{detail.match_id[-8:]}",
         f"- 맵/모드: {translate_code(detail.map_name, 'map') if detail.map_name else '-'} / "
         f"{translate_code(detail.game_mode, 'game_mode') if detail.game_mode else '-'} / "
         f"{translate_code(detail.match_type, 'match_type') if detail.match_type else '-'}",
@@ -1165,7 +1204,7 @@ def format_player_match_detail(detail: PlayerMatchDetail, *, detail_base_url: st
         lines.append(f"- 맞춘 부위: {hit_parts}")
 
     if detail.replay_artifact:
-        lines.append(f"- 2D 스냅샷: 생성됨 (`!최근스냅샷 {detail.match_id}`)")
+        lines.append(f"- 2D 스냅샷: 생성됨 (`/최근스냅샷`에서 이 플레이어와 경기를 선택)")
 
     local_link = _local_section_url(
         detail_base_url,
@@ -1185,14 +1224,18 @@ def format_player_ranking(
     limit: int | None = None,
 ) -> str:
     scope = "전체" if ranking.global_scope else f"서버 {ranking.guild_id}"
-    lines = [f"{ranking.metric_label} 랭킹 ({ranking.shard}, {scope})"]
+    lines = [
+        f"{ranking.metric_label} 랭킹 ({translate_code(ranking.shard, 'shard')}, {scope})",
+        f"- 집계 기준: 최소 {ranking.min_matches}경기",
+    ]
     if not ranking.rows:
         lines.append("- 랭킹 데이터가 없습니다.")
     else:
         for row in ranking.rows:
             lines.append(
                 f"- #{row.rank} {row.player.current_name}: {_ranking_score(ranking.metric, row.score)} "
-                f"({row.match_count}전 {row.wins}치킨, {row.kills}K/{row.deaths}D/{row.assists}A, "
+                f"({row.match_count}전 {row.wins}치킨, "
+                f"{row.kills}킬/{row.deaths}사망/{row.assists}어시, "
                 f"평딜 {_number(row.avg_damage_dealt, 1)})"
             )
 
@@ -1226,7 +1269,7 @@ def format_player_recommendations(
     detail_base_url: str | None = None,
 ) -> str:
     lines = [
-        f"{report.player.current_name} 추천 분석 ({report.player.shard})",
+        f"{report.player.current_name} 추천 분석 ({translate_code(report.player.shard, 'shard')})",
         f"- 최소 표본 경기: {report.min_matches}",
     ]
     if report.weapons:
@@ -1302,7 +1345,7 @@ def format_player_recommendations(
 
     if report.maps:
         lines.append("- 맵: " + ", ".join(
-            f"{item.map_name_ko} 승률 {_percent(item.win_rate)}"
+            f"{translate_code(item.map_name, 'map')} 승률 {_percent(item.win_rate)}"
             for item in report.maps[:3]
         ))
     else:
@@ -1318,7 +1361,8 @@ def format_player_recommendations(
 
     if report.drop_zones:
         lines.append("- 낙하 지역: " + ", ".join(
-            f"{item.map_name_ko} {_drop_zone_location_label(item)} 승률 {_percent(item.win_rate)}"
+            f"{translate_code(item.map_name, 'map')} {_drop_zone_location_label(item)} "
+            f"승률 {_percent(item.win_rate)}"
             for item in report.drop_zones[:3]
         ))
     else:
@@ -1357,6 +1401,71 @@ def create_discord_bot(
     custom_prefix_aliases: dict[str, str] = {}
     application_command_templates: tuple[Any, ...] | None = None
     application_command_sync_lock = asyncio.Lock()
+    match_catalog_cache: dict[tuple[str, str, str], tuple[float, Any]] = {}
+
+    shard_choices = [
+        app_commands.Choice(name="스팀", value="steam"),
+        app_commands.Choice(name="카카오", value="kakao"),
+    ]
+    trend_granularity_choices = [
+        app_commands.Choice(name="시간대별", value="hour"),
+        app_commands.Choice(name="일자별", value="date"),
+        app_commands.Choice(name="주별", value="week"),
+        app_commands.Choice(name="월별", value="month"),
+        app_commands.Choice(name="분기별", value="quarter"),
+        app_commands.Choice(name="연도별", value="year"),
+        app_commands.Choice(name="맵별", value="map"),
+        app_commands.Choice(name="무기별", value="weapon"),
+        app_commands.Choice(name="게임 모드별", value="game_mode"),
+        app_commands.Choice(name="팀 모드별", value="team_mode"),
+        app_commands.Choice(name="시점별", value="perspective"),
+        app_commands.Choice(name="매치 유형별", value="match_type"),
+    ]
+    team_mode_choices = [
+        app_commands.Choice(name="솔로", value="solo"),
+        app_commands.Choice(name="듀오", value="duo"),
+        app_commands.Choice(name="스쿼드", value="squad"),
+    ]
+    perspective_choices = [
+        app_commands.Choice(name="1인칭(FPP)", value="fpp"),
+        app_commands.Choice(name="3인칭(TPP)", value="tpp"),
+    ]
+    match_type_choices = [
+        app_commands.Choice(name="일반 매치", value="official"),
+        app_commands.Choice(name="경쟁전", value="competitive"),
+        app_commands.Choice(name="아케이드", value="arcade"),
+        app_commands.Choice(name="이벤트 모드", value="event"),
+        app_commands.Choice(name="AI 배틀로얄", value="airoyale"),
+    ]
+    ranking_scope_choices = [
+        app_commands.Choice(name="앱에 설정된 범위", value="configured"),
+        app_commands.Choice(name="현재 Discord 서버", value="guild"),
+        app_commands.Choice(name="전체 서버(글로벌 관리자)", value="global"),
+    ]
+    settings_section_choices = [
+        app_commands.Choice(name="현재 설정 조회", value="status"),
+        app_commands.Choice(name="수집 주기·인원", value="collector"),
+        app_commands.Choice(name="공개 프로필 기본값", value="public-profile"),
+    ]
+    deletion_scope_choices = [
+        app_commands.Choice(name="Discord 등록 연결만", value="registration"),
+        app_commands.Choice(name="정규화·분석 데이터", value="normalized"),
+        app_commands.Choice(name="원본 매치 데이터", value="raw"),
+        app_commands.Choice(name="2D 리플레이", value="replay"),
+        app_commands.Choice(name="전체 데이터", value="all"),
+    ]
+    permission_action_choices = [
+        app_commands.Choice(name="권한 부여", value="allow"),
+        app_commands.Choice(name="권한 회수", value="deny"),
+    ]
+    permission_scope_choices = [
+        app_commands.Choice(name="현재 Discord 서버", value="guild"),
+        app_commands.Choice(name="모든 서버(글로벌 관리자)", value="global"),
+    ]
+    admin_ranking_scope_choices = [
+        app_commands.Choice(name="선택한 서버 범위", value="guild"),
+        app_commands.Choice(name="전체 서버", value="global"),
+    ]
 
     def notify_status(event: str, **details: Any) -> None:
         if status_callback is None:
@@ -1806,6 +1915,111 @@ def create_discord_bot(
             print(f"failed to resync Discord application commands after resume: {exc}")
         notify_status("resumed", guild_count=len(bot.guilds))
 
+    class DiscordReportView(discord.ui.View):
+        def __init__(
+            self,
+            *,
+            owner_id: int,
+            pages: list[dict[str, Any]],
+            colour: int = 0x42D3AA,
+        ) -> None:
+            super().__init__(timeout=600.0)
+            self.owner_id = owner_id
+            self.pages = pages
+            self.colour = colour
+            self.page_index = 0
+            self.rebuild()
+
+        def make_embed(self) -> Any:
+            page = self.pages[self.page_index]
+            title = str(page.get("title") or "PUBG AI")[:256]
+            description = page.get("description")
+            embed = discord.Embed(
+                title=title,
+                description=str(description)[:4096] if description else None,
+                colour=self.colour,
+            )
+            for label, body in page.get("fields", []):
+                embed.add_field(name=str(label)[:256], value=str(body)[:1024] or "-", inline=False)
+            page_label = (
+                f" · {self.page_index + 1}/{len(self.pages)}페이지"
+                if len(self.pages) > 1
+                else ""
+            )
+            embed.set_footer(text=f"PUBG AI · 완료된 매치 기준 · KST{page_label}")
+            return embed
+
+        async def interaction_check(self, interaction: Any) -> bool:
+            if int(interaction.user.id) == self.owner_id:
+                return True
+            await interaction.response.send_message(
+                "이 결과의 페이지는 명령을 실행한 사용자만 바꿀 수 있습니다.",
+                ephemeral=True,
+            )
+            return False
+
+        def rebuild(self) -> None:
+            self.clear_items()
+            if len(self.pages) <= 1:
+                return
+            previous = discord.ui.Button(
+                label="이전",
+                style=discord.ButtonStyle.secondary,
+                disabled=self.page_index <= 0,
+                row=0,
+            )
+            indicator = discord.ui.Button(
+                label=f"{self.page_index + 1} / {len(self.pages)}",
+                style=discord.ButtonStyle.secondary,
+                disabled=True,
+                row=0,
+            )
+            following = discord.ui.Button(
+                label="다음",
+                style=discord.ButtonStyle.secondary,
+                disabled=self.page_index >= len(self.pages) - 1,
+                row=0,
+            )
+
+            async def previous_callback(interaction: Any) -> None:
+                self.page_index = max(0, self.page_index - 1)
+                self.rebuild()
+                await interaction.response.edit_message(embed=self.make_embed(), view=self)
+
+            async def following_callback(interaction: Any) -> None:
+                self.page_index = min(len(self.pages) - 1, self.page_index + 1)
+                self.rebuild()
+                await interaction.response.edit_message(embed=self.make_embed(), view=self)
+
+            previous.callback = previous_callback
+            following.callback = following_callback
+            self.add_item(previous)
+            self.add_item(indicator)
+            self.add_item(following)
+
+    async def reply_report(
+        ctx: Any,
+        text: str,
+        *,
+        colour: int = 0x42D3AA,
+        file: Any | None = None,
+    ) -> None:
+        pages = build_discord_report_pages(text)
+        view = DiscordReportView(
+            owner_id=int(ctx.author.id),
+            pages=pages,
+            colour=colour,
+        )
+        kwargs: dict[str, Any] = {
+            "embed": view.make_embed(),
+            "mention_author": False,
+        }
+        if len(pages) > 1:
+            kwargs["view"] = view
+        if file is not None:
+            kwargs["file"] = file
+        await ctx.reply(**kwargs)
+
     class DiscordHelpView(discord.ui.View):
         CATEGORY_LABELS = {
             "all": "전체 명령",
@@ -1979,12 +2193,12 @@ def create_discord_bot(
                     f"- `{command_prefix}유저조회 [닉네임] [shard]`",
                     f"- `{command_prefix}전적 닉네임 [shard]`",
                     f"- `{command_prefix}교전 닉네임 [shard]`",
-                    f"- `{command_prefix}추세 닉네임 [hour|date|week|month] [shard] [filters]`",
+                    f"- `{command_prefix}추세 닉네임 [집계] [shard] [팀] [시점] [맵] [게임모드] [매치유형] [시작일] [종료일] [구간]`",
                     f"- `{command_prefix}무기 닉네임 무기명 [shard]`",
-                    f"- `{command_prefix}추천 닉네임 [shard]`",
-                    f"- `{command_prefix}매치 match_id [닉네임|accountId] [shard]`",
-                    f"- `{command_prefix}랭킹 [지표] [shard] [limit] [전체]`",
-                    f"- `{command_prefix}최근스냅샷 [match_id]`",
+                    f"- `{command_prefix}추천 닉네임 [shard] [최소표본] [결과수]`",
+                    f"- `{command_prefix}매치 닉네임 [match_id] [shard]` (match_id를 비우면 최신 경기)",
+                    f"- `{command_prefix}랭킹 [지표] [shard] [인원] [configured|guild|global] [최소경기]`",
+                    f"- `{command_prefix}최근스냅샷 닉네임 [match_id] [shard]`",
                     f"- `{command_prefix}pubg-alerts`",
                     f"- `{command_prefix}pubg-alert-ack alert_id`",
                     f"- `{command_prefix}pubg-alert-snooze alert_id [minutes]`",
@@ -2008,6 +2222,12 @@ def create_discord_bot(
         )
 
     @bot.hybrid_command(name="유저조회", aliases=["pubg-profile"])
+    @app_commands.rename(name="닉네임", shard="플랫폼")
+    @app_commands.describe(
+        name="현재 서버에 등록된 유저를 닉네임 일부로 검색합니다. 비우면 등록 목록을 봅니다.",
+        shard="PUBG 계정 플랫폼을 선택합니다.",
+    )
+    @app_commands.choices(shard=shard_choices)
     async def list_players_command(ctx: Any, name: str | None = None, shard: str = "steam") -> None:
         if not await require_permission(ctx, "profile_read"):
             return
@@ -2031,12 +2251,18 @@ def create_discord_bot(
         finally:
             connection.close()
 
-        await ctx.reply(
+        await reply_report(
+            ctx,
             format_player_list(players, detail_base_url=config.app.local_web_base_url),
-            mention_author=False,
         )
 
     @bot.hybrid_command(name="전적", aliases=["pubg-stats"])
+    @app_commands.rename(name="닉네임", shard="플랫폼")
+    @app_commands.describe(
+        name="현재 서버 등록 유저입니다. 일부 글자를 입력하면 25개씩 검색됩니다.",
+        shard="PUBG 계정 플랫폼을 선택합니다.",
+    )
+    @app_commands.choices(shard=shard_choices)
     async def player_stats_command(ctx: Any, name: str | None = None, shard: str = "steam") -> None:
         if not await require_permission(ctx, "profile_read"):
             return
@@ -2074,12 +2300,18 @@ def create_discord_bot(
             )
             return
 
-        await ctx.reply(
+        await reply_report(
+            ctx,
             format_player_profile_stats(profile, detail_base_url=config.app.local_web_base_url),
-            mention_author=False,
         )
 
     @bot.hybrid_command(name="교전", aliases=["pubg-fights", "pubg-fight"])
+    @app_commands.rename(name="닉네임", shard="플랫폼")
+    @app_commands.describe(
+        name="현재 서버 등록 유저입니다. 일부 글자를 입력하면 25개씩 검색됩니다.",
+        shard="PUBG 계정 플랫폼을 선택합니다.",
+    )
+    @app_commands.choices(shard=shard_choices)
     async def player_fight_outcomes_command(
         ctx: Any,
         name: str | None = None,
@@ -2124,32 +2356,87 @@ def create_discord_bot(
             )
             return
 
-        await ctx.reply(
+        await reply_report(
+            ctx,
             format_player_fight_outcomes(report, detail_base_url=config.app.local_web_base_url),
-            mention_author=False,
         )
 
     @bot.hybrid_command(name="추세", aliases=["pubg-trends", "pubg-trend"])
+    @app_commands.rename(
+        name="닉네임",
+        granularity="집계_단위",
+        shard="플랫폼",
+        team_mode="팀_모드",
+        perspective="시점",
+        map_name="맵",
+        game_mode="게임_모드",
+        match_type="매치_유형",
+        from_date="시작일_kst",
+        to_date="종료일_kst",
+        limit="표시_구간",
+    )
+    @app_commands.describe(
+        name="현재 서버 등록 유저입니다. 닉네임 일부를 입력해 검색합니다.",
+        granularity="시간대·일자·주·월·분기·연도·맵·무기 등 결과를 묶을 기준입니다.",
+        shard="PUBG 계정 플랫폼을 선택합니다.",
+        team_mode="솔로·듀오·스쿼드 중 하나만 분석합니다. 비우면 전체입니다.",
+        perspective="1인칭 또는 3인칭 경기만 분석합니다. 비우면 전체입니다.",
+        map_name="플레이한 맵으로 제한합니다. 맵 이름 일부를 입력해 검색합니다.",
+        game_mode="실제 게임 모드로 제한합니다. 모드 일부를 입력해 검색합니다.",
+        match_type="일반·경쟁전·아케이드 등 매치 유형으로 제한합니다.",
+        from_date="이 날짜부터 분석합니다. 형식: YYYY-MM-DD (KST)",
+        to_date="이 날짜까지 분석합니다. 형식: YYYY-MM-DD (KST)",
+        limit="최근 몇 개 구간을 표시할지 정합니다. 1~120",
+    )
+    @app_commands.choices(
+        granularity=trend_granularity_choices,
+        shard=shard_choices,
+        team_mode=team_mode_choices,
+        perspective=perspective_choices,
+        match_type=match_type_choices,
+    )
     async def player_trends_command(
         ctx: Any,
         name: str | None = None,
-        *,
-        options: str = "",
+        granularity: str = "month",
+        shard: str = "steam",
+        team_mode: str | None = None,
+        perspective: str | None = None,
+        map_name: str | None = None,
+        game_mode: str | None = None,
+        match_type: str | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+        limit: int = 12,
     ) -> None:
         if not await require_permission(ctx, "profile_read"):
             return
         if not name:
-            await ctx.reply(
-                f"사용법: `{command_prefix}추세 닉네임 [month|week|date|hour] [steam|kakao] "
-                "[team=squad view=fpp mode=squad-fpp type=official map=Baltic_Main "
-                "from=YYYY-MM-DD to=YYYY-MM-DD custom=false limit=12]`",
-                mention_author=False,
+            await reply_report(
+                ctx,
+                "추세 조회 안내\n"
+                "- 닉네임: 현재 Discord 서버에 등록된 유저를 선택하세요.\n"
+                "- 집계 단위: 시간대·일자·주·월·분기·연도·맵·무기 중 원하는 기준을 선택하세요.\n"
+                "- 상세 필터: 비워 둔 항목은 전체 데이터를 사용합니다.",
             )
             return
         try:
-            granularity, shard, filters, limit = parse_player_trend_command_options(options)
+            normalized_granularity = normalize_trend_granularity(granularity)
+            normalized_shard = _normalize_discord_shard(shard)
+            normalized_limit = int(limit)
+            if not 1 <= normalized_limit <= 120:
+                raise ValueError("표시 구간은 1~120 사이여야 합니다.")
+            filters = PlayerTrendFilters(
+                game_mode=game_mode,
+                team_mode=team_mode,
+                perspective=perspective,
+                match_type=match_type,
+                map_name=map_name,
+                from_date_kst=parse_trend_date(from_date, "시작일"),
+                to_date_kst=parse_trend_date(to_date, "종료일"),
+            ).normalized()
         except ValueError as exc:
-            await ctx.reply(f"추세 옵션 오류: {exc}", mention_author=False)
+            await reply_report(ctx, f"추세 조회 조건 오류\n- 확인할 내용: {exc}", colour=0xE2A84A)
             return
 
         guild_id = await require_scoped_guild(ctx)
@@ -2159,14 +2446,14 @@ def create_discord_bot(
         connection = connect_mysql(config.database)
         try:
             report = PlayerTrendService(connection).get_report(
-                shard=shard,
+                shard=normalized_shard,
                 account_id=name if name.startswith("account.") else None,
                 name=None if name.startswith("account.") else name,
                 guild_id=None if global_scope else guild_id,
                 global_scope=global_scope,
-                granularity=granularity,
+                granularity=normalized_granularity,
                 filters=filters,
-                bucket_limit=limit,
+                bucket_limit=normalized_limit,
             )
         finally:
             connection.close()
@@ -2174,12 +2461,19 @@ def create_discord_bot(
         if report is None:
             await ctx.reply("조회 가능한 추세 데이터를 찾지 못했습니다.", mention_author=False)
             return
-        await ctx.reply(
+        await reply_report(
+            ctx,
             format_player_trends(report, detail_base_url=config.app.local_web_base_url),
-            mention_author=False,
         )
 
     @bot.hybrid_command(name="무기", aliases=["pubg-weapon"])
+    @app_commands.rename(name="닉네임", weapon="무기", shard="플랫폼")
+    @app_commands.describe(
+        name="현재 서버 등록 유저입니다. 닉네임 일부를 입력해 검색합니다.",
+        weapon="분석할 무기입니다. 한글 또는 코드 일부를 입력해 검색합니다.",
+        shard="PUBG 계정 플랫폼을 선택합니다.",
+    )
+    @app_commands.choices(shard=shard_choices)
     async def player_weapon_command(
         ctx: Any,
         name: str | None = None,
@@ -2223,21 +2517,53 @@ def create_discord_bot(
             )
             return
 
-        await ctx.reply(
+        await reply_report(
+            ctx,
             format_player_weapon_detail(detail, detail_base_url=config.app.local_web_base_url),
-            mention_author=False,
         )
 
     @bot.hybrid_command(name="추천", aliases=["pubg-recommend"])
+    @app_commands.rename(
+        name="닉네임",
+        shard="플랫폼",
+        min_matches="최소_표본_경기",
+        result_limit="결과_수",
+    )
+    @app_commands.describe(
+        name="현재 서버 등록 유저입니다. 닉네임 일부를 입력해 검색합니다.",
+        shard="PUBG 계정 플랫폼을 선택합니다.",
+        min_matches="추천 후보가 포함되기 위해 필요한 최소 경기 수입니다. 1~100000",
+        result_limit="각 추천 항목에서 계산할 상위 후보 수입니다. 1~20",
+    )
+    @app_commands.choices(shard=shard_choices)
     async def player_recommendations_command(
         ctx: Any,
         name: str | None = None,
         shard: str = "steam",
+        min_matches: int = 1,
+        result_limit: int = 5,
     ) -> None:
         if not await require_permission(ctx, "profile_read"):
             return
         if not name:
-            await ctx.reply(f"사용법: `{command_prefix}추천 닉네임 [shard]`", mention_author=False)
+            await reply_report(
+                ctx,
+                "추천 조회 안내\n"
+                "- 닉네임: 현재 Discord 서버에 등록된 유저를 선택하세요.\n"
+                "- 최소 표본 경기: 1~100000 범위에서 직접 정할 수 있습니다.\n"
+                "- 결과 수: 각 추천 항목에서 계산할 상위 후보 수입니다.",
+            )
+            return
+        try:
+            normalized_shard = _normalize_discord_shard(shard)
+            normalized_min_matches = int(min_matches)
+            normalized_result_limit = int(result_limit)
+            if not 1 <= normalized_min_matches <= 100_000:
+                raise ValueError("최소 표본 경기는 1~100000 사이여야 합니다.")
+            if not 1 <= normalized_result_limit <= 20:
+                raise ValueError("결과 수는 1~20 사이여야 합니다.")
+        except ValueError as exc:
+            await reply_report(ctx, f"추천 조회 조건 오류\n- 확인할 내용: {exc}", colour=0xE2A84A)
             return
 
         guild_id = await require_scoped_guild(ctx)
@@ -2248,11 +2574,13 @@ def create_discord_bot(
         connection = connect_mysql(config.database)
         try:
             recommendations = PlayerRecommendationService(connection).get_recommendations(
-                shard=shard,
+                shard=normalized_shard,
                 account_id=name if name.startswith("account.") else None,
                 name=None if name.startswith("account.") else name,
                 guild_id=None if global_scope else guild_id,
                 global_scope=global_scope,
+                limit=normalized_result_limit,
+                min_matches=normalized_min_matches,
             )
         finally:
             connection.close()
@@ -2264,40 +2592,48 @@ def create_discord_bot(
                     "recommendation_lookup",
                     "recommendation-lookup",
                     detail_base_url=config.app.local_web_base_url,
-                    query_params={"shard": shard, "target": name},
+                    query_params={
+                        "shard": normalized_shard,
+                        "target": name,
+                        "min_matches": normalized_min_matches,
+                    },
                 ),
                 mention_author=False,
             )
             return
 
-        await ctx.reply(
+        await reply_report(
+            ctx,
             format_player_recommendations(
                 recommendations,
                 evidence_base_url=config.app.local_web_base_url,
                 detail_base_url=config.app.local_web_base_url,
             ),
-            mention_author=False,
         )
 
     @bot.hybrid_command(name="매치", aliases=["pubg-match"])
+    @app_commands.rename(name="닉네임", match_id="최근_매치", shard="플랫폼")
+    @app_commands.describe(
+        name="현재 서버 등록 유저입니다. 먼저 닉네임 일부를 입력해 선택합니다.",
+        match_id="선택한 유저의 최근 완료 경기입니다. 비우면 가장 최근 경기를 조회합니다.",
+        shard="PUBG 계정 플랫폼을 선택합니다.",
+    )
+    @app_commands.choices(shard=shard_choices)
     async def player_match_command(
         ctx: Any,
+        name: str,
         match_id: str | None = None,
-        name: str | None = None,
         shard: str = "steam",
     ) -> None:
         if not await require_permission(ctx, "profile_read"):
             return
-        if not match_id:
-            await ctx.reply(
-                f"사용법: `{command_prefix}매치 match_id [닉네임|accountId] [shard]`",
-                mention_author=False,
-            )
-            return
 
-        if name and shard == "steam" and name.lower() in {"steam", "kakao", "psn", "xbox", "console"}:
-            shard = name
-            name = None
+        normalized_shard = _normalize_discord_shard(shard)
+        selected_name: str | None = name
+        selected_match_id = match_id
+        if _looks_like_pubg_match_id(name):
+            selected_match_id = name
+            selected_name = match_id
 
         guild_id = await require_scoped_guild(ctx)
         if guild_id is None and not has_global_scope(ctx):
@@ -2306,14 +2642,37 @@ def create_discord_bot(
 
         connection = connect_mysql(config.database)
         try:
-            detail = PlayerStatsService(connection).get_match_detail(
-                shard=shard,
-                match_id=match_id,
-                account_id=name if name and name.startswith("account.") else None,
-                name=None if not name or name.startswith("account.") else name,
-                guild_id=None if global_scope else guild_id,
-                global_scope=global_scope,
-            )
+            if not selected_match_id and selected_name:
+                catalog = PlayerStatsService(connection).get_lookup_catalog(
+                    shard=normalized_shard,
+                    account_id=selected_name if selected_name.startswith("account.") else None,
+                    name=None if selected_name.startswith("account.") else selected_name,
+                    guild_id=None if global_scope else guild_id,
+                    global_scope=global_scope,
+                    match_limit=1,
+                )
+                if catalog is not None and catalog.matches:
+                    selected_match_id = catalog.matches[0].match_id
+
+            if not selected_match_id:
+                detail = None
+            else:
+                detail = PlayerStatsService(connection).get_match_detail(
+                    shard=normalized_shard,
+                    match_id=selected_match_id,
+                    account_id=(
+                        selected_name
+                        if selected_name and selected_name.startswith("account.")
+                        else None
+                    ),
+                    name=(
+                        None
+                        if not selected_name or selected_name.startswith("account.")
+                        else selected_name
+                    ),
+                    guild_id=None if global_scope else guild_id,
+                    global_scope=global_scope,
+                )
         finally:
             connection.close()
 
@@ -2324,34 +2683,63 @@ def create_discord_bot(
                     "match_lookup",
                     "match-lookup",
                     detail_base_url=config.app.local_web_base_url,
-                    query_params={"shard": shard, "target": name, "match_id": match_id},
+                    query_params={
+                        "shard": normalized_shard,
+                        "target": selected_name,
+                        "match_id": selected_match_id,
+                    },
                 ),
                 mention_author=False,
             )
             return
 
-        await ctx.reply(
+        await reply_report(
+            ctx,
             format_player_match_detail(detail, detail_base_url=config.app.local_web_base_url),
-            mention_author=False,
         )
 
     @bot.hybrid_command(name="랭킹", aliases=["pubg-ranking"])
+    @app_commands.rename(
+        metric="랭킹_지표",
+        shard="플랫폼",
+        limit="표시_인원",
+        ranking_scope="랭킹_범위",
+        min_matches="최소_경기",
+    )
+    @app_commands.describe(
+        metric="KDA·승률·평균 딜·명중률 등입니다. 지표 이름 일부를 입력해 검색합니다.",
+        shard="PUBG 계정 플랫폼을 선택합니다.",
+        limit="상위 몇 명을 표시할지 정합니다. 1~100",
+        ranking_scope="앱 설정·현재 서버·전체 서버 중 집계 범위를 선택합니다.",
+        min_matches="랭킹에 포함되기 위해 필요한 최소 완료 경기 수입니다. 1~100000",
+    )
+    @app_commands.choices(shard=shard_choices, ranking_scope=ranking_scope_choices)
     async def ranking_command(
         ctx: Any,
         metric: str = "kda",
-        shard_or_limit: str = "steam",
-        limit_or_scope: str | None = None,
-        scope: str | None = None,
+        shard: str = "steam",
+        limit: int = 10,
+        ranking_scope: str = "configured",
+        min_matches: int = 1,
     ) -> None:
         if not await require_permission(ctx, "ranking_read"):
             return
 
-        parsed_metric, shard, limit, global_requested = _parse_ranking_args(
-            metric,
-            shard_or_limit,
-            limit_or_scope,
-            scope,
-        )
+        try:
+            parsed_metric = _normalize_ranking_metric_choice(metric)
+            normalized_shard = _normalize_discord_shard(shard)
+            normalized_limit = int(limit)
+            normalized_min_matches = int(min_matches)
+            normalized_scope = _normalize_ranking_scope_choice(ranking_scope)
+            if not 1 <= normalized_limit <= 100:
+                raise ValueError("표시 인원은 1~100 사이여야 합니다.")
+            if not 1 <= normalized_min_matches <= 100_000:
+                raise ValueError("최소 경기는 1~100000 사이여야 합니다.")
+        except ValueError as exc:
+            await reply_report(ctx, f"랭킹 조회 조건 오류\n- 확인할 내용: {exc}", colour=0xE2A84A)
+            return
+
+        global_requested = normalized_scope == "global"
         guild_id = await require_scoped_guild(ctx)
         if guild_id is None and not has_global_scope(ctx):
             return
@@ -2359,37 +2747,48 @@ def create_discord_bot(
             await ctx.reply("전체 랭킹은 글로벌 관리자만 조회할 수 있습니다.", mention_author=False)
             return
 
-        global_scope = (
-            global_requested
-            or (guild_id is None and has_global_scope(ctx))
-            or (guild_id is not None and guild_ranking_scope(ctx) == "global")
-        )
+        configured_scope = normalized_scope == "configured"
+        global_scope = global_requested or (guild_id is None and has_global_scope(ctx))
+        if configured_scope and guild_id is not None and guild_ranking_scope(ctx) == "global":
+            global_scope = True
         ranking_guild_id = None if global_scope else guild_id
-        ranking_guild_ids = [] if global_scope else guild_ranking_scope_ids(ctx)
+        if global_scope:
+            ranking_guild_ids: list[str] = []
+        elif configured_scope:
+            ranking_guild_ids = guild_ranking_scope_ids(ctx)
+        else:
+            ranking_guild_ids = [guild_id] if guild_id else []
 
         connection = connect_mysql(config.database)
         try:
             ranking = PlayerRankingService(connection).get_player_ranking(
-                shard=shard,
+                shard=normalized_shard,
                 metric=parsed_metric,
                 guild_id=ranking_guild_id,
                 guild_ids=ranking_guild_ids,
                 global_scope=global_scope,
-                limit=limit,
+                min_matches=normalized_min_matches,
+                limit=normalized_limit,
             )
         finally:
             connection.close()
 
-        await ctx.reply(
+        await reply_report(
+            ctx,
             format_player_ranking(
                 ranking,
                 detail_base_url=config.app.local_web_base_url,
-                limit=limit,
+                limit=normalized_limit,
             ),
-            mention_author=False,
         )
 
     @bot.hybrid_command(name="유저등록", aliases=["pubg-register"])
+    @app_commands.rename(shard="플랫폼", nickname="닉네임")
+    @app_commands.describe(
+        shard="등록할 PUBG 계정 플랫폼을 선택합니다.",
+        nickname="PUBG에서 사용하는 정확한 닉네임입니다. API로 Account ID를 확인합니다.",
+    )
+    @app_commands.choices(shard=shard_choices)
     async def register_player_command(ctx: Any, shard: str, nickname: str) -> None:
         if not await require_permission(ctx, "register"):
             return
@@ -2419,7 +2818,7 @@ def create_discord_bot(
 
         await ctx.reply(
             format_registered_player_command_reply(
-                f"등록 완료: {player.current_name} ({player.shard})",
+                f"등록 완료: {player.current_name} ({translate_code(player.shard, 'shard')})",
                 player,
                 detail_base_url=config.app.local_web_base_url,
             ),
@@ -2427,6 +2826,12 @@ def create_discord_bot(
         )
 
     @bot.hybrid_command(name="유저삭제", aliases=["pubg-unregister"])
+    @app_commands.rename(shard="플랫폼", target="닉네임")
+    @app_commands.describe(
+        shard="등록을 해제할 PUBG 계정 플랫폼을 선택합니다.",
+        target="현재 서버 등록 유저입니다. 기존 수집 데이터는 유지됩니다.",
+    )
+    @app_commands.choices(shard=shard_choices)
     async def unregister_player_command(ctx: Any, shard: str, target: str) -> None:
         if not await require_permission(ctx, "player_manage"):
             return
@@ -2474,9 +2879,11 @@ def create_discord_bot(
             await ctx.reply(
                 format_registered_player_command_reply(
                     (
-                        f"수집 중지 완료: {player.current_name} ({player.shard})"
+                        f"수집 중지 완료: {player.current_name} "
+                        f"({translate_code(player.shard, 'shard')})"
                         if global_scope
-                        else f"현재 Discord 서버 등록 해제 완료: {player.current_name} ({player.shard})"
+                        else f"현재 Discord 서버 등록 해제 완료: {player.current_name} "
+                        f"({translate_code(player.shard, 'shard')})"
                     ),
                     player,
                     detail_base_url=config.app.local_web_base_url,
@@ -2485,21 +2892,48 @@ def create_discord_bot(
             )
 
     @bot.hybrid_command(name="최근스냅샷", aliases=["pubg-replay"])
-    async def latest_snapshot_command(ctx: Any, match_id: str | None = None) -> None:
+    @app_commands.rename(name="닉네임", match_id="최근_매치", shard="플랫폼")
+    @app_commands.describe(
+        name="현재 서버 등록 유저입니다. 먼저 닉네임 일부를 입력해 선택합니다.",
+        match_id="선택한 유저의 최근 완료 경기입니다. 비우면 최신 생성 스냅샷을 봅니다.",
+        shard="PUBG 계정 플랫폼을 선택합니다.",
+    )
+    @app_commands.choices(shard=shard_choices)
+    async def latest_snapshot_command(
+        ctx: Any,
+        name: str,
+        match_id: str | None = None,
+        shard: str = "steam",
+    ) -> None:
         if not await require_permission(ctx, "replay_read"):
             return
         guild_id = await require_scoped_guild(ctx)
         if guild_id is None and not has_global_scope(ctx):
             return
+        global_scope = has_global_scope(ctx)
+        normalized_shard = _normalize_discord_shard(shard)
 
         connection = connect_mysql(config.database)
         try:
-            artifacts = list_replay_artifacts(
-                connection,
-                limit=1,
-                artifact_type="map_snapshot",
-                match_id=match_id,
-                registered_guild_id=None if has_global_scope(ctx) else guild_id,
+            catalog = PlayerStatsService(connection).get_lookup_catalog(
+                shard=normalized_shard,
+                account_id=name if name.startswith("account.") else None,
+                name=None if name.startswith("account.") else name,
+                guild_id=None if global_scope else guild_id,
+                global_scope=global_scope,
+                match_limit=1,
+            )
+            artifacts = (
+                list_replay_artifacts(
+                    connection,
+                    limit=1,
+                    artifact_type="map_snapshot",
+                    match_id=match_id,
+                    account_id=catalog.player.account_id,
+                    registered_guild_id=None if global_scope else guild_id,
+                )
+                if catalog is not None
+                else []
             )
         finally:
             connection.close()
@@ -2511,7 +2945,7 @@ def create_discord_bot(
                     "replay_artifacts",
                     "replay-artifacts",
                     detail_base_url=config.app.local_web_base_url,
-                    query_params={"match_id": match_id},
+                    query_params={"shard": normalized_shard, "target": name, "match_id": match_id},
                 ),
                 mention_author=False,
             )
@@ -2557,13 +2991,21 @@ def create_discord_bot(
             )
             return
 
-        await ctx.reply(
+        await reply_report(
+            ctx,
             format_replay_artifact_summary(artifact, detail_base_url=config.app.local_web_base_url),
             file=discord.File(Path(path), filename=path.name),
-            mention_author=False,
         )
 
     @bot.hybrid_command(name="pubg-settings")
+    @app_commands.rename(section="설정_종류", value1="첫번째_값", value2="두번째_값", value3="세번째_값")
+    @app_commands.describe(
+        section="조회·수집 설정·공개 프로필 기본값 중 관리할 항목입니다.",
+        value1="수집 설정: 조회 주기(초), 공개 프로필: public 또는 private입니다.",
+        value2="수집 설정에서 한 주기에 조회할 최대 플레이어 수입니다.",
+        value3="수집 설정에서 PUBG API 한 요청에 묶을 플레이어 수입니다.",
+    )
+    @app_commands.choices(section=settings_section_choices)
     async def discord_settings_command(
         ctx: Any,
         section: str | None = None,
@@ -2776,6 +3218,19 @@ def create_discord_bot(
         )
 
     @bot.hybrid_command(name="pubg-delete-data")
+    @app_commands.rename(
+        shard="플랫폼",
+        target="닉네임",
+        deletion_scope="삭제_범위",
+        reason="요청_사유",
+    )
+    @app_commands.describe(
+        shard="삭제 검토 대상의 PUBG 계정 플랫폼입니다.",
+        target="현재 서버 등록 유저입니다. 실제 삭제 전 검토 요청만 생성됩니다.",
+        deletion_scope="등록 연결·분석·원본·리플레이·전체 중 검토할 데이터 범위입니다.",
+        reason="관리자가 나중에 확인할 삭제 검토 사유입니다.",
+    )
+    @app_commands.choices(shard=shard_choices, deletion_scope=deletion_scope_choices)
     async def data_deletion_request_command(
         ctx: Any,
         shard: str | None = None,
@@ -2873,6 +3328,11 @@ def create_discord_bot(
         )
 
     @bot.hybrid_command(name="pubg-delete-cancel")
+    @app_commands.rename(request_id="삭제_요청_id", reason="취소_사유")
+    @app_commands.describe(
+        request_id="취소할 대기 중 삭제 검토 요청의 숫자 ID입니다.",
+        reason="삭제 검토 요청을 취소하는 이유입니다.",
+    )
     async def data_deletion_cancel_command(
         ctx: Any,
         request_id: str | None = None,
@@ -3181,6 +3641,19 @@ def create_discord_bot(
             return False
 
     @bot.hybrid_command(name="pubg-permission")
+    @app_commands.rename(
+        user_id="디스코드_사용자_id",
+        group="권한_그룹",
+        action="처리",
+        target_scope="적용_범위",
+    )
+    @app_commands.describe(
+        user_id="비우면 사용자 선택 화면이 열립니다. 직접 입력할 때만 Discord 사용자 ID를 씁니다.",
+        group="부여하거나 회수할 명령 권한 그룹입니다. 한글 그룹명 또는 키 일부로 검색합니다.",
+        action="권한을 부여할지 회수할지 선택합니다.",
+        target_scope="현재 서버에만 적용할지 모든 서버에 적용할지 선택합니다.",
+    )
+    @app_commands.choices(action=permission_action_choices, target_scope=permission_scope_choices)
     async def discord_permission_command(
         ctx: Any,
         user_id: str | None = None,
@@ -3341,6 +3814,12 @@ def create_discord_bot(
         )
 
     @bot.hybrid_command(name="pubg-ranking-scope", aliases=["pubg-guild-scope"])
+    @app_commands.rename(ranking_scope="랭킹_범위", guild_id="대상_서버_id")
+    @app_commands.describe(
+        ranking_scope="서버별 랭킹 범위를 선택 서버 또는 전체 서버로 설정합니다.",
+        guild_id="비우면 현재 서버에 적용합니다. 글로벌 관리자는 다른 서버 ID도 지정할 수 있습니다.",
+    )
+    @app_commands.choices(ranking_scope=admin_ranking_scope_choices)
     async def discord_ranking_scope_command(
         ctx: Any,
         ranking_scope: str | None = None,
@@ -3459,6 +3938,8 @@ def create_discord_bot(
         )
 
     @bot.hybrid_command(name="pubg-alert-ack", aliases=["pubg-alert-acknowledge"])
+    @app_commands.rename(alert_id="알림_id")
+    @app_commands.describe(alert_id="확인 처리할 운영 알림의 숫자 ID입니다. 운영 알림 목록에서 확인합니다.")
     async def alert_acknowledge_command(ctx: Any, alert_id: str | None = None) -> None:
         if not await require_permission(ctx, "admin"):
             return
@@ -3501,6 +3982,11 @@ def create_discord_bot(
         )
 
     @bot.hybrid_command(name="pubg-alert-snooze")
+    @app_commands.rename(alert_id="알림_id", minutes="숨길_시간_분")
+    @app_commands.describe(
+        alert_id="일시적으로 숨길 운영 알림의 숫자 ID입니다.",
+        minutes="알림을 다시 표시하기까지의 시간(분)입니다. 기본값 60",
+    )
     async def alert_snooze_command(
         ctx: Any,
         alert_id: str | None = None,
@@ -3548,6 +4034,11 @@ def create_discord_bot(
         )
 
     @bot.hybrid_command(name="pubg-alert-note")
+    @app_commands.rename(alert_id="알림_id", note_text="메모")
+    @app_commands.describe(
+        alert_id="메모를 남길 운영 알림의 숫자 ID입니다.",
+        note_text="원인·확인 내용 등 알림에 남길 운영 메모입니다.",
+    )
     async def alert_note_command(
         ctx: Any,
         alert_id: str | None = None,
@@ -3597,6 +4088,11 @@ def create_discord_bot(
         )
 
     @bot.hybrid_command(name="pubg-alert-resolution", aliases=["pubg-alert-resolve"])
+    @app_commands.rename(alert_id="알림_id", note_text="해결_기록")
+    @app_commands.describe(
+        alert_id="해결 기록을 남길 운영 알림의 숫자 ID입니다.",
+        note_text="실제로 수행한 해결 조치와 결과를 기록합니다.",
+    )
     async def alert_resolution_command(
         ctx: Any,
         alert_id: str | None = None,
@@ -3646,6 +4142,11 @@ def create_discord_bot(
         )
 
     @bot.hybrid_command(name="pubg-alert-notes", aliases=["pubg-alert-note-list"])
+    @app_commands.rename(alert_id="알림_id", limit="표시_개수")
+    @app_commands.describe(
+        alert_id="메모 이력을 확인할 운영 알림의 숫자 ID입니다.",
+        limit="최근 메모를 몇 개 표시할지 정합니다. 기본값 5",
+    )
     async def alert_notes_command(
         ctx: Any,
         alert_id: str | None = None,
@@ -3694,6 +4195,10 @@ def create_discord_bot(
         )
 
     @bot.hybrid_command(name="pubg-alert-history", aliases=["pubg-alert-log"])
+    @app_commands.rename(filters="필터")
+    @app_commands.describe(
+        filters="예: source=worker state=current severity=error sort=newest search=문구 limit=20",
+    )
     async def alert_history_command(ctx: Any, *, filters: str | None = None) -> None:
         if not await require_permission(ctx, "admin"):
             return
@@ -3757,6 +4262,10 @@ def create_discord_bot(
         )
 
     @bot.hybrid_command(name="pubg-worker-runs", aliases=["pubg-worker-history", "pubg-worker-log"])
+    @app_commands.rename(filters="필터")
+    @app_commands.describe(
+        filters="예: collector status=failed limit=20 range=last24h (today·yesterday·last7d 가능)",
+    )
     async def worker_runs_command(ctx: Any, *, filters: str | None = None) -> None:
         if not await require_permission(ctx, "admin"):
             return
@@ -3825,6 +4334,8 @@ def create_discord_bot(
         )
 
     @bot.hybrid_command(name="pubg-worker-run", aliases=["pubg-worker-run-detail", "pubg-worker-detail"])
+    @app_commands.rename(run_id="실행_id")
+    @app_commands.describe(run_id="상세히 확인할 자동 작업 실행의 숫자 ID입니다. 실행 이력에서 확인합니다.")
     async def worker_run_detail_command(ctx: Any, run_id: str | None = None) -> None:
         if not await require_permission(ctx, "admin"):
             return
@@ -3866,36 +4377,31 @@ def create_discord_bot(
         refresh_permission_settings()
         guild_id = str(interaction.guild_id) if interaction.guild_id else None
         identity = DiscordCommandIdentity(user_id=str(interaction.user.id), guild_id=guild_id)
-        global_scope = permission_checker.is_global_admin(identity)
-        if guild_id is None and not global_scope:
+        global_admin = permission_checker.is_global_admin(identity)
+        if guild_id is None and not global_admin:
             return []
         namespace = getattr(interaction, "namespace", None)
-        shard = str(getattr(namespace, "shard", "") or "").strip().lower()
-        if shard not in {"steam", "kakao", "xbox", "psn", "console"}:
-            shard = None
+        shard = _autocomplete_shard(namespace)
+        query = str(current or "").strip()
         connection = connect_mysql(config.database)
         try:
             players = PlayerRegistry(connection).list_players(
                 shard=shard,
-                registered_guild_id=None if global_scope else guild_id,
+                # Even a global administrator gets current-guild suggestions in a guild.
+                # DM suggestions remain global because there is no guild context.
+                registered_guild_id=guild_id,
+                search=query or None,
                 active_only=False,
-                limit=500,
+                limit=25,
             )
         except Exception:
             return []
         finally:
             connection.close()
-        query = str(current or "").strip().casefold()
-        matches = [
-            player
-            for player in players
-            if not query
-            or query in player.current_name.casefold()
-            or query in player.account_id.casefold()
-        ]
-        matches.sort(
+        folded_query = query.casefold()
+        players.sort(
             key=lambda player: (
-                not player.current_name.casefold().startswith(query) if query else False,
+                not player.current_name.casefold().startswith(folded_query) if folded_query else False,
                 not player.active,
                 player.current_name.casefold(),
             )
@@ -3908,7 +4414,139 @@ def create_discord_bot(
                 )[:100],
                 value=player.current_name[:100],
             )
-            for player in matches[:25]
+            for player in players[:25]
+        ]
+
+    def player_catalog_for_autocomplete(interaction: Any) -> Any | None:
+        refresh_permission_settings()
+        guild_id = str(interaction.guild_id) if interaction.guild_id else None
+        identity = DiscordCommandIdentity(user_id=str(interaction.user.id), guild_id=guild_id)
+        global_admin = permission_checker.is_global_admin(identity)
+        if guild_id is None and not global_admin:
+            return None
+        namespace = getattr(interaction, "namespace", None)
+        raw_name = getattr(namespace, "name", None) if namespace is not None else None
+        if raw_name is None and namespace is not None:
+            raw_name = getattr(namespace, "닉네임", None)
+        name = str(raw_name or "").strip()
+        if not name:
+            return None
+        shard = _autocomplete_shard(namespace)
+        cache_scope = guild_id or "global"
+        cache_key = (cache_scope, shard, name.casefold())
+        now = asyncio.get_running_loop().time()
+        expired_keys = [
+            key for key, (expires_at, _catalog) in match_catalog_cache.items()
+            if expires_at <= now
+        ]
+        for expired_key in expired_keys:
+            match_catalog_cache.pop(expired_key, None)
+        cached = match_catalog_cache.get(cache_key)
+        if cached is not None and cached[0] > now:
+            return cached[1]
+
+        connection = connect_mysql(config.database)
+        try:
+            catalog = PlayerStatsService(connection).get_lookup_catalog(
+                shard=shard,
+                account_id=name if name.startswith("account.") else None,
+                name=None if name.startswith("account.") else name,
+                guild_id=guild_id,
+                global_scope=guild_id is None and global_admin,
+                match_limit=DISCORD_MATCH_AUTOCOMPLETE_CATALOG_LIMIT,
+            )
+        except Exception:
+            return None
+        finally:
+            connection.close()
+        if catalog is not None:
+            if len(match_catalog_cache) >= DISCORD_MATCH_AUTOCOMPLETE_CACHE_MAX_ENTRIES:
+                oldest_key = min(
+                    match_catalog_cache,
+                    key=lambda key: match_catalog_cache[key][0],
+                )
+                match_catalog_cache.pop(oldest_key, None)
+            match_catalog_cache[cache_key] = (
+                now + DISCORD_MATCH_AUTOCOMPLETE_CACHE_TTL_SECONDS,
+                catalog,
+            )
+        return catalog
+
+    async def recent_match_autocomplete(interaction: Any, current: str) -> list[Any]:
+        catalog = player_catalog_for_autocomplete(interaction)
+        if catalog is None:
+            return []
+        query = str(current or "").strip().casefold()
+        choices: list[Any] = []
+        for match in catalog.matches:
+            created_label = (
+                match.created_at_kst.strftime("%Y-%m-%d %H:%M")
+                if match.created_at_kst
+                else "시각 미상"
+            )
+            map_label = translate_code(match.map_name, "map") if match.map_name else "맵 미상"
+            mode_label = translate_code(match.game_mode, "game_mode") if match.game_mode else "모드 미상"
+            rank_label = f"{match.win_place}등" if match.win_place else "등수 미상"
+            label = (
+                f"{created_label} · {map_label} · {mode_label} · "
+                f"{rank_label} · {match.kills}킬 {match.damage_dealt:.0f}딜"
+            )
+            search_text = " ".join(
+                (
+                    label,
+                    match.match_id,
+                    str(match.map_name or ""),
+                    str(match.game_mode or ""),
+                    f"#{match.win_place}" if match.win_place else "",
+                )
+            ).casefold()
+            if query and query not in search_text:
+                continue
+            choices.append(app_commands.Choice(name=label[:100], value=match.match_id[:100]))
+            if len(choices) >= 25:
+                break
+        return choices
+
+    async def map_autocomplete(interaction: Any, current: str) -> list[Any]:
+        return _catalog_facet_choices(
+            player_catalog_for_autocomplete(interaction),
+            facet="maps",
+            category="map",
+            current=current,
+            app_commands=app_commands,
+        )
+
+    async def game_mode_autocomplete(interaction: Any, current: str) -> list[Any]:
+        return _catalog_facet_choices(
+            player_catalog_for_autocomplete(interaction),
+            facet="game_modes",
+            category="game_mode",
+            current=current,
+            app_commands=app_commands,
+        )
+
+    async def ranking_metric_autocomplete(_interaction: Any, current: str) -> list[Any]:
+        query = str(current or "").strip().casefold()
+        candidates: list[tuple[str, str, set[str]]] = []
+        for key, metric_info in RANKING_METRICS.items():
+            aliases = {
+                alias
+                for alias, target in RANKING_METRIC_ALIASES.items()
+                if target == key
+            }
+            search_values = {key.casefold(), metric_info.label.casefold(), *(value.casefold() for value in aliases)}
+            if query and not any(query in value for value in search_values):
+                continue
+            candidates.append((key, metric_info.label, search_values))
+        candidates.sort(
+            key=lambda item: (
+                not any(value.startswith(query) for value in item[2]) if query else False,
+                item[1],
+            )
+        )
+        return [
+            app_commands.Choice(name=f"{label} · {key}"[:100], value=key)
+            for key, label, _ in candidates[:25]
         ]
 
     async def weapon_autocomplete(_interaction: Any, current: str) -> list[Any]:
@@ -3961,10 +4599,17 @@ def create_discord_bot(
         (player_weapon_command, "name"),
         (player_recommendations_command, "name"),
         (player_match_command, "name"),
+        (latest_snapshot_command, "name"),
         (unregister_player_command, "target"),
+        (data_deletion_request_command, "target"),
     ):
         player_command.autocomplete(parameter_name)(registered_player_autocomplete)
     player_weapon_command.autocomplete("weapon")(weapon_autocomplete)
+    player_trends_command.autocomplete("map_name")(map_autocomplete)
+    player_trends_command.autocomplete("game_mode")(game_mode_autocomplete)
+    player_match_command.autocomplete("match_id")(recent_match_autocomplete)
+    latest_snapshot_command.autocomplete("match_id")(recent_match_autocomplete)
+    ranking_command.autocomplete("metric")(ranking_metric_autocomplete)
     discord_permission_command.autocomplete("group")(permission_group_autocomplete)
 
     for spec in DISCORD_COMMAND_SPECS:
@@ -3983,6 +4628,98 @@ def create_discord_bot(
             f"(missing={missing}, unexpected={unexpected})."
         )
     return bot
+
+
+def _normalize_discord_shard(value: str | None) -> str:
+    normalized = str(value or "steam").strip().lower()
+    if normalized not in {"steam", "kakao"}:
+        raise ValueError("플랫폼은 스팀 또는 카카오여야 합니다.")
+    return normalized
+
+
+def _autocomplete_shard(namespace: Any) -> str:
+    value = getattr(namespace, "shard", None) if namespace is not None else None
+    if value is None and namespace is not None:
+        value = getattr(namespace, "플랫폼", None)
+    try:
+        return _normalize_discord_shard(value)
+    except ValueError:
+        return "steam"
+
+
+def _normalize_ranking_metric_choice(value: str | None) -> str:
+    normalized = "".join(
+        character.lower()
+        for character in str(value or "kda").strip()
+        if character.isalnum() or character == "_"
+    )
+    key = RANKING_METRIC_ALIASES.get(normalized, normalized)
+    if key not in RANKING_METRICS:
+        raise ValueError("지원하지 않는 랭킹 지표입니다. 지표 이름 일부를 입력해 목록에서 선택하세요.")
+    return key
+
+
+def _normalize_ranking_scope_choice(value: str | None) -> str:
+    normalized = str(value or "configured").strip().casefold()
+    aliases = {
+        "configured": "configured",
+        "default": "configured",
+        "설정": "configured",
+        "기본": "configured",
+        "guild": "guild",
+        "server": "guild",
+        "서버": "guild",
+        "현재": "guild",
+        "global": "global",
+        "all": "global",
+        "전체": "global",
+    }
+    result = aliases.get(normalized)
+    if result is None:
+        raise ValueError("랭킹 범위는 앱 설정, 현재 서버, 전체 서버 중 하나여야 합니다.")
+    return result
+
+
+def _looks_like_pubg_match_id(value: str | None) -> bool:
+    text = str(value or "").strip()
+    if text.startswith("match-"):
+        return True
+    return bool(
+        re.fullmatch(
+            r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+            text,
+        )
+    )
+
+
+def _catalog_facet_choices(
+    catalog: Any | None,
+    *,
+    facet: str,
+    category: str,
+    current: str,
+    app_commands: Any,
+) -> list[Any]:
+    if catalog is None:
+        return []
+    query = str(current or "").strip().casefold()
+    candidates: list[tuple[str, str]] = []
+    for raw_value in catalog.facets.get(facet, []):
+        code = str(raw_value)
+        label = translate_code(code, category)
+        if query and query not in code.casefold() and query not in label.casefold():
+            continue
+        candidates.append((code, label))
+    candidates.sort(
+        key=lambda item: (
+            not item[1].casefold().startswith(query) if query else False,
+            item[1].casefold(),
+        )
+    )
+    return [
+        app_commands.Choice(name=f"{label} · {code}"[:100], value=code[:100])
+        for code, label in candidates[:25]
+    ]
 
 
 def _short_account_id(account_id: str) -> str:
