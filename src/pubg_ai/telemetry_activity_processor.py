@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -128,8 +128,9 @@ class TelemetryActivityProcessingResult:
     activity_events: int
     activity_summaries: int
     event_types: int
+    failure_details: list[dict[str, str]] = field(default_factory=list)
 
-    def to_record(self) -> dict[str, int]:
+    def to_record(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -165,6 +166,7 @@ class TelemetryActivityProcessor:
         activity_events = 0
         activity_summaries = 0
         event_types = 0
+        failure_details: list[dict[str, str]] = []
 
         for payload in payloads:
             match_id = str(payload["match_id"])
@@ -210,8 +212,15 @@ class TelemetryActivityProcessor:
                     summaries=summaries,
                     counts=counts,
                 )
-            except Exception:
+            except Exception as exc:
                 failed_payloads += 1
+                failure_details.append(
+                    {
+                        "match_id": match_id,
+                        "error_type": exc.__class__.__name__,
+                        "message": str(exc)[:500],
+                    }
+                )
                 continue
             parsed_payloads += 1
             events_read += len(events)
@@ -228,6 +237,7 @@ class TelemetryActivityProcessor:
             activity_events=activity_events,
             activity_summaries=activity_summaries,
             event_types=event_types,
+            failure_details=failure_details,
         )
 
     def _load_telemetry_events(self, payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -522,7 +532,7 @@ def parse_activity_events(
                 action=("heal_item" if _optional_text(heal_item.get("itemId")) else "heal_passive"),
                 role="self",
                 item=heal_item,
-                amount=event.get("healAmount"),
+                amount=event.get("healAmount", event.get("healamount")),
             )
         elif event_type == "LogArmorDestroy":
             item = _mapping(event.get("item"))

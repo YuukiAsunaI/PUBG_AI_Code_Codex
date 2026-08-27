@@ -12961,7 +12961,7 @@ _INDEX_HTML = """<!doctype html>
           label: "경기당 총 체력 회복량",
           value: (row) => Number(row.avg_heal_amount || 0),
           format: (value) => formatNumber(value, 1),
-          basis: "LogHeal.healAmount 합계 ÷ 행동 파서 처리 경기 수",
+          basis: "LogHeal.healAmount 합계(healamount 호환) ÷ 행동 파서 처리 경기 수",
         },
         avg_revives_caused: {
           label: "경기당 팀원 부활",
@@ -15556,34 +15556,53 @@ _INDEX_HTML = """<!doctype html>
       const counts = audit.counts || {};
       const eventCatalog = audit.event_catalog || {};
       const sources = audit.item_source_totals || {};
+      const translations = audit.translation_coverage || {};
       const checks = audit.checks || [];
       const checkRows = checks.map((check) => `<tr>
         <td><span class="alert-severity ${check.passed ? "alert-severity-ok" : "alert-severity-error"}">${check.passed ? "통과" : "실패"}</span></td>
         <td>${escapeHtml(check.label_ko || check.key)}</td>
         <td>${escapeHtml(check.expected)}</td>
         <td>${escapeHtml(check.actual)}</td>
-      </tr>`).join("") || '<tr><td colspan="4">검사 항목 없음</td></tr>';
+        <td>${escapeHtml(check.detail_ko || "-")}</td>
+      </tr>`).join("") || '<tr><td colspan="5">검사 항목 없음</td></tr>';
+      const processorLabels = {
+        combat: "전투",
+        activity: "행동",
+        items: "아이템",
+        movement: "이동·좌표",
+      };
       const parserRows = (audit.parser_versions || []).map((row) => `<tr>
-        <td>${escapeHtml(row.processor_name)}</td><td class="identifier">${escapeHtml(row.parser_version)}</td>
+        <td>${escapeHtml(processorLabels[row.processor_name] || row.processor_name)}</td><td class="identifier">${escapeHtml(row.parser_version)}</td>
         <td>${formatInteger(row.matches)}</td>
         <td>${formatInteger(row.player_matches)}</td>
       </tr>`).join("") || '<tr><td colspan="4">파서 상태 없음</td></tr>';
+      const weaponTranslations = translations.weapons || {};
+      const itemTranslations = translations.items || {};
       playerIntelligenceAuditStatus.textContent = `${audit.passed ? "전체 통과" : "확인 필요"} · ${formatKstShort(audit.generated_at_kst)}`;
       playerIntelligenceAuditBody.className = "";
       playerIntelligenceAuditBody.innerHTML = intelligenceKpis([
         ["원본 경기", "raw_matches", counts.raw_matches],
-        ["추적 경기·플레이어", "eligible_player_matches", counts.eligible_player_matches],
-        ["행동 파서", "activity_matches", `${formatInteger(counts.activity_matches || 0)} / ${formatInteger(counts.eligible_matches || 0)}`],
-        ["아이템 파서", "item_matches", `${formatInteger(counts.item_matches || 0)} / ${formatInteger(counts.eligible_matches || 0)}`],
-        ["행동 원장", "activity_event_rows", counts.activity_event_rows],
-        ["아이템 원장", "item_event_rows", counts.item_event_rows],
+        ["분석 대상 경기", "analysis_raw_matches", `${formatInteger(counts.analysis_raw_matches || 0)} · 정책 제외 ${formatInteger(counts.excluded_raw_matches || 0)}`],
+        ["검사 대상 경기·플레이어", "eligible_player_matches", counts.eligible_player_matches],
+        ["처리 유예 중", "grace_player_matches", `${formatInteger(counts.grace_matches || 0)}경기 · ${formatInteger(counts.grace_player_matches || 0)}건`],
+        ["마지막 분석 경기", "latest_match_started_at_kst", formatKstShort(counts.latest_match_started_at_kst)],
+        ["마지막 텔레메트리 저장", "latest_raw_fetched_at_kst", formatKstShort(counts.latest_raw_fetched_at_kst)],
+        ["전투 파서", "combat_matches", `${formatInteger(counts.combat_matches || 0)} / ${formatInteger(counts.eligible_matches || 0)}경기`],
+        ["교전 승패", "fight_outcome_matches", `${formatInteger(counts.fight_outcome_matches || 0)} / ${formatInteger(counts.eligible_matches || 0)}경기`],
+        ["2D 지도·타임라인", "map_snapshot_player_matches", `${formatInteger(counts.map_snapshot_player_matches || 0)} / ${formatInteger(counts.timeline_player_matches || 0)}`],
+        ["지상 경로 없음", "unrenderable_player_matches", counts.unrenderable_player_matches],
         ["정규화 이벤트 타입", "normalized_type_count", `${formatInteger(eventCatalog.normalized_type_count || 0)} / ${formatInteger(eventCatalog.event_type_count || 0)}`],
         ["원본 전용 타입", "raw_only_type_count", eventCatalog.raw_only_type_count],
       ]) + `<div class="intelligence-data-section"><h3>정합성 검사</h3>
-        <div class="table-scroll"><table class="data-quality-checks"><thead><tr><th>상태</th><th>검사</th><th>기대</th><th>실제</th></tr></thead><tbody>${checkRows}</tbody></table></div>
-      </div><div class="intelligence-data-section"><h3>파서 버전</h3>
+        <div class="table-scroll"><table class="data-quality-checks"><thead><tr><th>상태</th><th>검사</th><th>기대</th><th>실제</th><th>판정 근거</th></tr></thead><tbody>${checkRows}</tbody></table></div>
+      </div><div class="intelligence-data-section"><h3>분석 대상 파서 버전</h3>
         <div class="table-scroll"><table class="intelligence-table"><thead><tr><th>처리기</th><th>버전</th><th>경기</th><th>경기·플레이어</th></tr></thead><tbody>${parserRows}</tbody></table></div>
-      </div><div class="intelligence-data-section"><h3>아이템 출처 합계</h3><div class="intelligence-metric-grid">
+      </div><div class="intelligence-data-section"><h3>번역 사전 커버리지</h3><div class="intelligence-metric-grid">
+        <div class="intelligence-metric-row"><span>무기 코드</span><strong>${formatInteger(weaponTranslations.known_distinct_code_count || 0)} / ${formatInteger(weaponTranslations.distinct_code_count || 0)}</strong></div>
+        <div class="intelligence-metric-row"><span>무기 미번역 행</span><strong>${formatInteger(weaponTranslations.unknown_row_count || 0)}</strong></div>
+        <div class="intelligence-metric-row"><span>아이템 코드</span><strong>${formatInteger(itemTranslations.known_distinct_code_count || 0)} / ${formatInteger(itemTranslations.distinct_code_count || 0)}</strong></div>
+        <div class="intelligence-metric-row"><span>아이템 미번역 행</span><strong>${formatInteger(itemTranslations.unknown_row_count || 0)}</strong></div>
+      </div></div><div class="intelligence-data-section"><h3>분석 대상 아이템 출처 합계</h3><div class="intelligence-metric-grid">
         <div class="intelligence-metric-row"><span>루트박스 획득</span><strong>${formatInteger(sources.loot_box_pickups)}</strong></div>
         <div class="intelligence-metric-row"><span>보급 획득</span><strong>${formatInteger(sources.carepackage_pickups)}</strong></div>
         <div class="intelligence-metric-row"><span>커스텀 패키지 획득</span><strong>${formatInteger(sources.custom_package_pickups)}</strong></div>

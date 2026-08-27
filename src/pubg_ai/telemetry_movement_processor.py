@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from math import sqrt
 from pathlib import Path
@@ -231,8 +231,9 @@ class TelemetryMovementProcessingResult:
     care_package_events: int
     plane_routes: int
     phase_events: int
+    failure_details: list[dict[str, str]] = field(default_factory=list)
 
-    def to_record(self) -> dict[str, int]:
+    def to_record(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -262,6 +263,7 @@ class TelemetryMovementProcessor:
         care_package_event_count = 0
         plane_route_count = 0
         phase_event_count = 0
+        failure_details: list[dict[str, str]] = []
 
         for payload in payloads:
             match_id = str(payload["match_id"])
@@ -322,8 +324,15 @@ class TelemetryMovementProcessor:
                     plane_route=plane_route,
                     phase_events=phase_events,
                 )
-            except Exception:
+            except Exception as exc:
                 failed_payloads += 1
+                failure_details.append(
+                    {
+                        "match_id": match_id,
+                        "error_type": exc.__class__.__name__,
+                        "message": str(exc)[:500],
+                    }
+                )
                 continue
 
             parsed_payloads += 1
@@ -350,6 +359,7 @@ class TelemetryMovementProcessor:
             care_package_events=care_package_event_count,
             plane_routes=plane_route_count,
             phase_events=phase_event_count,
+            failure_details=failure_details,
         )
 
     def _list_raw_telemetry_payloads(self, *, limit: int, force: bool) -> list[dict[str, Any]]:

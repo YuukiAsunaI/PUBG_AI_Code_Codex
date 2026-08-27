@@ -86,10 +86,18 @@ async function runDataQualityAudit(page) {
   await page.locator('[data-view-target="operations"]').click();
   await page.locator("#playerIntelligenceAuditRun").click();
   await page.locator("#playerIntelligenceAuditStatus").filter({ hasText: "전체 통과" }).waitFor({ timeout: 30000 });
+  const bodyText = await page.locator("#playerIntelligenceAuditBody").innerText();
   return {
     status: await page.locator("#playerIntelligenceAuditStatus").innerText(),
     checkRows: await page.locator("#playerIntelligenceAuditBody .data-quality-checks tbody tr").count(),
     failedRows: await page.locator("#playerIntelligenceAuditBody .alert-severity-error").count(),
+    hasScopeAndFreshness: [
+      "분석 대상 경기",
+      "정책 제외",
+      "마지막 분석 경기",
+      "마지막 텔레메트리 저장",
+      "번역 사전 커버리지",
+    ].every((label) => bodyText.includes(label)),
   };
 }
 
@@ -606,6 +614,7 @@ async function layoutDiagnostics(page) {
       result.mobile.registry.rows < 1,
       result.mobile.registry.editors < result.mobile.registry.rows,
       result.desktop.audit.failedRows > 0,
+      !result.desktop.audit.hasScopeAndFreshness,
       !result.desktop.workspaceNavigation.stable,
       result.desktop.consoleErrors.length > 0,
       result.mobile.consoleErrors.length > 0,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -115,8 +115,9 @@ class TelemetryItemProcessingResult:
     events_read: int
     item_events: int
     item_stats: int
+    failure_details: list[dict[str, str]] = field(default_factory=list)
 
-    def to_record(self) -> dict[str, int]:
+    def to_record(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -147,6 +148,7 @@ class TelemetryItemProcessor:
         events_read = 0
         item_event_count = 0
         item_stat_count = 0
+        failure_details: list[dict[str, str]] = []
 
         for payload in payloads:
             match_id = str(payload["match_id"])
@@ -176,8 +178,15 @@ class TelemetryItemProcessor:
                     item_events=item_events,
                     item_stats=item_stats,
                 )
-            except Exception:
+            except Exception as exc:
                 failed_payloads += 1
+                failure_details.append(
+                    {
+                        "match_id": match_id,
+                        "error_type": exc.__class__.__name__,
+                        "message": str(exc)[:500],
+                    }
+                )
                 continue
 
             parsed_payloads += 1
@@ -194,6 +203,7 @@ class TelemetryItemProcessor:
             events_read=events_read,
             item_events=item_event_count,
             item_stats=item_stat_count,
+            failure_details=failure_details,
         )
 
     def _list_raw_telemetry_payloads(self, *, limit: int, force: bool) -> list[dict[str, Any]]:

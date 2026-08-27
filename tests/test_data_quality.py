@@ -6,6 +6,8 @@ import unittest
 from pubg_ai.data_quality import (
     DataQualityCheck,
     PlayerIntelligenceAudit,
+    _eligible_player_match_counts,
+    _item_summary_mismatches,
     _item_use_quantity_mismatches,
     _json_value,
 )
@@ -63,6 +65,87 @@ class DataQualityTests(unittest.TestCase):
         self.assertEqual(_item_use_quantity_mismatches(connection), 0)
         self.assertIn("stats.used_quantity <> stats.used_events", connection.cursor_obj.query)
         self.assertEqual(connection.cursor_obj.params, ("items-v5",))
+
+    def test_item_summary_audit_reconciles_every_supported_action(self) -> None:
+        class Cursor:
+            def __init__(self) -> None:
+                self.query = ""
+                self.params = ()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def execute(self, query, params):
+                self.query = query
+                self.params = params
+
+            def fetchone(self):
+                return {"value": 0}
+
+        class Connection:
+            def __init__(self) -> None:
+                self.cursor_obj = Cursor()
+
+            def cursor(self):
+                return self.cursor_obj
+
+        connection = Connection()
+
+        self.assertEqual(_item_summary_mismatches(connection), 0)
+        for action in (
+            "pickup_carepackage",
+            "pickup_vehicle_trunk",
+            "put_vehicle_trunk",
+            "drop",
+            "use",
+            "equip",
+            "unequip",
+            "attach",
+            "detach",
+        ):
+            self.assertIn(action, connection.cursor_obj.query)
+        self.assertIn("INNER JOIN analysis_matches", connection.cursor_obj.query)
+        self.assertIn("stack_count > 0", connection.cursor_obj.query)
+        self.assertEqual(connection.cursor_obj.params, ("items-v5",))
+
+    def test_eligible_coverage_excludes_policy_matches_and_recent_ingestion(self) -> None:
+        class Cursor:
+            def __init__(self) -> None:
+                self.query = ""
+                self.params = ()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def execute(self, query, params):
+                self.query = query
+                self.params = params
+
+            def fetchone(self):
+                return {"player_matches": 12, "matches": 10}
+
+        class Connection:
+            def __init__(self) -> None:
+                self.cursor_obj = Cursor()
+
+            def cursor(self):
+                return self.cursor_obj
+
+        connection = Connection()
+
+        counts = _eligible_player_match_counts(connection, recent=False)
+
+        self.assertEqual(counts, {"player_matches": 12, "matches": 10})
+        self.assertIn("INNER JOIN analysis_matches", connection.cursor_obj.query)
+        self.assertIn("TIMESTAMPADD(MINUTE", connection.cursor_obj.query)
+        self.assertIn("<=", connection.cursor_obj.query)
+        self.assertEqual(connection.cursor_obj.params, (15,))
 
 
 if __name__ == "__main__":

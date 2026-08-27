@@ -19,7 +19,7 @@ Discord command layer, operational controls, and the research and evidence behin
 - [Configuration](docs/CONFIGURATION.md)
 - [Desktop Manager](docs/DESKTOP_MANAGER.md)
 - [Map Region Catalog](docs/MAP_REGION_CATALOG.md)
-- [Full Project Audit - 2026-08-24](docs/PROJECT_AUDIT_2026-08-24.md)
+- [Full Project Audit - 2026-08-28](docs/PROJECT_AUDIT_2026-08-28_FULL_SYSTEM.md)
 - [Reference Project Survey](docs/REFERENCE_PROJECT_SURVEY.md)
 - [Additional Reference Research](docs/ADDITIONAL_REFERENCE_RESEARCH.md)
 - [Sources](docs/SOURCES.md)
@@ -82,8 +82,8 @@ The first executable slice is now available:
   per-match telemetry event coverage
 - progressive player-intelligence workspace with overview, KST trend graphs, categorical comparisons, raw evidence,
   metric definitions, parser coverage, and item-source provenance
-- read-only data-quality audit in both CLI and local manager for schema, parser coverage, event reconciliation,
-  healing decomposition, and invalid negative values
+- read-only data-quality audit in both CLI and local manager for analysis-policy scope, current parser coverage,
+  combat/item/movement/fight reconciliation, 2D artifact coverage, translation coverage, and ingestion freshness
 - combat loadout snapshot generator for weapon + attachment state at kill/DBNO/finish moments
 - versioned official-asset-backed map-region catalog for Korean named drop-zone recommendations with
   raw-coordinate fallback
@@ -593,8 +593,9 @@ raw or replay artifacts. The local player manager can change collection/public-p
 connect one PUBG account to multiple known Discord guilds. See
 [`docs/MULTI_DISCORD_AND_DIMENSION_ANALYTICS_2026-08-23.md`](docs/MULTI_DISCORD_AND_DIMENSION_ANALYTICS_2026-08-23.md)
 for the data contract and live validation evidence. See also
-[`docs/PROJECT_AUDIT_2026-08-24.md`](docs/PROJECT_AUDIT_2026-08-24.md) for the latest full validation evidence. The
-previous 2026-08-21 baseline remains in [`docs/PROJECT_AUDIT_2026-08-21.md`](docs/PROJECT_AUDIT_2026-08-21.md).
+[`docs/PROJECT_AUDIT_2026-08-28_FULL_SYSTEM.md`](docs/PROJECT_AUDIT_2026-08-28_FULL_SYSTEM.md) for the latest full
+validation evidence. The previous 2026-08-24 baseline remains in
+[`docs/PROJECT_AUDIT_2026-08-24.md`](docs/PROJECT_AUDIT_2026-08-24.md).
 
 Each packet is guarded by six `ON DELETE RESTRICT` foreign keys. Generation appends only one version 20 audit row; it
 grants no authorization,
@@ -739,9 +740,10 @@ Validate the current player-intelligence materialization after a collection or b
 python -m pubg_ai.cli audit-player-intelligence
 ```
 
-The command returns exit code `0` only when all checks pass. Newly downloaded telemetry can temporarily make parser
-coverage incomplete until the activity and item post-processing stages catch up; this is reported as a failed audit,
-not silently treated as zero activity.
+The command returns exit code `0` only when all checks pass. Telemetry stored within the most recent 15 minutes is
+shown as processing-grace data and excluded from the mature coverage denominator. Older missing outputs fail the
+audit instead of being silently treated as zero activity. Custom and training matches remain preserved in raw storage
+but are excluded from the analytical audit through `analysis_matches`.
 
 The web app refuses non-localhost bind hosts by default. Do not run it with `0.0.0.0` unless a future authenticated
 remote-access mode is intentionally added.

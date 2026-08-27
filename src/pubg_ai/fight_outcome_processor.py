@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable, Literal, Mapping
@@ -92,8 +92,9 @@ class FightOutcomeProcessingResult:
     generated_wins: int
     generated_losses: int
     generated_loadout_snapshots: int
+    failure_details: list[dict[str, str]] = field(default_factory=list)
 
-    def to_record(self) -> dict[str, int]:
+    def to_record(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -120,6 +121,7 @@ class FightOutcomeProcessor:
         generated_wins = 0
         generated_losses = 0
         generated_loadout_snapshots = 0
+        failure_details: list[dict[str, str]] = []
 
         for payload in payloads:
             match_id = str(payload["match_id"])
@@ -151,8 +153,15 @@ class FightOutcomeProcessor:
                     account_ids=account_ids,
                     outcomes=outcomes,
                 )
-            except Exception:
+            except Exception as exc:
                 failed_payloads += 1
+                failure_details.append(
+                    {
+                        "match_id": match_id,
+                        "error_type": exc.__class__.__name__,
+                        "message": str(exc)[:500],
+                    }
+                )
                 continue
 
             parsed_payloads += 1
@@ -175,6 +184,7 @@ class FightOutcomeProcessor:
             generated_wins=generated_wins,
             generated_losses=generated_losses,
             generated_loadout_snapshots=generated_loadout_snapshots,
+            failure_details=failure_details,
         )
 
     def _list_raw_telemetry_payloads(self, *, limit: int, force: bool) -> list[dict[str, Any]]:

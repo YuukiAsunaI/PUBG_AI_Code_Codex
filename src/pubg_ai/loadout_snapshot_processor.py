@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from math import sqrt
 from typing import Any, Iterable, Mapping
@@ -70,6 +70,7 @@ class LoadoutSnapshotProcessingResult:
     skipped_no_items: int
     generated_snapshots: int
     failed_matches: int
+    failure_details: list[dict[str, str]] = field(default_factory=list)
 
     def to_record(self) -> dict[str, Any]:
         return asdict(self)
@@ -87,6 +88,7 @@ class LoadoutSnapshotProcessor:
         skipped_no_items = 0
         generated_snapshots = 0
         failed_matches = 0
+        failure_details: list[dict[str, str]] = []
 
         for candidate in candidates:
             match_id = str(candidate["match_id"])
@@ -102,8 +104,15 @@ class LoadoutSnapshotProcessor:
                     self._upsert_snapshots(snapshots)
                 generated_snapshots += len(snapshots)
                 processed_matches += 1
-            except Exception:
+            except Exception as exc:
                 failed_matches += 1
+                failure_details.append(
+                    {
+                        "match_id": match_id,
+                        "error_type": exc.__class__.__name__,
+                        "message": str(exc)[:500],
+                    }
+                )
 
         return LoadoutSnapshotProcessingResult(
             candidate_matches=len(candidates),
@@ -112,6 +121,7 @@ class LoadoutSnapshotProcessor:
             skipped_no_items=skipped_no_items,
             generated_snapshots=generated_snapshots,
             failed_matches=failed_matches,
+            failure_details=failure_details,
         )
 
     def _candidate_matches(self, *, limit: int, include_existing: bool) -> list[Mapping[str, Any]]:

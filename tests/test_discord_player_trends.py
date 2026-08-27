@@ -64,14 +64,15 @@ class DiscordPlayerTrendTests(unittest.TestCase):
             totals=metrics,
             buckets=[
                 PlayerTrendBucket(
-                    period_key="2026-08",
-                    period_label="2026년 08월",
-                    first_match_at_kst=datetime(2026, 8, 1),
-                    last_match_at_kst=datetime(2026, 8, 2),
+                    period_key=f"2026-{month:02d}",
+                    period_label=f"2026년 {month:02d}월",
+                    first_match_at_kst=datetime(2026, month, 1),
+                    last_match_at_kst=datetime(2026, month, 2),
                     metrics=metrics,
                 )
+                for month in range(1, 9)
             ],
-            available_bucket_count=1,
+            available_bucket_count=8,
             truncated=False,
         )
 
@@ -81,6 +82,7 @@ class DiscordPlayerTrendTests(unittest.TestCase):
         self.assertIn("10전 2치킨/8비치킨 (20.0%)", body)
         self.assertIn("일반 탄환 추정 10.0%", body)
         self.assertIn("팀 모드=스쿼드, 시점=1인칭, 시작일=2026-07-01", body)
+        self.assertIn("2026년 01월: 10전 2치킨 20.0%", body)
         self.assertIn("2026년 08월: 10전 2치킨 20.0%", body)
         self.assertIn("#trend-lookup", body)
 

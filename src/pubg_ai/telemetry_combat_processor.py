@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -42,8 +42,9 @@ class TelemetryCombatProcessingResult:
     events_read: int
     combat_summaries: int
     weapon_stats: int
+    failure_details: list[dict[str, str]] = field(default_factory=list)
 
-    def to_record(self) -> dict[str, int]:
+    def to_record(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -68,6 +69,7 @@ class TelemetryCombatProcessor:
         events_read = 0
         combat_summary_count = 0
         weapon_stat_count = 0
+        failure_details: list[dict[str, str]] = []
 
         for payload in payloads:
             match_id = str(payload["match_id"])
@@ -105,8 +107,15 @@ class TelemetryCombatProcessor:
                     summaries=summaries,
                     weapon_stats=weapon_stats,
                 )
-            except Exception:
+            except Exception as exc:
                 failed_payloads += 1
+                failure_details.append(
+                    {
+                        "match_id": match_id,
+                        "error_type": exc.__class__.__name__,
+                        "message": str(exc)[:500],
+                    }
+                )
                 continue
 
             parsed_payloads += 1
@@ -123,6 +132,7 @@ class TelemetryCombatProcessor:
             events_read=events_read,
             combat_summaries=combat_summary_count,
             weapon_stats=weapon_stat_count,
+            failure_details=failure_details,
         )
 
     def _list_raw_telemetry_payloads(self, *, limit: int, force: bool) -> list[dict[str, Any]]:

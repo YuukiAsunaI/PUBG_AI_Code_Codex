@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from bisect import bisect_right
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from math import hypot
 from typing import Any, Mapping
@@ -65,6 +65,7 @@ class TimelineResult:
     skipped_no_position: int
     failed_timelines: int
     artifacts: list[StoredReplayArtifact]
+    failure_details: list[dict[str, str]] = field(default_factory=list)
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
@@ -91,6 +92,7 @@ class ReplayTimelineProcessor:
         skipped_no_position = 0
         failed = 0
         artifacts: list[StoredReplayArtifact] = []
+        failure_details: list[dict[str, str]] = []
 
         for job in jobs:
             match_id = str(job["match_id"])
@@ -120,8 +122,16 @@ class ReplayTimelineProcessor:
                     match_created_at=_optional_datetime(job.get("created_at_kst")),
                 )
                 self._upsert_artifact(job=job, stored=stored)
-            except Exception:
+            except Exception as exc:
                 failed += 1
+                failure_details.append(
+                    {
+                        "match_id": match_id,
+                        "account_id": account_id,
+                        "error_type": exc.__class__.__name__,
+                        "message": str(exc)[:500],
+                    }
+                )
                 continue
 
             generated += 1
@@ -134,6 +144,7 @@ class ReplayTimelineProcessor:
             skipped_no_position=skipped_no_position,
             failed_timelines=failed,
             artifacts=artifacts,
+            failure_details=failure_details,
         )
 
     def _list_timeline_jobs(self, *, limit: int, force: bool) -> list[dict[str, Any]]:

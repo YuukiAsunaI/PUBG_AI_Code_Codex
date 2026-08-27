@@ -7,11 +7,35 @@ from pubg_ai.config import AppConfig, DatabaseConfig, RuntimeConfig, SecretConfi
 from pubg_ai.post_processing_worker import (
     PostProcessingWorkerError,
     PostProcessingWorkerOptions,
+    _append_reported_failures,
     run_post_processing_cycle,
 )
 
 
 class PostProcessingWorkerTests(unittest.TestCase):
+    def test_reported_2d_failure_includes_first_safe_reason(self) -> None:
+        errors: list[str] = []
+
+        _append_reported_failures(
+            errors,
+            "map_snapshots",
+            {
+                "failed_snapshots": 2,
+                "failure_details": [
+                    {"error_type": "OSError", "message": "저장 경로에 쓸 수 없습니다."}
+                ],
+            },
+            "failed_snapshots",
+        )
+
+        self.assertEqual(
+            errors,
+            [
+                "2D 지도 생성: 실패 지도 2건; "
+                "첫 원인=OSError: 저장 경로에 쓸 수 없습니다."
+            ],
+        )
+
     def test_run_post_processing_cycle_uses_limits_and_force(self) -> None:
         calls: list[tuple[str, object]] = []
         history: list[tuple[FakeConnection, str, dict[str, object]]] = []
@@ -96,7 +120,7 @@ class PostProcessingWorkerTests(unittest.TestCase):
 
         self.assertIsNone(result.combat)
         self.assertEqual(len(result.errors), 1)
-        self.assertIn("combat: RuntimeError: boom", result.errors[0])
+        self.assertIn("전투 처리: RuntimeError: boom", result.errors[0])
         self.assertEqual(result.items, {"parsed_payloads": 10, "failed_payloads": 0})
 
     def test_run_post_processing_cycle_records_replay_store_errors(self) -> None:
@@ -113,7 +137,7 @@ class PostProcessingWorkerTests(unittest.TestCase):
 
         self.assertIsNone(result.combat)
         self.assertEqual(len(result.errors), 1)
-        self.assertIn("replay_store: RuntimeError: drive missing", result.errors[0])
+        self.assertIn("리플레이 저장소: RuntimeError: drive missing", result.errors[0])
         self.assertTrue(connection.closed)
         self.assertEqual(history[0][1], "post_processing")
         self.assertEqual(history[0][2]["errors"], result.errors)
@@ -136,7 +160,7 @@ class PostProcessingWorkerTests(unittest.TestCase):
             history_recorder=lambda conn, worker_name, cycle: history.append((conn, worker_name, cycle)),
         )
 
-        self.assertEqual(result.errors, ["combat: reported failed_payloads=2"])
+        self.assertEqual(result.errors, ["전투 처리: 실패 텔레메트리 2건"])
         self.assertEqual(history[0][2]["errors"], result.errors)
 
     def test_run_post_processing_cycle_validates_limits(self) -> None:

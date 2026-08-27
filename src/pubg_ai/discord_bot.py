@@ -932,13 +932,13 @@ def format_player_profile_stats(profile: PlayerProfileStats, *, detail_base_url:
     if profile.top_weapons:
         weapons = [
             f"{weapon.weapon_name} {weapon.kills}킬 {_number(weapon.damage_dealt, 0)}딜"
-            for weapon in profile.top_weapons[:3]
+            for weapon in profile.top_weapons
         ]
         lines.append(f"- 주무기: {', '.join(weapons)}")
 
     if profile.recent_matches:
         lines.append("최근 경기")
-        for match in profile.recent_matches[:3]:
+        for match in profile.recent_matches:
             rank = f"#{match.win_place}" if match.win_place is not None else "-"
             lines.append(
                 f"- {_short_match_id(match.match_id)} {rank} "
@@ -993,8 +993,8 @@ def format_player_trends(
         f"- 필터: {_trend_filter_label(report.filters)}",
     ]
     if report.buckets:
-        lines.append("최근 구간")
-        for bucket in report.buckets[-6:]:
+        lines.append("구간 상세")
+        for bucket in report.buckets:
             metrics = bucket.metrics
             lines.append(
                 f"- {bucket.period_label}: {metrics.match_count}전 {metrics.wins}치킨 "
@@ -1080,13 +1080,13 @@ def format_player_fight_outcomes(
     if report.weapons:
         weapons = [
             f"{item.weapon_name} {item.wins}승/{item.losses}패 {_percent(item.fight_win_rate)}"
-            for item in report.weapons[:3]
+            for item in report.weapons
         ]
         lines.append(f"- 무기: {', '.join(weapons)}")
 
     if report.loadouts:
         lines.append("상위 무기 + 파츠")
-        for item in report.loadouts[:3]:
+        for item in report.loadouts:
             parts = (
                 " + ".join(translate_code(code, "item") for code in item.attachment_codes)
                 if item.attachment_codes
@@ -1140,12 +1140,12 @@ def format_player_weapon_detail(detail: PlayerWeaponDetail, *, detail_base_url: 
         lines.append("- 효율 거리: " + ", ".join(
             f"{item.bucket_label} {_percent(item.observed_win_rate)} "
             f"({item.wins}승/{item.losses}패)"
-            for item in detail.effective_ranges[:3]
+            for item in detail.effective_ranges
         ))
 
     if detail.recent_matches:
         lines.append("최근 사용 경기")
-        for match in detail.recent_matches[:3]:
+        for match in detail.recent_matches:
             rank = f"#{match.win_place}" if match.win_place is not None else "-"
             lines.append(
                 f"- {_short_match_id(match.match_id)} {rank} "
@@ -1191,7 +1191,7 @@ def format_player_match_detail(detail: PlayerMatchDetail, *, detail_base_url: st
 
     if detail.weapons:
         weapon_lines = []
-        for weapon in detail.weapons[:4]:
+        for weapon in detail.weapons:
             weapon_lines.append(
                 f"{weapon.weapon_name} {weapon.kills}킬/{weapon.dbnos}기절/"
                 f"{_number(weapon.damage_dealt, 0)}딜/"
@@ -1278,14 +1278,14 @@ def format_player_recommendations(
             f"(평균 딜 {_number(item.avg_damage_dealt, 1)}, 승률 {_percent(item.win_rate)}, "
             f"{_accuracy_metric_text(item.accuracy, item.accuracy_metric)}, "
             f"헤드샷 명중 {_percent(item.headshot_hit_rate)}, 교전 승률 {_percent(item.fight_win_rate)})"
-            for item in report.weapons[:3]
+            for item in report.weapons
         ))
     else:
         lines.append("- 추천 무기: 표본 없음")
 
     if report.loadouts:
         lines.append("- 추천 2주무기와 파츠 계획:")
-        for index, item in enumerate(report.loadouts[:3], start=1):
+        for index, item in enumerate(report.loadouts, start=1):
             primary_parts = " / ".join(
                 translate_code(part.attachment_code, "item")
                 for part in item.primary_attachments
@@ -1313,7 +1313,7 @@ def format_player_recommendations(
         lines.append("- 실전 파츠 조합: " + ", ".join(
             f"{item.weapon_name} + {' + '.join(translate_code(code, 'item') for code in item.attachment_codes)} "
             f"({item.match_count}경기, 승률 {_percent(item.win_rate)})"
-            for item in report.attachment_combinations[:3]
+            for item in report.attachment_combinations
         ))
 
     if report.weapon_attachments:
@@ -1321,7 +1321,7 @@ def format_player_recommendations(
             f"{item.weapon_name} + {translate_code(item.attachment_code, 'item')} "
             f"(평균 딜 {_number(item.avg_damage_dealt, 1)}, 승률 {_percent(item.win_rate)})"
             f"{_recommendation_evidence_link(report, item, evidence_base_url)}"
-            for item in report.weapon_attachments[:3]
+            for item in report.weapon_attachments
         ))
     else:
         lines.append("- 파츠별 개별 성과: 표본 없음")
@@ -1330,7 +1330,7 @@ def format_player_recommendations(
         lines.append("- 성과 발생 거리: " + ", ".join(
             f"{item.weapon_name} {item.bucket_label} "
             f"({item.kills}킬/{item.dbnos}기절)"
-            for item in report.weapon_ranges[:3]
+            for item in report.weapon_ranges
         ))
     else:
         lines.append("- 성과 발생 거리: 표본 없음")
@@ -1338,7 +1338,7 @@ def format_player_recommendations(
     if report.attachments:
         lines.append("- 전체 파츠: " + ", ".join(
             f"{translate_code(item.item_code, 'item')} ({item.attached_events}회 장착)"
-            for item in report.attachments[:3]
+            for item in report.attachments
         ))
     else:
         lines.append("- 전체 파츠: 표본 없음")
@@ -1346,7 +1346,7 @@ def format_player_recommendations(
     if report.maps:
         lines.append("- 맵: " + ", ".join(
             f"{translate_code(item.map_name, 'map')} 승률 {_percent(item.win_rate)}"
-            for item in report.maps[:3]
+            for item in report.maps
         ))
     else:
         lines.append("- 맵: 표본 없음")
@@ -1354,7 +1354,7 @@ def format_player_recommendations(
     if report.teammates:
         lines.append("- 팀원: " + ", ".join(
             f"{item.name}{' (등록 유저)' if item.registered else ''} 승률 {_percent(item.win_rate)}"
-            for item in report.teammates[:3]
+            for item in report.teammates
         ))
     else:
         lines.append("- 팀원: 표본 없음")
@@ -1363,7 +1363,7 @@ def format_player_recommendations(
         lines.append("- 낙하 지역: " + ", ".join(
             f"{translate_code(item.map_name, 'map')} {_drop_zone_location_label(item)} "
             f"승률 {_percent(item.win_rate)}"
-            for item in report.drop_zones[:3]
+            for item in report.drop_zones
         ))
     else:
         lines.append("- 낙하 지역: 표본 없음")
@@ -5083,10 +5083,6 @@ def _percent(value: float) -> str:
     return f"{value * 100:.1f}%"
 
 
-def _safe_ratio(numerator: int | float, denominator: int | float) -> float:
-    return float(numerator) / float(denominator) if denominator else 0.0
-
-
 def _number(value: float, digits: int) -> str:
     return f"{value:.{digits}f}"
 
@@ -5123,46 +5119,8 @@ def _ranking_score(metric: str, score: float) -> str:
     return _number(score, 0)
 
 
-def _parse_ranking_args(
-    metric: str,
-    shard_or_limit: str,
-    limit_or_scope: str | None,
-    scope: str | None,
-) -> tuple[str, str, int, bool]:
-    metric_value = metric or "kda"
-    shard = "steam"
-    limit = 10
-    global_requested = False
-
-    if _is_scope_token(metric_value):
-        metric_value = "kda"
-        global_requested = True
-    elif _is_shard_token(metric_value):
-        shard = metric_value.lower()
-        metric_value = "kda"
-    elif _is_int_token(metric_value):
-        limit = _ranking_limit(metric_value)
-        metric_value = "kda"
-
-    for token in [shard_or_limit, limit_or_scope, scope]:
-        if not token:
-            continue
-        if _is_scope_token(token):
-            global_requested = True
-        elif _is_shard_token(token):
-            shard = token.lower()
-        elif _is_int_token(token):
-            limit = _ranking_limit(token)
-
-    return metric_value, shard, limit, global_requested
-
-
 def _is_scope_token(value: str) -> bool:
     return value.lower() in {"전체", "global", "all"}
-
-
-def _is_shard_token(value: str) -> bool:
-    return value.lower() in {"steam", "kakao", "psn", "xbox", "console"}
 
 
 def _is_int_token(value: str) -> bool:
@@ -5171,10 +5129,6 @@ def _is_int_token(value: str) -> bool:
     except ValueError:
         return False
     return True
-
-
-def _ranking_limit(value: str) -> int:
-    return max(1, min(int(value), 20))
 
 
 def _positive_int(value: str | int | None) -> int | None:

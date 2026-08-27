@@ -12,6 +12,29 @@ from pubg_ai.telemetry_activity_processor import (
 
 
 class TelemetryActivityProcessorTests(unittest.TestCase):
+    def test_accepts_official_lowercase_log_heal_amount_field(self) -> None:
+        records = parse_activity_events(
+            [
+                {
+                    "_T": "LogHeal",
+                    "character": {"accountId": "account.a"},
+                    "item": {"itemId": "Item_Heal_FirstAid_C"},
+                    "healamount": 42.5,
+                }
+            ],
+            match_id="match-lowercase-heal",
+            tracked_account_ids={"account.a"},
+        )
+
+        summaries = summarize_activity_match(
+            records,
+            match_id="match-lowercase-heal",
+            account_ids={"account.a"},
+        )
+
+        self.assertEqual(summaries[0].heal_amount, 42.5)
+        self.assertEqual(summaries[0].item_heal_amount, 42.5)
+
     def test_normalizes_roles_and_summarizes_player_activity(self) -> None:
         tracked = {"account.a", "account.b"}
         a = {"accountId": "account.a", "location": {"x": 1, "y": 2, "z": 3}}

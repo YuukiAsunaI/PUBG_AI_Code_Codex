@@ -86,21 +86,39 @@ python -m pubg_ai.cli audit-player-intelligence
 The local manager exposes the same operation under `운영·알림 > 플레이어 데이터 품질`. It is intentionally
 manual because it scans materialized coverage and reconciliation tables.
 
-The audit currently enforces eleven checks:
+The audit currently enforces 27 checks against policy-eligible `analysis_matches`:
 
 1. Applied MySQL schema version equals the application schema version.
-2. Current activity parser covers every eligible match/player pair.
-3. Current activity parser covers every eligible match.
-4. Current item parser covers every eligible match/player pair.
-5. Current item parser covers every eligible match.
-6. Activity processing-state output counts match summary and event rows.
-7. Total healing equals item healing plus passive boost healing.
-8. Per-match event-catalog normalized totals match player activity summaries.
-9. Item processing-state output counts match item event rows.
-10. Activity summaries contain no invalid negative values.
-11. Item summaries contain no invalid negative values.
+2. Current combat parser covers every mature eligible match/player pair.
+3. Current combat parser covers every mature eligible match.
+4. Current activity parser covers every mature eligible match/player pair.
+5. Current activity parser covers every mature eligible match.
+6. Current item parser covers every mature eligible match/player pair.
+7. Current item parser covers every mature eligible match.
+8. Current movement parser covers every mature eligible match/player pair.
+9. Current movement parser covers every mature eligible match.
+10. Current fight-outcome parser covers every mature eligible match/player pair.
+11. Current fight-outcome parser covers every mature eligible match.
+12. Combat state counts match combat summary rows.
+13. Combat hits equal character plus vehicle hits; headshots cannot exceed character hits; combat values are nonnegative.
+14. Activity state counts match summary and normalized event rows.
+15. Total healing equals item healing plus passive boost healing.
+16. Per-match event-catalog normalized totals match player activity summaries.
+17. Item processing-state counts match item event rows.
+18. Item pickup, source, drop, use, equip, unequip, attach, and detach aggregates match normalized item events.
+19. Item use quantity follows one-consumed-item-per-`LogItemUse` semantics.
+20. Movement state counts match position, landing, movement-summary, and combat-location rows.
+21. Fight-outcome state counts match stored outcome rows.
+22. Activity summaries contain no invalid negative values.
+23. Item summaries contain no invalid negative values.
+24. Every renderable player-match has a current-version 2D map snapshot.
+25. Every renderable player-match has a current-version 2D replay timeline.
+26. Every analysis weapon code used by the current combat parser resolves through the translation dictionary.
+27. Every analysis item code used by the current item parser resolves through the translation dictionary.
 
-An audit can correctly fail immediately after the collector stores a new telemetry payload. Process the new rows and
+Custom and training matches stay preserved but are excluded from this audit through `analysis_matches`. Telemetry
+stored within the most recent 15 minutes appears as processing-grace data and is not yet part of the mature coverage
+denominator. Once that grace period expires, missing current-parser outputs fail the audit. Process pending rows and
 run the audit again:
 
 ```powershell

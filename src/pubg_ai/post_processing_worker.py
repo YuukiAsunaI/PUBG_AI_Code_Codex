@@ -25,6 +25,29 @@ class PostProcessingWorkerError(RuntimeError):
     """Raised when the automatic post-processing worker cannot run."""
 
 
+_STAGE_LABELS = {
+    "worker_run_history": "작업 실행 이력",
+    "raw_store": "원본 저장소",
+    "replay_store": "리플레이 저장소",
+    "combat": "전투 처리",
+    "activity": "행동 처리",
+    "items": "아이템 처리",
+    "movement": "이동·좌표 처리",
+    "loadout_snapshots": "장비 스냅샷 처리",
+    "fight_outcomes": "교전 승패 처리",
+    "map_snapshots": "2D 지도 생성",
+    "replay_timelines": "2D 타임라인 생성",
+    "worker": "후처리 작업",
+}
+
+_FAILURE_FIELD_LABELS = {
+    "failed_payloads": "실패 텔레메트리",
+    "failed_matches": "실패 경기",
+    "failed_snapshots": "실패 지도",
+    "failed_timelines": "실패 타임라인",
+}
+
+
 @dataclass(frozen=True)
 class PostProcessingWorkerOptions:
     combat_limit: int = 10
@@ -454,13 +477,21 @@ def _append_reported_failures(
     *fields: str,
 ) -> None:
     failures = [
-        f"{field}={int(result.get(field) or 0)}"
+        f"{_FAILURE_FIELD_LABELS.get(field, field)} {int(result.get(field) or 0)}건"
         for field in fields
         if int(result.get(field) or 0) > 0
     ]
     if failures:
-        errors.append(f"{stage}: reported " + ", ".join(failures))
+        summary = f"{_STAGE_LABELS.get(stage, stage)}: " + ", ".join(failures)
+        details = result.get("failure_details")
+        if isinstance(details, list) and details and isinstance(details[0], dict):
+            first = details[0]
+            summary += (
+                f"; 첫 원인={first.get('error_type') or 'Error'}: "
+                f"{first.get('message') or '원인 정보 없음'}"
+            )
+        errors.append(summary[:1000])
 
 
 def _safe_error(stage: str, exc: Exception) -> str:
-    return f"{stage}: {exc.__class__.__name__}: {exc}"[:1000]
+    return f"{_STAGE_LABELS.get(stage, stage)}: {exc.__class__.__name__}: {exc}"[:1000]

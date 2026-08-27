@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import unittest
 
 from pubg_ai.discord_bot import format_player_recommendations
@@ -180,10 +181,22 @@ class DiscordRecommendationFormattingTests(unittest.TestCase):
             ],
         )
 
+        base_weapon = report.weapons[0]
+        report = replace(
+            report,
+            weapons=[
+                base_weapon,
+                replace(base_weapon, weapon_code="WeapAK47_C", weapon_name="AKM"),
+                replace(base_weapon, weapon_code="WeapAUG_C", weapon_name="AUG"),
+                replace(base_weapon, weapon_code="WeapM24_C", weapon_name="M24"),
+            ],
+        )
+
         body = format_player_recommendations(report)
 
         self.assertIn("Yuuki_Asuna--- 추천 분석 (스팀)", body)
         self.assertIn("M416", body)
+        self.assertIn("M24", body)
         self.assertIn("추정 30.0%", body)
         self.assertIn("헤드샷 명중 20.0%", body)
         self.assertIn("교전 승률 70.0%", body)

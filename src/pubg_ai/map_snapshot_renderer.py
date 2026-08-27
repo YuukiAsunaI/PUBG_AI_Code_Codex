@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -140,6 +140,7 @@ class MapSnapshotResult:
     skipped_no_position: int
     failed_snapshots: int
     artifacts: list[StoredReplayArtifact]
+    failure_details: list[dict[str, str]] = field(default_factory=list)
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
@@ -205,6 +206,7 @@ class MapSnapshotProcessor:
         skipped_no_position = 0
         failed = 0
         artifacts: list[StoredReplayArtifact] = []
+        failure_details: list[dict[str, str]] = []
 
         for job in jobs:
             match_id = str(job["match_id"])
@@ -234,8 +236,16 @@ class MapSnapshotProcessor:
                     match_created_at=context.created_at_kst,
                 )
                 self._upsert_artifact(context=context, stored=stored)
-            except Exception:
+            except Exception as exc:
                 failed += 1
+                failure_details.append(
+                    {
+                        "match_id": match_id,
+                        "account_id": account_id,
+                        "error_type": exc.__class__.__name__,
+                        "message": str(exc)[:500],
+                    }
+                )
                 continue
 
             generated += 1
@@ -248,6 +258,7 @@ class MapSnapshotProcessor:
             skipped_no_position=skipped_no_position,
             failed_snapshots=failed,
             artifacts=artifacts,
+            failure_details=failure_details,
         )
 
     def _list_snapshot_jobs(self, *, limit: int, force: bool) -> list[dict[str, Any]]:

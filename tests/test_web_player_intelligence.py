@@ -61,6 +61,11 @@ class WebPlayerIntelligenceTests(unittest.TestCase):
         self.assertIn('id="player-intelligence-audit"', body)
         self.assertIn('id="playerIntelligenceAuditRun"', body)
         self.assertIn("/operations/player-intelligence-audit", body)
+        self.assertIn("처리 유예 중", body)
+        self.assertIn("번역 사전 커버리지", body)
+        self.assertIn("판정 근거", body)
+        self.assertIn("마지막 텔레메트리 저장", body)
+        self.assertIn("분석 대상 파서 버전", body)
 
     def test_data_quality_audit_endpoint_closes_connection(self) -> None:
         connection = FakeConnection()
