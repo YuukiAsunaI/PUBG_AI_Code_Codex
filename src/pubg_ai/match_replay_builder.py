@@ -264,7 +264,7 @@ class MatchReplayProcessor:
             actor_combat = combat_by_actor.get(account_id, [])
             _annotate_actor_events(actor_landings, member)
             _annotate_actor_events(actor_combat, member)
-            if account_id != focus_id and (actor_positions or actor_landings or actor_combat):
+            if account_id != focus_id:
                 tracks.append(
                     {
                         "account_id": account_id,
@@ -492,6 +492,8 @@ def _payload_record(
         "team": {
             "scope": "all_participants",
             "member_count": len(members),
+            "human_member_count": sum(not bool(item["is_ai_or_bot"]) for item in members),
+            "bot_member_count": sum(bool(item["is_ai_or_bot"]) for item in members),
             "registered_member_count": sum(bool(item["registered"]) for item in members),
             "registered_teammate_count": sum(
                 bool(item["registered"]) and not item["is_self"] for item in members

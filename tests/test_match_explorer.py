@@ -11,6 +11,28 @@ from pubg_ai.raw_storage import RawPayloadStore
 
 
 class MatchExplorerServiceTests(unittest.TestCase):
+    def test_list_matches_can_filter_by_exact_participant_account_id(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store, match_row, _participants = _fixture(Path(temp_dir))
+            listed_row = {
+                **match_row,
+                "participant_count": 3,
+                "registered_participant_count": 1,
+            }
+            connection = FakeConnection([[{"total": 1}], [listed_row]])
+
+            result = MatchExplorerService(connection, store).list_matches(
+                shard="steam",
+                account_id="account.alpha",
+                telemetry_only=True,
+            )
+
+            self.assertEqual(result["total"], 1)
+            self.assertEqual(result["matches"][0]["match_id"], "match-1")
+            query_text = "\n".join(query for query, _params in connection.executed)
+            self.assertIn("requested_participant.account_id = %s", query_text)
+            self.assertEqual(connection.executed[0][1], ("steam", "account.alpha"))
+
     def test_detail_and_events_include_unregistered_participants(self) -> None:
         with TemporaryDirectory() as temp_dir:
             store, match_row, participants = _fixture(Path(temp_dir))

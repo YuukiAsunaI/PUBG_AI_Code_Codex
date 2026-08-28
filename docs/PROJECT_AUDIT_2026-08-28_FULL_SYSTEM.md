@@ -44,6 +44,8 @@ current parser versions, rendering exclusions, check evidence, and translation c
   payloads.
 - `WeapJuliesKar98k_C` resolves to `Kar98k` using the official damage-causer dictionary.
 - `Item_Weapon_CamoNet_Desert_C` resolves to the current Korean label `차량 위장망`.
+- The official `Item_Secuity_KeyCard_C` spelling and the observed `Item_Secuity_Keycard_C` casing variant both resolve
+  to `키 카드`, preventing a known current-telemetry code from leaking into the Korean UI.
 - Unknown codes still fall back to their raw code, while the audit now makes every newly observed unknown visible.
 
 ### Failure observability
@@ -67,7 +69,16 @@ recent-match selection, and configurable recommendation sample size up to 100,00
 ### Desktop release consistency
 
 The release module contained an unused label from a different build date. The dead label was removed and the single
-release source is now `2026.08.28.1`. The current executable was rebuilt from this exact workspace.
+release source is now `2026.08.28.2`. The current executable was rebuilt from this exact workspace.
+
+### Whole-match tactical replay
+
+The replay entry path now uses the selected registration's exact PUBG account ID only to find completed matches and
+establish the focus team. It creates or reuses a match-wide artifact containing every available human and bot
+participant instead of silently returning the selected player's old team-only artifact. Ally, enemy, bot, and other
+registered-player relationships are separately labeled; participant search, layer toggles, elapsed trail windows,
+terminal marker removal, and match-level artifact launch are covered by browser automation. Raw telemetry objects are
+not copied into the derived replay payload.
 
 ## Live Data Evidence
 
@@ -93,7 +104,7 @@ known raw-only types, and zero unclassified types.
 
 ## Verification
 
-- `python -m pytest -p no:cacheprovider`: **658 passed**.
+- `python -m pytest -p no:cacheprovider`: **660 passed**.
 - `python -m compileall -q src tests`: passed.
 - `node --check scripts/verify_local_ui.js`: passed.
 - `git diff --check`: passed with only the repository's existing Windows LF/CRLF notices.
@@ -101,13 +112,16 @@ known raw-only types, and zero unclassified types.
 - Playwright source and packaged-app runs: all 33 workspace states rendered content; desktop and mobile returned 200;
   blank pages, overlays, console errors, request failures, HTTP errors, horizontal overflow, and overflowing buttons
   were all zero.
+- Whole-match replay in both runs: 100 participants (99 humans, one bot), 101 actor choices, 14,545 tactical events,
+  enemy/focus labels present, all eight required tactical layers enabled, nonblank multicolor canvas, and advancing
+  playback.
 - live Discord deployment: four guilds, 26 commands per guild, all metadata quality checks passed.
 
 The packaged artifact is `dist/PUBG_AI_Manager.exe`:
 
-- size: 51,814,299 bytes;
-- SHA-256: `4BBF85F499AF7AB2AB33A9D14E437CBAEAE7F4CA30938086170C8390398FA5FA`;
-- health: `ok`, localhost-only `true`, release `2026.08.28.1`;
+- size: 51,817,705 bytes;
+- SHA-256: `50BB37545AF83851D9491609EB031617D00C280E2D2944E14866BA28B78645C0`;
+- health: `ok`, localhost-only `true`, release `2026.08.28.2`;
 - app-managed Discord bot: running and ready for four guilds.
 
 ## Residual Risks

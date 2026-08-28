@@ -3346,6 +3346,7 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
     @app.get("/matches/explorer")
     def explore_matches(
         shard: str | None = None,
+        account_id: str | None = None,
         search: str | None = None,
         map_name: str | None = None,
         game_mode: str | None = None,
@@ -3367,6 +3368,7 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
                 ),
             ).list_matches(
                 shard=shard,
+                account_id=account_id,
                 search=search,
                 map_name=map_name,
                 game_mode=game_mode,
@@ -5254,13 +5256,13 @@ _INDEX_HTML = """<!doctype html>
     .review-packet-comparer-result .comparison-canonical-table th:nth-child(2), .review-packet-comparer-result .comparison-canonical-table td:nth-child(2) { min-width: 90px; }
     .review-packet-comparer-result .comparison-value { min-width: 180px; max-width: 420px; white-space: normal; }
     .confirmation-input-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
-    .player-controls { display: grid; grid-template-columns: minmax(220px, 1fr) 110px auto auto; gap: 10px; align-items: end; }
+    .player-controls { display: grid; grid-template-columns: minmax(260px, 1fr) 110px 130px auto auto; gap: 10px; align-items: end; }
     .toggle-row { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; color: var(--muted); font-size: 13px; }
     .toggle-row label { display: inline-flex; grid-template-columns: none; align-items: center; gap: 6px; }
     .toggle-row input { width: auto; min-height: 0; }
     .replay-explorer-bar {
       display: grid;
-      grid-template-columns: repeat(2, minmax(150px, 220px)) auto auto minmax(100px, 1fr);
+      grid-template-columns: repeat(3, minmax(150px, 220px)) auto auto minmax(100px, 1fr);
       gap: 10px;
       align-items: end;
       margin: 12px 0;
@@ -5303,6 +5305,12 @@ _INDEX_HTML = """<!doctype html>
     .replay-legend-group { display: flex; flex-wrap: wrap; gap: 7px 14px; align-items: center; }
     .replay-legend-group > strong { width: 70px; color: var(--text); font-size: 11px; }
     .replay-legend span { display: inline-flex; align-items: center; gap: 6px; min-height: 22px; white-space: nowrap; }
+    .legend-actor { display: inline-block; width: 11px; height: 11px; border: 2px solid currentColor; border-radius: 50%; background: currentColor; }
+    .legend-actor.focus { color: #4bd0a0; box-shadow: 0 0 0 2px #fff; }
+    .legend-actor.ally { color: #54c8ff; }
+    .legend-actor.enemy { color: #ff786e; }
+    .legend-actor.registered { color: #d98cff; }
+    .legend-actor.bot { color: #87939d; }
     .legend-line { display: inline-block; width: 28px; height: 0; border-top: 3px solid #4bd0a0; }
     .legend-line.vehicle { border-top-color: #ffb84d; border-top-style: dashed; }
     .legend-line.airborne { border-top-color: #54c8ff; border-top-style: dashed; }
@@ -5444,6 +5452,9 @@ _INDEX_HTML = """<!doctype html>
     .timeline-team-list {
       display: grid;
       gap: 6px;
+      max-height: 360px;
+      overflow: auto;
+      padding-right: 3px;
     }
     .team-member {
       display: grid;
@@ -7934,7 +7945,7 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="timelineStatus">대기 중</div>
     </section>
     <section id="replay-player" data-view="replay">
-      <h2>2D 리플레이 재생</h2>
+      <h2>2D 전체 경기 리플레이</h2>
       <form id="timelinePlayerForm" class="query-form">
         <label>플랫폼
           <select name="shard">
@@ -7942,14 +7953,14 @@ _INDEX_HTML = """<!doctype html>
             <option value="kakao">kakao</option>
           </select>
         </label>
-        <label>등록 유저
+        <label>기준 등록 유저
           <input class="registered-player-input" name="target" id="timelinePlayerInput" list="registeredPlayerOptions" autocomplete="off" placeholder="닉네임 일부 입력" required>
         </label>
-        <button type="submit">경기 불러오기</button>
+        <button type="submit">경기 목록</button>
         <button class="secondary" type="button" id="timelinePlayerClear">초기화</button>
       </form>
       <div class="player-controls">
-        <label>타임라인
+        <label>경기
           <select id="timelineSelect" disabled><option value="">유저를 선택하세요</option></select>
         </label>
         <label>속도
@@ -7959,6 +7970,15 @@ _INDEX_HTML = """<!doctype html>
             <option value="2">2x</option>
             <option value="4">4x</option>
             <option value="8">8x</option>
+          </select>
+        </label>
+        <label>이동 흔적
+          <select id="timelineTrailSeconds">
+            <option value="15">15초</option>
+            <option value="30">30초</option>
+            <option value="60" selected>1분</option>
+            <option value="120">2분</option>
+            <option value="0">경기 전체</option>
           </select>
         </label>
         <button type="button" id="timelinePlayButton">재생</button>
@@ -7976,7 +7996,9 @@ _INDEX_HTML = """<!doctype html>
         <label><input type="checkbox" id="timelineShowCare" checked>보급</label>
         <label><input type="checkbox" id="timelineShowPlane" checked>비행기</label>
         <label><input type="checkbox" id="timelineShowPhase" checked>자기장</label>
-        <label><input type="checkbox" id="timelineShowTeam" checked>팀원</label>
+        <label><input type="checkbox" id="timelineShowAllies" checked>아군</label>
+        <label><input type="checkbox" id="timelineShowEnemies" checked>적군</label>
+        <label><input type="checkbox" id="timelineShowBots" checked>봇</label>
         <label><input type="checkbox" id="timelineFollowPlayer">팔로우</label>
         <label>줌
           <select id="timelineZoom">
@@ -7990,7 +8012,10 @@ _INDEX_HTML = """<!doctype html>
       </div>
       <div class="replay-explorer-bar" aria-label="이벤트 탐색 조건">
         <label>이벤트 대상
-          <select id="timelineActorFilter"><option value="focus">선택 유저</option><option value="all">전체 팀</option></select>
+          <select id="timelineActorFilter"><option value="focus">선택 유저</option><option value="all">전체 참가자</option></select>
+        </label>
+        <label>참가자 찾기
+          <input id="timelineParticipantSearch" autocomplete="off" placeholder="닉네임 일부 입력">
         </label>
         <label>이벤트 종류
           <select id="timelineEventTypeFilter">
@@ -8015,6 +8040,14 @@ _INDEX_HTML = """<!doctype html>
         <div class="replay-quick-actions" id="timelineQuickEvents"><span class="status">경기를 불러오세요.</span></div>
       </div>
       <div class="replay-legend" aria-label="리플레이 기호 범례">
+        <div class="replay-legend-group">
+          <strong>참가자</strong>
+          <span><i class="legend-actor focus"></i>기준 유저</span>
+          <span><i class="legend-actor ally"></i>아군</span>
+          <span><i class="legend-actor enemy"></i>적군</span>
+          <span><i class="legend-actor registered"></i>다른 등록 유저</span>
+          <span><i class="legend-actor bot"></i>봇</span>
+        </div>
         <div class="replay-legend-group">
           <strong>이동 경로</strong>
           <span><i class="legend-line foot"></i>도보</span>
@@ -8471,6 +8504,7 @@ _INDEX_HTML = """<!doctype html>
     const timelinePlayerClear = document.querySelector("#timelinePlayerClear");
     const timelineSelect = document.querySelector("#timelineSelect");
     const timelineSpeed = document.querySelector("#timelineSpeed");
+    const timelineTrailSeconds = document.querySelector("#timelineTrailSeconds");
     const timelinePlayButton = document.querySelector("#timelinePlayButton");
     const timelineResetButton = document.querySelector("#timelineResetButton");
     const timelineScrubber = document.querySelector("#timelineScrubber");
@@ -8479,6 +8513,7 @@ _INDEX_HTML = """<!doctype html>
     const timelineEventList = document.querySelector("#timelineEventList");
     const timelineTeamList = document.querySelector("#timelineTeamList");
     const timelineActorFilter = document.querySelector("#timelineActorFilter");
+    const timelineParticipantSearch = document.querySelector("#timelineParticipantSearch");
     const timelineEventTypeFilter = document.querySelector("#timelineEventTypeFilter");
     const timelineFollowEvents = document.querySelector("#timelineFollowEvents");
     const timelineEventFilterReset = document.querySelector("#timelineEventFilterReset");
@@ -8498,7 +8533,9 @@ _INDEX_HTML = """<!doctype html>
     const timelineShowCare = document.querySelector("#timelineShowCare");
     const timelineShowPlane = document.querySelector("#timelineShowPlane");
     const timelineShowPhase = document.querySelector("#timelineShowPhase");
-    const timelineShowTeam = document.querySelector("#timelineShowTeam");
+    const timelineShowAllies = document.querySelector("#timelineShowAllies");
+    const timelineShowEnemies = document.querySelector("#timelineShowEnemies");
+    const timelineShowBots = document.querySelector("#timelineShowBots");
     const timelineFollowPlayer = document.querySelector("#timelineFollowPlayer");
     const timelineZoom = document.querySelector("#timelineZoom");
     const replayCtx = replayCanvas.getContext("2d");
@@ -16148,9 +16185,6 @@ _INDEX_HTML = """<!doctype html>
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.detail || response.statusText);
       const artifacts = payload.artifacts || [];
-      if (accountId && artifactType !== "map_snapshot") {
-        updateTimelineOptions(artifacts, options.artifact_id ?? replayArtifactFilter.artifact_id);
-      }
       replayArtifactsStatus.textContent = [
         `${formatInteger(artifacts.length)}개 표시`,
         accountId ? `유저 ${registeredPlayers.find((player) => player.account_id === accountId)?.current_name || compactIdentifier(accountId)}` : "전체 등록 유저",
@@ -16168,7 +16202,7 @@ _INDEX_HTML = """<!doctype html>
             <td>${escapeHtml(formatBytes(artifact.size_bytes || 0))}</td>
             <td>
               <div class="actions">
-                ${canPlayTimelineArtifact(artifact) ? `<button type="button" data-load-timeline="${attr(artifact.id)}" data-load-account-id="${attr(artifact.account_id)}">재생</button>` : ""}
+                ${canPlayTimelineArtifact(artifact) ? `<button type="button" data-load-timeline="${attr(artifact.id)}" data-load-match-id="${attr(artifact.match_id)}" data-load-account-id="${attr(artifact.account_id)}">전체 경기 재생</button>` : ""}
                 ${artifact.artifact_type === "timeline" && !canPlayTimelineArtifact(artifact) ? `<span class="status-badge warning" title="${attr(artifact.renderer_version || "버전 정보 없음")}">재생성 필요</span>` : ""}
                 <a href="${attr(artifact.view_url)}" target="_blank" rel="noreferrer">열기</a>
               </div>
@@ -16188,16 +16222,13 @@ _INDEX_HTML = """<!doctype html>
             <div class="dense-card-row"><span>매치 ID</span><strong class="identifier" title="${attr(artifact.match_id || "")}">${escapeHtml(compactIdentifier(artifact.match_id))}</strong></div>
             <div class="dense-card-row"><span>생성 / 크기</span><strong>${escapeHtml(formatKstShort(artifact.generated_at_kst))} · ${escapeHtml(formatBytes(artifact.size_bytes || 0))}</strong></div>
             <div class="dense-card-actions">
-              ${canPlayTimelineArtifact(artifact) ? `<button type="button" data-load-timeline="${attr(artifact.id)}" data-load-account-id="${attr(artifact.account_id)}">재생</button>` : ""}
+              ${canPlayTimelineArtifact(artifact) ? `<button type="button" data-load-timeline="${attr(artifact.id)}" data-load-match-id="${attr(artifact.match_id)}" data-load-account-id="${attr(artifact.account_id)}">전체 경기 재생</button>` : ""}
               ${artifact.artifact_type === "timeline" && !canPlayTimelineArtifact(artifact) ? `<span class="status-badge warning" title="${attr(artifact.renderer_version || "버전 정보 없음")}">재생성 필요</span>` : ""}
               <a href="${attr(artifact.view_url)}" target="_blank" rel="noreferrer">열기</a>
             </div>
           </article>
         `).join("")
         : `<div class="dense-card"><span class="status">조건에 맞는 저장 파일이 없습니다.</span></div>`;
-      if (accountId && replayTimelineArtifacts.length && (!activeTimelineArtifact || String(activeTimelineArtifact.id) !== timelineSelect.value)) {
-        await loadSelectedTimeline();
-      }
     }
 
     const flightPathColors = ["#46d2aa", "#f0d479", "#ff8a65", "#70b7ff", "#d0a7ff", "#9ccc65"];
@@ -16386,10 +16417,11 @@ _INDEX_HTML = """<!doctype html>
       replayPinnedMap = null;
       replayPinnedEventId = null;
       timelineActorFilter.value = "focus";
+      timelineParticipantSearch.value = "";
       timelineEventTypeFilter.value = "all";
       timelineFollowEvents.checked = true;
       timelineSelect.disabled = true;
-      timelineSelect.innerHTML = '<option value="">유저를 선택하세요</option>';
+      timelineSelect.innerHTML = '<option value="">기준 유저를 선택하세요</option>';
       timelineScrubber.max = "0";
       timelineScrubber.value = "0";
       timelineClock.textContent = "0.0초";
@@ -16403,7 +16435,7 @@ _INDEX_HTML = """<!doctype html>
       drawEmptyReplayCanvas();
     }
 
-    async function loadReplayTimelinesForPlayer(player, preferredArtifactId = "") {
+    async function loadReplayTimelinesForPlayer(player, preferredMatchId = "") {
       activeReplayPlayer = player;
       timelinePlayerInput.value = player.current_name;
       timelinePlayerInput.dataset.accountId = player.account_id;
@@ -16411,17 +16443,56 @@ _INDEX_HTML = """<!doctype html>
       replayPlayerStatus.textContent = `${player.current_name}의 종료된 경기를 불러오는 중`;
 
       const params = new URLSearchParams({
-        artifact_type: "timeline",
+        shard: player.shard,
         account_id: player.account_id,
+        telemetry_only: "true",
         limit: "200",
       });
-      const response = await fetch(`/replay/artifacts?${params.toString()}`);
+      const response = await fetch(`/matches/explorer?${params.toString()}`);
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.detail || response.statusText);
-      updateTimelineOptions(payload.artifacts || [], preferredArtifactId);
+      updateTimelineMatchOptions(payload.matches || [], preferredMatchId);
       if (replayTimelineArtifacts.length) {
         await loadSelectedTimeline();
       }
+    }
+
+    function updateTimelineMatchOptions(matches, preferredMatchId = "") {
+      const previousMatchId = replayTimelineArtifacts.find(
+        (item) => String(item.id) === String(timelineSelect.value),
+      )?.match_id || "";
+      replayTimelineArtifacts = matches.map((match) => ({
+        id: `match:${match.match_id}`,
+        source_kind: "match_catalog",
+        match_id: match.match_id,
+        shard: match.shard,
+        match_created_at_kst: match.created_at_kst,
+        map_name: match.map_name,
+        map_label: match.map_label,
+        game_mode: match.game_mode,
+        game_mode_label: match.game_mode_label,
+        match_type: match.match_type,
+        participant_count: match.participant_count,
+      }));
+      if (!replayTimelineArtifacts.length) {
+        const player = activeReplayPlayer;
+        clearReplayTimeline(player ? `${player.current_name}의 저장된 전체 경기 리플레이 원본이 없습니다.` : undefined);
+        activeReplayPlayer = player;
+        return;
+      }
+      timelineSelect.disabled = false;
+      timelineSelect.innerHTML = replayTimelineArtifacts.map((match) => {
+        const label = [
+          formatKstShort(match.match_created_at_kst),
+          match.map_label || displayCode(match.map_name, "map"),
+          match.game_mode_label || displayCode(match.game_mode, "game_mode"),
+          `${formatInteger(match.participant_count || 0)}명`,
+        ].join(" / ");
+        return `<option value="${attr(match.id)}">${escapeHtml(label)}</option>`;
+      }).join("");
+      const selectedMatchId = preferredMatchId || previousMatchId;
+      const selected = replayTimelineArtifacts.find((item) => item.match_id === selectedMatchId);
+      if (selected) timelineSelect.value = String(selected.id);
     }
 
     function canPlayTimelineArtifact(artifact) {
@@ -16479,8 +16550,8 @@ _INDEX_HTML = """<!doctype html>
     }
 
     async function loadSelectedTimeline() {
-      const artifact = replayTimelineArtifacts.find((item) => String(item.id) === timelineSelect.value);
-      if (!artifact) {
+      const selection = replayTimelineArtifacts.find((item) => String(item.id) === timelineSelect.value);
+      if (!selection) {
         activeTimeline = null;
         activeTimelineArtifact = null;
         activeTimelineEvents = [];
@@ -16501,12 +16572,25 @@ _INDEX_HTML = """<!doctype html>
       }
 
       pauseReplay();
+      let artifact = selection;
+      if (selection.source_kind === "match_catalog") {
+        replayPlayerStatus.textContent = `${formatKstShort(selection.match_created_at_kst)} 전체 참가자 리플레이 준비 중`;
+        const generated = await requestJson(
+          `/matches/${encodeURIComponent(selection.match_id)}/replay`,
+          "POST",
+          { force: false },
+        );
+        artifact = generated.artifact;
+      }
       const payload = await fetch(artifact.view_url).then((response) => {
         if (!response.ok) throw new Error(response.statusText);
         return response.json();
       });
       validateTimelinePayload(payload);
-      activeTimeline = normalizeTimelineTiming(payload);
+      activeTimeline = rebaseMatchTimelineFocus(
+        normalizeTimelineTiming(payload),
+        activeReplayPlayer?.account_id || payload?.player?.account_id || "",
+      );
       activeTimelineArtifact = artifact;
       activeTimelineEvents = timelineEvents(activeTimeline);
       activeTimelineVisibleEvents = [];
@@ -16521,7 +16605,19 @@ _INDEX_HTML = """<!doctype html>
       timelineEventTypeFilter.value = "all";
       timelineScrubber.max = String(activeTimelineDuration);
       timelineScrubber.value = "0";
-      replayPlayerStatus.textContent = `${activeTimeline.player?.name || artifact.player_name || "알 수 없음"} · ${formatKstShort(artifact.match_created_at_kst)} · ${activeTimeline.match?.map_name || "-"} · ${compactIdentifier(activeTimeline.match?.match_id || artifact.match_id)}`;
+      const replayTeam = activeTimeline.team || {};
+      const replayMembers = replayTeam.members || [];
+      const replayTotal = replayTeam.member_count ?? replayMembers.length;
+      const replayHumans = replayTeam.human_member_count ?? replayMembers.filter((member) => !member.is_ai_or_bot).length;
+      const replayBots = replayTeam.bot_member_count ?? replayMembers.filter((member) => member.is_ai_or_bot).length;
+      replayPlayerStatus.textContent = [
+        activeTimeline.player?.name || artifact.player_name || "알 수 없음",
+        formatKstShort(artifact.match_created_at_kst),
+        displayCode(activeTimeline.match?.map_name, "map"),
+        `전체 ${formatInteger(replayTotal)}명`,
+        `사람 ${formatInteger(replayHumans)} · 봇 ${formatInteger(replayBots)}`,
+        compactIdentifier(activeTimeline.match?.match_id || artifact.match_id),
+      ].join(" · ");
       await loadReplayMapImage(activeTimeline.match?.map_name);
       renderTimelineActorFilter();
       renderTimelineQuickEvents();
@@ -16556,7 +16652,7 @@ _INDEX_HTML = """<!doctype html>
         });
         await loadSelectedTimeline();
         const result = payload.result || {};
-        replayPlayerStatus.textContent = `전체 참가자 ${formatInteger(result.tracked_participant_count || 0)}명 · 위치 ${formatInteger(result.position_sample_count || 0)}개 · 전투 ${formatInteger(result.combat_event_count || 0)}개`;
+        replayPlayerStatus.textContent = `전체 참가자 ${formatInteger(result.participant_count || 0)}명 · 이동 표시 ${formatInteger(result.tracked_participant_count || 0)}명 · 위치 ${formatInteger(result.position_sample_count || 0)}개 · 전투 ${formatInteger(result.combat_event_count || 0)}개`;
         banner.textContent = result.generated
           ? "전체 참가자 2D 리플레이 생성 완료"
           : "저장된 전체 참가자 2D 리플레이를 열었습니다.";
@@ -16736,6 +16832,93 @@ _INDEX_HTML = """<!doctype html>
       return timeline;
     }
 
+    function rebaseMatchTimelineFocus(timeline, requestedAccountId) {
+      if (timeline?.scope !== "match" || !requestedAccountId) return timeline;
+      const members = Array.isArray(timeline.team?.members) ? timeline.team.members : [];
+      const memberByAccount = new Map(
+        members.filter((member) => member?.account_id).map((member) => [String(member.account_id), member]),
+      );
+      const rootAccountId = String(timeline.player?.account_id || "");
+      const rootMember = memberByAccount.get(rootAccountId) || {};
+      const tracks = [
+        {
+          account_id: rootAccountId,
+          name: timeline.player?.name || rootMember.name,
+          match_name: rootMember.match_name,
+          team_id: rootMember.team_id,
+          registered: Boolean(rootMember.registered),
+          is_ai_or_bot: Boolean(rootMember.is_ai_or_bot),
+          sample_count: (timeline.positions || []).length,
+          positions: timeline.positions || [],
+          drop_starts: timeline.drop_starts || [],
+          landings: timeline.landings || [],
+          combat_events: timeline.combat_events || [],
+        },
+        ...(timeline.team_tracks || []),
+      ].filter((track) => track?.account_id);
+      if (
+        memberByAccount.has(String(requestedAccountId))
+        && !tracks.some((track) => String(track.account_id) === String(requestedAccountId))
+      ) {
+        const requestedMember = memberByAccount.get(String(requestedAccountId));
+        tracks.push({
+          account_id: String(requestedAccountId),
+          name: requestedMember?.name || requestedMember?.match_name || String(requestedAccountId),
+          match_name: requestedMember?.match_name,
+          team_id: requestedMember?.team_id ?? null,
+          registered: Boolean(requestedMember?.registered),
+          is_ai_or_bot: Boolean(requestedMember?.is_ai_or_bot),
+          sample_count: 0,
+          positions: [],
+          drop_starts: [],
+          landings: [],
+          combat_events: [],
+        });
+      }
+      const focusIndex = tracks.findIndex((track) => String(track.account_id) === String(requestedAccountId));
+      if (focusIndex < 0) return timeline;
+
+      const focus = tracks[focusIndex];
+      const focusMember = memberByAccount.get(String(focus.account_id)) || {};
+      for (const member of members) {
+        member.is_self = String(member.account_id || "") === String(focus.account_id);
+      }
+      for (const track of tracks) {
+        const member = memberByAccount.get(String(track.account_id)) || {};
+        track.name = track.name || member.name || track.account_id;
+        track.match_name = track.match_name || member.match_name;
+        track.team_id = track.team_id ?? member.team_id ?? null;
+        track.registered = Boolean(track.registered || member.registered);
+        track.is_ai_or_bot = Boolean(track.is_ai_or_bot || member.is_ai_or_bot);
+        track.sample_count = (track.positions || []).length;
+        for (const event of [
+          ...(track.drop_starts || []),
+          ...(track.landings || []),
+          ...(track.combat_events || []),
+        ]) {
+          event.actor_account_id = track.account_id;
+          event.actor_name = track.name;
+          event.actor_registered = track.registered;
+          event.actor_is_self = String(track.account_id) === String(focus.account_id);
+          event.actor_is_ai_or_bot = track.is_ai_or_bot;
+        }
+      }
+      for (const engagement of timeline.engagements || []) {
+        engagement.actor_is_self = String(engagement.actor_account_id || "") === String(focus.account_id);
+      }
+
+      timeline.player = {
+        account_id: String(focus.account_id),
+        name: focus.name || focusMember.name || String(focus.account_id),
+      };
+      timeline.positions = focus.positions || [];
+      timeline.drop_starts = focus.drop_starts || [];
+      timeline.landings = focus.landings || [];
+      timeline.combat_events = focus.combat_events || [];
+      timeline.team_tracks = tracks.filter((_, index) => index !== focusIndex);
+      return timeline;
+    }
+
     function ensureReplayPathSegments(samples) {
       if (!samples.length || samples.every((sample) => Number.isInteger(Number(sample.segment_id)))) return;
       let segmentId = 0;
@@ -16863,7 +17046,7 @@ _INDEX_HTML = """<!doctype html>
         add(
           "engagement",
           source,
-          `${engagement.actor_name || "팀원"} · ${verifiedOpponent ? "교전" : "공격 활동"}`,
+          `${engagement.actor_name || "참가자"} · ${verifiedOpponent ? "교전" : "공격 활동"}`,
           `${verifiedOpponent ? `상대 ${formatInteger(engagement.opponent_count || 0)}명 확인` : "상대 미확인"} / ${outcome} / ${formatInteger(engagement.event_count || 0)}개 사건 / 킬 ${formatInteger(engagement.kills || 0)} / 기절 ${formatInteger(engagement.dbnos_caused || 0)}`,
         );
       }
@@ -16881,7 +17064,7 @@ _INDEX_HTML = """<!doctype html>
 
     function replayActorName(event) {
       if (event?.actor_is_self) return event.actor_name || activeTimeline?.player?.name || "선택 유저";
-      return event?.actor_name || compactIdentifier(event?.actor_account_id || "팀원");
+      return event?.actor_name || compactIdentifier(event?.actor_account_id || "참가자");
     }
 
     function combatActionLabel(action) {
@@ -17016,6 +17199,65 @@ _INDEX_HTML = """<!doctype html>
       return source.map || null;
     }
 
+    function timelineFocusMember() {
+      const focusId = String(activeTimeline?.player?.account_id || "");
+      return (activeTimeline?.team?.members || []).find(
+        (member) => String(member.account_id || "") === focusId,
+      ) || null;
+    }
+
+    function timelineTrackByAccount(accountId) {
+      const normalized = String(accountId || "");
+      if (!normalized) return null;
+      if (normalized === String(activeTimeline?.player?.account_id || "")) {
+        const member = timelineFocusMember() || {};
+        return {
+          ...member,
+          account_id: normalized,
+          name: activeTimeline?.player?.name || member.name,
+          positions: activeTimeline?.positions || [],
+          drop_starts: activeTimeline?.drop_starts || [],
+          landings: activeTimeline?.landings || [],
+          combat_events: activeTimeline?.combat_events || [],
+          is_self: true,
+        };
+      }
+      return (activeTimeline?.team_tracks || []).find(
+        (track) => String(track.account_id || "") === normalized,
+      ) || null;
+    }
+
+    function replayParticipantRelation(participant) {
+      if (!participant) return "enemy";
+      if (String(participant.account_id || "") === String(activeTimeline?.player?.account_id || "")) return "focus";
+      const focusTeamId = timelineFocusMember()?.team_id;
+      if (focusTeamId !== null && focusTeamId !== undefined && String(participant.team_id) === String(focusTeamId)) return "ally";
+      if (participant.is_ai_or_bot) return "bot";
+      return "enemy";
+    }
+
+    function replayParticipantVisible(participant) {
+      const relation = replayParticipantRelation(participant);
+      if (relation === "focus") return true;
+      if (relation === "ally") return timelineShowAllies.checked;
+      if (relation === "bot") return timelineShowBots.checked;
+      return timelineShowEnemies.checked;
+    }
+
+    function replayParticipantColor(participant) {
+      const relation = replayParticipantRelation(participant);
+      if (relation === "focus") return "#4bd0a0";
+      if (relation === "ally") return "#54c8ff";
+      if (relation === "bot") return "#87939d";
+      if (participant?.registered) return "#d98cff";
+      return "#ff786e";
+    }
+
+    function replayRelationLabel(participant) {
+      const labels = { focus: "기준 유저", ally: "아군", enemy: "적군", bot: "봇" };
+      return labels[replayParticipantRelation(participant)] || "참가자";
+    }
+
     function renderTimelineActorFilter() {
       if (!timelineActorFilter) return;
       const previous = timelineActorFilter.value || "focus";
@@ -17025,7 +17267,7 @@ _INDEX_HTML = """<!doctype html>
         { value: "all", label: activeTimeline?.scope === "match" ? "전체 참가자" : "전체 팀" },
         ...members.filter((member) => !member.is_self && member.account_id).map((member) => ({
           value: member.account_id,
-          label: `${member.name || compactIdentifier(member.account_id)}${member.registered ? " · 등록 유저" : ""}`,
+          label: `${member.name || compactIdentifier(member.account_id)} · ${replayRelationLabel(member)}${member.registered ? " · 등록 유저" : ""}`,
         })),
       ];
       timelineActorFilter.innerHTML = options.map((option) => (
@@ -17152,16 +17394,25 @@ _INDEX_HTML = """<!doctype html>
 
     function renderTimelineTeamList() {
       if (!timelineTeamList) return;
-      const members = activeTimeline?.team?.members || [];
+      const query = String(timelineParticipantSearch?.value || "").trim().toLocaleLowerCase("ko-KR");
+      const members = (activeTimeline?.team?.members || []).filter((member) => {
+        if (!query) return true;
+        return String(member.name || member.account_id || "").toLocaleLowerCase("ko-KR").includes(query);
+      });
       if (!members.length) {
-        timelineTeamList.innerHTML = `<div class="status">팀 정보가 없습니다.</div>`;
+        timelineTeamList.innerHTML = `<div class="status">조건에 맞는 참가자가 없습니다.</div>`;
         return;
       }
-      timelineTeamList.innerHTML = members.map((member) => {
+      const ordered = [...members].sort((left, right) => {
+        const order = { focus: 0, ally: 1, enemy: 2, bot: 3 };
+        const relationDelta = order[replayParticipantRelation(left)] - order[replayParticipantRelation(right)];
+        if (relationDelta) return relationDelta;
+        return String(left.name || "").localeCompare(String(right.name || ""), "ko-KR");
+      });
+      timelineTeamList.innerHTML = ordered.map((member) => {
         const badges = [];
-        if (member.is_self) badges.push("선택 유저");
+        badges.push(replayRelationLabel(member));
         if (member.registered && !member.is_self) badges.push("등록 유저");
-        if (member.is_ai_or_bot) badges.push("봇");
         if (member.position_sample_count > 0 && !member.is_self) badges.push("이동 경로");
         if (member.combat_event_count > 0) badges.push("전투 기록");
         const stats = [
@@ -17175,9 +17426,9 @@ _INDEX_HTML = """<!doctype html>
         const actorFilterValue = member.is_self ? "focus" : member.account_id;
         const selected = (timelineActorFilter?.value || "focus") === actorFilterValue;
         return `
-          <button type="button" class="team-member ${member.is_self ? "self" : ""} ${member.registered && !member.is_self ? "registered" : ""} ${selected ? "selected" : ""}" data-timeline-actor="${attr(actorFilterValue)}">
+          <button type="button" class="team-member ${member.is_self ? "self" : ""} ${member.registered && !member.is_self ? "registered" : ""} ${selected ? "selected" : ""}" data-timeline-actor="${attr(actorFilterValue)}" style="border-left-color:${attr(replayParticipantColor(member))}">
             <strong>${escapeHtml(member.name || member.account_id || "알 수 없음")}</strong>
-            <span>${escapeHtml(badges.join(" / ") || "팀원")}</span>
+            <span>${escapeHtml(badges.join(" / ") || "참가자")}</span>
             <span>${escapeHtml(stats || "-")}</span>
           </button>
         `;
@@ -17214,7 +17465,8 @@ _INDEX_HTML = """<!doctype html>
 
     function timelineEventVisible(event) {
       const source = event?.source || {};
-      if (source.actor_is_self === false && !timelineShowTeam.checked) return false;
+      const actorId = timelineEventActorId(event);
+      if (actorId && !replayParticipantVisible(timelineTrackByAccount(actorId))) return false;
       if (event.category === "plane") return timelineShowPlane.checked;
       if (["drop", "landing"].includes(event.category)) return timelineShowPath.checked;
       if (event.category === "care") return timelineShowCare.checked;
@@ -17352,17 +17604,12 @@ _INDEX_HTML = """<!doctype html>
         drawReplayDropStarts(activeTimeline.drop_starts || [], "#4bd0a0");
         drawReplayLandings(activeTimeline.landings || [], "#4bd0a0");
       }
-      if (timelineShowTeam.checked) drawReplayTeamTracks(activeTimeline.team_tracks || []);
+      drawReplayTeamTracks(activeTimeline.team_tracks || []);
       if (timelineShowCombat.checked && timelineShowEngagements.checked) {
         drawReplayEngagements(activeTimeline.engagements || []);
       }
       if (timelineShowCombat.checked) {
-        drawReplayCombatEvents(activeTimeline.combat_events || [], "#4bd0a0");
-        if (timelineShowTeam.checked) {
-          (activeTimeline.team_tracks || []).forEach((track, index) => {
-            drawReplayCombatEvents(track.combat_events || [], teamTrackColor(index, Boolean(track.registered)));
-          });
-        }
+        drawReplayAllCombatEvents();
       }
       syncTimelineCurrentEvent();
       drawReplaySelectedEvent();
@@ -17498,21 +17745,26 @@ _INDEX_HTML = """<!doctype html>
     }
 
     function drawReplayTeamTracks(tracks) {
-      tracks.forEach((track, index) => {
+      tracks.forEach((track) => {
+        if (!replayParticipantVisible(track)) return;
         const samples = track.positions || [];
-        const color = teamTrackColor(index, Boolean(track.registered));
+        const color = replayParticipantColor(track);
         if (timelineShowPath.checked) {
           drawMovementTrack(samples, color, false, track.registered ? 3 : 2);
           drawReplayDropStarts(track.drop_starts || [], color);
           drawReplayLandings(track.landings || [], color);
         }
 
-        const current = interpolatedPosition(samples, activeTimelineTime);
+        const current = replayTrackPosition(track, activeTimelineTime);
         if (!current) return;
         const point = canvasPoint(current);
         if (!canvasPointVisible(point, 16)) return;
         drawReplayActorMarker(point, current.movement_mode, color, false);
-        drawReplayLabel(point, track.name || track.account_id || "팀원", color);
+        const selectedActor = timelineActorFilter?.value || "focus";
+        const relation = replayParticipantRelation(track);
+        if (relation === "ally" || track.registered || selectedActor === String(track.account_id)) {
+          drawReplayLabel(point, track.name || track.account_id || "참가자", color);
+        }
       });
       replayCtx.setLineDash([]);
     }
@@ -17664,13 +17916,38 @@ _INDEX_HTML = """<!doctype html>
       }
     }
 
+    function drawReplayAllCombatEvents() {
+      const tracks = [
+        timelineTrackByAccount(activeTimeline?.player?.account_id),
+        ...(activeTimeline?.team_tracks || []),
+      ].filter((track) => track && replayParticipantVisible(track));
+      const seen = new Set();
+      for (const track of tracks) {
+        const color = replayParticipantColor(track);
+        for (const event of track.combat_events || []) {
+          if (!canonicalReplayCombatEvent(event)) continue;
+          const actionGroup = ["kill", "finish"].includes(event.action) ? "kill" : event.action;
+          const key = `${event.event_index ?? "x"}:${actionGroup}:${event.related_account_id || ""}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          drawReplayCombatEvents([event], color);
+        }
+      }
+    }
+
+    function canonicalReplayCombatEvent(event) {
+      const relatedTrack = timelineTrackByAccount(event?.related_account_id);
+      if (!relatedTrack) return true;
+      return !["hit_taken", "dbno_taken", "death", "finished_taken", "revive_received"].includes(event.action);
+    }
+
     function drawReplayEngagements(engagements) {
       for (const engagement of engagements) {
         const start = Number(engagement.start_time_seconds);
         const end = Number(engagement.end_time_seconds);
         if (!engagement.map || !Number.isFinite(start) || !Number.isFinite(end)) continue;
         if (activeTimelineTime < start || activeTimelineTime > end + 6) continue;
-        if (engagement.actor_is_self === false && !timelineShowTeam.checked) continue;
+        if (!replayParticipantVisible(timelineTrackByAccount(engagement.actor_account_id))) continue;
         const point = canvasPoint(engagement.map);
         const pulse = 18 + Math.sin(activeTimelineTime * 4) * 3;
         replayCtx.strokeStyle = engagement.evidence === "inferred_attack_activity"
@@ -17844,7 +18121,7 @@ _INDEX_HTML = """<!doctype html>
     }
 
     function drawReplayPlayer(samples) {
-      const current = interpolatedPosition(samples, activeTimelineTime);
+      const current = replayTrackPosition(timelineTrackByAccount(activeTimeline?.player?.account_id), activeTimelineTime);
       if (!current) return;
       drawReplayActorMarker(canvasPoint(current), current.movement_mode, "#4bd0a0", true);
     }
@@ -17873,7 +18150,8 @@ _INDEX_HTML = """<!doctype html>
     }
 
     function drawReplayOverlay() {
-      const current = interpolatedPosition(activeTimeline?.positions || [], activeTimelineTime);
+      const focusTrack = timelineTrackByAccount(activeTimeline?.player?.account_id);
+      const current = replayTrackPosition(focusTrack, activeTimelineTime);
       replayCtx.fillStyle = "rgba(17,24,32,0.82)";
       replayCtx.fillRect(12, 12, 430, 112);
       replayCtx.fillStyle = "#f5f7fa";
@@ -17886,7 +18164,8 @@ _INDEX_HTML = """<!doctype html>
       const vehicleLabel = current?.vehicle_id
         ? displayCode(current.vehicle_id, "vehicle")
         : (current?.vehicle_label || "");
-      replayCtx.fillText(`KST ${formatReplayKst(activeTimelineTime)} · ${current?.movement_label || "위치 대기"}${vehicleLabel ? ` (${vehicleLabel})` : ""}`, 24, 84);
+      const movementLabel = current?.movement_label || (replayTrackTerminalTime(focusTrack) !== null ? "생존 종료" : "위치 대기");
+      replayCtx.fillText(`KST ${formatReplayKst(activeTimelineTime)} · ${movementLabel}${vehicleLabel ? ` (${vehicleLabel})` : ""}`, 24, 84);
       const viewportMode = replayPinnedEventId ? "선택 사건" : timelineFollowPlayer.checked ? "플레이어" : "맵 중앙";
       replayCtx.fillText(`확대 ${formatNumber(replayZoom(), 1)}x · 화면 중심 ${viewportMode}`, 24, 108);
     }
@@ -17921,19 +18200,18 @@ _INDEX_HTML = """<!doctype html>
       replayCtx.fillText(text, x + 6, y);
     }
 
-    function teamTrackColor(index, registered) {
-      const registeredColors = ["#00bcd4", "#ffca28", "#ab47bc", "#26a69a"];
-      const defaultColors = ["#90a4ae", "#ffab91", "#b0bec5", "#a5d6a7"];
-      const colors = registered ? registeredColors : defaultColors;
-      return colors[index % colors.length];
-    }
-
     function visiblePositionModeSegments(samples) {
       const segments = [];
       let previous = null;
+      const trailSeconds = Math.max(0, Number(timelineTrailSeconds?.value || 0));
+      const minimumTime = trailSeconds > 0 ? Math.max(0, activeTimelineTime - trailSeconds) : Number.NEGATIVE_INFINITY;
       for (const sample of samples) {
         const time = eventTime(sample);
         if (!sample.map || !Number.isFinite(time) || time > activeTimelineTime) continue;
+        if (time < minimumTime) {
+          previous = sample;
+          continue;
+        }
         const key = `${Number(sample.segment_id || 0)}:${sample.movement_mode || "on_foot"}`;
         const current = segments[segments.length - 1];
         if (!current || current.key !== key) {
@@ -17958,6 +18236,22 @@ _INDEX_HTML = """<!doctype html>
         else segments.push({ key, mode: current.movement_mode || "on_foot", samples: previous ? [previous, point] : [point] });
       }
       return segments;
+    }
+
+    function replayTrackPosition(track, time) {
+      if (!track) return null;
+      const terminalTime = replayTrackTerminalTime(track);
+      if (terminalTime !== null && time >= terminalTime + 0.75) return null;
+      return interpolatedPosition(track.positions || [], time);
+    }
+
+    function replayTrackTerminalTime(track) {
+      const terminal = (track?.combat_events || [])
+        .filter((event) => ["death", "finished_taken"].includes(event.action))
+        .map(eventTime)
+        .filter(Number.isFinite)
+        .sort((left, right) => left - right)[0];
+      return Number.isFinite(terminal) ? terminal : null;
     }
 
     function interpolatedPosition(samples, time) {
@@ -20413,7 +20707,7 @@ _INDEX_HTML = """<!doctype html>
       try {
         const player = selectedRegisteredPlayer(timelinePlayerForm);
         await loadReplayTimelinesForPlayer(player);
-        banner.textContent = "선택한 유저의 2D 리플레이 목록을 불러왔습니다.";
+        banner.textContent = "선택한 유저의 전체 경기 2D 리플레이를 불러왔습니다.";
       } catch (error) {
         replayPlayerStatus.textContent = `오류: ${error.message}`;
         banner.textContent = `오류: ${error.message}`;
@@ -20465,8 +20759,22 @@ _INDEX_HTML = """<!doctype html>
       try {
         const accountId = button.dataset.loadAccountId || "";
         const player = registeredPlayers.find((item) => item.account_id === accountId);
-        if (!player) throw new Error("이 리플레이의 등록 유저 정보를 찾을 수 없습니다.");
-        await loadReplayTimelinesForPlayer(player, button.dataset.loadTimeline || "");
+        const matchId = button.dataset.loadMatchId || "";
+        if (player) {
+          await loadReplayTimelinesForPlayer(player, matchId);
+        } else {
+          if (!matchId) throw new Error("재생할 경기 정보를 찾을 수 없습니다.");
+          const generated = await requestJson(
+            `/matches/${encodeURIComponent(matchId)}/replay`,
+            "POST",
+            { force: false },
+          );
+          activeReplayPlayer = null;
+          timelinePlayerInput.value = "";
+          delete timelinePlayerInput.dataset.accountId;
+          updateTimelineOptions([generated.artifact], String(generated.artifact.id));
+          await loadSelectedTimeline();
+        }
         const url = new URL(window.location.href);
         url.hash = "replay-player";
         window.history.pushState({}, "", url);
@@ -20547,7 +20855,9 @@ _INDEX_HTML = """<!doctype html>
       timelineShowCare,
       timelineShowPlane,
       timelineShowPhase,
-      timelineShowTeam,
+      timelineShowAllies,
+      timelineShowEnemies,
+      timelineShowBots,
       timelineFollowPlayer,
     ]) {
       toggle.addEventListener("change", () => {
@@ -20563,12 +20873,15 @@ _INDEX_HTML = """<!doctype html>
           renderReplayFrame();
           return;
         }
-        if (toggle === timelineShowTeam && !timelineShowTeam.checked && !["focus", "all"].includes(timelineActorFilter.value)) {
-          timelineActorFilter.value = "focus";
+        if ([timelineShowAllies, timelineShowEnemies, timelineShowBots].includes(toggle)) {
+          const selectedTrack = timelineTrackByAccount(timelineActorFilter.value);
+          if (selectedTrack && !replayParticipantVisible(selectedTrack)) timelineActorFilter.value = "focus";
         }
         refreshTimelineEventExplorer({ clearSelection: false });
       });
     }
+    timelineTrailSeconds.addEventListener("change", renderReplayFrame);
+    timelineParticipantSearch.addEventListener("input", renderTimelineTeamList);
     timelineZoom.addEventListener("change", renderReplayFrame);
 
     workspaceNav.addEventListener("click", (event) => {

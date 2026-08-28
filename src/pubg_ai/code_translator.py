@@ -518,6 +518,8 @@ ITEM_ID_KO = {
     "Item_Head_G_01_Lv3_C": "헬멧 Lv.3",
     "Item_Head_G_00_Lv3_C": "헬멧 Lv.3",
     "Item_JerryCan_C": "연료통",
+    "Item_Secuity_KeyCard_C": "키 카드",
+    "Item_Secuity_Keycard_C": "키 카드",
     "Item_Tiger_SelfRevive_C": "자가제세동기",
     "Item_Bluechip_C": "블루칩",
     "Item_Revival_Transmitter_C": "부활 송신기",

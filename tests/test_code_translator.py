@@ -49,6 +49,8 @@ class CodeTranslatorTests(unittest.TestCase):
             ("Item_BulletproofShield_C", "item"): "접이식 방패",
             ("Item_DihorOtok_Key_C", "item"): "비밀의 방 열쇠",
             ("Item_EmergencyPickup_C", "item"): "긴급 수송",
+            ("Item_Secuity_KeyCard_C", "item"): "키 카드",
+            ("Item_Secuity_Keycard_C", "item"): "키 카드",
             ("Item_Weapon_Ziplinegun_C", "item"): "집라인 건",
             ("WeapFamasG2_C", "damage_causer"): "FAMAS",
             ("TslGameModeBase_BattleRoyaleBP_C", "damage_causer"): "블루존",

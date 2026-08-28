@@ -7,6 +7,7 @@ Discord command layer, operational controls, and the research and evidence behin
 ## Current Documents
 
 - [Requirement-to-Evidence Audit](docs/REQUIREMENT_EVIDENCE_AUDIT.md)
+- [Whole-Match Tactical Replay Verification](docs/WHOLE_MATCH_TACTICAL_REPLAY_2026-08-28.md)
 - [PUBG Open API Research](docs/PUBG_OPEN_API_RESEARCH.md)
 - [PUBG Collection Flow](docs/PUBG_COLLECTION_FLOW.md)
 - [Local Architecture and MySQL Model](docs/LOCAL_ARCHITECTURE_AND_MYSQL_MODEL.md)
@@ -353,20 +354,32 @@ GET /replay/artifacts?artifact_type=&limit=50
 GET /replay/artifacts/{artifact_id}/file
 ```
 
-The local web app includes a 2D replay player that loads generated `player-timeline-v13` JSON artifacts, uses cached
-official map PNG assets as the canvas background when available, and renders movement, plane route, phase rings,
-landing, combat, care-package, and revive markers when telemetry has the related events. Its grouped legend uses
-shape, line pattern, text, and color together. The current-event strip, time-sorted event list, KST detail panel, actor
-and event-type filters, and major-location shortcuts make each marker inspectable without memorizing a timestamp.
-Every located event has a map button; drop start, landing, first verified engagement, inferred attack activity, hit,
-DBNO, kill, and death shortcuts seek and center the map directly. Movement is classified as airborne, vehicle,
-on-foot, or DBNO for the tracked player and every available teammate track.
+The local web app's primary 2D replay is a whole-match tactical replay. A registered player is selected only to find
+that player's completed matches and establish the focus player's team; the generated `match-timeline` contains every
+participant with an account ID, including unregistered enemies and bots. The UI uses cached official map PNG assets
+when available and renders all available movement, plane route, phase rings, landing, combat, care-package, DBNO,
+kill/death, and revive markers on one event clock. The raw telemetry event objects are not copied into the replay
+artifact.
+
+Focus, ally, enemy, other-registered-player, and bot relationships have separate labels and colors. Operators can
+toggle allies, enemies, or bots, search the participant roster by partial nickname, choose an event actor, and limit
+movement trails to 15, 30, 60, or 120 seconds or the full match. Dead or finished participant markers stop after the
+terminal event instead of remaining at their final position. The current-event strip, time-sorted event list, KST
+detail panel, actor/event filters, and major-location shortcuts make each marker inspectable without memorizing a
+timestamp. Every located event has a map button; drop start, landing, first verified engagement, inferred attack
+activity, hit, DBNO, kill, and death shortcuts seek and center the map directly. Movement is classified as airborne,
+vehicle, on-foot, or DBNO for all participants when telemetry supplies those samples.
+
+The player selector queries matches by the stored PUBG account ID, not by nickname text. Selecting a match calls
+`POST /matches/{match_id}/replay`, which creates or reuses the match-wide content-addressed artifact. Older
+registered-player timeline artifacts remain preserved and playable from storage, but they are no longer the default
+entry path for tactical replay.
 
 Attack normalization requires a non-empty PUBG weapon item ID. Firearm shots, throwable uses, melee attacks, and
 other attacks are classified separately from item category/subcategory with item-code fallbacks for partial older
 events. Empty weapon placeholder attacks remain in immutable raw telemetry but are not presented as measured shots.
 
-Timeline JSON carries the tracked player's team roster, teammate position/combat tracks, registered-player emphasis,
+Timeline JSON carries the full participant roster, per-participant position/combat tracks, registered-player emphasis,
 engagement clusters, and vehicle identity when telemetry provides it. Opponent-backed engagements are separated from
 attack-only activity; environmental/self damage and teammate damage cannot establish opponent evidence. Resolution
 causes such as Blue Zone remain visible events but are not mislabeled as weapons. A shot always gets a location

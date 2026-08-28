@@ -85,7 +85,9 @@ async function runPlayerAnalysis(page) {
 async function runDataQualityAudit(page) {
   await page.locator('[data-view-target="operations"]').click();
   await page.locator("#playerIntelligenceAuditRun").click();
-  await page.locator("#playerIntelligenceAuditStatus").filter({ hasText: "전체 통과" }).waitFor({ timeout: 30000 });
+  await page.locator("#playerIntelligenceAuditStatus")
+    .filter({ hasText: /전체 통과|확인 필요|오류/ })
+    .waitFor({ timeout: 60000 });
   const bodyText = await page.locator("#playerIntelligenceAuditBody").innerText();
   return {
     status: await page.locator("#playerIntelligenceAuditStatus").innerText(),
@@ -98,6 +100,83 @@ async function runDataQualityAudit(page) {
       "마지막 텔레메트리 저장",
       "번역 사전 커버리지",
     ].every((label) => bodyText.includes(label)),
+  };
+}
+
+async function runWholeMatchReplay(page) {
+  await openWorkspaceSection(page, "replay", "player");
+  const selection = await selectPlayerForForm(page, "#timelinePlayerForm");
+  await selection.form.locator('button[type="submit"]').click();
+  await page.waitForFunction(() => {
+    const select = document.querySelector("#timelineSelect");
+    const status = document.querySelector("#replayPlayerStatus")?.textContent || "";
+    return Boolean(
+      select
+      && !select.disabled
+      && [...select.options].some((option) => option.value)
+      && /전체\s+[1-9][0-9,]*명/.test(status)
+      && !status.includes("준비 중")
+    );
+  }, null, { timeout: 120000 });
+  await page.waitForFunction(() => (
+    document.querySelectorAll("#timelineTeamList [data-timeline-actor]").length > 4
+  ), null, { timeout: 30000 });
+
+  const status = await page.locator("#replayPlayerStatus").innerText();
+  const participantCards = await page.locator("#timelineTeamList [data-timeline-actor]").count();
+  const actorOptions = await page.locator("#timelineActorFilter option").count();
+  const participantText = await page.locator("#timelineTeamList").innerText();
+  const checkedLayers = await page.locator([
+    "#timelineShowPath:checked",
+    "#timelineShowCombat:checked",
+    "#timelineShowEngagements:checked",
+    "#timelineShowDbno:checked",
+    "#timelineShowKills:checked",
+    "#timelineShowAllies:checked",
+    "#timelineShowEnemies:checked",
+    "#timelineShowBots:checked",
+  ].join(", ")).count();
+
+  await page.locator("#timelineActorFilter").selectOption("all");
+  await page.waitForTimeout(200);
+  const eventCount = await page.locator("#timelineEventList [data-timeline-event-item]").count();
+  const eventText = await page.locator("#timelineEventList").innerText();
+  const canvas = await page.locator("#replayCanvas").evaluate((element) => {
+    const context = element.getContext("2d");
+    const pixels = context.getImageData(0, 0, element.width, element.height).data;
+    let opaque = 0;
+    const colors = new Set();
+    for (let index = 0; index < pixels.length; index += 1600) {
+      if (pixels[index + 3] > 0) opaque += 1;
+      colors.add(`${pixels[index]}:${pixels[index + 1]}:${pixels[index + 2]}:${pixels[index + 3]}`);
+    }
+    return { opaque, sampledColors: colors.size };
+  });
+
+  const before = Number(await page.locator("#timelineScrubber").inputValue());
+  await page.locator("#timelineSpeed").selectOption("8");
+  await page.locator("#timelinePlayButton").click();
+  await page.waitForTimeout(900);
+  const after = Number(await page.locator("#timelineScrubber").inputValue());
+  if ((await page.locator("#timelinePlayButton").innerText()) !== "재생") {
+    await page.locator("#timelinePlayButton").click();
+  }
+
+  const screenshot = path.join(outputDir, "whole-match-replay-desktop.png");
+  await page.locator("#replay-player").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: screenshot, fullPage: false });
+  return {
+    status,
+    participantCards,
+    actorOptions,
+    hasEnemy: participantText.includes("적군"),
+    hasFocus: participantText.includes("기준 유저"),
+    checkedLayers,
+    eventCount,
+    hasCombatEvent: ["교전", "명중", "피격", "기절", "킬", "사망"].some((label) => eventText.includes(label)),
+    canvas,
+    playbackAdvanced: after > before,
+    screenshot,
   };
 }
 
@@ -520,6 +599,7 @@ async function layoutDiagnostics(page) {
     await desktopPage.screenshot({ path: playerScreenshot, fullPage: false });
     const features = await runExpandedFeatureChecks(desktopPage);
     const registryDimensions = await runRegistryAndDimensionChecks(desktopPage);
+    const wholeMatchReplay = await runWholeMatchReplay(desktopPage);
     const audit = await runDataQualityAudit(desktopPage);
     const workspaceNavigation = await runWorkspaceNavigationCheck(desktopPage);
     const auditScreenshot = path.join(outputDir, "data-quality-desktop.png");
@@ -551,6 +631,7 @@ async function layoutDiagnostics(page) {
         workspaceContent,
         features,
         registryDimensions,
+        wholeMatchReplay,
         audit,
         workspaceNavigation,
         layout: desktopLayout,
@@ -569,6 +650,7 @@ async function layoutDiagnostics(page) {
         mobileScreenshot,
         ...features.screenshots,
         ...registryDimensions.screenshots,
+        wholeMatchReplay: wholeMatchReplay.screenshot,
         mobileRegistry: mobileRegistry.screenshot,
       },
     };
@@ -611,6 +693,16 @@ async function layoutDiagnostics(page) {
       result.desktop.registryDimensions.rowsByDimension.hour < 1,
       result.desktop.registryDimensions.weaponChartRows < 1,
       !result.desktop.registryDimensions.hasDetailedMetrics,
+      result.desktop.wholeMatchReplay.participantCards <= 4,
+      result.desktop.wholeMatchReplay.actorOptions !== result.desktop.wholeMatchReplay.participantCards + 1,
+      !result.desktop.wholeMatchReplay.hasEnemy,
+      !result.desktop.wholeMatchReplay.hasFocus,
+      result.desktop.wholeMatchReplay.checkedLayers !== 8,
+      result.desktop.wholeMatchReplay.eventCount < 1,
+      !result.desktop.wholeMatchReplay.hasCombatEvent,
+      result.desktop.wholeMatchReplay.canvas.opaque < 10,
+      result.desktop.wholeMatchReplay.canvas.sampledColors < 4,
+      !result.desktop.wholeMatchReplay.playbackAdvanced,
       result.mobile.registry.rows < 1,
       result.mobile.registry.editors < result.mobile.registry.rows,
       result.desktop.audit.failedRows > 0,

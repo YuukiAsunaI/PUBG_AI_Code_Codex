@@ -56,6 +56,7 @@ class MatchExplorerService:
         self,
         *,
         shard: str | None = None,
+        account_id: str | None = None,
         search: str | None = None,
         map_name: str | None = None,
         game_mode: str | None = None,
@@ -73,6 +74,14 @@ class MatchExplorerService:
 
         if normalized := _optional_text(shard):
             clauses.append("matches.shard = %s")
+            params.append(normalized)
+        if normalized := _optional_text(account_id):
+            clauses.append(
+                "EXISTS ("
+                "SELECT 1 FROM match_participants requested_participant "
+                "WHERE requested_participant.match_id = matches.match_id "
+                "AND requested_participant.account_id = %s)"
+            )
             params.append(normalized)
         if normalized := _optional_text(map_name):
             clauses.append("matches.map_name = %s")
