@@ -124,7 +124,10 @@ async function runWholeMatchReplay(page) {
 
   const status = await page.locator("#replayPlayerStatus").innerText();
   const participantCards = await page.locator("#timelineTeamList [data-timeline-actor]").count();
-  const actorOptions = await page.locator("#timelineActorFilter option").count();
+  const actorCheckboxes = await page.locator("#timelineActorFilter [data-timeline-actor-filter]").count();
+  const defaultActorChecked = await page.locator("#timelineActorFilter [data-timeline-actor-filter]:checked").count();
+  const eventTypeCheckboxes = await page.locator("#timelineEventTypeFilter [data-timeline-event-type-filter]").count();
+  const defaultEventTypeChecked = await page.locator("#timelineEventTypeFilter [data-timeline-event-type-filter]:checked").count();
   const participantText = await page.locator("#timelineTeamList").innerText();
   const checkedLayers = await page.locator([
     "#timelineShowPath:checked",
@@ -137,7 +140,36 @@ async function runWholeMatchReplay(page) {
     "#timelineShowBots:checked",
   ].join(", ")).count();
 
-  await page.locator("#timelineActorFilter").selectOption("all");
+  await page.locator('[data-timeline-actor-action="all"]').click();
+  await page.waitForFunction(() => {
+    const all = document.querySelectorAll("#timelineActorFilter [data-timeline-actor-filter]").length;
+    const checked = document.querySelectorAll("#timelineActorFilter [data-timeline-actor-filter]:checked").length;
+    return all > 0 && checked === all;
+  });
+  const allActorChecked = await page.locator("#timelineActorFilter [data-timeline-actor-filter]:checked").count();
+
+  const actorSearchName = actorCheckboxes > 1
+    ? await page.locator("#timelineActorFilter .replay-checkbox-option strong").nth(1).innerText()
+    : await page.locator("#timelineActorFilter .replay-checkbox-option strong").first().innerText();
+  await page.locator("#timelineParticipantSearch").fill(actorSearchName);
+  await page.waitForTimeout(100);
+  const searchedActorCheckboxes = await page.locator("#timelineActorFilter [data-timeline-actor-filter]").count();
+  await page.locator("#timelineParticipantSearch").fill("");
+  await page.waitForTimeout(100);
+  const restoredActorCheckboxes = await page.locator("#timelineActorFilter [data-timeline-actor-filter]").count();
+  const restoredActorChecked = await page.locator("#timelineActorFilter [data-timeline-actor-filter]:checked").count();
+
+  await page.locator('[data-timeline-type-action="none"]').click();
+  await page.waitForTimeout(100);
+  const typeNoneCount = await page.locator("#timelineEventList [data-timeline-event-item]").count();
+  await page.locator('[data-timeline-event-type-filter][value="dbno"]').check();
+  await page.locator('[data-timeline-event-type-filter][value="kill"]').check();
+  await page.waitForTimeout(200);
+  const multiTypeEventCount = await page.locator("#timelineEventList [data-timeline-event-item]").count();
+  const filteredEventTypes = await page.locator("#timelineEventList [data-timeline-event-item]").evaluateAll((items) => (
+    [...new Set(items.flatMap((item) => (item.dataset.timelineEventType || "").split(/\s+/).filter(Boolean)))].sort()
+  ));
+  await page.locator('[data-timeline-type-action="all"]').click();
   await page.waitForTimeout(200);
   const eventCount = await page.locator("#timelineEventList [data-timeline-event-item]").count();
   const eventText = await page.locator("#timelineEventList").innerText();
@@ -168,7 +200,17 @@ async function runWholeMatchReplay(page) {
   return {
     status,
     participantCards,
-    actorOptions,
+    actorCheckboxes,
+    defaultActorChecked,
+    allActorChecked,
+    searchedActorCheckboxes,
+    restoredActorCheckboxes,
+    restoredActorChecked,
+    eventTypeCheckboxes,
+    defaultEventTypeChecked,
+    typeNoneCount,
+    multiTypeEventCount,
+    filteredEventTypes,
     hasEnemy: participantText.includes("적군"),
     hasFocus: participantText.includes("기준 유저"),
     checkedLayers,
@@ -694,7 +736,18 @@ async function layoutDiagnostics(page) {
       result.desktop.registryDimensions.weaponChartRows < 1,
       !result.desktop.registryDimensions.hasDetailedMetrics,
       result.desktop.wholeMatchReplay.participantCards <= 4,
-      result.desktop.wholeMatchReplay.actorOptions !== result.desktop.wholeMatchReplay.participantCards + 1,
+      result.desktop.wholeMatchReplay.actorCheckboxes !== result.desktop.wholeMatchReplay.participantCards,
+      result.desktop.wholeMatchReplay.defaultActorChecked !== 1,
+      result.desktop.wholeMatchReplay.allActorChecked !== result.desktop.wholeMatchReplay.actorCheckboxes,
+      result.desktop.wholeMatchReplay.searchedActorCheckboxes < 1,
+      result.desktop.wholeMatchReplay.searchedActorCheckboxes >= result.desktop.wholeMatchReplay.actorCheckboxes,
+      result.desktop.wholeMatchReplay.restoredActorCheckboxes !== result.desktop.wholeMatchReplay.actorCheckboxes,
+      result.desktop.wholeMatchReplay.restoredActorChecked !== result.desktop.wholeMatchReplay.actorCheckboxes,
+      result.desktop.wholeMatchReplay.eventTypeCheckboxes !== 9,
+      result.desktop.wholeMatchReplay.defaultEventTypeChecked !== 9,
+      result.desktop.wholeMatchReplay.typeNoneCount !== 0,
+      result.desktop.wholeMatchReplay.multiTypeEventCount < 1,
+      result.desktop.wholeMatchReplay.filteredEventTypes.some((eventType) => !["dbno", "kill"].includes(eventType)),
       !result.desktop.wholeMatchReplay.hasEnemy,
       !result.desktop.wholeMatchReplay.hasFocus,
       result.desktop.wholeMatchReplay.checkedLayers !== 8,

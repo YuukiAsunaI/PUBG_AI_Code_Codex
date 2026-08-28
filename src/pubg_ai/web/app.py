@@ -5262,12 +5262,19 @@ _INDEX_HTML = """<!doctype html>
     .toggle-row input { width: auto; min-height: 0; }
     .replay-explorer-bar {
       display: grid;
-      grid-template-columns: repeat(3, minmax(150px, 220px)) auto auto minmax(100px, 1fr);
+      grid-template-columns: minmax(0, 1.45fr) minmax(300px, 0.75fr);
       gap: 10px;
-      align-items: end;
+      align-items: start;
       margin: 12px 0;
     }
-    .replay-explorer-bar .checkbox-field {
+    .replay-filter-toolbar {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: minmax(220px, 360px) auto auto minmax(100px, 1fr);
+      gap: 10px;
+      align-items: end;
+    }
+    .replay-filter-toolbar .checkbox-field {
       display: inline-flex;
       align-items: center;
       align-self: center;
@@ -5276,7 +5283,64 @@ _INDEX_HTML = """<!doctype html>
       color: var(--muted);
       font-size: 12px;
     }
-    .replay-explorer-bar .checkbox-field input { width: auto; min-height: 0; }
+    .replay-filter-toolbar .checkbox-field input { width: auto; min-height: 0; }
+    .replay-checkbox-panel {
+      min-width: 0;
+      margin: 0;
+      padding: 9px 10px 10px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: #0a0d0f;
+    }
+    .replay-checkbox-panel legend {
+      padding: 0 5px;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .replay-filter-selection-count {
+      margin-left: 6px;
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+    .replay-filter-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+    .replay-filter-actions button { min-height: 30px; padding: 5px 9px; font-size: 11px; }
+    .replay-checkbox-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+      gap: 5px 8px;
+      min-width: 0;
+    }
+    .replay-actor-filter-list {
+      max-height: 210px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+    .replay-type-filter-list { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
+    .replay-checkbox-option {
+      display: grid;
+      grid-template-columns: 16px minmax(0, 1fr);
+      gap: 7px;
+      align-items: start;
+      min-width: 0;
+      min-height: 34px;
+      padding: 6px 7px;
+      border: 1px solid transparent;
+      border-radius: 3px;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .replay-checkbox-option:hover { border-color: var(--line-strong); background: var(--panel-soft); }
+    .replay-checkbox-option:has(input:checked) { border-color: rgba(66, 211, 164, 0.5); background: rgba(66, 211, 164, 0.08); color: var(--text); }
+    .replay-checkbox-option input { width: auto; min-height: 0; margin: 2px 0 0; }
+    .replay-checkbox-option span { min-width: 0; }
+    .replay-checkbox-option strong,
+    .replay-checkbox-option small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .replay-checkbox-option strong { color: inherit; font-size: 12px; }
+    .replay-checkbox-option small { margin-top: 2px; color: var(--muted); font-size: 10px; }
+    .replay-filter-empty { grid-column: 1 / -1; padding: 8px; color: var(--muted); font-size: 11px; }
     .timeline-event-count { align-self: center; text-align: right; font-variant-numeric: tabular-nums; }
     .replay-quick-nav {
       display: grid;
@@ -5485,7 +5549,10 @@ _INDEX_HTML = """<!doctype html>
       .result-columns { grid-template-columns: 1fr; }
       .drop-analysis-layout { grid-template-columns: 1fr; }
       .player-controls { grid-template-columns: 1fr; }
-      .replay-explorer-bar { grid-template-columns: 1fr; }
+      .replay-explorer-bar,
+      .replay-filter-toolbar { grid-template-columns: 1fr; }
+      .replay-filter-toolbar { grid-column: auto; }
+      .replay-type-filter-list { grid-template-columns: 1fr; }
       .timeline-event-count { text-align: left; }
       .replay-quick-nav { grid-template-columns: 1fr; }
       .replay-legend-group > strong { width: 100%; }
@@ -8011,29 +8078,43 @@ _INDEX_HTML = """<!doctype html>
         </label>
       </div>
       <div class="replay-explorer-bar" aria-label="이벤트 탐색 조건">
-        <label>이벤트 대상
-          <select id="timelineActorFilter"><option value="focus">선택 유저</option><option value="all">전체 참가자</option></select>
-        </label>
-        <label>참가자 찾기
-          <input id="timelineParticipantSearch" autocomplete="off" placeholder="닉네임 일부 입력">
-        </label>
-        <label>이벤트 종류
-          <select id="timelineEventTypeFilter">
-            <option value="all">전체 사건</option>
-            <option value="drop_landing">낙하·착지</option>
-            <option value="engagement">교전·공격 활동</option>
-            <option value="attack">발사·투척·공격</option>
-            <option value="hit">명중·피격</option>
-            <option value="environment">환경·상태 피해</option>
-            <option value="dbno">기절</option>
-            <option value="kill">킬·사망</option>
-            <option value="revive">부활</option>
-            <option value="world">비행기·보급</option>
-          </select>
-        </label>
-        <label class="checkbox-field"><input type="checkbox" id="timelineFollowEvents" checked>목록 자동 추적</label>
-        <button class="secondary" type="button" id="timelineEventFilterReset">필터 초기화</button>
-        <div class="status timeline-event-count" id="timelineEventCount">0개 사건</div>
+        <div class="replay-filter-toolbar">
+          <label>참가자 찾기
+            <input id="timelineParticipantSearch" autocomplete="off" placeholder="닉네임 일부 입력">
+          </label>
+          <label class="checkbox-field"><input type="checkbox" id="timelineFollowEvents" checked>목록 자동 추적</label>
+          <button class="secondary" type="button" id="timelineEventFilterReset">필터 초기화</button>
+          <div class="status timeline-event-count" id="timelineEventCount">0개 사건</div>
+        </div>
+        <fieldset class="replay-checkbox-panel">
+          <legend>이벤트 대상 <span class="replay-filter-selection-count" id="timelineActorFilterCount">0/0명</span></legend>
+          <div class="replay-filter-actions">
+            <button class="secondary" type="button" data-timeline-actor-action="focus">기준 유저만</button>
+            <button class="secondary" type="button" data-timeline-actor-action="all">전체 선택</button>
+            <button class="secondary" type="button" data-timeline-actor-action="none">전체 해제</button>
+          </div>
+          <div class="replay-checkbox-list replay-actor-filter-list" id="timelineActorFilter" role="group" aria-label="이벤트 대상 선택">
+            <span class="replay-filter-empty">경기를 불러오세요.</span>
+          </div>
+        </fieldset>
+        <fieldset class="replay-checkbox-panel">
+          <legend>이벤트 종류 <span class="replay-filter-selection-count" id="timelineEventTypeFilterCount">9/9종</span></legend>
+          <div class="replay-filter-actions">
+            <button class="secondary" type="button" data-timeline-type-action="all">전체 선택</button>
+            <button class="secondary" type="button" data-timeline-type-action="none">전체 해제</button>
+          </div>
+          <div class="replay-checkbox-list replay-type-filter-list" id="timelineEventTypeFilter" role="group" aria-label="이벤트 종류 선택">
+            <label class="replay-checkbox-option"><input type="checkbox" value="drop_landing" data-timeline-event-type-filter checked><span><strong>낙하·착지</strong></span></label>
+            <label class="replay-checkbox-option"><input type="checkbox" value="engagement" data-timeline-event-type-filter checked><span><strong>교전·공격 활동</strong></span></label>
+            <label class="replay-checkbox-option"><input type="checkbox" value="attack" data-timeline-event-type-filter checked><span><strong>발사·투척·공격</strong></span></label>
+            <label class="replay-checkbox-option"><input type="checkbox" value="hit" data-timeline-event-type-filter checked><span><strong>명중·피격</strong></span></label>
+            <label class="replay-checkbox-option"><input type="checkbox" value="environment" data-timeline-event-type-filter checked><span><strong>환경·상태 피해</strong></span></label>
+            <label class="replay-checkbox-option"><input type="checkbox" value="dbno" data-timeline-event-type-filter checked><span><strong>기절</strong></span></label>
+            <label class="replay-checkbox-option"><input type="checkbox" value="kill" data-timeline-event-type-filter checked><span><strong>킬·사망</strong></span></label>
+            <label class="replay-checkbox-option"><input type="checkbox" value="revive" data-timeline-event-type-filter checked><span><strong>부활</strong></span></label>
+            <label class="replay-checkbox-option"><input type="checkbox" value="world" data-timeline-event-type-filter checked><span><strong>비행기·보급</strong></span></label>
+          </div>
+        </fieldset>
       </div>
       <div class="replay-quick-nav" aria-label="주요 위치 바로가기">
         <strong>주요 위치</strong>
@@ -8513,8 +8594,12 @@ _INDEX_HTML = """<!doctype html>
     const timelineEventList = document.querySelector("#timelineEventList");
     const timelineTeamList = document.querySelector("#timelineTeamList");
     const timelineActorFilter = document.querySelector("#timelineActorFilter");
+    const timelineActorFilterPanel = timelineActorFilter.closest("fieldset");
+    const timelineActorFilterCount = document.querySelector("#timelineActorFilterCount");
     const timelineParticipantSearch = document.querySelector("#timelineParticipantSearch");
     const timelineEventTypeFilter = document.querySelector("#timelineEventTypeFilter");
+    const timelineEventTypeFilterPanel = timelineEventTypeFilter.closest("fieldset");
+    const timelineEventTypeFilterCount = document.querySelector("#timelineEventTypeFilterCount");
     const timelineFollowEvents = document.querySelector("#timelineFollowEvents");
     const timelineEventFilterReset = document.querySelector("#timelineEventFilterReset");
     const timelineEventCount = document.querySelector("#timelineEventCount");
@@ -8539,11 +8624,24 @@ _INDEX_HTML = """<!doctype html>
     const timelineFollowPlayer = document.querySelector("#timelineFollowPlayer");
     const timelineZoom = document.querySelector("#timelineZoom");
     const replayCtx = replayCanvas.getContext("2d");
+    const TIMELINE_EVENT_TYPE_KEYS = [
+      "drop_landing",
+      "engagement",
+      "attack",
+      "hit",
+      "environment",
+      "dbno",
+      "kill",
+      "revive",
+      "world",
+    ];
     let replayTimelineArtifacts = [];
     let activeTimeline = null;
     let activeTimelineArtifact = null;
     let activeTimelineEvents = [];
     let activeTimelineVisibleEvents = [];
+    let activeTimelineActorFilters = new Set(["focus"]);
+    let activeTimelineEventTypeFilters = new Set(TIMELINE_EVENT_TYPE_KEYS);
     let activeTimelineSelectedEventId = null;
     let activeTimelineCurrentEventId = null;
     let activeTimelineDetailKey = "";
@@ -16416,9 +16514,9 @@ _INDEX_HTML = """<!doctype html>
       activeTimelineTime = 0;
       replayPinnedMap = null;
       replayPinnedEventId = null;
-      timelineActorFilter.value = "focus";
+      activeTimelineActorFilters = new Set(["focus"]);
+      activeTimelineEventTypeFilters = new Set(TIMELINE_EVENT_TYPE_KEYS);
       timelineParticipantSearch.value = "";
-      timelineEventTypeFilter.value = "all";
       timelineFollowEvents.checked = true;
       timelineSelect.disabled = true;
       timelineSelect.innerHTML = '<option value="">기준 유저를 선택하세요</option>';
@@ -16427,6 +16525,7 @@ _INDEX_HTML = """<!doctype html>
       timelineClock.textContent = "0.0초";
       replayPlayerStatus.textContent = message;
       renderTimelineActorFilter();
+      renderTimelineEventTypeFilter();
       renderTimelineQuickEvents();
       renderTimelineTeamList();
       renderTimelineEventList();
@@ -16601,8 +16700,9 @@ _INDEX_HTML = """<!doctype html>
       activeTimelineTime = 0;
       replayPinnedMap = null;
       replayPinnedEventId = null;
-      timelineActorFilter.value = "focus";
-      timelineEventTypeFilter.value = "all";
+      activeTimelineActorFilters = new Set(["focus"]);
+      activeTimelineEventTypeFilters = new Set(TIMELINE_EVENT_TYPE_KEYS);
+      timelineParticipantSearch.value = "";
       timelineScrubber.max = String(activeTimelineDuration);
       timelineScrubber.value = "0";
       const replayTeam = activeTimeline.team || {};
@@ -16620,6 +16720,7 @@ _INDEX_HTML = """<!doctype html>
       ].join(" · ");
       await loadReplayMapImage(activeTimeline.match?.map_name);
       renderTimelineActorFilter();
+      renderTimelineEventTypeFilter();
       renderTimelineQuickEvents();
       renderTimelineTeamList();
       renderTimelineEventList();
@@ -17154,31 +17255,40 @@ _INDEX_HTML = """<!doctype html>
       return String(event?.source?.actor_account_id || event?.source?.account_id || "");
     }
 
-    function timelineEventMatchesActor(event) {
-      const selected = timelineActorFilter?.value || "focus";
+    function timelineEventActorFilterKey(event) {
       const source = event?.source || {};
       const actorId = timelineEventActorId(event);
-      if (!actorId) return true;
-      if (selected === "all") return true;
-      if (selected === "focus") return source.actor_is_self !== false;
-      return actorId === selected;
+      const focusId = String(activeTimeline?.player?.account_id || "");
+      if (source.actor_is_self === true || (actorId && actorId === focusId)) return "focus";
+      return actorId;
+    }
+
+    function timelineEventMatchesActor(event) {
+      if (!activeTimelineActorFilters.size) return false;
+      const actorKey = timelineEventActorFilterKey(event);
+      if (!actorKey) return true;
+      return activeTimelineActorFilters.has(actorKey);
+    }
+
+    function timelineEventTypeKeys(event) {
+      if (["drop", "landing"].includes(event.category)) return ["drop_landing"];
+      if (event.category === "engagement") return ["engagement"];
+      if (["plane", "care"].includes(event.category)) return ["world"];
+      if (event.category !== "combat") return [];
+      const action = event.source?.action;
+      const nonOpponentDamage = isNonOpponentDamage(event.source);
+      const keys = [];
+      if (nonOpponentDamage) keys.push("environment");
+      if (["shot", "throw", "melee", "attack"].includes(action)) keys.push("attack");
+      if (["hit_caused", "hit_taken"].includes(action) && !nonOpponentDamage) keys.push("hit");
+      if (["dbno_caused", "dbno_taken"].includes(action)) keys.push("dbno");
+      if (["kill", "finish", "death", "finished_taken"].includes(action)) keys.push("kill");
+      if (isReviveAction(action)) keys.push("revive");
+      return keys;
     }
 
     function timelineEventMatchesType(event) {
-      const selected = timelineEventTypeFilter?.value || "all";
-      if (selected === "all") return true;
-      if (selected === "drop_landing") return ["drop", "landing"].includes(event.category);
-      if (selected === "engagement") return event.category === "engagement";
-      if (selected === "world") return ["plane", "care"].includes(event.category);
-      if (event.category !== "combat") return false;
-      const action = event.source?.action;
-      if (selected === "environment") return isNonOpponentDamage(event.source);
-      if (selected === "attack") return ["shot", "throw", "melee", "attack"].includes(action);
-      if (selected === "hit") return ["hit_caused", "hit_taken"].includes(action) && !isNonOpponentDamage(event.source);
-      if (selected === "dbno") return ["dbno_caused", "dbno_taken"].includes(action);
-      if (selected === "kill") return ["kill", "finish", "death", "finished_taken"].includes(action);
-      if (selected === "revive") return isReviveAction(action);
-      return true;
+      return timelineEventTypeKeys(event).some((eventType) => activeTimelineEventTypeFilters.has(eventType));
     }
 
     function filteredTimelineEvents() {
@@ -17258,28 +17368,86 @@ _INDEX_HTML = """<!doctype html>
       return labels[replayParticipantRelation(participant)] || "참가자";
     }
 
+    function timelineActorFilterOptions() {
+      if (!activeTimeline) return [];
+      const focusId = String(activeTimeline.player?.account_id || "");
+      const options = [];
+      const seen = new Set();
+      for (const member of activeTimeline.team?.members || []) {
+        const accountId = String(member.account_id || "");
+        if (!accountId) continue;
+        const value = member.is_self || accountId === focusId ? "focus" : accountId;
+        if (seen.has(value)) continue;
+        seen.add(value);
+        options.push({
+          value,
+          name: member.name || compactIdentifier(accountId),
+          meta: `${replayRelationLabel(member)}${member.registered && !member.is_self ? " · 등록 유저" : ""}`,
+          relation: replayParticipantRelation(member),
+        });
+      }
+      if (focusId && !seen.has("focus")) {
+        options.unshift({
+          value: "focus",
+          name: activeTimeline.player?.name || compactIdentifier(focusId),
+          meta: "기준 유저",
+          relation: "focus",
+        });
+      }
+      const relationOrder = { focus: 0, ally: 1, enemy: 2, bot: 3 };
+      return options.sort((left, right) => (
+        (relationOrder[left.relation] ?? 4) - (relationOrder[right.relation] ?? 4)
+        || left.name.localeCompare(right.name, "ko-KR")
+      ));
+    }
+
     function renderTimelineActorFilter() {
       if (!timelineActorFilter) return;
-      const previous = timelineActorFilter.value || "focus";
-      const members = activeTimeline?.team?.members || [];
-      const options = [
-        { value: "focus", label: `선택 유저${activeTimeline?.player?.name ? ` · ${activeTimeline.player.name}` : ""}` },
-        { value: "all", label: activeTimeline?.scope === "match" ? "전체 참가자" : "전체 팀" },
-        ...members.filter((member) => !member.is_self && member.account_id).map((member) => ({
-          value: member.account_id,
-          label: `${member.name || compactIdentifier(member.account_id)} · ${replayRelationLabel(member)}${member.registered ? " · 등록 유저" : ""}`,
-        })),
-      ];
-      timelineActorFilter.innerHTML = options.map((option) => (
-        `<option value="${attr(option.value)}">${escapeHtml(option.label)}</option>`
-      )).join("");
-      timelineActorFilter.value = options.some((option) => option.value === previous) ? previous : "focus";
+      const options = timelineActorFilterOptions();
+      const validValues = new Set(options.map((option) => option.value));
+      activeTimelineActorFilters = new Set(
+        [...activeTimelineActorFilters].filter((value) => validValues.has(value)),
+      );
+      const query = String(timelineParticipantSearch?.value || "").trim().toLocaleLowerCase("ko-KR");
+      const visibleOptions = options.filter((option) => (
+        !query || `${option.name} ${option.meta}`.toLocaleLowerCase("ko-KR").includes(query)
+      ));
+      timelineActorFilter.innerHTML = visibleOptions.length
+        ? visibleOptions.map((option) => `
+          <label class="replay-checkbox-option">
+            <input type="checkbox" value="${attr(option.value)}" data-timeline-actor-filter ${activeTimelineActorFilters.has(option.value) ? "checked" : ""}>
+            <span><strong title="${attr(option.name)}">${escapeHtml(option.name)}</strong><small>${escapeHtml(option.meta)}</small></span>
+          </label>
+        `).join("")
+        : `<span class="replay-filter-empty">${activeTimeline ? "검색 조건에 맞는 참가자가 없습니다." : "경기를 불러오세요."}</span>`;
+      if (timelineActorFilterCount) {
+        timelineActorFilterCount.textContent = `${formatInteger(activeTimelineActorFilters.size)}/${formatInteger(options.length)}명`;
+      }
+    }
+
+    function renderTimelineEventTypeFilter() {
+      if (!timelineEventTypeFilter) return;
+      timelineEventTypeFilter.querySelectorAll("[data-timeline-event-type-filter]").forEach((input) => {
+        input.checked = activeTimelineEventTypeFilters.has(input.value);
+      });
+      if (timelineEventTypeFilterCount) {
+        timelineEventTypeFilterCount.textContent = `${formatInteger(activeTimelineEventTypeFilters.size)}/${formatInteger(TIMELINE_EVENT_TYPE_KEYS.length)}종`;
+      }
+    }
+
+    function resetTimelineEventFilters() {
+      activeTimelineActorFilters = new Set(["focus"]);
+      activeTimelineEventTypeFilters = new Set(TIMELINE_EVENT_TYPE_KEYS);
+      timelineParticipantSearch.value = "";
+      timelineFollowEvents.checked = true;
+      renderTimelineActorFilter();
+      renderTimelineEventTypeFilter();
     }
 
     function quickTimelineCandidates() {
       return activeTimelineEvents.filter((event) => {
         if (!timelineEventMapPoint(event)) return false;
-        return timelineEventMatchesActor(event);
+        return timelineEventMatchesActor(event) && timelineEventMatchesType(event);
       });
     }
 
@@ -17349,6 +17517,17 @@ _INDEX_HTML = """<!doctype html>
       `;
     }
 
+    function scrollTimelineEventListToItem(item) {
+      if (!timelineEventList || !item) return;
+      const listRect = timelineEventList.getBoundingClientRect();
+      const itemRect = item.getBoundingClientRect();
+      if (itemRect.top < listRect.top) {
+        timelineEventList.scrollTop -= listRect.top - itemRect.top;
+      } else if (itemRect.bottom > listRect.bottom) {
+        timelineEventList.scrollTop += itemRect.bottom - listRect.bottom;
+      }
+    }
+
     function syncTimelineCurrentEvent() {
       const current = currentPlaybackTimelineEvent();
       const nextId = current?.id || null;
@@ -17362,7 +17541,7 @@ _INDEX_HTML = """<!doctype html>
         .find((element) => element.dataset.timelineEventItem === nextId);
       if (item) {
         item.classList.add("current");
-        if (replayPlaying && timelineFollowEvents?.checked) item.scrollIntoView({ block: "nearest" });
+        if (replayPlaying && timelineFollowEvents?.checked) scrollTimelineEventListToItem(item);
       }
       renderTimelineNowEvent(activeTimelineSelectedEventId ? selectedTimelineEvent() : current);
     }
@@ -17423,8 +17602,10 @@ _INDEX_HTML = """<!doctype html>
           member.combat_event_count > 0 ? `전투 ${formatInteger(member.combat_event_count || 0)}건` : "",
           member.win_place ? `${member.win_place}위` : "",
         ].filter(Boolean).join(" / ");
-        const actorFilterValue = member.is_self ? "focus" : member.account_id;
-        const selected = (timelineActorFilter?.value || "focus") === actorFilterValue;
+        const actorFilterValue = member.is_self || String(member.account_id || "") === String(activeTimeline?.player?.account_id || "")
+          ? "focus"
+          : member.account_id;
+        const selected = activeTimelineActorFilters.has(String(actorFilterValue || ""));
         return `
           <button type="button" class="team-member ${member.is_self ? "self" : ""} ${member.registered && !member.is_self ? "registered" : ""} ${selected ? "selected" : ""}" data-timeline-actor="${attr(actorFilterValue)}" style="border-left-color:${attr(replayParticipantColor(member))}">
             <strong>${escapeHtml(member.name || member.account_id || "알 수 없음")}</strong>
@@ -17452,7 +17633,7 @@ _INDEX_HTML = """<!doctype html>
         return;
       }
       timelineEventList.innerHTML = visibleEvents.map((event) => `
-        <div class="timeline-event-item ${event.id === activeTimelineSelectedEventId ? "active" : ""} ${event.id === activeTimelineCurrentEventId ? "current" : ""}" data-timeline-event-item="${attr(event.id)}">
+        <div class="timeline-event-item ${event.id === activeTimelineSelectedEventId ? "active" : ""} ${event.id === activeTimelineCurrentEventId ? "current" : ""}" data-timeline-event-item="${attr(event.id)}" data-timeline-event-type="${attr(timelineEventTypeKeys(event).filter((eventType) => activeTimelineEventTypeFilters.has(eventType)).join(" "))}" data-timeline-event-actor="${attr(timelineEventActorFilterKey(event) || "world")}">
           <button class="timeline-event-row" type="button" data-timeline-event="${attr(event.id)}">
             ${timelineEventBadgeHtml(event)}
             <span>${formatReplayTime(event.time)}</span>
@@ -17760,9 +17941,9 @@ _INDEX_HTML = """<!doctype html>
         const point = canvasPoint(current);
         if (!canvasPointVisible(point, 16)) return;
         drawReplayActorMarker(point, current.movement_mode, color, false);
-        const selectedActor = timelineActorFilter?.value || "focus";
+        const selectedActor = activeTimelineActorFilters.has(String(track.account_id || ""));
         const relation = replayParticipantRelation(track);
-        if (relation === "ally" || track.registered || selectedActor === String(track.account_id)) {
+        if (relation === "ally" || track.registered || selectedActor) {
           drawReplayLabel(point, track.name || track.account_id || "참가자", color);
         }
       });
@@ -20832,15 +21013,58 @@ _INDEX_HTML = """<!doctype html>
         ? event.target.closest("button[data-timeline-actor]")
         : null;
       if (!button) return;
-      timelineActorFilter.value = button.dataset.timelineActor || "focus";
+      const actorKey = button.dataset.timelineActor || "focus";
+      if (activeTimelineActorFilters.has(actorKey)) activeTimelineActorFilters.delete(actorKey);
+      else activeTimelineActorFilters.add(actorKey);
+      renderTimelineActorFilter();
       refreshTimelineEventExplorer();
     });
-    timelineActorFilter.addEventListener("change", () => refreshTimelineEventExplorer());
-    timelineEventTypeFilter.addEventListener("change", () => refreshTimelineEventExplorer());
+    timelineActorFilterPanel.addEventListener("click", (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("button[data-timeline-actor-action]")
+        : null;
+      if (!button) return;
+      const action = button.dataset.timelineActorAction;
+      if (action === "focus") activeTimelineActorFilters = new Set(["focus"]);
+      if (action === "all") activeTimelineActorFilters = new Set(timelineActorFilterOptions().map((option) => option.value));
+      if (action === "none") activeTimelineActorFilters = new Set();
+      renderTimelineActorFilter();
+      refreshTimelineEventExplorer();
+    });
+    timelineActorFilter.addEventListener("change", (event) => {
+      const input = event.target instanceof Element
+        ? event.target.closest("input[data-timeline-actor-filter]")
+        : null;
+      if (!input) return;
+      if (input.checked) activeTimelineActorFilters.add(input.value);
+      else activeTimelineActorFilters.delete(input.value);
+      renderTimelineActorFilter();
+      refreshTimelineEventExplorer();
+    });
+    timelineEventTypeFilterPanel.addEventListener("click", (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("button[data-timeline-type-action]")
+        : null;
+      if (!button) return;
+      const action = button.dataset.timelineTypeAction;
+      activeTimelineEventTypeFilters = action === "all"
+        ? new Set(TIMELINE_EVENT_TYPE_KEYS)
+        : new Set();
+      renderTimelineEventTypeFilter();
+      refreshTimelineEventExplorer();
+    });
+    timelineEventTypeFilter.addEventListener("change", (event) => {
+      const input = event.target instanceof Element
+        ? event.target.closest("input[data-timeline-event-type-filter]")
+        : null;
+      if (!input) return;
+      if (input.checked) activeTimelineEventTypeFilters.add(input.value);
+      else activeTimelineEventTypeFilters.delete(input.value);
+      renderTimelineEventTypeFilter();
+      refreshTimelineEventExplorer();
+    });
     timelineEventFilterReset.addEventListener("click", () => {
-      timelineActorFilter.value = "focus";
-      timelineEventTypeFilter.value = "all";
-      timelineFollowEvents.checked = true;
+      resetTimelineEventFilters();
       refreshTimelineEventExplorer();
     });
     for (const toggle of [
@@ -20873,15 +21097,14 @@ _INDEX_HTML = """<!doctype html>
           renderReplayFrame();
           return;
         }
-        if ([timelineShowAllies, timelineShowEnemies, timelineShowBots].includes(toggle)) {
-          const selectedTrack = timelineTrackByAccount(timelineActorFilter.value);
-          if (selectedTrack && !replayParticipantVisible(selectedTrack)) timelineActorFilter.value = "focus";
-        }
         refreshTimelineEventExplorer({ clearSelection: false });
       });
     }
     timelineTrailSeconds.addEventListener("change", renderReplayFrame);
-    timelineParticipantSearch.addEventListener("input", renderTimelineTeamList);
+    timelineParticipantSearch.addEventListener("input", () => {
+      renderTimelineActorFilter();
+      renderTimelineTeamList();
+    });
     timelineZoom.addEventListener("change", renderReplayFrame);
 
     workspaceNav.addEventListener("click", (event) => {

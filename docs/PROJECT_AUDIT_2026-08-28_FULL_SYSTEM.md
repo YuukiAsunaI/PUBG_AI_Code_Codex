@@ -68,8 +68,8 @@ recent-match selection, and configurable recommendation sample size up to 100,00
 
 ### Desktop release consistency
 
-The release module contained an unused label from a different build date. The dead label was removed and the single
-release source is now `2026.08.28.2`. The current executable was rebuilt from this exact workspace.
+The release module contains one release source. The current packaged application was rebuilt from this exact workspace
+as `2026.08.29.1` after the replay multi-select filter update.
 
 ### Whole-match tactical replay
 
@@ -78,7 +78,9 @@ establish the focus team. It creates or reuses a match-wide artifact containing 
 participant instead of silently returning the selected player's old team-only artifact. Ally, enemy, bot, and other
 registered-player relationships are separately labeled; participant search, layer toggles, elapsed trail windows,
 terminal marker removal, and match-level artifact launch are covered by browser automation. Raw telemetry objects are
-not copied into the derived replay payload.
+not copied into the derived replay payload. Event targets and event types are now independent checkbox sets. Target
+search preserves hidden selections, empty selections produce zero results, overlapping environment/DBNO/death
+semantics are retained, and event auto-follow scrolls only inside the event list.
 
 ## Live Data Evidence
 
@@ -112,16 +114,17 @@ known raw-only types, and zero unclassified types.
 - Playwright source and packaged-app runs: all 33 workspace states rendered content; desktop and mobile returned 200;
   blank pages, overlays, console errors, request failures, HTTP errors, horizontal overflow, and overflowing buttons
   were all zero.
-- Whole-match replay in both runs: 100 participants (99 humans, one bot), 101 actor choices, 14,545 tactical events,
-  enemy/focus labels present, all eight required tactical layers enabled, nonblank multicolor canvas, and advancing
-  playback.
+- Whole-match replay in both runs: 100 participants (99 humans, one bot), 100 target checkboxes, nine event-type
+  checkboxes, 14,545 tactical events, 533 events for the combined DBNO plus kill/death filter, preserved target
+  selections across participant search, enemy/focus labels, all eight required tactical layers, a nonblank multicolor
+  canvas, and advancing playback.
 - live Discord deployment: four guilds, 26 commands per guild, all metadata quality checks passed.
 
 The packaged artifact is `dist/PUBG_AI_Manager.exe`:
 
-- size: 51,817,705 bytes;
-- SHA-256: `50BB37545AF83851D9491609EB031617D00C280E2D2944E14866BA28B78645C0`;
-- health: `ok`, localhost-only `true`, release `2026.08.28.2`;
+- size: 51,819,459 bytes;
+- SHA-256: `5E036D470F9379AE0374571BDEF1EFEE332C426922EA76A22411290036BEE184`;
+- health: `ok`, localhost-only `true`, release `2026.08.29.1`;
 - app-managed Discord bot: running and ready for four guilds.
 
 ## Residual Risks
