@@ -259,48 +259,19 @@ class PlayerRegistry:
         limit: int = 100,
     ) -> list[RegisteredPlayer]:
         limit = max(1, min(limit, 500))
-        conditions: list[str] = []
-        params: list[Any] = []
-        if shard:
-            conditions.append("shard = %s")
-            params.append(shard.lower())
-        if registered_guild_id:
-            conditions.append(
-                "EXISTS ("
-                "SELECT 1 FROM player_discord_registrations registrations "
-                "WHERE registrations.registered_player_id = registered_players.id "
-                "AND registrations.guild_id = %s AND registrations.active = 1"
-                ")"
-            )
-            params.append(registered_guild_id)
-        if active_only:
-            conditions.append("active = 1")
-
-        normalized_search = str(search or "").strip()
-        if normalized_search:
-            conditions.append(
-                "(current_name LIKE %s ESCAPE '=' OR account_id LIKE %s ESCAPE '=')"
-            )
-            escaped_search = _escape_like_literal(normalized_search)
-            search_pattern = f"%{escaped_search}%"
-            params.extend((search_pattern, search_pattern))
-
-        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        if normalized_search:
-            order_sql = (
-                "CASE WHEN current_name LIKE %s ESCAPE '=' THEN 0 ELSE 1 END, "
-                "shard ASC, current_name ASC"
-            )
-            params.append(f"{escaped_search}%")
-        else:
-            order_sql = "shard ASC, current_name ASC"
+        where, filter_params, order_sql, order_params = _player_list_query_parts(
+            shard=shard,
+            registered_guild_id=registered_guild_id,
+            search=search,
+            active_only=active_only,
+        )
         query = (
             "SELECT id, account_id, shard, current_name, active, public_profile, "
             "registered_by_discord_user_id, registered_guild_id, registered_channel_id "
             f"FROM registered_players {where} "
             f"ORDER BY {order_sql} LIMIT %s"
         )
-        params.append(limit)
+        params = [*filter_params, *order_params, limit]
 
         with self.connection.cursor() as cursor:
             cursor.execute(query, params)
@@ -312,6 +283,52 @@ class PlayerRegistry:
             _player_from_row(row, registrations_by_player.get(int(row["id"]), ()))
             for row in rows
         ]
+
+    def list_players_page(
+        self,
+        *,
+        shard: str | None = None,
+        registered_guild_id: str | None = None,
+        search: str | None = None,
+        active_only: bool = True,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> tuple[list[RegisteredPlayer], int]:
+        limit = max(1, min(int(limit), 100))
+        offset = max(0, int(offset))
+        where, filter_params, order_sql, order_params = _player_list_query_parts(
+            shard=shard,
+            registered_guild_id=registered_guild_id,
+            search=search,
+            active_only=active_only,
+        )
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT COUNT(*) AS total FROM registered_players {where}",
+                filter_params,
+            )
+            count_row = cursor.fetchone() or {}
+            total = int(count_row.get("total") or 0)
+            cursor.execute(
+                (
+                    "SELECT id, account_id, shard, current_name, active, public_profile, "
+                    "registered_by_discord_user_id, registered_guild_id, registered_channel_id "
+                    f"FROM registered_players {where} "
+                    f"ORDER BY {order_sql} LIMIT %s OFFSET %s"
+                ),
+                [*filter_params, *order_params, limit, offset],
+            )
+            rows = cursor.fetchall()
+        registrations_by_player = self._load_discord_registrations(
+            [int(row["id"]) for row in rows]
+        )
+        return (
+            [
+                _player_from_row(row, registrations_by_player.get(int(row["id"]), ()))
+                for row in rows
+            ],
+            total,
+        )
 
     def set_player_management(
         self,
@@ -524,6 +541,50 @@ def _discord_registration_from_row(row: dict[str, Any]) -> PlayerDiscordRegistra
         created_at_kst=row.get("created_at_kst"),
         updated_at_kst=row.get("updated_at_kst"),
     )
+
+
+def _player_list_query_parts(
+    *,
+    shard: str | None,
+    registered_guild_id: str | None,
+    search: str | None,
+    active_only: bool,
+) -> tuple[str, list[Any], str, list[Any]]:
+    conditions: list[str] = []
+    filter_params: list[Any] = []
+    if shard:
+        conditions.append("shard = %s")
+        filter_params.append(shard.lower())
+    if registered_guild_id:
+        conditions.append(
+            "EXISTS ("
+            "SELECT 1 FROM player_discord_registrations registrations "
+            "WHERE registrations.registered_player_id = registered_players.id "
+            "AND registrations.guild_id = %s AND registrations.active = 1"
+            ")"
+        )
+        filter_params.append(registered_guild_id)
+    if active_only:
+        conditions.append("active = 1")
+
+    normalized_search = str(search or "").strip()
+    order_params: list[Any] = []
+    if normalized_search:
+        conditions.append(
+            "(current_name LIKE %s ESCAPE '=' OR account_id LIKE %s ESCAPE '=')"
+        )
+        escaped_search = _escape_like_literal(normalized_search)
+        search_pattern = f"%{escaped_search}%"
+        filter_params.extend((search_pattern, search_pattern))
+        order_sql = (
+            "CASE WHEN current_name LIKE %s ESCAPE '=' THEN 0 ELSE 1 END, "
+            "shard ASC, current_name ASC"
+        )
+        order_params.append(f"{escaped_search}%")
+    else:
+        order_sql = "shard ASC, current_name ASC"
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    return where, filter_params, order_sql, order_params
 
 
 def _mysql_kst_now() -> datetime:

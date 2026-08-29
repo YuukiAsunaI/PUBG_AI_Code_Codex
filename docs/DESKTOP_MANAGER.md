@@ -98,6 +98,33 @@ The result provides a per-map frequency overlay, ranked routes, map share, domin
 length/sample evidence, first/last KST occurrence, and recent source matches. It is post-match analysis and is not
 presented as a prediction of the next plane route.
 
+## Weapon Attachment Analysis
+
+Weapon detail separates overall performance, no-parts/individual-part performance, and exact observed attachment
+combinations. Every row is calculated from durable fight-outcome snapshots: a kill or caused DBNO is a fight win,
+while death or taken DBNO is a fight loss. No-parts means that the fight snapshot contained no attachment, not that
+the weapon remained unmodified for the entire match. Chicken rate is displayed separately from fight win rate.
+
+Individual parts and combinations include fights, wins/losses, fight win rate, percentage-point difference from the
+no-parts baseline, chicken rate, kills, caused/taken DBNOs, deaths, headshot outcomes, average distance, and sample
+reliability. The same map, mode, season, custom-match, KST date, and time filters used by weapon detail apply to these
+comparisons.
+
+## Replay Performance
+
+Whole-match replay retains every participant and tactical event, but the visible event list is windowed to at most
+240 DOM rows around the current or selected time. Participant, track, focus/team, threat, and event indexes are built
+once per replay. Current-event and position interpolation use binary search, and transient combat drawing scans only
+the active time window. Persistent DBNO, revive, kill, and death markers keep their existing behavior.
+
+## Discord Report Readability
+
+Recommendation reports use separate scan-friendly fields for each weapon, two-weapon loadout, attachment combination,
+individual attachment, range, map, teammate, and drop zone. Five fields are shown per page with previous/next controls.
+Leaving a player nickname blank opens a private picker scoped to active registrations in the current Discord server;
+it supports 25 registrations per page plus partial nickname/account-ID search, so server registrations are not capped
+at 25.
+
 ## Launch
 
 ```powershell
@@ -123,3 +150,10 @@ This creates `dist/PUBG_AI_Manager.exe` without a console window and embeds `ass
 entrypoint searches upward from the executable and current directory for the project `.env` plus `config` directory.
 Set `PUBG_AI_BASE_DIR` when the executable is stored elsewhere. Secrets and local settings are not embedded into the
 executable.
+
+The verified `2026.08.29.3` artifact is 51,838,606 bytes with SHA-256
+`D3F88EC9984922B4A850FF3742BFA7B38F2FE3701478938C3D465E6D6F48FC98`. Its localhost-only health endpoint returned
+the same release. The packaged Playwright audit reached all 33 workspaces, rendered the weapon attachment views, and
+processed an all-target 98-player replay with 16,066 retained events, 240 visible event rows, and a 167 ms filter
+refresh. Desktop and 390px mobile layouts had no blank view, overlay, overflow, console error, failed request, or HTTP
+error.

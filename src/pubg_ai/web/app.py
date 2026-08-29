@@ -8096,6 +8096,10 @@ _INDEX_HTML = """<!doctype html>
           <div class="replay-checkbox-list replay-actor-filter-list" id="timelineActorFilter" role="group" aria-label="이벤트 대상 선택">
             <span class="replay-filter-empty">경기를 불러오세요.</span>
           </div>
+          <p class="section-note">
+            정렬 기준: 1 이벤트 대상 · 2 나를 기절·죽인 적군(결과 병기) ·
+            3 팀원 · 4 팀원을 기절·죽인 적군 · 5 그 외 사람 · 6 봇
+          </p>
         </fieldset>
         <fieldset class="replay-checkbox-panel">
           <legend>이벤트 종류 <span class="replay-filter-selection-count" id="timelineEventTypeFilterCount">9/9종</span></legend>
@@ -8635,11 +8639,24 @@ _INDEX_HTML = """<!doctype html>
       "revive",
       "world",
     ];
+    const TIMELINE_EVENT_LIST_LIMIT = 240;
+    const REPLAY_TRANSIENT_EVENT_SECONDS = 8;
     let replayTimelineArtifacts = [];
     let activeTimeline = null;
     let activeTimelineArtifact = null;
     let activeTimelineEvents = [];
     let activeTimelineVisibleEvents = [];
+    let activeTimelineVisibleEventsDirty = true;
+    let activeTimelineEventById = new Map();
+    let activeTimelineRenderedEventIds = new Set();
+    let activeTimelineTrackIndex = new Map();
+    let activeTimelinePreparedSource = null;
+    let activeTimelineFocusMemberCache = null;
+    let activeTimelineFocusTeamId = null;
+    let activeTimelineThreatCache = null;
+    let replayPositionCache = new WeakMap();
+    let replayCombatEventCache = new WeakMap();
+    let replayTerminalTimeCache = new WeakMap();
     let activeTimelineActorFilters = new Set(["focus"]);
     let activeTimelineEventTypeFilters = new Set(TIMELINE_EVENT_TYPE_KEYS);
     let activeTimelineSelectedEventId = null;
@@ -8665,6 +8682,7 @@ _INDEX_HTML = """<!doctype html>
     let activeComparisonRows = [];
     let activeComparisonView = "chart";
     let activeWeaponDetail = null;
+    let activeWeaponDetailView = "overview";
     let activeWeaponTrendGranularity = "month";
     let activeWeaponTrendMetric = "fight_win_rate";
     let activeRecommendationTarget = "";
@@ -14226,6 +14244,61 @@ _INDEX_HTML = """<!doctype html>
       });
     }
 
+    function weaponAttachmentLabel(item) {
+      if (!item || item.kind === "none") return "노 파츠";
+      return (item.attachment_names || []).join(" + ") || "파츠 정보 없음";
+    }
+
+    function weaponAttachmentDeltaLabel(item) {
+      const value = Number(item?.fight_win_rate_delta_vs_no_attachment);
+      if (item?.fight_win_rate_delta_vs_no_attachment === null || item?.fight_win_rate_delta_vs_no_attachment === undefined || !Number.isFinite(value)) {
+        return item?.kind === "none" ? "비교 기준" : "노 파츠 표본 없음";
+      }
+      const sign = value > 0 ? "+" : "";
+      return `노 파츠 대비 ${sign}${formatNumber(value * 100, 1)}%p`;
+    }
+
+    function weaponAttachmentPerformanceRow(item) {
+      if (!item) return '<span class="result-caption">노 파츠 교전 표본이 없습니다.</span>';
+      const distance = item.avg_distance_m === null || item.avg_distance_m === undefined
+        ? "거리 미확인"
+        : `평균 ${formatNumber(item.avg_distance_m, 0)}m`;
+      return `<div class="result-row">
+        <span>${item.reliable_sample ? "표본 확보" : "참고 표본"} · ${formatInteger(item.match_count)}경기</span>
+        <strong>${escapeHtml(weaponAttachmentLabel(item))} · 교전 승률 ${percent(item.fight_win_rate)}</strong>
+        <p>${formatInteger(item.fight_wins)}승 / ${formatInteger(item.fight_losses)}패 · ${formatInteger(item.fight_count)}교전 · ${escapeHtml(weaponAttachmentDeltaLabel(item))}<br>
+        치킨률 ${percent(item.match_win_rate)} (${formatInteger(item.match_wins)}/${formatInteger(item.match_count)}경기) · 킬 ${formatInteger(item.kills)} · 기절 ${formatInteger(item.dbnos)} · 사망 ${formatInteger(item.deaths)} · 당한 기절 ${formatInteger(item.dbnos_taken)} · 헤드샷 결과 ${formatInteger(item.headshots)}건 · ${distance}</p>
+      </div>`;
+    }
+
+    function weaponAttachmentWinRateChart(items, kind) {
+      const visible = (items || []).filter(Boolean).slice(0, 30);
+      if (!visible.length) return '<span class="result-caption">표시할 파츠 교전 표본이 없습니다.</span>';
+      const color = kind === "combination" ? "#ffb84d" : "#4bd0a0";
+      return `<div class="comparison-bars">${visible.map((item) => {
+        const width = Math.max(0, Math.min(100, Number(item.fight_win_rate || 0) * 100));
+        const fill = item.kind === "none" ? "#87939d" : color;
+        return `<div class="comparison-bar-row">
+          <strong class="comparison-bar-label">${escapeHtml(weaponAttachmentLabel(item))}<small>${formatInteger(item.fight_count)}교전 · ${escapeHtml(weaponAttachmentDeltaLabel(item))}</small></strong>
+          <span class="comparison-bar-track"><span class="comparison-bar-fill" style="width:${width.toFixed(2)}%;background:${fill}"></span></span>
+          <span class="comparison-bar-value">${percent(item.fight_win_rate)}</span>
+        </div>`;
+      }).join("")}</div>`;
+    }
+
+    function setWeaponDetailView(view) {
+      if (!activeWeaponDetail) return;
+      activeWeaponDetailView = ["overview", "attachments", "combinations"].includes(view) ? view : "overview";
+      weaponBody.querySelectorAll("[data-weapon-detail-view]").forEach((button) => {
+        const selected = button.dataset.weaponDetailView === activeWeaponDetailView;
+        button.classList.toggle("active", selected);
+        button.setAttribute("aria-selected", selected ? "true" : "false");
+      });
+      weaponBody.querySelectorAll("[data-weapon-detail-panel]").forEach((panel) => {
+        panel.hidden = panel.dataset.weaponDetailPanel !== activeWeaponDetailView;
+      });
+    }
+
     async function loadPlayerWeapon(formElement) {
       const form = new FormData(formElement);
       const player = selectedRegisteredPlayer(formElement);
@@ -14261,7 +14334,16 @@ _INDEX_HTML = """<!doctype html>
       const payload = await response.json();
       const detail = payload.weapon;
       activeWeaponDetail = detail;
+      activeWeaponDetailView = "overview";
       const totals = detail.totals;
+      const attachmentAnalysis = detail.attachment_analysis || {};
+      const noAttachment = attachmentAnalysis.no_attachment || null;
+      const individualAttachments = attachmentAnalysis.individual || [];
+      const attachmentCombinations = attachmentAnalysis.combinations || [];
+      const individualAttachmentRows = individualAttachments.slice(0, 50).map(weaponAttachmentPerformanceRow).join("")
+        || '<span class="result-caption">개별 파츠 교전 표본이 없습니다.</span>';
+      const attachmentCombinationRows = attachmentCombinations.slice(0, 40).map(weaponAttachmentPerformanceRow).join("")
+        || '<span class="result-caption">2개 이상 파츠 조합 교전 표본이 없습니다.</span>';
       const effectiveRanges = (detail.effective_ranges || []).map((item, index) => `
         <div class="result-row">
           <span>${index === 0 ? "최우선" : `#${index + 1}`} · ${item.reliable_sample ? "표본 확보" : "표본 부족"}</span>
@@ -14276,6 +14358,12 @@ _INDEX_HTML = """<!doctype html>
         </div>`).join("") || '<span class="result-caption">최근 사용 경기 없음</span>';
       weaponBody.innerHTML = `<div class="result-shell">
         ${resultHeading(detail.weapon_name, `${detail.player.current_name} · 조건에 맞는 완료 경기`, `${formatInteger(totals.match_count)}경기`)}
+        <div class="recommendation-view-switch" role="tablist" aria-label="무기 상세 보기">
+          <button type="button" role="tab" data-weapon-detail-view="overview">전체 성과</button>
+          <button type="button" role="tab" data-weapon-detail-view="attachments">노 파츠·개별 파츠</button>
+          <button type="button" role="tab" data-weapon-detail-view="combinations">관측 파츠 조합</button>
+        </div>
+        <div class="recommendation-panel" data-weapon-detail-panel="overview">
         ${resultMetricGrid([
           ["사용 경기 / 치킨", `${formatInteger(totals.match_count)}전 / ${formatInteger(totals.wins)}회 · ${percent(totals.win_rate)}`],
           ["킬 / 어시 / 기절", `${formatInteger(totals.kills)} / ${formatInteger(totals.assists)} / ${formatInteger(totals.dbnos)}`],
@@ -14321,8 +14409,21 @@ _INDEX_HTML = """<!doctype html>
         `)}
         ${resultSection("효율 교전 거리", `<div class="result-list">${effectiveRanges}</div>`)}
         ${resultSection("최근 사용 경기", `<div class="result-list">${recentRows}</div>`)}
+        </div>
+        <div class="recommendation-panel" data-weapon-detail-panel="attachments" hidden>
+          ${resultSection("계산 기준", `<p class="result-caption">${escapeHtml(attachmentAnalysis.basis || "교전 결과 시점의 장착 파츠를 기준으로 비교합니다.")} 노 파츠는 경기 전체가 아니라 해당 교전 결과 시점에 장착 파츠가 없었다는 뜻입니다. 치킨률은 해당 상태가 한 번 이상 관측된 경기 중 1위 경기 비율입니다.</p>`)}
+          ${resultSection("노 파츠 기준", `<div class="result-list">${weaponAttachmentPerformanceRow(noAttachment)}</div>`)}
+          ${resultSection(`노 파츠와 개별 파츠 교전 승률 · ${formatInteger(individualAttachments.length)}개`, weaponAttachmentWinRateChart([noAttachment, ...individualAttachments], "single"))}
+          ${resultSection("개별 파츠 상세", `<div class="result-list">${individualAttachmentRows}</div>`)}
+        </div>
+        <div class="recommendation-panel" data-weapon-detail-panel="combinations" hidden>
+          ${resultSection("계산 기준", `<p class="result-caption">같은 교전 결과 시점에 함께 장착된 2개 이상의 파츠만 하나의 조합으로 묶습니다. 각 파츠를 따로 평가한 결과는 개별 파츠 탭에서 확인할 수 있습니다.</p>`)}
+          ${resultSection(`관측 조합 교전 승률 · ${formatInteger(attachmentCombinations.length)}개`, weaponAttachmentWinRateChart(attachmentCombinations, "combination"))}
+          ${resultSection("파츠 조합 상세", `<div class="result-list">${attachmentCombinationRows}</div>`)}
+        </div>
       </div>`;
       renderWeaponTrendChart();
+      setWeaponDetailView(activeWeaponDetailView);
     }
 
     function dropZoneLocation(item) {
@@ -16499,6 +16600,54 @@ _INDEX_HTML = """<!doctype html>
       flightPathStatus.textContent = `분석 완료 · ${formatInteger(payload.flight_paths.analyzed_route_count)}개 항로 · ${formatInteger(payload.flight_paths.available_cluster_count)}개 군집`;
     }
 
+    function resetTimelineReplayIndexes() {
+      activeTimelineVisibleEvents = [];
+      activeTimelineVisibleEventsDirty = true;
+      activeTimelineEventById = new Map();
+      activeTimelineRenderedEventIds = new Set();
+      activeTimelineTrackIndex = new Map();
+      activeTimelinePreparedSource = null;
+      activeTimelineFocusMemberCache = null;
+      activeTimelineFocusTeamId = null;
+      activeTimelineThreatCache = null;
+      replayPositionCache = new WeakMap();
+      replayCombatEventCache = new WeakMap();
+      replayTerminalTimeCache = new WeakMap();
+    }
+
+    function prepareTimelineReplayIndexes() {
+      resetTimelineReplayIndexes();
+      if (!activeTimeline) return;
+      activeTimelinePreparedSource = activeTimeline;
+      const focusId = String(activeTimeline.player?.account_id || "");
+      activeTimelineFocusMemberCache = (activeTimeline.team?.members || []).find(
+        (member) => String(member.account_id || "") === focusId,
+      ) || null;
+      activeTimelineFocusTeamId = activeTimelineFocusMemberCache?.team_id ?? null;
+      if (focusId) {
+        const member = activeTimelineFocusMemberCache || {};
+        activeTimelineTrackIndex.set(focusId, {
+          ...member,
+          account_id: focusId,
+          name: activeTimeline.player?.name || member.name,
+          positions: activeTimeline.positions || [],
+          drop_starts: activeTimeline.drop_starts || [],
+          landings: activeTimeline.landings || [],
+          combat_events: activeTimeline.combat_events || [],
+          is_self: true,
+        });
+      }
+      for (const track of activeTimeline.team_tracks || []) {
+        const accountId = String(track.account_id || "");
+        if (accountId && !activeTimelineTrackIndex.has(accountId)) {
+          activeTimelineTrackIndex.set(accountId, track);
+        }
+      }
+      activeTimelineEventById = new Map(
+        activeTimelineEvents.map((event) => [event.id, event]),
+      );
+    }
+
     function clearReplayTimeline(message = "등록 유저를 선택한 뒤 경기를 불러오세요.") {
       pauseReplay();
       activeReplayPlayer = null;
@@ -16506,7 +16655,7 @@ _INDEX_HTML = """<!doctype html>
       activeTimeline = null;
       activeTimelineArtifact = null;
       activeTimelineEvents = [];
-      activeTimelineVisibleEvents = [];
+      resetTimelineReplayIndexes();
       activeTimelineSelectedEventId = null;
       activeTimelineCurrentEventId = null;
       activeTimelineDetailKey = "";
@@ -16654,7 +16803,7 @@ _INDEX_HTML = """<!doctype html>
         activeTimeline = null;
         activeTimelineArtifact = null;
         activeTimelineEvents = [];
-        activeTimelineVisibleEvents = [];
+        resetTimelineReplayIndexes();
         activeTimelineSelectedEventId = null;
         activeTimelineCurrentEventId = null;
         replayPinnedMap = null;
@@ -16692,7 +16841,7 @@ _INDEX_HTML = """<!doctype html>
       );
       activeTimelineArtifact = artifact;
       activeTimelineEvents = timelineEvents(activeTimeline);
-      activeTimelineVisibleEvents = [];
+      prepareTimelineReplayIndexes();
       activeTimelineSelectedEventId = null;
       activeTimelineCurrentEventId = null;
       activeTimelineDetailKey = "";
@@ -17299,6 +17448,48 @@ _INDEX_HTML = """<!doctype html>
       ));
     }
 
+    function replayIndexedTime(item) {
+      const direct = Number(item?.time);
+      return Number.isFinite(direct) ? direct : eventTime(item);
+    }
+
+    function lowerBoundReplayTime(items, target) {
+      let low = 0;
+      let high = items.length;
+      while (low < high) {
+        const middle = Math.floor((low + high) / 2);
+        if (replayIndexedTime(items[middle]) < target) low = middle + 1;
+        else high = middle;
+      }
+      return low;
+    }
+
+    function upperBoundReplayTime(items, target) {
+      let low = 0;
+      let high = items.length;
+      while (low < high) {
+        const middle = Math.floor((low + high) / 2);
+        if (replayIndexedTime(items[middle]) <= target) low = middle + 1;
+        else high = middle;
+      }
+      return low;
+    }
+
+    function timelineEventWindow(events) {
+      if (events.length <= TIMELINE_EVENT_LIST_LIMIT) {
+        return { events, start: 0, end: events.length };
+      }
+      let anchor = Math.max(0, upperBoundReplayTime(events, activeTimelineTime) - 1);
+      if (activeTimelineSelectedEventId) {
+        const selected = activeTimelineEventById.get(activeTimelineSelectedEventId);
+        if (selected) anchor = Math.max(0, upperBoundReplayTime(events, selected.time) - 1);
+      }
+      const half = Math.floor(TIMELINE_EVENT_LIST_LIMIT / 2);
+      const start = Math.max(0, Math.min(events.length - TIMELINE_EVENT_LIST_LIMIT, anchor - half));
+      const end = Math.min(events.length, start + TIMELINE_EVENT_LIST_LIMIT);
+      return { events: events.slice(start, end), start, end };
+    }
+
     function timelineEventMapPoint(event) {
       const source = event?.source || {};
       if (
@@ -17310,6 +17501,9 @@ _INDEX_HTML = """<!doctype html>
     }
 
     function timelineFocusMember() {
+      if (activeTimelinePreparedSource === activeTimeline) {
+        return activeTimelineFocusMemberCache;
+      }
       const focusId = String(activeTimeline?.player?.account_id || "");
       return (activeTimeline?.team?.members || []).find(
         (member) => String(member.account_id || "") === focusId,
@@ -17319,6 +17513,9 @@ _INDEX_HTML = """<!doctype html>
     function timelineTrackByAccount(accountId) {
       const normalized = String(accountId || "");
       if (!normalized) return null;
+      if (activeTimelinePreparedSource === activeTimeline && activeTimelineTrackIndex.has(normalized)) {
+        return activeTimelineTrackIndex.get(normalized) || null;
+      }
       if (normalized === String(activeTimeline?.player?.account_id || "")) {
         const member = timelineFocusMember() || {};
         return {
@@ -17340,7 +17537,9 @@ _INDEX_HTML = """<!doctype html>
     function replayParticipantRelation(participant) {
       if (!participant) return "enemy";
       if (String(participant.account_id || "") === String(activeTimeline?.player?.account_id || "")) return "focus";
-      const focusTeamId = timelineFocusMember()?.team_id;
+      const focusTeamId = activeTimelinePreparedSource === activeTimeline
+        ? activeTimelineFocusTeamId
+        : timelineFocusMember()?.team_id;
       if (focusTeamId !== null && focusTeamId !== undefined && String(participant.team_id) === String(focusTeamId)) return "ally";
       if (participant.is_ai_or_bot) return "bot";
       return "enemy";
@@ -17369,6 +17568,9 @@ _INDEX_HTML = """<!doctype html>
     }
 
     function timelineOpponentThreatSets() {
+      if (activeTimelineThreatCache?.timeline === activeTimeline) {
+        return activeTimelineThreatCache.value;
+      }
       const focusId = String(activeTimeline?.player?.account_id || "");
       const focusTeamId = timelineFocusMember()?.team_id;
       const teammateIds = new Set(
@@ -17382,8 +17584,13 @@ _INDEX_HTML = """<!doctype html>
           ))
           .map((member) => String(member.account_id)),
       );
-      const focusThreats = new Set();
-      const teammateThreats = new Set();
+      const focusThreats = new Map();
+      const teammateThreats = new Map();
+      const recordThreat = (threats, attackerId, action) => {
+        const outcomes = threats.get(attackerId) || new Set();
+        outcomes.add(["dbno_caused", "dbno_taken"].includes(action) ? "dbno" : "kill");
+        threats.set(attackerId, outcomes);
+      };
       const tracks = [
         { account_id: focusId, combat_events: activeTimeline?.combat_events || [] },
         ...(activeTimeline?.team_tracks || []),
@@ -17404,24 +17611,46 @@ _INDEX_HTML = """<!doctype html>
             victimId = actorId;
           }
           if (!attackerId || !victimId || attackerId === victimId) continue;
-          if (victimId === focusId) focusThreats.add(attackerId);
-          else if (teammateIds.has(victimId)) teammateThreats.add(attackerId);
+          if (victimId === focusId) recordThreat(focusThreats, attackerId, action);
+          else if (teammateIds.has(victimId)) recordThreat(teammateThreats, attackerId, action);
         }
       }
-      return { focusThreats, teammateThreats };
+      const value = { focusThreats, teammateThreats };
+      if (activeTimelinePreparedSource === activeTimeline) {
+        activeTimelineThreatCache = { timeline: activeTimeline, value };
+      }
+      return value;
+    }
+
+    function timelineThreatOutcomeLabel(outcomes) {
+      if (!outcomes) return "";
+      const labels = [];
+      if (outcomes.has("dbno")) labels.push("기절");
+      if (outcomes.has("kill")) labels.push("죽임");
+      return labels.join("·");
     }
 
     function timelineActorFilterGroup(member, threats) {
       const relation = replayParticipantRelation(member);
       const accountId = String(member.account_id || "");
       if (relation === "focus") return { key: "focus", priority: 1, label: "이벤트 대상" };
-      if (relation === "ally") return { key: "ally", priority: 2, label: "팀원" };
       if (relation === "bot") return { key: "bot", priority: 6, label: "봇" };
-      if (threats.focusThreats.has(accountId)) {
-        return { key: "focus_threat", priority: 3, label: "나를 기절·죽인 적군" };
+      if (relation === "enemy" && threats.focusThreats.has(accountId)) {
+        return {
+          key: "focus_threat",
+          priority: 2,
+          label: "나를 기절·죽인 적군",
+          detail: timelineThreatOutcomeLabel(threats.focusThreats.get(accountId)),
+        };
       }
-      if (threats.teammateThreats.has(accountId)) {
-        return { key: "teammate_threat", priority: 4, label: "팀원을 기절·죽인 적군" };
+      if (relation === "ally") return { key: "ally", priority: 3, label: "팀원" };
+      if (relation === "enemy" && threats.teammateThreats.has(accountId)) {
+        return {
+          key: "teammate_threat",
+          priority: 4,
+          label: "팀원을 기절·죽인 적군",
+          detail: timelineThreatOutcomeLabel(threats.teammateThreats.get(accountId)),
+        };
       }
       return { key: "human", priority: 5, label: "그 외 사람" };
     }
@@ -17442,7 +17671,7 @@ _INDEX_HTML = """<!doctype html>
         options.push({
           value,
           name: member.name || compactIdentifier(accountId),
-          meta: `${group.priority}순위 · ${group.label}${member.registered && !member.is_self ? " · 등록 유저" : ""}`,
+          meta: `${group.priority}순위 · ${group.label}${group.detail ? ` (${group.detail})` : ""}${member.registered && !member.is_self ? " · 등록 유저" : ""}`,
           group: group.key,
           priority: group.priority,
         });
@@ -17541,11 +17770,8 @@ _INDEX_HTML = """<!doctype html>
 
     function currentPlaybackTimelineEvent() {
       const visible = activeTimelineVisibleEvents;
-      let current = null;
-      for (const event of visible) {
-        if (event.time > activeTimelineTime) break;
-        current = event;
-      }
+      const currentIndex = upperBoundReplayTime(visible, activeTimelineTime) - 1;
+      const current = currentIndex >= 0 ? visible[currentIndex] : null;
       if (!current) return null;
       const age = activeTimelineTime - current.time;
       const keepSeconds = current.category === "combat" ? 4.5 : current.category === "engagement" ? 8 : 6;
@@ -17598,8 +17824,13 @@ _INDEX_HTML = """<!doctype html>
       }
       activeTimelineCurrentEventId = nextId;
       timelineEventList?.querySelectorAll(".timeline-event-item.current").forEach((element) => element.classList.remove("current"));
-      const item = Array.from(timelineEventList?.querySelectorAll("[data-timeline-event-item]") || [])
+      let item = Array.from(timelineEventList?.querySelectorAll("[data-timeline-event-item]") || [])
         .find((element) => element.dataset.timelineEventItem === nextId);
+      if (!item && nextId && timelineFollowEvents?.checked && !activeTimelineRenderedEventIds.has(nextId)) {
+        renderTimelineEventList();
+        item = Array.from(timelineEventList?.querySelectorAll("[data-timeline-event-item]") || [])
+          .find((element) => element.dataset.timelineEventItem === nextId);
+      }
       if (item) {
         item.classList.add("current");
         if (replayPlaying && timelineFollowEvents?.checked) scrollTimelineEventListToItem(item);
@@ -17608,6 +17839,7 @@ _INDEX_HTML = """<!doctype html>
     }
 
     function refreshTimelineEventExplorer({ clearSelection = true } = {}) {
+      activeTimelineVisibleEventsDirty = true;
       if (clearSelection) {
         activeTimelineSelectedEventId = null;
         activeTimelineCurrentEventId = null;
@@ -17686,14 +17918,29 @@ _INDEX_HTML = """<!doctype html>
 
     function renderTimelineEventList() {
       if (!timelineEventList) return;
-      const visibleEvents = filteredTimelineEvents();
-      activeTimelineVisibleEvents = visibleEvents;
-      if (timelineEventCount) timelineEventCount.textContent = `${formatInteger(visibleEvents.length)}개 사건`;
+      if (activeTimelineVisibleEventsDirty) {
+        activeTimelineVisibleEvents = filteredTimelineEvents();
+        activeTimelineVisibleEventsDirty = false;
+      }
+      const visibleEvents = activeTimelineVisibleEvents;
       if (!visibleEvents.length) {
+        activeTimelineRenderedEventIds = new Set();
+        timelineEventList.dataset.totalCount = "0";
+        timelineEventList.dataset.renderedCount = "0";
+        if (timelineEventCount) timelineEventCount.textContent = "0개 사건";
         timelineEventList.innerHTML = `<div class="status">표시할 리플레이 이벤트가 없습니다.</div>`;
         return;
       }
-      timelineEventList.innerHTML = visibleEvents.map((event) => `
+      const windowed = timelineEventWindow(visibleEvents);
+      activeTimelineRenderedEventIds = new Set(windowed.events.map((event) => event.id));
+      timelineEventList.dataset.totalCount = String(visibleEvents.length);
+      timelineEventList.dataset.renderedCount = String(windowed.events.length);
+      if (timelineEventCount) {
+        timelineEventCount.textContent = visibleEvents.length > windowed.events.length
+          ? `${formatInteger(visibleEvents.length)}개 사건 · 현재 주변 ${formatInteger(windowed.start + 1)}-${formatInteger(windowed.end)} 표시`
+          : `${formatInteger(visibleEvents.length)}개 사건`;
+      }
+      timelineEventList.innerHTML = windowed.events.map((event) => `
         <div class="timeline-event-item ${event.id === activeTimelineSelectedEventId ? "active" : ""} ${event.id === activeTimelineCurrentEventId ? "current" : ""}" data-timeline-event-item="${attr(event.id)}" data-timeline-event-type="${attr(timelineEventTypeKeys(event).filter((eventType) => activeTimelineEventTypeFilters.has(eventType)).join(" "))}" data-timeline-event-actor="${attr(timelineEventActorFilterKey(event) || "world")}">
           <button class="timeline-event-row" type="button" data-timeline-event="${attr(event.id)}">
             ${timelineEventBadgeHtml(event)}
@@ -17799,11 +18046,11 @@ _INDEX_HTML = """<!doctype html>
     }
 
     function selectedTimelineEvent() {
-      return activeTimelineEvents.find((event) => event.id === activeTimelineSelectedEventId) || null;
+      return activeTimelineEventById.get(activeTimelineSelectedEventId) || null;
     }
 
     function seekTimelineEvent(eventId, focusMap = false) {
-      const event = activeTimelineEvents.find((item) => item.id === eventId);
+      const event = activeTimelineEventById.get(eventId);
       if (!event) return;
       pauseReplay();
       activeTimelineSelectedEventId = event.id;
@@ -18099,9 +18346,52 @@ _INDEX_HTML = """<!doctype html>
       }
     }
 
-    function drawReplayCombatEvents(events, actorColor = "#4bd0a0") {
-      for (const event of events) {
-        if (eventTime(event) > activeTimelineTime || !event.map) continue;
+    function preparedReplayCombatEvents(events) {
+      if (!Array.isArray(events)) return { sorted: [], persistent: [] };
+      const cached = replayCombatEventCache.get(events);
+      if (cached) return cached;
+      const sorted = events
+        .filter((event) => Number.isFinite(eventTime(event)))
+        .slice()
+        .sort((left, right) => eventTime(left) - eventTime(right));
+      const persistentActions = new Set([
+        "dbno_caused",
+        "dbno_taken",
+        "revive_given",
+        "revive_received",
+        "kill",
+        "finish",
+        "death",
+        "finished_taken",
+      ]);
+      const value = {
+        sorted,
+        persistent: sorted.filter((event) => persistentActions.has(event.action)),
+      };
+      replayCombatEventCache.set(events, value);
+      return value;
+    }
+
+    function visibleReplayCombatEvents(events) {
+      const prepared = preparedReplayCombatEvents(events);
+      const recentStart = Math.max(0, activeTimelineTime - REPLAY_TRANSIENT_EVENT_SECONDS);
+      const recent = prepared.sorted.slice(
+        lowerBoundReplayTime(prepared.sorted, recentStart),
+        upperBoundReplayTime(prepared.sorted, activeTimelineTime),
+      );
+      const persistent = prepared.persistent.slice(
+        0,
+        upperBoundReplayTime(prepared.persistent, activeTimelineTime),
+      );
+      return [...new Set([...persistent, ...recent])].sort(
+        (left, right) => eventTime(left) - eventTime(right),
+      );
+    }
+
+    function drawReplayCombatEvents(events, actorColor = "#4bd0a0", eventsAreVisible = false) {
+      const visibleEvents = eventsAreVisible ? events : visibleReplayCombatEvents(events);
+      for (const event of visibleEvents) {
+        if (!event.map) continue;
         const eventAge = activeTimelineTime - eventTime(event);
         const actorPoint = canvasPoint(event.map);
         const relatedPoint = event.related_map ? canvasPoint(event.related_map) : null;
@@ -18166,14 +18456,16 @@ _INDEX_HTML = """<!doctype html>
       const seen = new Set();
       for (const track of tracks) {
         const color = replayParticipantColor(track);
-        for (const event of track.combat_events || []) {
+        const visibleEvents = [];
+        for (const event of visibleReplayCombatEvents(track.combat_events || [])) {
           if (!canonicalReplayCombatEvent(event)) continue;
           const actionGroup = ["kill", "finish"].includes(event.action) ? "kill" : event.action;
           const key = `${event.event_index ?? "x"}:${actionGroup}:${event.related_account_id || ""}`;
           if (seen.has(key)) continue;
           seen.add(key);
-          drawReplayCombatEvents([event], color);
+          visibleEvents.push(event);
         }
+        drawReplayCombatEvents(visibleEvents, color, true);
       }
     }
 
@@ -18444,16 +18736,17 @@ _INDEX_HTML = """<!doctype html>
 
     function visiblePositionModeSegments(samples) {
       const segments = [];
-      let previous = null;
+      const prepared = preparedReplayPositions(samples);
+      if (!prepared.length) return segments;
       const trailSeconds = Math.max(0, Number(timelineTrailSeconds?.value || 0));
       const minimumTime = trailSeconds > 0 ? Math.max(0, activeTimelineTime - trailSeconds) : Number.NEGATIVE_INFINITY;
-      for (const sample of samples) {
-        const time = eventTime(sample);
-        if (!sample.map || !Number.isFinite(time) || time > activeTimelineTime) continue;
-        if (time < minimumTime) {
-          previous = sample;
-          continue;
-        }
+      const startIndex = minimumTime === Number.NEGATIVE_INFINITY
+        ? 0
+        : lowerBoundReplayTime(prepared, minimumTime);
+      const endIndex = upperBoundReplayTime(prepared, activeTimelineTime);
+      let previous = startIndex > 0 ? prepared[startIndex - 1] : null;
+      for (let index = startIndex; index < endIndex; index += 1) {
+        const sample = prepared[index];
         const key = `${Number(sample.segment_id || 0)}:${sample.movement_mode || "on_foot"}`;
         const current = segments[segments.length - 1];
         if (!current || current.key !== key) {
@@ -18488,40 +18781,56 @@ _INDEX_HTML = """<!doctype html>
     }
 
     function replayTrackTerminalTime(track) {
+      if (!track || typeof track !== "object") return null;
+      if (replayTerminalTimeCache.has(track)) return replayTerminalTimeCache.get(track);
       const terminal = (track?.combat_events || [])
         .filter((event) => ["death", "finished_taken"].includes(event.action))
         .map(eventTime)
         .filter(Number.isFinite)
         .sort((left, right) => left - right)[0];
-      return Number.isFinite(terminal) ? terminal : null;
+      const value = Number.isFinite(terminal) ? terminal : null;
+      replayTerminalTimeCache.set(track, value);
+      return value;
+    }
+
+    function preparedReplayPositions(samples) {
+      if (!Array.isArray(samples)) return [];
+      const cached = replayPositionCache.get(samples);
+      if (cached) return cached;
+      const prepared = samples
+        .filter((sample) => sample.map && Number.isFinite(eventTime(sample)))
+        .slice()
+        .sort((left, right) => eventTime(left) - eventTime(right));
+      replayPositionCache.set(samples, prepared);
+      return prepared;
     }
 
     function interpolatedPosition(samples, time) {
-      const valid = samples.filter((sample) => sample.map && Number.isFinite(eventTime(sample)));
+      const valid = preparedReplayPositions(samples);
       if (!valid.length) return null;
       if (time < eventTime(valid[0])) return null;
-      let previous = valid[0];
-      for (const sample of valid) {
-        const sampleTime = eventTime(sample);
-        if (sampleTime >= time) {
-          const prevTime = eventTime(previous);
-          const previousSegment = Number(previous.segment_id || 0);
-          const sampleSegment = Number(sample.segment_id || 0);
-          if (sampleSegment !== previousSegment) {
-            if (time >= sampleTime) return { ...sample.map, ...replayMovementState(sample), segment_id: sampleSegment };
-            return time - prevTime <= 15 ? { ...previous.map, ...replayMovementState(previous), segment_id: previousSegment } : null;
-          }
-          const ratio = sampleTime === prevTime ? 0 : Math.max(0, Math.min(1, (time - prevTime) / (sampleTime - prevTime)));
-          return {
-            x_pct: previous.map.x_pct + (sample.map.x_pct - previous.map.x_pct) * ratio,
-            y_pct: previous.map.y_pct + (sample.map.y_pct - previous.map.y_pct) * ratio,
-            segment_id: sampleSegment,
-            ...replayMovementState(ratio >= 1 ? sample : previous),
-          };
-        }
-        previous = sample;
+      const nextIndex = lowerBoundReplayTime(valid, time);
+      if (nextIndex >= valid.length) {
+        const previous = valid[valid.length - 1];
+        return { ...previous.map, ...replayMovementState(previous), segment_id: Number(previous.segment_id || 0) };
       }
-      return { ...previous.map, ...replayMovementState(previous), segment_id: Number(previous.segment_id || 0) };
+      const sample = valid[nextIndex];
+      const previous = valid[Math.max(0, nextIndex - 1)];
+      const sampleTime = eventTime(sample);
+      const prevTime = eventTime(previous);
+      const previousSegment = Number(previous.segment_id || 0);
+      const sampleSegment = Number(sample.segment_id || 0);
+      if (sampleSegment !== previousSegment) {
+        if (time >= sampleTime) return { ...sample.map, ...replayMovementState(sample), segment_id: sampleSegment };
+        return time - prevTime <= 15 ? { ...previous.map, ...replayMovementState(previous), segment_id: previousSegment } : null;
+      }
+      const ratio = sampleTime === prevTime ? 0 : Math.max(0, Math.min(1, (time - prevTime) / (sampleTime - prevTime)));
+      return {
+        x_pct: previous.map.x_pct + (sample.map.x_pct - previous.map.x_pct) * ratio,
+        y_pct: previous.map.y_pct + (sample.map.y_pct - previous.map.y_pct) * ratio,
+        segment_id: sampleSegment,
+        ...replayMovementState(ratio >= 1 ? sample : previous),
+      };
     }
 
     function replayMovementState(sample) {
@@ -19487,6 +19796,13 @@ _INDEX_HTML = """<!doctype html>
       }
     });
     weaponBody.addEventListener("click", (event) => {
+      const viewButton = event.target instanceof Element
+        ? event.target.closest("button[data-weapon-detail-view]")
+        : null;
+      if (viewButton && activeWeaponDetail) {
+        setWeaponDetailView(viewButton.dataset.weaponDetailView || "overview");
+        return;
+      }
       const button = event.target instanceof Element
         ? event.target.closest("button[data-weapon-trend-granularity]")
         : null;
@@ -21045,9 +21361,9 @@ _INDEX_HTML = """<!doctype html>
       replayPinnedMap = null;
       replayPinnedEventId = null;
       activeTimelineTime = Number(timelineScrubber.value || 0);
-      renderTimelineEventList();
       renderReplayFrame();
     });
+    timelineScrubber.addEventListener("change", () => renderTimelineEventList());
     timelineEventList.addEventListener("click", (event) => {
       const mapButton = event.target instanceof Element
         ? event.target.closest("button[data-timeline-map-event]")

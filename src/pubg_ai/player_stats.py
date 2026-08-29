@@ -264,6 +264,55 @@ class PlayerWeaponTrendSeries:
 
 
 @dataclass(frozen=True)
+class PlayerWeaponAttachmentPerformance:
+    kind: str
+    attachment_codes: tuple[str, ...]
+    attachment_names: tuple[str, ...]
+    match_count: int
+    match_wins: int
+    match_win_rate: float
+    fight_count: int
+    fight_wins: int
+    fight_losses: int
+    fight_win_rate: float
+    fight_win_rate_delta_vs_no_attachment: float | None
+    kills: int
+    dbnos: int
+    deaths: int
+    dbnos_taken: int
+    headshots: int
+    avg_distance_m: float | None
+    reliable_sample: bool
+
+    def to_record(self) -> dict[str, Any]:
+        record = asdict(self)
+        record["attachment_codes"] = list(self.attachment_codes)
+        record["attachment_names"] = list(self.attachment_names)
+        return record
+
+
+@dataclass(frozen=True)
+class PlayerWeaponAttachmentAnalysis:
+    no_attachment: PlayerWeaponAttachmentPerformance | None
+    individual: list[PlayerWeaponAttachmentPerformance]
+    combinations: list[PlayerWeaponAttachmentPerformance]
+    source: str = "player_fight_outcomes"
+    basis: str = (
+        "교전 결과 시점의 장착 상태입니다. 킬·기절시킴은 승리, "
+        "사망·기절당함은 패배로 계산합니다."
+    )
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "no_attachment": self.no_attachment.to_record() if self.no_attachment else None,
+            "individual": [item.to_record() for item in self.individual],
+            "combinations": [item.to_record() for item in self.combinations],
+            "source": self.source,
+            "basis": self.basis,
+        }
+
+
+@dataclass(frozen=True)
 class PlayerWeaponDetail:
     player: RegisteredPlayer
     weapon_code: str
@@ -273,6 +322,13 @@ class PlayerWeaponDetail:
     filters: PlayerTrendFilters = field(default_factory=PlayerTrendFilters)
     effective_ranges: list[PlayerWeaponFightRange] = field(default_factory=list)
     trend_series: dict[str, PlayerWeaponTrendSeries] = field(default_factory=dict)
+    attachment_analysis: PlayerWeaponAttachmentAnalysis = field(
+        default_factory=lambda: PlayerWeaponAttachmentAnalysis(
+            no_attachment=None,
+            individual=[],
+            combinations=[],
+        )
+    )
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -287,6 +343,7 @@ class PlayerWeaponDetail:
                 key: series.to_record()
                 for key, series in self.trend_series.items()
             },
+            "attachment_analysis": self.attachment_analysis.to_record(),
         }
 
 
@@ -1637,10 +1694,18 @@ class PlayerStatsService:
                 SELECT
                     outcomes.match_id,
                     outcomes.outcome_type,
-                    outcomes.distance_m
+                    outcomes.outcome_reason,
+                    outcomes.attachment_codes,
+                    outcomes.attachment_names_ko,
+                    outcomes.is_headshot,
+                    outcomes.distance_m,
+                    participants.win_place
                 FROM player_fight_outcomes outcomes
                 INNER JOIN analysis_matches AS matches
                     ON matches.match_id = outcomes.match_id
+                LEFT JOIN match_participants participants
+                    ON participants.match_id = outcomes.match_id
+                   AND participants.account_id = outcomes.account_id
                 WHERE
                 """
                 + " AND ".join(conditions)
@@ -1910,6 +1975,132 @@ def _weapon_detail_from_rows(
             rows,
             eligible_fights,
         ),
+        attachment_analysis=_weapon_attachment_analysis(eligible_fights),
+    )
+
+
+def _weapon_attachment_analysis(
+    rows: list[dict[str, Any]],
+) -> PlayerWeaponAttachmentAnalysis:
+    normalized: list[dict[str, Any]] = []
+    names_by_code: dict[str, str] = {}
+    for row in rows:
+        codes = tuple(sorted(set(_json_string_list(row.get("attachment_codes")))))
+        names = _json_string_list(row.get("attachment_names_ko"))
+        for code, name in zip(_json_string_list(row.get("attachment_codes")), names):
+            if code and name:
+                names_by_code.setdefault(code, name)
+        normalized.append({**row, "_attachment_codes": codes})
+
+    no_attachment_rows = [
+        row for row in normalized if not row["_attachment_codes"]
+    ]
+    baseline = _attachment_performance_from_rows(
+        kind="none",
+        attachment_codes=(),
+        rows=no_attachment_rows,
+        names_by_code=names_by_code,
+        baseline_rate=None,
+    )
+    baseline_rate = baseline.fight_win_rate if baseline and baseline.fight_count else None
+
+    by_attachment: dict[str, list[dict[str, Any]]] = {}
+    by_combination: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+    for row in normalized:
+        codes = row["_attachment_codes"]
+        for code in codes:
+            by_attachment.setdefault(code, []).append(row)
+        if len(codes) >= 2:
+            by_combination.setdefault(codes, []).append(row)
+
+    individual = [
+        _attachment_performance_from_rows(
+            kind="single",
+            attachment_codes=(code,),
+            rows=group_rows,
+            names_by_code=names_by_code,
+            baseline_rate=baseline_rate,
+        )
+        for code, group_rows in by_attachment.items()
+    ]
+    combinations = [
+        _attachment_performance_from_rows(
+            kind="combination",
+            attachment_codes=codes,
+            rows=group_rows,
+            names_by_code=names_by_code,
+            baseline_rate=baseline_rate,
+        )
+        for codes, group_rows in by_combination.items()
+    ]
+    return PlayerWeaponAttachmentAnalysis(
+        no_attachment=baseline,
+        individual=sorted(
+            (item for item in individual if item is not None),
+            key=lambda item: (-item.fight_count, -item.fight_win_rate, item.attachment_names),
+        ),
+        combinations=sorted(
+            (item for item in combinations if item is not None),
+            key=lambda item: (-item.fight_count, -item.fight_win_rate, item.attachment_names),
+        ),
+    )
+
+
+def _attachment_performance_from_rows(
+    *,
+    kind: str,
+    attachment_codes: tuple[str, ...],
+    rows: list[dict[str, Any]],
+    names_by_code: Mapping[str, str],
+    baseline_rate: float | None,
+) -> PlayerWeaponAttachmentPerformance | None:
+    if not rows:
+        return None
+    fight_wins = sum(str(row.get("outcome_type")) == "win" for row in rows)
+    fight_losses = sum(str(row.get("outcome_type")) == "loss" for row in rows)
+    fight_count = fight_wins + fight_losses
+    if not fight_count:
+        return None
+    match_ids = {str(row.get("match_id")) for row in rows if row.get("match_id")}
+    match_win_ids = {
+        str(row.get("match_id"))
+        for row in rows
+        if row.get("match_id") and _optional_int(row.get("win_place")) == 1
+    }
+    distances = [
+        distance
+        for row in rows
+        for distance in [_optional_float(row.get("distance_m"))]
+        if distance is not None and distance >= 0
+    ]
+    fight_win_rate = _safe_divide(fight_wins, fight_count)
+    match_count = len(match_ids)
+    return PlayerWeaponAttachmentPerformance(
+        kind=kind,
+        attachment_codes=attachment_codes,
+        attachment_names=tuple(
+            translate_code(code, "item")
+            if translate_code(code, "item") != code
+            else names_by_code.get(code, code)
+            for code in attachment_codes
+        ),
+        match_count=match_count,
+        match_wins=len(match_win_ids),
+        match_win_rate=_safe_divide(len(match_win_ids), match_count),
+        fight_count=fight_count,
+        fight_wins=fight_wins,
+        fight_losses=fight_losses,
+        fight_win_rate=fight_win_rate,
+        fight_win_rate_delta_vs_no_attachment=(
+            fight_win_rate - baseline_rate if baseline_rate is not None and kind != "none" else None
+        ),
+        kills=sum(str(row.get("outcome_reason")) == "kill" for row in rows),
+        dbnos=sum(str(row.get("outcome_reason")) == "dbno_caused" for row in rows),
+        deaths=sum(str(row.get("outcome_reason")) == "death" for row in rows),
+        dbnos_taken=sum(str(row.get("outcome_reason")) == "dbno_taken" for row in rows),
+        headshots=sum(bool(row.get("is_headshot")) for row in rows),
+        avg_distance_m=_safe_divide(sum(distances), len(distances)) if distances else None,
+        reliable_sample=fight_count >= 10 and match_count >= 3,
     )
 
 
@@ -2145,6 +2336,17 @@ def _json_mapping(value: Any) -> Mapping[str, Any]:
     if isinstance(value, Mapping):
         return value
     return {}
+
+
+def _json_string_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def _normalize_weapon_text(value: str) -> str:

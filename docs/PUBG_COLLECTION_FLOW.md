@@ -363,6 +363,10 @@ The Discord command surface reuses the same local MySQL and file stores and is o
   average survival/movement, top weapons, and recent match rows.
 - `!무기 닉네임 무기명 [shard]` resolves common names such as `M416` to PUBG weapon codes and returns weapon-specific
   usage matches, chickens, kills, assists, DBNOs, damage, the weapon-family hit metric, body-part hits, and recent weapon rows.
+  The local manager applies the same map/mode/season/KST filters to no-attachment, individual-attachment, and exact
+  multi-attachment fight-outcome views. Kill/DBNO-caused is a fight win; death/DBNO-taken is a fight loss. Chicken rate
+  remains a separate match-level value and each attachment row shows its percentage-point delta from the no-attachment
+  combat-snapshot baseline.
 - `/매치` selects a current-guild registered player and then autocompletes that player's recent completed matches
   with KST date, Korean map/mode, placement, kills, and damage. Leaving the match option empty selects the latest
   completed match. `!매치 닉네임 [match_id] [shard]` remains the prefix equivalent. The result includes
@@ -386,10 +390,10 @@ The Discord command surface reuses the same local MySQL and file stores and is o
 - `/최근스냅샷` first selects a current-guild registered player, then optionally selects one of that player's recent
   matches with the same friendly autocomplete labels as `/매치`. Leaving the match option empty sends that player's
   latest generated `map_snapshot` JPEG artifact.
-- Discord autocomplete has a protocol response limit of 25 rows, but the bot does not preload or cap the registration
-  catalog at 25. It applies the typed nickname fragment and current `guild_id` in MySQL first, then returns the best
-  25 matches. Users beyond the first page remain searchable by any nickname fragment.
-  MySQL LIKE wildcard characters in nicknames (`_`, `%`, and the escape marker) are treated as literal text.
+- Registered-player slash options can be entered directly or left blank. A blank nickname opens a caller-only picker
+  scoped to active registrations in the current `guild_id`, with 25 rows per page and a partial nickname/account-ID
+  search modal. The database result is paged rather than truncated, so guilds with more than 25 players remain fully
+  selectable. MySQL LIKE wildcard characters in nicknames (`_`, `%`, and the escape marker) are treated as literal text.
 - Recent-match autocomplete reads at most the latest 500 completed matches for the selected player and uses a
   60-second, 128-entry bounded cache so long-running bots do not accumulate stale match catalogs.
 - Core query results use bounded Discord embeds with named fields and caller-only previous/next controls instead of

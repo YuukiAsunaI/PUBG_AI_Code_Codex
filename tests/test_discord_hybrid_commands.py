@@ -168,15 +168,15 @@ class DiscordHybridCommandTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("결과_수", recommendation_names)
 
                 match_options = {item["name"]: item for item in payloads["매치"]["options"]}
-                self.assertTrue(match_options["닉네임"]["required"])
-                self.assertTrue(match_options["닉네임"]["autocomplete"])
+                self.assertFalse(match_options["닉네임"].get("required", False))
+                self.assertFalse(match_options["닉네임"].get("autocomplete", False))
                 self.assertFalse(match_options["최근_매치"].get("required", False))
                 self.assertTrue(match_options["최근_매치"]["autocomplete"])
 
                 snapshot_options = {
                     item["name"]: item for item in payloads["최근스냅샷"]["options"]
                 }
-                self.assertTrue(snapshot_options["닉네임"]["required"])
+                self.assertFalse(snapshot_options["닉네임"].get("required", False))
                 self.assertTrue(snapshot_options["최근_매치"]["autocomplete"])
 
                 ranking_options = {item["name"]: item for item in payloads["랭킹"]["options"]}
@@ -197,28 +197,28 @@ class DiscordHybridCommandTests(unittest.IsolatedAsyncioTestCase):
                 }
                 for command_name, parameter_name in registered_player_parameters.items():
                     parameter = bot.get_command(command_name).app_command._params[parameter_name]
-                    self.assertTrue(callable(parameter.autocomplete), command_name)
+                    self.assertFalse(callable(parameter.autocomplete), command_name)
                     option = next(
                         item
                         for item in payloads[command_name]["options"]
-                        if item.get("autocomplete")
-                        and item["name"] in {"닉네임", "대상"}
+                        if item["name"] in {"닉네임", "대상"}
                     )
                     self.assertIn("현재 Discord 서버", option["description"])
-                    self.assertIn("25명", option["description"])
+                    self.assertIn("페이지·검색", option["description"])
+                    self.assertFalse(option.get("required", False))
             finally:
                 await bot.close()
 
-    async def test_player_and_match_autocomplete_are_guild_scoped_and_searchable(self) -> None:
+    async def test_registered_player_picker_is_guild_scoped_paged_and_match_autocomplete_is_searchable(self) -> None:
         with TemporaryDirectory() as temp_dir:
             base_dir = Path(temp_dir)
             store = LocalSettingsStore(base_dir / "local_settings.json", base_dir=base_dir)
             checker = DiscordPermissionChecker(
                 DiscordPermissionSettings(
                     command_groups=DEFAULT_COMMAND_GROUPS,
-                    user_grants={},
+                    user_grants={"7": ["profile_read"]},
                     guild_user_grants={},
-                    global_admin_user_ids=["7"],
+                    global_admin_user_ids=[],
                 )
             )
             config = RuntimeConfig(
@@ -229,7 +229,7 @@ class DiscordHybridCommandTests(unittest.IsolatedAsyncioTestCase):
             bot = create_discord_bot(
                 config=config,
                 permission_checker=checker,
-                scope_settings_store=store,
+                scope_settings_store=None,
             )
             connection = SimpleNamespace(close=lambda: None)
             players = [
@@ -243,53 +243,118 @@ class DiscordHybridCommandTests(unittest.IsolatedAsyncioTestCase):
                 )
                 for index in range(40)
             ]
-            interaction = SimpleNamespace(
-                guild_id=100,
-                user=SimpleNamespace(id=7),
-                namespace=SimpleNamespace(**{"플랫폼": "steam"}),
+            ctx = SimpleNamespace(
+                author=SimpleNamespace(id=7),
+                guild=SimpleNamespace(id=100),
+                channel=SimpleNamespace(id=200),
+                interaction=SimpleNamespace(),
+                reply=AsyncMock(),
             )
             try:
-                callback = bot.get_command("전적").app_command._params["name"].autocomplete
+                stats_command = bot.get_command("전적")
+                ctx.command = stats_command
 
-                def filter_registered_players(**kwargs):
-                    query = str(kwargs.get("search") or "").casefold()
-                    filtered = [
-                        player
-                        for player in players
-                        if query in player.current_name.casefold()
-                        or query in player.account_id.casefold()
-                    ]
-                    return filtered[: int(kwargs["limit"])]
+                def page_registered_players(**kwargs):
+                    offset = int(kwargs["offset"])
+                    limit = int(kwargs["limit"])
+                    return players[offset : offset + limit], len(players)
+
+                interaction = SimpleNamespace(
+                    user=ctx.author,
+                    guild=ctx.guild,
+                    channel=ctx.channel,
+                    response=SimpleNamespace(
+                        edit_message=AsyncMock(),
+                        send_message=AsyncMock(),
+                        send_modal=AsyncMock(),
+                        defer=AsyncMock(),
+                    ),
+                    edit_original_response=AsyncMock(),
+                )
 
                 with (
                     patch("pubg_ai.discord_bot.connect_mysql", return_value=connection),
                     patch.object(
                         PlayerRegistry,
-                        "list_players",
-                        side_effect=filter_registered_players,
-                    ) as list_players,
+                        "list_players_page",
+                        side_effect=page_registered_players,
+                    ) as list_players_page,
                 ):
-                    choices = await callback(interaction, "ki")
-                    late_choice = await callback(interaction, "player37")
+                    await stats_command.callback(ctx, None, "steam")
+                    picker = ctx.reply.await_args.kwargs["view"]
+                    first_select = next(item for item in picker.children if hasattr(item, "options"))
+                    self.assertEqual(len(first_select.options), 25)
+                    self.assertIn(
+                        "검색 결과 40명",
+                        ctx.reply.await_args.kwargs["embed"].fields[2].value,
+                    )
+                    self.assertTrue(ctx.reply.await_args.kwargs["ephemeral"])
 
-                self.assertEqual(len(choices), 25)
-                self.assertEqual([choice.value for choice in late_choice], ["KiPlayer37"])
+                    search_button = next(
+                        item for item in picker.children if getattr(item, "label", None) == "검색"
+                    )
+                    await search_button.callback(interaction)
+                    search_modal = interaction.response.send_modal.await_args.args[0]
+                    self.assertEqual(search_modal.title, "등록 유저 검색")
+                    self.assertIn("일부 글자", search_modal.query_input.placeholder)
+
+                    next_button = next(
+                        item
+                        for item in picker.children
+                        if getattr(item, "label", None) == "다음 25명"
+                    )
+                    await next_button.callback(interaction)
+                    second_select = next(item for item in picker.children if hasattr(item, "options"))
+                    self.assertEqual(len(second_select.options), 15)
+                    second_select._values = [players[25].account_id]
+                    await second_select.callback(interaction)
+
+                    with (
+                        patch.object(
+                            PlayerStatsService,
+                            "get_profile",
+                            return_value=object(),
+                        ) as get_profile,
+                        patch(
+                            "pubg_ai.discord_bot.format_player_profile_stats",
+                            return_value="전적 분석\n- 경기: 1\n- KDA: 2.0",
+                        ),
+                    ):
+                        execute_button = next(
+                            item
+                            for item in picker.children
+                            if getattr(item, "label", None) == "전적 조회"
+                        )
+                        await execute_button.callback(interaction)
+
+                    get_profile.assert_called_once_with(
+                        shard="steam",
+                        account_id=players[25].account_id,
+                        name=None,
+                        guild_id="100",
+                        global_scope=False,
+                    )
+                    result_embed = interaction.edit_original_response.await_args.kwargs["embed"]
+                    self.assertEqual(result_embed.title, "전적 분석")
+
                 self.assertEqual(
-                    list_players.call_args_list,
+                    list_players_page.call_args_list,
                     [
                         call(
                             shard="steam",
                             registered_guild_id="100",
-                            search="ki",
+                            search=None,
                             active_only=False,
                             limit=25,
+                            offset=0,
                         ),
                         call(
                             shard="steam",
                             registered_guild_id="100",
-                            search="player37",
+                            search=None,
                             active_only=False,
                             limit=25,
+                            offset=25,
                         ),
                     ],
                 )

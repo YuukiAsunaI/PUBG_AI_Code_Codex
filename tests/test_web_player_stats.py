@@ -44,6 +44,11 @@ class WebPlayerStatsTests(unittest.TestCase):
         self.assertIn('class="trend-line-chart"', body)
         self.assertIn('data-trend-granularity="month"', body)
         self.assertIn('data-weapon-trend-metric', body)
+        self.assertIn('data-weapon-detail-view="overview"', body)
+        self.assertIn('data-weapon-detail-view="attachments"', body)
+        self.assertIn('data-weapon-detail-view="combinations"', body)
+        self.assertIn("attachment_analysis", body)
+        self.assertIn("노 파츠 대비", body)
         self.assertIn("await setActiveAnalysisPlayer(player);", body)
         self.assertIn(
             'activeAnalysisPlayer.shard + ":" + activeAnalysisPlayer.account_id !== selectionKey',

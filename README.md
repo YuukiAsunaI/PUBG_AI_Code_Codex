@@ -181,6 +181,11 @@ Recommendations include distance-weighted weapon ranges and weapon+attachment pa
 snapshots are used first so parts reflect the actual kill/DBNO/finish moment; attach-event co-occurrence remains the
 fallback for older parsed data.
 
+The local weapon-detail view also compares no-parts, every observed individual attachment, and exact multi-part
+combinations from durable fight snapshots. It keeps fight win rate separate from chicken rate and shows each part's
+percentage-point difference from the no-parts baseline, combat outcome counts, average distance, and sample
+reliability under the same map/mode/season/KST filters.
+
 Drop-zone recommendations keep their stable cluster ID and raw centroid coordinates in centimeters. A versioned
 official-asset-backed catalog adds a Korean place name only when the centroid is inside a maintained region; unmatched
 points retain the map/grid label, and Paramo is explicitly treated as a dynamic map.
@@ -370,6 +375,10 @@ timestamp. Every located event has a map button; drop start, landing, first veri
 activity, hit, DBNO, kill, and death shortcuts seek and center the map directly. Movement is classified as airborne,
 vehicle, on-foot, or DBNO for all participants when telemetry supplies those samples.
 
+Selecting every participant keeps the complete event dataset but windows the visible event-list DOM to 240 rows near
+the active time. Cached replay indexes and binary-search time lookup keep movement and combat rendering responsive
+without discarding events or hiding participants.
+
 The player selector queries matches by the stored PUBG account ID, not by nickname text. Selecting a match calls
 `POST /matches/{match_id}/replay`, which creates or reuses the match-wide content-addressed artifact. Older
 registered-player timeline artifacts remain preserved and playable from storage, but they are no longer the default
@@ -459,10 +468,15 @@ Initial commands are:
 
 Command access is checked through local Discord permission settings in `config/local_settings.json`. Slash commands are
 the recommended interactive surface: every option has a Korean name and description, finite values use choices, and
-players are searched only from registrations in the current Discord guild. Discord returns at most 25 autocomplete
-rows per request, so the bot searches MySQL by the typed nickname fragment before applying that response limit; the
-registered-player count itself is not capped at 25. Match and replay commands show recent matches as KST date, Korean
-map/mode, placement, kills, and damage while retaining the match ID only as the hidden option value.
+players are selected only from registrations in the current Discord guild. Leaving the nickname blank opens a private
+picker with 25 registrations per page, previous/next controls, and a partial nickname/account-ID search modal. This
+avoids Discord's 25-option component limit without capping the guild registration count. Direct nickname entry remains
+available. Match and replay commands show recent matches as KST date, Korean map/mode, placement, kills, and damage
+while retaining the match ID only as the hidden option value.
+
+Recommendation replies are split into one concise field per weapon, two-weapon loadout, attachment combination,
+individual attachment, range, map, teammate, or drop zone. Five fields are shown per page with previous/next controls,
+so large result sets remain readable instead of becoming one continuous paragraph.
 Recommendation lookup is available through `!추천 닉네임 [shard] [최소표본경기] [결과수]` and the equivalent slash
 command; minimum sample size is caller-selectable from 1 to 100,000.
 Named drop-zone rows show the Korean region when matched and preserve a map/grid fallback otherwise.
@@ -476,6 +490,9 @@ rows separate match share, chicken/win rate, fights per match, accuracy, headsho
 damage with their sample denominators. Comparison supports two to five catalog-selected subjects, shared detailed
 filters, selectable metrics, and chart/table views. Player selection is retained while moving between weapon,
 trend, time, comparison, and match tools, while profile search itself starts and returns to an empty query field.
+Weapon detail separates the overall view from no-attachment, individual-attachment, and exact multi-attachment views.
+It shows chicken rate and fight win rate separately, where kill/DBNO-caused is a fight win and death/DBNO-taken is a
+fight loss, and reports the percentage-point difference from the no-attachment combat-snapshot baseline.
 If `PUBG_LOCAL_WEB_BASE_URL` is set, weapon+attachment recommendation rows include local web evidence links for
 supporting combat snapshots, and `pubg-alert-history` rows include local alert-detail links, a filtered local manager
 page link, and a filtered CSV export link. This can be set from the local manager's `Local Web Link` section or through

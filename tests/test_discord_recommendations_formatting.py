@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 import unittest
 
-from pubg_ai.discord_bot import format_player_recommendations
+from pubg_ai.discord_bot import build_discord_report_pages, format_player_recommendations
 from pubg_ai.player_recommendations import (
     AttachmentRecommendation,
     DropZoneRecommendation,
@@ -198,8 +198,8 @@ class DiscordRecommendationFormattingTests(unittest.TestCase):
         self.assertIn("M416", body)
         self.assertIn("M24", body)
         self.assertIn("추정 30.0%", body)
-        self.assertIn("헤드샷 명중 20.0%", body)
-        self.assertIn("교전 승률 70.0%", body)
+        self.assertIn("헤드샷 명중 **20.0%**", body)
+        self.assertIn("교전 승률 **70.0%**", body)
         self.assertIn("수직 손잡이", body)
         self.assertIn("M416 + 수직 손잡이", body)
         self.assertIn("M416 10-15m", body)
@@ -207,6 +207,16 @@ class DiscordRecommendationFormattingTests(unittest.TestCase):
         self.assertIn("Friend (등록 유저)", body)
         self.assertIn("태이고 용천", body)
         self.assertNotIn("/players/recommendations/weapon-attachment-evidence", body)
+        pages = build_discord_report_pages(body)
+        fields = [field for page in pages for field in page["fields"]]
+        self.assertGreater(len(pages), 1)
+        self.assertTrue(all(len(page["fields"]) <= 5 for page in pages))
+        self.assertTrue(all(len(value) <= 950 for _, value in fields))
+        self.assertEqual(
+            [label for label, _ in fields if label.startswith("추천 무기")],
+            ["추천 무기 1 · M416", "추천 무기 2 · AKM", "추천 무기 3 · AUG", "추천 무기 4 · M24"],
+        )
+        self.assertTrue(any(label.startswith("파츠 성과 1") for label, _ in fields))
 
         body_with_links = format_player_recommendations(
             report,

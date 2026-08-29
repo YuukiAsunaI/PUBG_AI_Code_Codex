@@ -11,6 +11,18 @@ from pubg_ai.config import RuntimeConfig
 
 
 FOCUS_COMMANDS = ("추세", "추천", "매치", "랭킹", "최근스냅샷")
+PLAYER_PICKER_COMMANDS = (
+    "유저조회",
+    "전적",
+    "교전",
+    "추세",
+    "무기",
+    "추천",
+    "매치",
+    "유저삭제",
+    "최근스냅샷",
+    "pubg-delete-data",
+)
 
 
 def main() -> int:
@@ -75,6 +87,17 @@ def main() -> int:
         for choice in option.get("choices", [])
         if isinstance(choice, dict)
     ]
+    player_picker_options = {
+        command_name: next(
+            (
+                option
+                for option in sample[command_name].get("options", [])
+                if option.get("name") == "닉네임"
+            ),
+            None,
+        )
+        for command_name in PLAYER_PICKER_COMMANDS
+    }
     checks = {
         "all_26_commands_present": all(len(value) == 26 for value in catalogs.values()),
         "no_blank_or_placeholder_option_descriptions": all(
@@ -100,6 +123,13 @@ def main() -> int:
         "recommendation_minimum_sample_is_configurable": any(
             option.get("name") == "최소_표본_경기"
             for option in sample["추천"].get("options", [])
+        ),
+        "registered_players_use_paged_search_picker": all(
+            option
+            and not option.get("required", False)
+            and not option.get("autocomplete", False)
+            and "페이지·검색" in str(option.get("description") or "")
+            for option in player_picker_options.values()
         ),
     }
     result = {

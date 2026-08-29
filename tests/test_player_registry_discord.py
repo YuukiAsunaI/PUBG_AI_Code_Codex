@@ -117,6 +117,37 @@ class PlayerRegistryDiscordTests(unittest.TestCase):
         )
         self.assertEqual(params, ["steam", "100", "%ki%", "%ki%", "ki%", 25])
 
+    def test_list_players_page_counts_and_pages_after_guild_search(self) -> None:
+        cursor = MagicMock()
+        cursor.__enter__.return_value = cursor
+        cursor.fetchone.return_value = {"total": 40}
+        cursor.fetchall.return_value = []
+        connection = MagicMock()
+        connection.cursor.return_value = cursor
+
+        players, total = PlayerRegistry(connection).list_players_page(
+            shard="steam",
+            registered_guild_id="100",
+            search="ki",
+            active_only=False,
+            limit=25,
+            offset=25,
+        )
+
+        self.assertEqual(players, [])
+        self.assertEqual(total, 40)
+        count_call, page_call = cursor.execute.call_args_list
+        count_query, count_params = count_call.args
+        page_query, page_params = page_call.args
+        self.assertIn("SELECT COUNT(*) AS total", " ".join(count_query.split()))
+        self.assertIn("registrations.guild_id = %s", " ".join(count_query.split()))
+        self.assertEqual(count_params, ["steam", "100", "%ki%", "%ki%"])
+        self.assertIn("LIMIT %s OFFSET %s", " ".join(page_query.split()))
+        self.assertEqual(
+            page_params,
+            ["steam", "100", "%ki%", "%ki%", "ki%", 25, 25],
+        )
+
     def test_list_players_treats_pubg_nickname_wildcards_as_literal_text(self) -> None:
         cursor = MagicMock()
         cursor.__enter__.return_value = cursor

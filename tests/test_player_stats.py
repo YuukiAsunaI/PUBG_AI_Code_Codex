@@ -245,21 +245,41 @@ class PlayerStatsServiceTests(unittest.TestCase):
                     {
                         "match_id": "match-2",
                         "outcome_type": "win",
+                        "outcome_reason": "kill",
+                        "attachment_codes": '["Item_Attach_Weapon_Lower_Foregrip_C", "Item_Attach_Weapon_Muzzle_AR_Compensator_C"]',
+                        "attachment_names_ko": '["수직 손잡이", "보정기"]',
+                        "is_headshot": 1,
+                        "win_place": 1,
                         "distance_m": 42.0,
                     },
                     {
                         "match_id": "match-2",
                         "outcome_type": "win",
+                        "outcome_reason": "dbno_caused",
+                        "attachment_codes": ["Item_Attach_Weapon_Lower_Foregrip_C", "Item_Attach_Weapon_Muzzle_AR_Compensator_C"],
+                        "attachment_names_ko": ["수직 손잡이", "보정기"],
+                        "is_headshot": 0,
+                        "win_place": 1,
                         "distance_m": 48.0,
                     },
                     {
                         "match_id": "match-2",
                         "outcome_type": "loss",
+                        "outcome_reason": "death",
+                        "attachment_codes": ["Item_Attach_Weapon_Lower_Foregrip_C", "Item_Attach_Weapon_Muzzle_AR_Compensator_C"],
+                        "attachment_names_ko": ["수직 손잡이", "보정기"],
+                        "is_headshot": 0,
+                        "win_place": 1,
                         "distance_m": 45.0,
                     },
                     {
                         "match_id": "match-1",
                         "outcome_type": "loss",
+                        "outcome_reason": "dbno_taken",
+                        "attachment_codes": [],
+                        "attachment_names_ko": [],
+                        "is_headshot": 0,
+                        "win_place": 4,
                         "distance_m": 112.0,
                     },
                 ],
@@ -298,6 +318,25 @@ class PlayerStatsServiceTests(unittest.TestCase):
         self.assertEqual(detail.totals.fight_wins, 2)
         self.assertAlmostEqual(detail.totals.fight_win_rate, 0.5)
         self.assertEqual(detail.totals.avg_fights_per_match, 2.0)
+        baseline = detail.attachment_analysis.no_attachment
+        self.assertIsNotNone(baseline)
+        assert baseline is not None
+        self.assertEqual(baseline.fight_count, 1)
+        self.assertEqual(baseline.fight_losses, 1)
+        self.assertEqual(baseline.fight_win_rate, 0.0)
+        vertical = next(
+            item
+            for item in detail.attachment_analysis.individual
+            if item.attachment_codes == ("Item_Attach_Weapon_Lower_Foregrip_C",)
+        )
+        self.assertEqual(vertical.fight_count, 3)
+        self.assertEqual(vertical.fight_wins, 2)
+        self.assertAlmostEqual(vertical.fight_win_rate, 2 / 3)
+        self.assertAlmostEqual(vertical.fight_win_rate_delta_vs_no_attachment or 0, 2 / 3)
+        self.assertEqual(vertical.match_count, 1)
+        self.assertEqual(vertical.match_wins, 1)
+        self.assertEqual(len(detail.attachment_analysis.combinations), 1)
+        self.assertEqual(detail.attachment_analysis.combinations[0].fight_count, 3)
         self.assertEqual(detail.effective_ranges[0].bucket_label, "25-50m")
         self.assertEqual(detail.effective_ranges[0].wins, 2)
         self.assertEqual(detail.effective_ranges[0].losses, 1)
@@ -325,6 +364,8 @@ class PlayerStatsServiceTests(unittest.TestCase):
         self.assertAlmostEqual(serialized["totals"]["headshot_hit_rate"], 8 / 40)
         self.assertAlmostEqual(serialized["totals"]["avg_kills"], 2.0)
         self.assertEqual(serialized["trend_series"]["date"]["returned_point_count"], 2)
+        self.assertEqual(serialized["attachment_analysis"]["no_attachment"]["fight_losses"], 1)
+        self.assertEqual(len(serialized["attachment_analysis"]["individual"]), 2)
         query, params = connection.executed[2]
         self.assertIn("matches.map_name = %s", query)
         self.assertIn("matches.season_state = %s", query)
@@ -336,6 +377,8 @@ class PlayerStatsServiceTests(unittest.TestCase):
         fight_query, fight_params = connection.executed[3]
         self.assertIn("outcomes.is_friendly_fire = 0", fight_query)
         self.assertIn("outcomes.match_id", fight_query)
+        self.assertIn("outcomes.attachment_codes", fight_query)
+        self.assertIn("participants.win_place", fight_query)
         self.assertIn("matches.map_name = %s", fight_query)
         self.assertEqual(fight_params[:3], ["account.test", "steam", "WeapHK416_C"])
 

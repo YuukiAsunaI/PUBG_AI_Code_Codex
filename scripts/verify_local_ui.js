@@ -140,13 +140,19 @@ async function runWholeMatchReplay(page) {
     "#timelineShowBots:checked",
   ].join(", ")).count();
 
+  const allSelectionStartedAt = Date.now();
   await page.locator('[data-timeline-actor-action="all"]').click();
   await page.waitForFunction(() => {
     const all = document.querySelectorAll("#timelineActorFilter [data-timeline-actor-filter]").length;
     const checked = document.querySelectorAll("#timelineActorFilter [data-timeline-actor-filter]:checked").length;
     return all > 0 && checked === all;
   });
+  const allSelectionRenderMs = Date.now() - allSelectionStartedAt;
   const allActorChecked = await page.locator("#timelineActorFilter [data-timeline-actor-filter]:checked").count();
+  const allSelectionEventWindow = await page.locator("#timelineEventList").evaluate((element) => ({
+    total: Number(element.dataset.totalCount || 0),
+    rendered: Number(element.dataset.renderedCount || 0),
+  }));
 
   const actorSearchName = actorCheckboxes > 1
     ? await page.locator("#timelineActorFilter .replay-checkbox-option strong").nth(1).innerText()
@@ -210,7 +216,9 @@ async function runWholeMatchReplay(page) {
             { account_id: "fixture.bot", name: "Bot", team_id: 4, is_ai_or_bot: true },
             { account_id: "fixture.ally-threat", name: "Ally threat", team_id: 2 },
             { account_id: "fixture.ally", name: "Ally", team_id: 1 },
-            { account_id: "fixture.focus-threat", name: "Focus threat", team_id: 2 },
+            { account_id: "fixture.focus-both", name: "C Both threat", team_id: 2 },
+            { account_id: "fixture.focus-kill", name: "B Kill threat", team_id: 2 },
+            { account_id: "fixture.focus-down", name: "A Down threat", team_id: 2 },
             { account_id: "fixture.focus", name: "Focus", team_id: 1, is_self: true },
           ],
         },
@@ -218,7 +226,22 @@ async function runWholeMatchReplay(page) {
           {
             action: "dbno_taken",
             actor_account_id: "fixture.focus",
-            related_account_id: "fixture.focus-threat",
+            related_account_id: "fixture.focus-down",
+          },
+          {
+            action: "death",
+            actor_account_id: "fixture.focus",
+            related_account_id: "fixture.focus-kill",
+          },
+          {
+            action: "dbno_taken",
+            actor_account_id: "fixture.focus",
+            related_account_id: "fixture.focus-both",
+          },
+          {
+            action: "death",
+            actor_account_id: "fixture.focus",
+            related_account_id: "fixture.focus-both",
           },
         ],
         team_tracks: [
@@ -238,6 +261,7 @@ async function runWholeMatchReplay(page) {
       timelineParticipantSearch.value = "";
       renderTimelineActorFilter();
       return [...document.querySelectorAll("#timelineActorFilter [data-timeline-actor-group]")].map((item) => ({
+        name: item.querySelector("strong")?.textContent || "",
         group: item.dataset.timelineActorGroup,
         priority: Number(item.dataset.timelineActorPriority),
         label: item.querySelector("small")?.textContent || "",
@@ -255,6 +279,8 @@ async function runWholeMatchReplay(page) {
     actorCheckboxes,
     defaultActorChecked,
     allActorChecked,
+    allSelectionRenderMs,
+    allSelectionEventWindow,
     searchedActorCheckboxes,
     restoredActorCheckboxes,
     restoredActorChecked,
@@ -485,6 +511,33 @@ async function runExpandedFeatureChecks(page) {
   await openWorkspaceSection(page, "settings", "display");
   const restoredOriginalMode = await page.locator('#displaySettingsForm [name="number_format"]').inputValue();
 
+  await openWorkspaceSection(page, "players", "weapons");
+  const weaponSelection = await selectPlayerForForm(page, "#weaponForm");
+  await page.waitForFunction(() => (
+    [...document.querySelectorAll('#weaponForm select[name="weapon"] option')]
+      .some((option) => option.value)
+  ));
+  const weaponSelect = weaponSelection.form.locator('select[name="weapon"]');
+  const weaponCode = await weaponSelect.locator("option").evaluateAll((options) => (
+    options.find((option) => option.value)?.value || ""
+  ));
+  await weaponSelect.selectOption(weaponCode);
+  await weaponSelection.form.locator('button[type="submit"]').click();
+  await page.locator("#weaponBody .result-shell").waitFor({ timeout: 30000 });
+  const weaponDetailTabs = await page.locator("#weaponBody [data-weapon-detail-view]").count();
+  await page.locator('[data-weapon-detail-view="attachments"]').click();
+  const attachmentPanel = page.locator('[data-weapon-detail-panel="attachments"]');
+  const attachmentPanelVisible = await attachmentPanel.isVisible();
+  const attachmentText = await attachmentPanel.innerText();
+  const attachmentBars = await attachmentPanel.locator(".comparison-bar-row").count();
+  await page.locator('[data-weapon-detail-view="combinations"]').click();
+  const combinationPanel = page.locator('[data-weapon-detail-panel="combinations"]');
+  const combinationPanelVisible = await combinationPanel.isVisible();
+  const combinationText = await combinationPanel.innerText();
+  const weaponScreenshot = path.join(outputDir, "weapon-attachment-analysis-desktop.png");
+  await page.locator("#weapon-lookup").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: weaponScreenshot, fullPage: false });
+
   await openWorkspaceSection(page, "players", "matches");
 
   const matchSelection = await selectPlayerForForm(page, "#matchForm");
@@ -611,6 +664,15 @@ async function runExpandedFeatureChecks(page) {
         && koreanAnalysis.hasKoreanLargeUnit
         && koreanAnalysis.unconvertedLargeNumbers.length === 0,
     },
+    weaponAttachments: {
+      weaponCode,
+      tabCount: weaponDetailTabs,
+      attachmentPanelVisible,
+      combinationPanelVisible,
+      attachmentBars,
+      hasNoAttachmentBasis: attachmentText.includes("노 파츠") && attachmentText.includes("교전 승률"),
+      hasCombinationBasis: combinationText.includes("2개 이상의 파츠") && combinationText.includes("교전 승률"),
+    },
     match: {
       matchId,
       itemRows: items.length,
@@ -653,6 +715,7 @@ async function runExpandedFeatureChecks(page) {
     iconLoaded,
     screenshots: {
       matchScreenshot,
+      weaponScreenshot,
       landingScreenshot,
       comparisonScreenshot,
       flightScreenshot,
@@ -757,6 +820,11 @@ async function layoutDiagnostics(page) {
       !result.desktop.workspaceContent.valid,
       !result.mobile.player.hasPlayer,
       !result.desktop.features.numberFormat.koreanUnitsRendered,
+      result.desktop.features.weaponAttachments.tabCount !== 3,
+      !result.desktop.features.weaponAttachments.attachmentPanelVisible,
+      !result.desktop.features.weaponAttachments.combinationPanelVisible,
+      !result.desktop.features.weaponAttachments.hasNoAttachmentBasis,
+      !result.desktop.features.weaponAttachments.hasCombinationBasis,
       !result.desktop.features.match.hasSummary,
       !result.desktop.features.match.usedQuantityMatchesEvents,
       result.desktop.features.match.rawItemLabels > 0,
@@ -792,15 +860,27 @@ async function layoutDiagnostics(page) {
       result.desktop.wholeMatchReplay.actorCheckboxes !== result.desktop.wholeMatchReplay.participantCards,
       result.desktop.wholeMatchReplay.defaultActorChecked !== 1,
       result.desktop.wholeMatchReplay.allActorChecked !== result.desktop.wholeMatchReplay.actorCheckboxes,
+      result.desktop.wholeMatchReplay.allSelectionRenderMs > 5000,
+      result.desktop.wholeMatchReplay.allSelectionEventWindow.rendered > 240,
+      result.desktop.wholeMatchReplay.allSelectionEventWindow.total < result.desktop.wholeMatchReplay.allSelectionEventWindow.rendered,
       result.desktop.wholeMatchReplay.searchedActorCheckboxes < 1,
       result.desktop.wholeMatchReplay.searchedActorCheckboxes >= result.desktop.wholeMatchReplay.actorCheckboxes,
       result.desktop.wholeMatchReplay.restoredActorCheckboxes !== result.desktop.wholeMatchReplay.actorCheckboxes,
       result.desktop.wholeMatchReplay.restoredActorChecked !== result.desktop.wholeMatchReplay.actorCheckboxes,
       JSON.stringify(result.desktop.wholeMatchReplay.actorPriorityFixture.map((item) => item.group)) !== JSON.stringify([
-        "focus", "ally", "focus_threat", "teammate_threat", "human", "bot",
+        "focus", "focus_threat", "focus_threat", "focus_threat", "ally", "teammate_threat", "human", "bot",
       ]),
-      JSON.stringify(result.desktop.wholeMatchReplay.actorPriorityFixture.map((item) => item.priority)) !== JSON.stringify([1, 2, 3, 4, 5, 6]),
-      !result.desktop.wholeMatchReplay.actorPriorityFixture.every((item, index) => item.label.startsWith(`${index + 1}순위 · `)),
+      JSON.stringify(result.desktop.wholeMatchReplay.actorPriorityFixture.map((item) => item.priority)) !== JSON.stringify([1, 2, 2, 2, 3, 4, 5, 6]),
+      JSON.stringify(result.desktop.wholeMatchReplay.actorPriorityFixture.map((item) => item.label)) !== JSON.stringify([
+        "1순위 · 이벤트 대상",
+        "2순위 · 나를 기절·죽인 적군 (기절)",
+        "2순위 · 나를 기절·죽인 적군 (죽임)",
+        "2순위 · 나를 기절·죽인 적군 (기절·죽임)",
+        "3순위 · 팀원",
+        "4순위 · 팀원을 기절·죽인 적군 (죽임)",
+        "5순위 · 그 외 사람",
+        "6순위 · 봇",
+      ]),
       result.desktop.wholeMatchReplay.eventTypeCheckboxes !== 9,
       result.desktop.wholeMatchReplay.defaultEventTypeChecked !== 9,
       result.desktop.wholeMatchReplay.typeNoneCount !== 0,
