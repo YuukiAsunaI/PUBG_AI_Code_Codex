@@ -197,6 +197,58 @@ async function runWholeMatchReplay(page) {
   const screenshot = path.join(outputDir, "whole-match-replay-desktop.png");
   await page.locator("#replay-player").scrollIntoViewIfNeeded();
   await page.screenshot({ path: screenshot, fullPage: false });
+  const actorPriorityFixture = await page.evaluate(() => {
+    const previousTimeline = activeTimeline;
+    const previousFilters = activeTimelineActorFilters;
+    const previousSearch = timelineParticipantSearch.value;
+    try {
+      activeTimeline = {
+        player: { account_id: "fixture.focus", name: "Focus" },
+        team: {
+          members: [
+            { account_id: "fixture.other", name: "Other human", team_id: 3 },
+            { account_id: "fixture.bot", name: "Bot", team_id: 4, is_ai_or_bot: true },
+            { account_id: "fixture.ally-threat", name: "Ally threat", team_id: 2 },
+            { account_id: "fixture.ally", name: "Ally", team_id: 1 },
+            { account_id: "fixture.focus-threat", name: "Focus threat", team_id: 2 },
+            { account_id: "fixture.focus", name: "Focus", team_id: 1, is_self: true },
+          ],
+        },
+        combat_events: [
+          {
+            action: "dbno_taken",
+            actor_account_id: "fixture.focus",
+            related_account_id: "fixture.focus-threat",
+          },
+        ],
+        team_tracks: [
+          {
+            account_id: "fixture.ally",
+            combat_events: [
+              {
+                action: "death",
+                actor_account_id: "fixture.ally",
+                related_account_id: "fixture.ally-threat",
+              },
+            ],
+          },
+        ],
+      };
+      activeTimelineActorFilters = new Set(["focus"]);
+      timelineParticipantSearch.value = "";
+      renderTimelineActorFilter();
+      return [...document.querySelectorAll("#timelineActorFilter [data-timeline-actor-group]")].map((item) => ({
+        group: item.dataset.timelineActorGroup,
+        priority: Number(item.dataset.timelineActorPriority),
+        label: item.querySelector("small")?.textContent || "",
+      }));
+    } finally {
+      activeTimeline = previousTimeline;
+      activeTimelineActorFilters = previousFilters;
+      timelineParticipantSearch.value = previousSearch;
+      renderTimelineActorFilter();
+    }
+  });
   return {
     status,
     participantCards,
@@ -218,6 +270,7 @@ async function runWholeMatchReplay(page) {
     hasCombatEvent: ["교전", "명중", "피격", "기절", "킬", "사망"].some((label) => eventText.includes(label)),
     canvas,
     playbackAdvanced: after > before,
+    actorPriorityFixture,
     screenshot,
   };
 }
@@ -743,6 +796,11 @@ async function layoutDiagnostics(page) {
       result.desktop.wholeMatchReplay.searchedActorCheckboxes >= result.desktop.wholeMatchReplay.actorCheckboxes,
       result.desktop.wholeMatchReplay.restoredActorCheckboxes !== result.desktop.wholeMatchReplay.actorCheckboxes,
       result.desktop.wholeMatchReplay.restoredActorChecked !== result.desktop.wholeMatchReplay.actorCheckboxes,
+      JSON.stringify(result.desktop.wholeMatchReplay.actorPriorityFixture.map((item) => item.group)) !== JSON.stringify([
+        "focus", "ally", "focus_threat", "teammate_threat", "human", "bot",
+      ]),
+      JSON.stringify(result.desktop.wholeMatchReplay.actorPriorityFixture.map((item) => item.priority)) !== JSON.stringify([1, 2, 3, 4, 5, 6]),
+      !result.desktop.wholeMatchReplay.actorPriorityFixture.every((item, index) => item.label.startsWith(`${index + 1}순위 · `)),
       result.desktop.wholeMatchReplay.eventTypeCheckboxes !== 9,
       result.desktop.wholeMatchReplay.defaultEventTypeChecked !== 9,
       result.desktop.wholeMatchReplay.typeNoneCount !== 0,

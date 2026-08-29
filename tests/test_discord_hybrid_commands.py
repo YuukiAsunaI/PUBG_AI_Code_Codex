@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 import unittest
 
 from discord.ext.commands import HybridCommand
@@ -182,6 +182,30 @@ class DiscordHybridCommandTests(unittest.IsolatedAsyncioTestCase):
                 ranking_options = {item["name"]: item for item in payloads["랭킹"]["options"]}
                 self.assertTrue(ranking_options["랭킹_지표"]["autocomplete"])
                 self.assertIn("최소_경기", ranking_options)
+
+                registered_player_parameters = {
+                    "유저조회": "name",
+                    "전적": "name",
+                    "교전": "name",
+                    "추세": "name",
+                    "무기": "name",
+                    "추천": "name",
+                    "매치": "name",
+                    "유저삭제": "target",
+                    "최근스냅샷": "name",
+                    "pubg-delete-data": "target",
+                }
+                for command_name, parameter_name in registered_player_parameters.items():
+                    parameter = bot.get_command(command_name).app_command._params[parameter_name]
+                    self.assertTrue(callable(parameter.autocomplete), command_name)
+                    option = next(
+                        item
+                        for item in payloads[command_name]["options"]
+                        if item.get("autocomplete")
+                        and item["name"] in {"닉네임", "대상"}
+                    )
+                    self.assertIn("현재 Discord 서버", option["description"])
+                    self.assertIn("25명", option["description"])
             finally:
                 await bot.close()
 
@@ -217,7 +241,7 @@ class DiscordHybridCommandTests(unittest.IsolatedAsyncioTestCase):
                     active=True,
                     public_profile=True,
                 )
-                for index in range(30)
+                for index in range(40)
             ]
             interaction = SimpleNamespace(
                 guild_id=100,
@@ -226,19 +250,48 @@ class DiscordHybridCommandTests(unittest.IsolatedAsyncioTestCase):
             )
             try:
                 callback = bot.get_command("전적").app_command._params["name"].autocomplete
+
+                def filter_registered_players(**kwargs):
+                    query = str(kwargs.get("search") or "").casefold()
+                    filtered = [
+                        player
+                        for player in players
+                        if query in player.current_name.casefold()
+                        or query in player.account_id.casefold()
+                    ]
+                    return filtered[: int(kwargs["limit"])]
+
                 with (
                     patch("pubg_ai.discord_bot.connect_mysql", return_value=connection),
-                    patch.object(PlayerRegistry, "list_players", return_value=players) as list_players,
+                    patch.object(
+                        PlayerRegistry,
+                        "list_players",
+                        side_effect=filter_registered_players,
+                    ) as list_players,
                 ):
                     choices = await callback(interaction, "ki")
+                    late_choice = await callback(interaction, "player37")
 
                 self.assertEqual(len(choices), 25)
-                list_players.assert_called_once_with(
-                    shard="steam",
-                    registered_guild_id="100",
-                    search="ki",
-                    active_only=False,
-                    limit=25,
+                self.assertEqual([choice.value for choice in late_choice], ["KiPlayer37"])
+                self.assertEqual(
+                    list_players.call_args_list,
+                    [
+                        call(
+                            shard="steam",
+                            registered_guild_id="100",
+                            search="ki",
+                            active_only=False,
+                            limit=25,
+                        ),
+                        call(
+                            shard="steam",
+                            registered_guild_id="100",
+                            search="player37",
+                            active_only=False,
+                            limit=25,
+                        ),
+                    ],
                 )
 
                 player = players[0]

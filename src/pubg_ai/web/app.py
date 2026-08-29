@@ -5314,6 +5314,7 @@ _INDEX_HTML = """<!doctype html>
       min-width: 0;
     }
     .replay-actor-filter-list {
+      grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
       max-height: 210px;
       overflow: auto;
       padding-right: 4px;
@@ -5336,10 +5337,9 @@ _INDEX_HTML = """<!doctype html>
     .replay-checkbox-option:has(input:checked) { border-color: rgba(66, 211, 164, 0.5); background: rgba(66, 211, 164, 0.08); color: var(--text); }
     .replay-checkbox-option input { width: auto; min-height: 0; margin: 2px 0 0; }
     .replay-checkbox-option span { min-width: 0; }
-    .replay-checkbox-option strong,
-    .replay-checkbox-option small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .replay-checkbox-option strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .replay-checkbox-option strong { color: inherit; font-size: 12px; }
-    .replay-checkbox-option small { margin-top: 2px; color: var(--muted); font-size: 10px; }
+    .replay-checkbox-option small { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; line-height: 1.35; overflow-wrap: anywhere; }
     .replay-filter-empty { grid-column: 1 / -1; padding: 8px; color: var(--muted); font-size: 11px; }
     .timeline-event-count { align-self: center; text-align: right; font-variant-numeric: tabular-nums; }
     .replay-quick-nav {
@@ -17368,9 +17368,68 @@ _INDEX_HTML = """<!doctype html>
       return labels[replayParticipantRelation(participant)] || "참가자";
     }
 
+    function timelineOpponentThreatSets() {
+      const focusId = String(activeTimeline?.player?.account_id || "");
+      const focusTeamId = timelineFocusMember()?.team_id;
+      const teammateIds = new Set(
+        (activeTimeline?.team?.members || [])
+          .filter((member) => (
+            member.account_id
+            && String(member.account_id) !== focusId
+            && focusTeamId !== null
+            && focusTeamId !== undefined
+            && String(member.team_id) === String(focusTeamId)
+          ))
+          .map((member) => String(member.account_id)),
+      );
+      const focusThreats = new Set();
+      const teammateThreats = new Set();
+      const tracks = [
+        { account_id: focusId, combat_events: activeTimeline?.combat_events || [] },
+        ...(activeTimeline?.team_tracks || []),
+      ];
+      for (const track of tracks) {
+        for (const event of track.combat_events || []) {
+          if (isNonOpponentDamage(event)) continue;
+          const action = String(event.action || "");
+          const actorId = String(event.actor_account_id || event.account_id || track.account_id || "");
+          const relatedId = String(event.related_account_id || "");
+          let attackerId = "";
+          let victimId = "";
+          if (["dbno_caused", "kill", "finish"].includes(action)) {
+            attackerId = actorId;
+            victimId = relatedId;
+          } else if (["dbno_taken", "death", "finished_taken"].includes(action)) {
+            attackerId = relatedId;
+            victimId = actorId;
+          }
+          if (!attackerId || !victimId || attackerId === victimId) continue;
+          if (victimId === focusId) focusThreats.add(attackerId);
+          else if (teammateIds.has(victimId)) teammateThreats.add(attackerId);
+        }
+      }
+      return { focusThreats, teammateThreats };
+    }
+
+    function timelineActorFilterGroup(member, threats) {
+      const relation = replayParticipantRelation(member);
+      const accountId = String(member.account_id || "");
+      if (relation === "focus") return { key: "focus", priority: 1, label: "이벤트 대상" };
+      if (relation === "ally") return { key: "ally", priority: 2, label: "팀원" };
+      if (relation === "bot") return { key: "bot", priority: 6, label: "봇" };
+      if (threats.focusThreats.has(accountId)) {
+        return { key: "focus_threat", priority: 3, label: "나를 기절·죽인 적군" };
+      }
+      if (threats.teammateThreats.has(accountId)) {
+        return { key: "teammate_threat", priority: 4, label: "팀원을 기절·죽인 적군" };
+      }
+      return { key: "human", priority: 5, label: "그 외 사람" };
+    }
+
     function timelineActorFilterOptions() {
       if (!activeTimeline) return [];
       const focusId = String(activeTimeline.player?.account_id || "");
+      const threats = timelineOpponentThreatSets();
       const options = [];
       const seen = new Set();
       for (const member of activeTimeline.team?.members || []) {
@@ -17379,24 +17438,26 @@ _INDEX_HTML = """<!doctype html>
         const value = member.is_self || accountId === focusId ? "focus" : accountId;
         if (seen.has(value)) continue;
         seen.add(value);
+        const group = timelineActorFilterGroup(member, threats);
         options.push({
           value,
           name: member.name || compactIdentifier(accountId),
-          meta: `${replayRelationLabel(member)}${member.registered && !member.is_self ? " · 등록 유저" : ""}`,
-          relation: replayParticipantRelation(member),
+          meta: `${group.priority}순위 · ${group.label}${member.registered && !member.is_self ? " · 등록 유저" : ""}`,
+          group: group.key,
+          priority: group.priority,
         });
       }
       if (focusId && !seen.has("focus")) {
         options.unshift({
           value: "focus",
           name: activeTimeline.player?.name || compactIdentifier(focusId),
-          meta: "기준 유저",
-          relation: "focus",
+          meta: "1순위 · 이벤트 대상",
+          group: "focus",
+          priority: 1,
         });
       }
-      const relationOrder = { focus: 0, ally: 1, enemy: 2, bot: 3 };
       return options.sort((left, right) => (
-        (relationOrder[left.relation] ?? 4) - (relationOrder[right.relation] ?? 4)
+        left.priority - right.priority
         || left.name.localeCompare(right.name, "ko-KR")
       ));
     }
@@ -17414,9 +17475,9 @@ _INDEX_HTML = """<!doctype html>
       ));
       timelineActorFilter.innerHTML = visibleOptions.length
         ? visibleOptions.map((option) => `
-          <label class="replay-checkbox-option">
+          <label class="replay-checkbox-option" data-timeline-actor-group="${attr(option.group)}" data-timeline-actor-priority="${attr(option.priority)}">
             <input type="checkbox" value="${attr(option.value)}" data-timeline-actor-filter ${activeTimelineActorFilters.has(option.value) ? "checked" : ""}>
-            <span><strong title="${attr(option.name)}">${escapeHtml(option.name)}</strong><small>${escapeHtml(option.meta)}</small></span>
+            <span><strong title="${attr(option.name)}">${escapeHtml(option.name)}</strong><small title="${attr(option.meta)}">${escapeHtml(option.meta)}</small></span>
           </label>
         `).join("")
         : `<span class="replay-filter-empty">${activeTimeline ? "검색 조건에 맞는 참가자가 없습니다." : "경기를 불러오세요."}</span>`;

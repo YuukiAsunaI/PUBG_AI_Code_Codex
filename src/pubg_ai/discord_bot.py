@@ -85,6 +85,11 @@ from pubg_ai.weapon_accuracy import is_ballistic_weapon
 
 
 DEFAULT_DISCORD_PREFIX = "!"
+DISCORD_AUTOCOMPLETE_CHOICE_LIMIT = 25
+DISCORD_REGISTERED_PLAYER_OPTION_DESCRIPTION = (
+    "현재 Discord 서버 등록 유저입니다. 처음 25명까지 보이며, "
+    "일부 글자를 입력하면 전체 등록자에서 검색합니다."
+)
 DISCORD_MATCH_AUTOCOMPLETE_CATALOG_LIMIT = 500
 DISCORD_MATCH_AUTOCOMPLETE_CACHE_TTL_SECONDS = 60.0
 DISCORD_MATCH_AUTOCOMPLETE_CACHE_MAX_ENTRIES = 128
@@ -2224,7 +2229,7 @@ def create_discord_bot(
     @bot.hybrid_command(name="유저조회", aliases=["pubg-profile"])
     @app_commands.rename(name="닉네임", shard="플랫폼")
     @app_commands.describe(
-        name="현재 서버에 등록된 유저를 닉네임 일부로 검색합니다. 비우면 등록 목록을 봅니다.",
+        name=DISCORD_REGISTERED_PLAYER_OPTION_DESCRIPTION,
         shard="PUBG 계정 플랫폼을 선택합니다.",
     )
     @app_commands.choices(shard=shard_choices)
@@ -2259,7 +2264,7 @@ def create_discord_bot(
     @bot.hybrid_command(name="전적", aliases=["pubg-stats"])
     @app_commands.rename(name="닉네임", shard="플랫폼")
     @app_commands.describe(
-        name="현재 서버 등록 유저입니다. 일부 글자를 입력하면 25개씩 검색됩니다.",
+        name=DISCORD_REGISTERED_PLAYER_OPTION_DESCRIPTION,
         shard="PUBG 계정 플랫폼을 선택합니다.",
     )
     @app_commands.choices(shard=shard_choices)
@@ -2308,7 +2313,7 @@ def create_discord_bot(
     @bot.hybrid_command(name="교전", aliases=["pubg-fights", "pubg-fight"])
     @app_commands.rename(name="닉네임", shard="플랫폼")
     @app_commands.describe(
-        name="현재 서버 등록 유저입니다. 일부 글자를 입력하면 25개씩 검색됩니다.",
+        name=DISCORD_REGISTERED_PLAYER_OPTION_DESCRIPTION,
         shard="PUBG 계정 플랫폼을 선택합니다.",
     )
     @app_commands.choices(shard=shard_choices)
@@ -2376,7 +2381,7 @@ def create_discord_bot(
         limit="표시_구간",
     )
     @app_commands.describe(
-        name="현재 서버 등록 유저입니다. 닉네임 일부를 입력해 검색합니다.",
+        name=DISCORD_REGISTERED_PLAYER_OPTION_DESCRIPTION,
         granularity="시간대·일자·주·월·분기·연도·맵·무기 등 결과를 묶을 기준입니다.",
         shard="PUBG 계정 플랫폼을 선택합니다.",
         team_mode="솔로·듀오·스쿼드 중 하나만 분석합니다. 비우면 전체입니다.",
@@ -2469,7 +2474,7 @@ def create_discord_bot(
     @bot.hybrid_command(name="무기", aliases=["pubg-weapon"])
     @app_commands.rename(name="닉네임", weapon="무기", shard="플랫폼")
     @app_commands.describe(
-        name="현재 서버 등록 유저입니다. 닉네임 일부를 입력해 검색합니다.",
+        name=DISCORD_REGISTERED_PLAYER_OPTION_DESCRIPTION,
         weapon="분석할 무기입니다. 한글 또는 코드 일부를 입력해 검색합니다.",
         shard="PUBG 계정 플랫폼을 선택합니다.",
     )
@@ -2530,7 +2535,7 @@ def create_discord_bot(
         result_limit="결과_수",
     )
     @app_commands.describe(
-        name="현재 서버 등록 유저입니다. 닉네임 일부를 입력해 검색합니다.",
+        name=DISCORD_REGISTERED_PLAYER_OPTION_DESCRIPTION,
         shard="PUBG 계정 플랫폼을 선택합니다.",
         min_matches="추천 후보가 포함되기 위해 필요한 최소 경기 수입니다. 1~100000",
         result_limit="각 추천 항목에서 계산할 상위 후보 수입니다. 1~20",
@@ -2614,7 +2619,7 @@ def create_discord_bot(
     @bot.hybrid_command(name="매치", aliases=["pubg-match"])
     @app_commands.rename(name="닉네임", match_id="최근_매치", shard="플랫폼")
     @app_commands.describe(
-        name="현재 서버 등록 유저입니다. 먼저 닉네임 일부를 입력해 선택합니다.",
+        name=DISCORD_REGISTERED_PLAYER_OPTION_DESCRIPTION,
         match_id="선택한 유저의 최근 완료 경기입니다. 비우면 가장 최근 경기를 조회합니다.",
         shard="PUBG 계정 플랫폼을 선택합니다.",
     )
@@ -2829,7 +2834,7 @@ def create_discord_bot(
     @app_commands.rename(shard="플랫폼", target="닉네임")
     @app_commands.describe(
         shard="등록을 해제할 PUBG 계정 플랫폼을 선택합니다.",
-        target="현재 서버 등록 유저입니다. 기존 수집 데이터는 유지됩니다.",
+        target=DISCORD_REGISTERED_PLAYER_OPTION_DESCRIPTION,
     )
     @app_commands.choices(shard=shard_choices)
     async def unregister_player_command(ctx: Any, shard: str, target: str) -> None:
@@ -2894,7 +2899,7 @@ def create_discord_bot(
     @bot.hybrid_command(name="최근스냅샷", aliases=["pubg-replay"])
     @app_commands.rename(name="닉네임", match_id="최근_매치", shard="플랫폼")
     @app_commands.describe(
-        name="현재 서버 등록 유저입니다. 먼저 닉네임 일부를 입력해 선택합니다.",
+        name=DISCORD_REGISTERED_PLAYER_OPTION_DESCRIPTION,
         match_id="선택한 유저의 최근 완료 경기입니다. 비우면 최신 생성 스냅샷을 봅니다.",
         shard="PUBG 계정 플랫폼을 선택합니다.",
     )
@@ -3226,7 +3231,7 @@ def create_discord_bot(
     )
     @app_commands.describe(
         shard="삭제 검토 대상의 PUBG 계정 플랫폼입니다.",
-        target="현재 서버 등록 유저입니다. 실제 삭제 전 검토 요청만 생성됩니다.",
+        target=DISCORD_REGISTERED_PLAYER_OPTION_DESCRIPTION,
         deletion_scope="등록 연결·분석·원본·리플레이·전체 중 검토할 데이터 범위입니다.",
         reason="관리자가 나중에 확인할 삭제 검토 사유입니다.",
     )
@@ -4392,7 +4397,7 @@ def create_discord_bot(
                 registered_guild_id=guild_id,
                 search=query or None,
                 active_only=False,
-                limit=25,
+                limit=DISCORD_AUTOCOMPLETE_CHOICE_LIMIT,
             )
         except Exception:
             return []
@@ -4414,7 +4419,7 @@ def create_discord_bot(
                 )[:100],
                 value=player.current_name[:100],
             )
-            for player in players[:25]
+            for player in players[:DISCORD_AUTOCOMPLETE_CHOICE_LIMIT]
         ]
 
     def player_catalog_for_autocomplete(interaction: Any) -> Any | None:
