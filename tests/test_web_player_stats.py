@@ -49,6 +49,8 @@ class WebPlayerStatsTests(unittest.TestCase):
         self.assertIn('data-weapon-detail-view="combinations"', body)
         self.assertIn("attachment_analysis", body)
         self.assertIn("노 파츠 대비", body)
+        self.assertIn("attachmentAnalysis.weapon_code === detail.weapon_code", body)
+        self.assertIn("다른 무기에 장착된 파츠는 포함하지 않습니다", body)
         self.assertIn("await setActiveAnalysisPlayer(player);", body)
         self.assertIn(
             'activeAnalysisPlayer.shard + ":" + activeAnalysisPlayer.account_id !== selectionKey',

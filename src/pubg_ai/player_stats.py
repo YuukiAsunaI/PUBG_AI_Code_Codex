@@ -293,17 +293,18 @@ class PlayerWeaponAttachmentPerformance:
 
 @dataclass(frozen=True)
 class PlayerWeaponAttachmentAnalysis:
+    weapon_code: str
+    weapon_name: str
     no_attachment: PlayerWeaponAttachmentPerformance | None
     individual: list[PlayerWeaponAttachmentPerformance]
     combinations: list[PlayerWeaponAttachmentPerformance]
-    source: str = "player_fight_outcomes"
-    basis: str = (
-        "교전 결과 시점의 장착 상태입니다. 킬·기절시킴은 승리, "
-        "사망·기절당함은 패배로 계산합니다."
-    )
+    source: str = "player_fight_outcomes.weapon_code"
+    basis: str = ""
 
     def to_record(self) -> dict[str, Any]:
         return {
+            "weapon_code": self.weapon_code,
+            "weapon_name": self.weapon_name,
             "no_attachment": self.no_attachment.to_record() if self.no_attachment else None,
             "individual": [item.to_record() for item in self.individual],
             "combinations": [item.to_record() for item in self.combinations],
@@ -324,6 +325,8 @@ class PlayerWeaponDetail:
     trend_series: dict[str, PlayerWeaponTrendSeries] = field(default_factory=dict)
     attachment_analysis: PlayerWeaponAttachmentAnalysis = field(
         default_factory=lambda: PlayerWeaponAttachmentAnalysis(
+            weapon_code="",
+            weapon_name="",
             no_attachment=None,
             individual=[],
             combinations=[],
@@ -1693,6 +1696,7 @@ class PlayerStatsService:
                 """
                 SELECT
                     outcomes.match_id,
+                    outcomes.weapon_code,
                     outcomes.outcome_type,
                     outcomes.outcome_reason,
                     outcomes.attachment_codes,
@@ -1932,11 +1936,12 @@ def _weapon_detail_from_rows(
 ) -> PlayerWeaponDetail:
     eligible_fights = list(fight_rows or [])
     totals = _weapon_totals_from_rows(weapon_code, rows, eligible_fights)
+    weapon_name = translate_code(weapon_code, "damage_causer")
 
     return PlayerWeaponDetail(
         player=player,
         weapon_code=weapon_code,
-        weapon_name=translate_code(weapon_code, "damage_causer"),
+        weapon_name=weapon_name,
         totals=totals,
         recent_matches=[
             PlayerWeaponRecentMatch(
@@ -1975,16 +1980,26 @@ def _weapon_detail_from_rows(
             rows,
             eligible_fights,
         ),
-        attachment_analysis=_weapon_attachment_analysis(eligible_fights),
+        attachment_analysis=_weapon_attachment_analysis(
+            eligible_fights,
+            weapon_code=weapon_code,
+            weapon_name=weapon_name,
+        ),
     )
 
 
 def _weapon_attachment_analysis(
     rows: list[dict[str, Any]],
+    *,
+    weapon_code: str,
+    weapon_name: str,
 ) -> PlayerWeaponAttachmentAnalysis:
     normalized: list[dict[str, Any]] = []
     names_by_code: dict[str, str] = {}
     for row in rows:
+        row_weapon_code = str(row.get("weapon_code") or weapon_code).strip()
+        if row_weapon_code != weapon_code:
+            continue
         codes = tuple(sorted(set(_json_string_list(row.get("attachment_codes")))))
         names = _json_string_list(row.get("attachment_names_ko"))
         for code, name in zip(_json_string_list(row.get("attachment_codes")), names):
@@ -2034,6 +2049,8 @@ def _weapon_attachment_analysis(
         for codes, group_rows in by_combination.items()
     ]
     return PlayerWeaponAttachmentAnalysis(
+        weapon_code=weapon_code,
+        weapon_name=weapon_name,
         no_attachment=baseline,
         individual=sorted(
             (item for item in individual if item is not None),
@@ -2042,6 +2059,10 @@ def _weapon_attachment_analysis(
         combinations=sorted(
             (item for item in combinations if item is not None),
             key=lambda item: (-item.fight_count, -item.fight_win_rate, item.attachment_names),
+        ),
+        basis=(
+            f"{weapon_name}으로 발생한 교전 결과 시점에 그 무기에 장착돼 있던 파츠만 집계합니다. "
+            "다른 무기의 파츠는 섞지 않으며, 킬·기절시킴은 승리, 사망·기절당함은 패배로 계산합니다."
         ),
     )
 

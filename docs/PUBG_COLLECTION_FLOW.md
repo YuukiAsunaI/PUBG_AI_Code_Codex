@@ -393,11 +393,13 @@ The Discord command surface reuses the same local MySQL and file stores and is o
 - Registered-player slash options can be entered directly or left blank. A blank nickname opens a caller-only picker
   scoped to active registrations in the current `guild_id`, with 25 rows per page and a partial nickname/account-ID
   search modal. The database result is paged rather than truncated, so guilds with more than 25 players remain fully
-  selectable. MySQL LIKE wildcard characters in nicknames (`_`, `%`, and the escape marker) are treated as literal text.
+  selectable. After selection, the completed analysis is sent as a separate public channel message; the private
+  picker is replaced with a short publication confirmation. MySQL LIKE wildcard characters in nicknames (`_`, `%`,
+  and the escape marker) are treated as literal text.
 - Recent-match autocomplete reads at most the latest 500 completed matches for the selected player and uses a
   60-second, 128-entry bounded cache so long-running bots do not accumulate stale match catalogs.
-- Core query results use bounded Discord embeds with named fields and caller-only previous/next controls instead of
-  unstructured text walls. Every application-command option has a non-placeholder Korean description.
+- Core query results use public bounded Discord embeds with named fields and owner-locked previous/next controls instead
+  of unstructured text walls. Every application-command option has a non-placeholder Korean description.
   Platform, map, attachment, deletion-scope, and ranking-row labels are translated for display while stored codes
   remain unchanged for queries.
 - `!pubg-alerts` returns current storage and worker alerts for admins. When alert channel IDs are configured in the

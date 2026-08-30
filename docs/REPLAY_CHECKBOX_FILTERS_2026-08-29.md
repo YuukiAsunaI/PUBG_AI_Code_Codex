@@ -42,7 +42,9 @@
 
 - Weapon detail now separates `전체 성과`, `노 파츠·개별 파츠`, and `관측 파츠 조합`.
 - Fight win rate uses durable kill/DBNO-caused wins and death/DBNO-taken losses at the
-  attachment snapshot. No-parts means the attachment list was empty at that fight outcome,
+  attachment snapshot for the selected weapon only. The query carries that weapon code,
+  rows for another weapon are rejected, and only parts mounted on the selected weapon are
+  grouped. No-parts means that weapon's attachment list was empty at that fight outcome,
   not that the weapon was unmodified for the whole match.
 - Individual parts and exact multi-part combinations show fights, wins/losses, fight win
   rate, percentage-point delta from the no-parts baseline, chicken rate, outcome counts,
@@ -50,34 +52,39 @@
 - Discord recommendation output uses one concise field per weapon, two-weapon loadout,
   attachment combination, individual attachment, range, map, teammate, or drop zone. Reports
   show five fields per page with previous/next controls instead of one dense text block.
+- Registered-player search and permission inputs remain caller-only, but completed player
+  reports are posted as new public channel messages. Help and direct query results are public;
+  report controls remain owner-locked.
 
 ## Verification Evidence
 
-- Full Python suite: 661 passed.
+- Full Python suite: 663 passed.
 - Source UI and packaged EXE UI both passed the full Playwright audit.
 - Deterministic browser fixture returned the exact groups
   `focus, focus_threat, ally, teammate_threat, human, bot` at priorities 1 through 6,
   including separate `(기절)`, `(죽임)`, and `(기절·죽임)` labels.
-- Packaged live-match check: 98 participants produced 98 target checkboxes.
-- Selecting all retained 16,066 tactical events while rendering only 240 event-list rows;
-  the complete all-target refresh took 167 ms on the verification machine.
+- Packaged live-match check: 93 participants produced 93 target checkboxes.
+- Selecting all retained 17,418 tactical events while rendering only 240 event-list rows;
+  the complete all-target refresh took 152 ms on the verification machine.
 - Searching one participant reduced the target list to one and clearing search restored all
-  98 checked targets.
-- Playback advanced, the canvas was nonblank with 1,732 sampled colors, and combat events
+  93 checked targets.
+- Playback advanced, the canvas was nonblank with 2,020 sampled colors, and combat events
   remained visible.
-- Weapon detail exposed three views and 19 individual attachment bars for the verified M416 sample.
+- Weapon detail exposed three views, an 8-fight no-parts baseline, 18 individual parts,
+  and 70 exact combinations for the verified M416 sample; its response and UI both
+  identified `WeapHK416_C`/M416 as the only attachment-analysis weapon.
 - All 33 workspace sections were nonblank and reachable.
 - Desktop and 390px mobile checks had no page overflow, overlay, console error, request failure, or HTTP error.
 - Discord picker tests used 40 current-guild registrations and verified page two, partial
   search, guild isolation, and account-ID selection without a 25-player registration cap.
 - The deployed-command verifier passed for all 26 commands in each of four managed guilds;
   nickname fields were optional with no static choices or autocomplete, and their descriptions
-  direct users to the private current-guild page/search picker.
+  direct users to the current-guild page/search picker.
 
 ## Packaged Artifact
 
-- Release: `2026.08.29.3`
+- Release: `2026.08.30.1`
 - Path: `dist/PUBG_AI_Manager.exe`
-- Size: 51,838,606 bytes
-- SHA-256: `D3F88EC9984922B4A850FF3742BFA7B38F2FE3701478938C3D465E6D6F48FC98`
+- Size: 51,839,600 bytes
+- SHA-256: `68F51E1A3F5CEA9ADF78EFFD2AB6476002B93666AD045B66FA3CEF3F615B349E`
 - Runtime health: `ok`, localhost-only

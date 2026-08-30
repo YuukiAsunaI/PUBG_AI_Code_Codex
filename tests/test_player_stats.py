@@ -5,6 +5,7 @@ import unittest
 
 from pubg_ai.player_stats import (
     PlayerStatsService,
+    _weapon_attachment_analysis,
     _movement_distance_from_row,
     weapon_code_from_identifier,
 )
@@ -12,6 +13,49 @@ from pubg_ai.player_trends import PlayerTrendFilters
 
 
 class PlayerStatsServiceTests(unittest.TestCase):
+    def test_weapon_attachment_analysis_never_mixes_other_weapon_rows(self) -> None:
+        analysis = _weapon_attachment_analysis(
+            [
+                {
+                    "match_id": "m416-none",
+                    "weapon_code": "WeapHK416_C",
+                    "outcome_type": "win",
+                    "outcome_reason": "kill",
+                    "attachment_codes": [],
+                    "attachment_names_ko": [],
+                    "win_place": 2,
+                },
+                {
+                    "match_id": "m416-grip",
+                    "weapon_code": "WeapHK416_C",
+                    "outcome_type": "loss",
+                    "outcome_reason": "death",
+                    "attachment_codes": ["Item_Attach_Weapon_Lower_Foregrip_C"],
+                    "attachment_names_ko": ["수직 손잡이"],
+                    "win_place": 4,
+                },
+                {
+                    "match_id": "beryl-grip",
+                    "weapon_code": "WeapBerylM762_C",
+                    "outcome_type": "win",
+                    "outcome_reason": "kill",
+                    "attachment_codes": ["Item_Attach_Weapon_Lower_Foregrip_C"],
+                    "attachment_names_ko": ["수직 손잡이"],
+                    "win_place": 1,
+                },
+            ],
+            weapon_code="WeapHK416_C",
+            weapon_name="M416",
+        )
+
+        self.assertEqual(analysis.weapon_code, "WeapHK416_C")
+        self.assertEqual(analysis.weapon_name, "M416")
+        self.assertIn("다른 무기의 파츠는 섞지 않으며", analysis.basis)
+        self.assertEqual(analysis.no_attachment.fight_wins, 1)
+        self.assertEqual(len(analysis.individual), 1)
+        self.assertEqual(analysis.individual[0].fight_count, 1)
+        self.assertEqual(analysis.individual[0].fight_losses, 1)
+
     def test_movement_distance_prefers_official_participant_totals(self) -> None:
         distance = _movement_distance_from_row(
             {
@@ -244,6 +288,7 @@ class PlayerStatsServiceTests(unittest.TestCase):
                 [
                     {
                         "match_id": "match-2",
+                        "weapon_code": "WeapHK416_C",
                         "outcome_type": "win",
                         "outcome_reason": "kill",
                         "attachment_codes": '["Item_Attach_Weapon_Lower_Foregrip_C", "Item_Attach_Weapon_Muzzle_AR_Compensator_C"]',
@@ -254,6 +299,7 @@ class PlayerStatsServiceTests(unittest.TestCase):
                     },
                     {
                         "match_id": "match-2",
+                        "weapon_code": "WeapHK416_C",
                         "outcome_type": "win",
                         "outcome_reason": "dbno_caused",
                         "attachment_codes": ["Item_Attach_Weapon_Lower_Foregrip_C", "Item_Attach_Weapon_Muzzle_AR_Compensator_C"],
@@ -264,6 +310,7 @@ class PlayerStatsServiceTests(unittest.TestCase):
                     },
                     {
                         "match_id": "match-2",
+                        "weapon_code": "WeapHK416_C",
                         "outcome_type": "loss",
                         "outcome_reason": "death",
                         "attachment_codes": ["Item_Attach_Weapon_Lower_Foregrip_C", "Item_Attach_Weapon_Muzzle_AR_Compensator_C"],
@@ -274,6 +321,7 @@ class PlayerStatsServiceTests(unittest.TestCase):
                     },
                     {
                         "match_id": "match-1",
+                        "weapon_code": "WeapHK416_C",
                         "outcome_type": "loss",
                         "outcome_reason": "dbno_taken",
                         "attachment_codes": [],
@@ -366,6 +414,8 @@ class PlayerStatsServiceTests(unittest.TestCase):
         self.assertEqual(serialized["trend_series"]["date"]["returned_point_count"], 2)
         self.assertEqual(serialized["attachment_analysis"]["no_attachment"]["fight_losses"], 1)
         self.assertEqual(len(serialized["attachment_analysis"]["individual"]), 2)
+        self.assertEqual(serialized["attachment_analysis"]["weapon_code"], "WeapHK416_C")
+        self.assertEqual(serialized["attachment_analysis"]["weapon_name"], "M416")
         query, params = connection.executed[2]
         self.assertIn("matches.map_name = %s", query)
         self.assertIn("matches.season_state = %s", query)
@@ -378,6 +428,7 @@ class PlayerStatsServiceTests(unittest.TestCase):
         self.assertIn("outcomes.is_friendly_fire = 0", fight_query)
         self.assertIn("outcomes.match_id", fight_query)
         self.assertIn("outcomes.attachment_codes", fight_query)
+        self.assertIn("outcomes.weapon_code", fight_query)
         self.assertIn("participants.win_place", fight_query)
         self.assertIn("matches.map_name = %s", fight_query)
         self.assertEqual(fight_params[:3], ["account.test", "steam", "WeapHK416_C"])

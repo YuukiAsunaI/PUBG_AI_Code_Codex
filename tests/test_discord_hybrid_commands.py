@@ -19,6 +19,35 @@ from pubg_ai.player_stats import PlayerCatalogMatch, PlayerLookupCatalog, Player
 
 
 class DiscordHybridCommandTests(unittest.IsolatedAsyncioTestCase):
+    async def test_help_command_is_public_and_only_controls_are_owner_locked(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            store = LocalSettingsStore(base_dir / "local_settings.json", base_dir=base_dir)
+            checker = DiscordPermissionChecker(store.load_discord_permission_settings())
+            config = RuntimeConfig(
+                app=AppConfig(raw_data_dir=base_dir / "raw", replay_data_dir=base_dir / "replay"),
+                database=DatabaseConfig(),
+                secrets=SecretConfig(discord_bot_token="test-token"),
+            )
+            bot = create_discord_bot(
+                config=config,
+                permission_checker=checker,
+                scope_settings_store=store,
+            )
+            ctx = SimpleNamespace(
+                author=SimpleNamespace(id=7),
+                guild=SimpleNamespace(id=100),
+                interaction=SimpleNamespace(),
+                reply=AsyncMock(),
+            )
+            try:
+                await bot.get_command("배그도움말").callback(ctx)
+                reply = ctx.reply.await_args.kwargs
+                self.assertNotIn("ephemeral", reply)
+                self.assertIn("채널 전체에 공개", reply["embed"].footer.text)
+            finally:
+                await bot.close()
+
     async def test_core_commands_are_registered_for_prefix_and_slash_use(self) -> None:
         with TemporaryDirectory() as temp_dir:
             base_dir = Path(temp_dir)
@@ -243,10 +272,11 @@ class DiscordHybridCommandTests(unittest.IsolatedAsyncioTestCase):
                 )
                 for index in range(40)
             ]
+            channel = SimpleNamespace(id=200, send=AsyncMock())
             ctx = SimpleNamespace(
                 author=SimpleNamespace(id=7),
                 guild=SimpleNamespace(id=100),
-                channel=SimpleNamespace(id=200),
+                channel=channel,
                 interaction=SimpleNamespace(),
                 reply=AsyncMock(),
             )
@@ -334,8 +364,14 @@ class DiscordHybridCommandTests(unittest.IsolatedAsyncioTestCase):
                         guild_id="100",
                         global_scope=False,
                     )
-                    result_embed = interaction.edit_original_response.await_args.kwargs["embed"]
+                    public_reply = channel.send.await_args.kwargs
+                    self.assertNotIn("ephemeral", public_reply)
+                    result_embed = public_reply["embed"]
                     self.assertEqual(result_embed.title, "전적 분석")
+                    self.assertIn(
+                        "현재 채널에 공개했습니다",
+                        interaction.edit_original_response.await_args.kwargs["content"],
+                    )
 
                 self.assertEqual(
                     list_players_page.call_args_list,

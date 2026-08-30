@@ -672,6 +672,9 @@ async function runExpandedFeatureChecks(page) {
       attachmentBars,
       hasNoAttachmentBasis: attachmentText.includes("노 파츠") && attachmentText.includes("교전 승률"),
       hasCombinationBasis: combinationText.includes("2개 이상의 파츠") && combinationText.includes("교전 승률"),
+      hasWeaponScopedBasis: attachmentText.includes("그 무기에 장착돼 있던 파츠만")
+        && attachmentText.includes("다른 무기의 파츠는 섞지")
+        && combinationText.includes("다른 무기에 장착된 파츠는 포함하지"),
     },
     match: {
       matchId,
@@ -825,6 +828,7 @@ async function layoutDiagnostics(page) {
       !result.desktop.features.weaponAttachments.combinationPanelVisible,
       !result.desktop.features.weaponAttachments.hasNoAttachmentBasis,
       !result.desktop.features.weaponAttachments.hasCombinationBasis,
+      !result.desktop.features.weaponAttachments.hasWeaponScopedBasis,
       !result.desktop.features.match.hasSummary,
       !result.desktop.features.match.usedQuantityMatchesEvents,
       result.desktop.features.match.rawItemLabels > 0,

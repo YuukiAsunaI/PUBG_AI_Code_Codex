@@ -182,9 +182,10 @@ snapshots are used first so parts reflect the actual kill/DBNO/finish moment; at
 fallback for older parsed data.
 
 The local weapon-detail view also compares no-parts, every observed individual attachment, and exact multi-part
-combinations from durable fight snapshots. It keeps fight win rate separate from chicken rate and shows each part's
-percentage-point difference from the no-parts baseline, combat outcome counts, average distance, and sample
-reliability under the same map/mode/season/KST filters.
+combinations from durable fight snapshots for one selected weapon. It rejects rows from any other weapon and counts
+only parts mounted on the selected weapon at that outcome. It keeps fight win rate separate from chicken rate and
+shows each part's percentage-point difference from the no-parts baseline, combat outcome counts, average distance,
+and sample reliability under the same map/mode/season/KST filters.
 
 Drop-zone recommendations keep their stable cluster ID and raw centroid coordinates in centimeters. A versioned
 official-asset-backed catalog adds a Korean place name only when the centroid is inside a maintained region; unmatched
@@ -473,6 +474,11 @@ picker with 25 registrations per page, previous/next controls, and a partial nic
 avoids Discord's 25-option component limit without capping the guild registration count. Direct nickname entry remains
 available. Match and replay commands show recent matches as KST date, Korean map/mode, placement, kills, and damage
 while retaining the match ID only as the hidden option value.
+
+The private picker protects the current guild's registration catalog, but the completed analysis is sent as a new
+public channel message so every channel member can read it. `/배그도움말` is public as well. Security-sensitive
+permission-management inputs and per-user validation errors remain caller-only; their controls cannot be used by
+other members.
 
 Recommendation replies are split into one concise field per weapon, two-weapon loadout, attachment combination,
 individual attachment, range, map, teammate, or drop zone. Five fields are shown per page with previous/next controls,

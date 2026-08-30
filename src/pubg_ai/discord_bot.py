@@ -2080,6 +2080,7 @@ def create_discord_bot(
             self.channel = getattr(interaction, "channel", None) or getattr(source_ctx, "channel", None)
             self.interaction = interaction
             self.command = command
+            self.published = False
 
         def __getattr__(self, name: str) -> Any:
             return getattr(self._source_ctx, name)
@@ -2087,18 +2088,36 @@ def create_discord_bot(
         async def reply(self, content: str | None = None, **kwargs: Any) -> Any:
             kwargs.pop("mention_author", None)
             kwargs.pop("ephemeral", None)
-            file = kwargs.pop("file", None)
-            files = list(kwargs.pop("files", []) or [])
-            if file is not None:
-                files.append(file)
-            if files:
-                kwargs["attachments"] = files
             kwargs.setdefault("view", None)
             if content is not None:
                 kwargs["content"] = content
                 kwargs.setdefault("embed", None)
             elif "embed" in kwargs:
                 kwargs.setdefault("content", None)
+
+            channel = self.channel
+            channel_send = getattr(channel, "send", None)
+            if callable(channel_send):
+                self.published = True
+                return await channel_send(**kwargs)
+
+            source_send = getattr(self._source_ctx, "send", None)
+            if callable(source_send):
+                self.published = True
+                return await source_send(**kwargs)
+
+            followup = getattr(self._interaction, "followup", None)
+            followup_send = getattr(followup, "send", None)
+            if callable(followup_send):
+                self.published = True
+                return await followup_send(ephemeral=False, **kwargs)
+
+            file = kwargs.pop("file", None)
+            files = list(kwargs.pop("files", []) or [])
+            if file is not None:
+                files.append(file)
+            if files:
+                kwargs["attachments"] = files
             return await self._interaction.edit_original_response(**kwargs)
 
         async def send(self, content: str | None = None, **kwargs: Any) -> Any:
@@ -2235,7 +2254,10 @@ def create_discord_bot(
                     inline=False,
                 )
             embed.set_footer(
-                text="25명씩 나누어 표시합니다. 검색은 현재 서버의 전체 등록자를 대상으로 합니다."
+                text=(
+                    "선택 화면은 실행자만 볼 수 있고 조회 결과는 채널 전체에 공개됩니다. "
+                    "25명씩 표시하며 검색은 현재 서버의 전체 등록자를 대상으로 합니다."
+                )
             )
             return embed
 
@@ -2359,6 +2381,12 @@ def create_discord_bot(
                 )
                 try:
                     await self.runner(picker_ctx, player)
+                    if picker_ctx.published:
+                        await interaction.edit_original_response(
+                            content=f"{self.command_label} 결과를 현재 채널에 공개했습니다.",
+                            embed=None,
+                            view=None,
+                        )
                 except Exception as exc:
                     print(f"Discord registered-player picker failed for {self.command_label}: {exc}")
                     await interaction.edit_original_response(
@@ -2501,7 +2529,12 @@ def create_discord_bot(
                 )
                 title = f"PUBG AI 명령어 · {self.CATEGORY_LABELS[self.category]}"
             embed = discord.Embed(title=title, description=description[:4096], colour=0x42D3AA)
-            embed.set_footer(text=f"현재 서버에 공개된 명령 {len(self.specs)}개 · 이 화면은 실행한 사용자만 조작할 수 있습니다.")
+            embed.set_footer(
+                text=(
+                    f"현재 서버에 공개된 명령 {len(self.specs)}개 · "
+                    "내용은 채널 전체에 공개되며 조작은 실행자만 할 수 있습니다."
+                )
+            )
             return embed
 
         def rebuild(self) -> None:
@@ -2589,7 +2622,6 @@ def create_discord_bot(
             await ctx.reply(
                 embed=view.make_embed(),
                 view=view,
-                ephemeral=True,
                 mention_author=False,
             )
             return

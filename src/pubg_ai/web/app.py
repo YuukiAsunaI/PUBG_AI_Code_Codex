@@ -14337,9 +14337,12 @@ _INDEX_HTML = """<!doctype html>
       activeWeaponDetailView = "overview";
       const totals = detail.totals;
       const attachmentAnalysis = detail.attachment_analysis || {};
-      const noAttachment = attachmentAnalysis.no_attachment || null;
-      const individualAttachments = attachmentAnalysis.individual || [];
-      const attachmentCombinations = attachmentAnalysis.combinations || [];
+      const attachmentAnalysisMatchesWeapon = !attachmentAnalysis.weapon_code
+        || attachmentAnalysis.weapon_code === detail.weapon_code;
+      const attachmentWeaponName = attachmentAnalysis.weapon_name || detail.weapon_name;
+      const noAttachment = attachmentAnalysisMatchesWeapon ? (attachmentAnalysis.no_attachment || null) : null;
+      const individualAttachments = attachmentAnalysisMatchesWeapon ? (attachmentAnalysis.individual || []) : [];
+      const attachmentCombinations = attachmentAnalysisMatchesWeapon ? (attachmentAnalysis.combinations || []) : [];
       const individualAttachmentRows = individualAttachments.slice(0, 50).map(weaponAttachmentPerformanceRow).join("")
         || '<span class="result-caption">개별 파츠 교전 표본이 없습니다.</span>';
       const attachmentCombinationRows = attachmentCombinations.slice(0, 40).map(weaponAttachmentPerformanceRow).join("")
@@ -14411,14 +14414,14 @@ _INDEX_HTML = """<!doctype html>
         ${resultSection("최근 사용 경기", `<div class="result-list">${recentRows}</div>`)}
         </div>
         <div class="recommendation-panel" data-weapon-detail-panel="attachments" hidden>
-          ${resultSection("계산 기준", `<p class="result-caption">${escapeHtml(attachmentAnalysis.basis || "교전 결과 시점의 장착 파츠를 기준으로 비교합니다.")} 노 파츠는 경기 전체가 아니라 해당 교전 결과 시점에 장착 파츠가 없었다는 뜻입니다. 치킨률은 해당 상태가 한 번 이상 관측된 경기 중 1위 경기 비율입니다.</p>`)}
-          ${resultSection("노 파츠 기준", `<div class="result-list">${weaponAttachmentPerformanceRow(noAttachment)}</div>`)}
-          ${resultSection(`노 파츠와 개별 파츠 교전 승률 · ${formatInteger(individualAttachments.length)}개`, weaponAttachmentWinRateChart([noAttachment, ...individualAttachments], "single"))}
+          ${resultSection(`${escapeHtml(attachmentWeaponName)} 전용 계산 기준`, `<p class="result-caption">${escapeHtml(attachmentAnalysis.basis || `${attachmentWeaponName} 교전 결과 시점에 그 무기에 장착돼 있던 파츠만 비교합니다.`)} 노 파츠는 경기 전체가 아니라 해당 무기로 싸운 교전 결과 시점에 그 무기에 장착 파츠가 없었다는 뜻입니다. 치킨률은 해당 상태가 한 번 이상 관측된 경기 중 1위 경기 비율입니다.</p>`)}
+          ${resultSection(`${escapeHtml(attachmentWeaponName)} 노 파츠 기준`, `<div class="result-list">${weaponAttachmentPerformanceRow(noAttachment)}</div>`)}
+          ${resultSection(`${escapeHtml(attachmentWeaponName)} 노 파츠와 개별 파츠 교전 승률 · ${formatInteger(individualAttachments.length)}개`, weaponAttachmentWinRateChart([noAttachment, ...individualAttachments], "single"))}
           ${resultSection("개별 파츠 상세", `<div class="result-list">${individualAttachmentRows}</div>`)}
         </div>
         <div class="recommendation-panel" data-weapon-detail-panel="combinations" hidden>
-          ${resultSection("계산 기준", `<p class="result-caption">같은 교전 결과 시점에 함께 장착된 2개 이상의 파츠만 하나의 조합으로 묶습니다. 각 파츠를 따로 평가한 결과는 개별 파츠 탭에서 확인할 수 있습니다.</p>`)}
-          ${resultSection(`관측 조합 교전 승률 · ${formatInteger(attachmentCombinations.length)}개`, weaponAttachmentWinRateChart(attachmentCombinations, "combination"))}
+          ${resultSection(`${escapeHtml(attachmentWeaponName)} 전용 계산 기준`, `<p class="result-caption">${escapeHtml(attachmentWeaponName)}으로 싸운 같은 교전 결과 시점에 그 무기에 함께 장착된 2개 이상의 파츠만 하나의 조합으로 묶습니다. 다른 무기에 장착된 파츠는 포함하지 않습니다. 각 파츠를 따로 평가한 결과는 개별 파츠 탭에서 확인할 수 있습니다.</p>`)}
+          ${resultSection(`${escapeHtml(attachmentWeaponName)} 관측 조합 교전 승률 · ${formatInteger(attachmentCombinations.length)}개`, weaponAttachmentWinRateChart(attachmentCombinations, "combination"))}
           ${resultSection("파츠 조합 상세", `<div class="result-list">${attachmentCombinationRows}</div>`)}
         </div>
       </div>`;

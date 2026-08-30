@@ -103,7 +103,9 @@ presented as a prediction of the next plane route.
 Weapon detail separates overall performance, no-parts/individual-part performance, and exact observed attachment
 combinations. Every row is calculated from durable fight-outcome snapshots: a kill or caused DBNO is a fight win,
 while death or taken DBNO is a fight loss. No-parts means that the fight snapshot contained no attachment, not that
-the weapon remained unmodified for the entire match. Chicken rate is displayed separately from fight win rate.
+the weapon remained unmodified for the entire match. The query and serialized analysis both carry the selected weapon
+code; rows for any other weapon are rejected before grouping, and only attachments mounted on that weapon at that
+fight outcome are counted. Chicken rate is displayed separately from fight win rate.
 
 Individual parts and combinations include fights, wins/losses, fight win rate, percentage-point difference from the
 no-parts baseline, chicken rate, kills, caused/taken DBNOs, deaths, headshot outcomes, average distance, and sample
@@ -123,7 +125,9 @@ Recommendation reports use separate scan-friendly fields for each weapon, two-we
 individual attachment, range, map, teammate, and drop zone. Five fields are shown per page with previous/next controls.
 Leaving a player nickname blank opens a private picker scoped to active registrations in the current Discord server;
 it supports 25 registrations per page plus partial nickname/account-ID search, so server registrations are not capped
-at 25.
+at 25. The picker remains caller-only to protect the guild registration catalog, then posts the completed report as a
+new public channel message. Help and normal direct query replies are public. Permission-management inputs and personal
+validation errors remain caller-only, while interactive report paging is visible to everyone and owner-locked.
 
 ## Launch
 
@@ -151,9 +155,9 @@ entrypoint searches upward from the executable and current directory for the pro
 Set `PUBG_AI_BASE_DIR` when the executable is stored elsewhere. Secrets and local settings are not embedded into the
 executable.
 
-The verified `2026.08.29.3` artifact is 51,838,606 bytes with SHA-256
-`D3F88EC9984922B4A850FF3742BFA7B38F2FE3701478938C3D465E6D6F48FC98`. Its localhost-only health endpoint returned
+The verified `2026.08.30.1` artifact is 51,839,600 bytes with SHA-256
+`68F51E1A3F5CEA9ADF78EFFD2AB6476002B93666AD045B66FA3CEF3F615B349E`. Its localhost-only health endpoint returned
 the same release. The packaged Playwright audit reached all 33 workspaces, rendered the weapon attachment views, and
-processed an all-target 98-player replay with 16,066 retained events, 240 visible event rows, and a 167 ms filter
+processed an all-target 93-player replay with 17,418 retained events, 240 visible event rows, and a 152 ms filter
 refresh. Desktop and 390px mobile layouts had no blank view, overlay, overflow, console error, failed request, or HTTP
 error.
