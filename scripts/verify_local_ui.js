@@ -530,10 +530,45 @@ async function runExpandedFeatureChecks(page) {
   const attachmentPanelVisible = await attachmentPanel.isVisible();
   const attachmentText = await attachmentPanel.innerText();
   const attachmentBars = await attachmentPanel.locator(".comparison-bar-row").count();
+  const attachmentGroups = await attachmentPanel.locator("[data-attachment-group]").count();
+  const attachmentGroupLabels = await attachmentPanel.locator("[data-attachment-group] summary").allInnerTexts();
+  const attachmentHasConfidenceInterval = attachmentText.includes("95% 신뢰구간");
+  const attachmentMinimumInput = attachmentPanel.locator("[data-weapon-attachment-min-matches]");
+  await attachmentMinimumInput.fill("999999");
+  await attachmentMinimumInput.press("Tab");
+  await page.waitForTimeout(100);
+  const attachmentHighMinimumEmpty = (await attachmentPanel.innerText()).includes(
+    "최소 경기 수를 충족한 개별 파츠가 없습니다.",
+  );
+  await attachmentPanel.locator('[data-reset-weapon-attachment-filter="individual"]').click();
+  const attachmentMinimumReset = await attachmentPanel.locator(
+    "[data-weapon-attachment-min-matches]",
+  ).inputValue();
+  const attachmentGroupsAfterReset = await attachmentPanel.locator("[data-attachment-group]").count();
+  const weaponAttachmentScreenshot = path.join(
+    outputDir,
+    "weapon-individual-attachment-analysis-desktop.png",
+  );
+  await page.locator("#weapon-lookup").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: weaponAttachmentScreenshot, fullPage: false });
   await page.locator('[data-weapon-detail-view="combinations"]').click();
   const combinationPanel = page.locator('[data-weapon-detail-panel="combinations"]');
   const combinationPanelVisible = await combinationPanel.isVisible();
   const combinationText = await combinationPanel.innerText();
+  const combinationMinimumInput = combinationPanel.locator("[data-weapon-combination-min-matches]");
+  await combinationMinimumInput.fill("999999");
+  await combinationMinimumInput.press("Tab");
+  await page.waitForTimeout(100);
+  const combinationHighMinimumEmpty = (await combinationPanel.innerText()).includes(
+    "최소 경기 수를 충족한 파츠 조합이 없습니다.",
+  );
+  await combinationPanel.locator('[data-reset-weapon-attachment-filter="combination"]').click();
+  const combinationMinimumReset = await combinationPanel.locator(
+    "[data-weapon-combination-min-matches]",
+  ).inputValue();
+  const combinationGroupsAfterReset = await combinationPanel.locator(
+    "[data-attachment-combination-size]",
+  ).count();
   const weaponScreenshot = path.join(outputDir, "weapon-attachment-analysis-desktop.png");
   await page.locator("#weapon-lookup").scrollIntoViewIfNeeded();
   await page.screenshot({ path: weaponScreenshot, fullPage: false });
@@ -670,6 +705,15 @@ async function runExpandedFeatureChecks(page) {
       attachmentPanelVisible,
       combinationPanelVisible,
       attachmentBars,
+      attachmentGroups,
+      attachmentGroupsAfterReset,
+      attachmentGroupLabels,
+      attachmentHasConfidenceInterval,
+      attachmentHighMinimumEmpty,
+      attachmentMinimumReset,
+      combinationHighMinimumEmpty,
+      combinationMinimumReset,
+      combinationGroupsAfterReset,
       hasNoAttachmentBasis: attachmentText.includes("노 파츠") && attachmentText.includes("교전 승률"),
       hasCombinationBasis: combinationText.includes("2개 이상의 파츠") && combinationText.includes("교전 승률"),
       hasWeaponScopedBasis: attachmentText.includes("그 무기에 장착돼 있던 파츠만")
@@ -719,6 +763,7 @@ async function runExpandedFeatureChecks(page) {
     screenshots: {
       matchScreenshot,
       weaponScreenshot,
+      weaponAttachmentScreenshot,
       landingScreenshot,
       comparisonScreenshot,
       flightScreenshot,
@@ -829,6 +874,15 @@ async function layoutDiagnostics(page) {
       !result.desktop.features.weaponAttachments.hasNoAttachmentBasis,
       !result.desktop.features.weaponAttachments.hasCombinationBasis,
       !result.desktop.features.weaponAttachments.hasWeaponScopedBasis,
+      result.desktop.features.weaponAttachments.attachmentGroups < 1,
+      result.desktop.features.weaponAttachments.attachmentGroupsAfterReset < 1,
+      !result.desktop.features.weaponAttachments.attachmentGroupLabels.some((label) => label.includes("손잡이")),
+      !result.desktop.features.weaponAttachments.attachmentHasConfidenceInterval,
+      !result.desktop.features.weaponAttachments.attachmentHighMinimumEmpty,
+      result.desktop.features.weaponAttachments.attachmentMinimumReset !== "1",
+      !result.desktop.features.weaponAttachments.combinationHighMinimumEmpty,
+      result.desktop.features.weaponAttachments.combinationMinimumReset !== "1",
+      result.desktop.features.weaponAttachments.combinationGroupsAfterReset < 1,
       !result.desktop.features.match.hasSummary,
       !result.desktop.features.match.usedQuantityMatchesEvents,
       result.desktop.features.match.rawItemLabels > 0,

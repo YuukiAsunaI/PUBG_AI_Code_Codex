@@ -718,6 +718,7 @@ def _combat_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     kills = _sum_rows(rows, "kills")
     assists = _sum_rows(rows, "assists")
     deaths = _sum_rows(rows, "deaths")
+    dbnos_caused = _sum_rows(rows, "dbnos_caused")
     shots_fired = _sum_rows(rows, "shots_fired")
     shots_hit = _sum_rows(rows, "shots_hit")
     character_hits = sum(
@@ -728,9 +729,14 @@ def _combat_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     )
     vehicle_hits = _sum_rows(rows, "vehicle_hits")
     headshot_hits = _sum_rows(rows, "headshot_hits")
+    damage_dealt = _sum_rows(rows, "damage_dealt")
+    damage_taken = _sum_rows(rows, "damage_taken")
     fights = _sum_rows(rows, "fight_count")
     fight_wins = _sum_rows(rows, "fight_wins")
     fight_losses = _sum_rows(rows, "fight_losses")
+    survival_durations = [_effective_survival_seconds(row) for row in rows]
+    survival_seconds = sum(survival_durations)
+    tempo_covered_matches = sum(value > 0 for value in survival_durations)
     return {
         "match_count": match_count,
         "kills": kills,
@@ -740,14 +746,22 @@ def _combat_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "avg_kills": _ratio(kills, match_count),
         "avg_assists": _ratio(assists, match_count),
         "avg_deaths": _ratio(deaths, match_count),
-        "dbnos_caused": _sum_rows(rows, "dbnos_caused"),
+        "dbnos_caused": dbnos_caused,
         "dbnos_taken": _sum_rows(rows, "dbnos_taken"),
         "finishes": _sum_rows(rows, "finishes"),
         "finishes_taken": _sum_rows(rows, "finishes_taken"),
-        "damage_dealt": _sum_rows(rows, "damage_dealt"),
-        "damage_taken": _sum_rows(rows, "damage_taken"),
-        "avg_damage_dealt": _ratio(_sum_rows(rows, "damage_dealt"), match_count),
-        "avg_damage_taken": _ratio(_sum_rows(rows, "damage_taken"), match_count),
+        "damage_dealt": damage_dealt,
+        "damage_taken": damage_taken,
+        "avg_damage_dealt": _ratio(damage_dealt, match_count),
+        "avg_damage_taken": _ratio(damage_taken, match_count),
+        "damage_ratio": _ratio(damage_dealt, damage_taken if damage_taken > 0 else 1),
+        "tempo_covered_matches": tempo_covered_matches,
+        "total_survival_seconds": survival_seconds,
+        "kills_per_10_minutes": _ratio(kills * 600.0, survival_seconds),
+        "dbnos_per_10_minutes": _ratio(dbnos_caused * 600.0, survival_seconds),
+        "damage_per_10_minutes": _ratio(damage_dealt * 600.0, survival_seconds),
+        "fights_per_10_minutes": _ratio(fights * 600.0, survival_seconds),
+        "damage_per_fight": _ratio(damage_dealt, fights),
         "shots_fired": shots_fired,
         "shots_hit": shots_hit,
         "character_hits": character_hits,
@@ -772,6 +786,14 @@ def _combat_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "fight_win_rate": _ratio(fight_wins, fight_wins + fight_losses),
         "avg_fights_per_match": _ratio(fights, match_count),
     }
+
+
+def _effective_survival_seconds(row: Mapping[str, Any]) -> float:
+    survived = max(0.0, _float(_stat(row, "timeSurvived")))
+    duration = max(0.0, _float(row.get("duration_seconds")))
+    if survived and duration:
+        return min(survived, duration)
+    return survived
 
 
 def _loot_summary(rows: list[dict[str, Any]], match_count: int) -> dict[str, Any]:
@@ -899,6 +921,14 @@ def _bucket_summary(key: str, label: str, rows: list[dict[str, Any]]) -> dict[st
         "kda": combat["kda"],
         "avg_damage_dealt": combat["avg_damage_dealt"],
         "avg_damage_taken": combat["avg_damage_taken"],
+        "damage_ratio": combat["damage_ratio"],
+        "tempo_covered_matches": combat["tempo_covered_matches"],
+        "total_survival_seconds": combat["total_survival_seconds"],
+        "kills_per_10_minutes": combat["kills_per_10_minutes"],
+        "dbnos_per_10_minutes": combat["dbnos_per_10_minutes"],
+        "damage_per_10_minutes": combat["damage_per_10_minutes"],
+        "fights_per_10_minutes": combat["fights_per_10_minutes"],
+        "damage_per_fight": combat["damage_per_fight"],
         "accuracy": combat["accuracy"],
         "headshot_hit_rate": combat["headshot_hit_rate"],
         "dbnos_caused": combat["dbnos_caused"],

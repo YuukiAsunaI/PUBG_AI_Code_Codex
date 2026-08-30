@@ -38,6 +38,10 @@ class CodeTranslatorTests(unittest.TestCase):
             translator.translate("Item_Attach_Weapon_Muzzle_AR_MuzzleBrake_C", "item").label,
             "총구 제동기",
         )
+        self.assertEqual(
+            translator.translate("Item_Attach_Weapon_SideRail_DotSight_RMR_C", "item").label,
+            "캔티드 사이트",
+        )
 
     def test_current_real_telemetry_codes_are_translated(self) -> None:
         translator = CodeTranslator()

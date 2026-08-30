@@ -28,6 +28,7 @@ class PlayerIntelligenceTests(unittest.TestCase):
                 shots_hit=5,
                 headshot_hits=2,
                 damage_dealt=400,
+                damage_taken=150,
                 heal_amount=60,
                 revives_caused=1,
                 throwable_uses=3,
@@ -54,6 +55,7 @@ class PlayerIntelligenceTests(unittest.TestCase):
                 shots_hit=3,
                 headshot_hits=1,
                 damage_dealt=100,
+                damage_taken=100,
                 heal_amount=20,
                 revives_caused=0,
                 throwable_uses=1,
@@ -82,11 +84,41 @@ class PlayerIntelligenceTests(unittest.TestCase):
         self.assertEqual(report["combat"]["headshot_hit_rate"], 3 / 8)
         self.assertEqual(report["combat"]["fight_win_rate"], 0.5)
         self.assertEqual(report["combat"]["avg_fights_per_match"], 2.0)
+        self.assertEqual(report["combat"]["damage_ratio"], 2.0)
+        self.assertEqual(report["combat"]["kills_per_10_minutes"], 1.0)
+        self.assertEqual(report["combat"]["fights_per_10_minutes"], 1.0)
+        self.assertEqual(report["combat"]["damage_per_10_minutes"], 125.0)
+        self.assertEqual(report["combat"]["damage_per_fight"], 125.0)
         self.assertEqual(report["support"]["heal_amount"], 80)
         self.assertEqual(report["mobility"]["total_distance_m"], 4010)
         self.assertEqual(len(report["trends"]["daily"]), 2)
         self.assertEqual(len(report["trends"]["monthly"]), 1)
         self.assertEqual(report["breakdowns"]["maps"][0]["matches"], 2)
+        self.assertEqual(report["trends"]["monthly"][0]["damage_per_10_minutes"], 125.0)
+
+    def test_tempo_metrics_cap_survival_at_match_duration(self) -> None:
+        report = summarize_player_intelligence(
+            [
+                _row(
+                    kills=2,
+                    damage_dealt=300,
+                    duration_seconds=600,
+                    raw_stats={"timeSurvived": 999999},
+                )
+            ],
+            fight_rows=[
+                {
+                    "match_id": "match",
+                    "fight_count": 2,
+                    "fight_wins": 2,
+                    "fight_losses": 0,
+                }
+            ],
+        )
+
+        self.assertEqual(report["combat"]["total_survival_seconds"], 600)
+        self.assertEqual(report["combat"]["kills_per_10_minutes"], 2)
+        self.assertEqual(report["combat"]["damage_per_10_minutes"], 300)
 
     def test_activity_averages_only_use_current_parser_coverage(self) -> None:
         rows = [

@@ -53,6 +53,9 @@ keeps the same text inputs and hides the native-only buttons.
 - Trend and weapon forms keep their common controls visible and place the less-frequent KST/date/season/custom-match
   controls under `상세 필터`. Results use metric blocks, translated chips, grouped sections, and mobile trend cards to
   avoid dense paragraph output and wide-table dependence.
+- Player intelligence includes kills, caused DBNOs, fights, and damage per 10 minutes, damage per resolved fight, and
+  dealt/taken damage ratio. The same metrics can be selected in KST day/week/month graphs; time normalization uses
+  positive `timeSurvived` capped at the completed match duration.
 - Default backup and quarantine directories are created during manager startup. Missing-path alerts resolve on the
   next status refresh while remaining available as resolved history records.
 
@@ -109,8 +112,12 @@ fight outcome are counted. Chicken rate is displayed separately from fight win r
 
 Individual parts and combinations include fights, wins/losses, fight win rate, percentage-point difference from the
 no-parts baseline, chicken rate, kills, caused/taken DBNOs, deaths, headshot outcomes, average distance, and sample
-reliability. The same map, mode, season, custom-match, KST date, and time filters used by weapon detail apply to these
-comparisons.
+reliability. Fight win rates also show a Wilson 95% confidence interval. The no-parts/individual tab and observed-
+combination tab each have an independent minimum-match input with no upper cap; the threshold is applied to the unique
+matches where that exact state was observed, not to fight count. Individual parts are grouped from official item-code
+slot families into grips, muzzle, magazine, stock/rear, sights, lower rail, quiver, and other, while exact combinations
+are grouped by mounted-part count. The same map, mode, season, custom-match, KST date, and time filters used by weapon
+detail apply to these comparisons.
 
 ## Replay Performance
 
@@ -155,9 +162,10 @@ entrypoint searches upward from the executable and current directory for the pro
 Set `PUBG_AI_BASE_DIR` when the executable is stored elsewhere. Secrets and local settings are not embedded into the
 executable.
 
-The verified `2026.08.30.1` artifact is 51,839,600 bytes with SHA-256
-`68F51E1A3F5CEA9ADF78EFFD2AB6476002B93666AD045B66FA3CEF3F615B349E`. Its localhost-only health endpoint returned
-the same release. The packaged Playwright audit reached all 33 workspaces, rendered the weapon attachment views, and
-processed an all-target 93-player replay with 17,418 retained events, 240 visible event rows, and a 152 ms filter
+The verified `2026.08.30.2` artifact is 51,845,035 bytes with SHA-256
+`78A2CBBB4D33FB3F285D8E49D83ED18E687B843C0F58CA11377BEAB7087D01BE`. Its localhost-only health endpoint returned
+the same release. The packaged Playwright audit reached all 33 workspaces, verified the two uncapped attachment
+minimum-match controls and reset paths, rendered five M416 attachment-slot groups plus four combination-size groups,
+and processed an all-target 93-player replay with 17,418 retained events, 240 visible event rows, and a 157 ms filter
 refresh. Desktop and 390px mobile layouts had no blank view, overlay, overflow, console error, failed request, or HTTP
 error.

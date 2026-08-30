@@ -5,7 +5,9 @@ import unittest
 
 from pubg_ai.player_stats import (
     PlayerStatsService,
+    _attachment_group_for_code,
     _weapon_attachment_analysis,
+    _wilson_interval,
     _movement_distance_from_row,
     weapon_code_from_identifier,
 )
@@ -13,6 +15,29 @@ from pubg_ai.player_trends import PlayerTrendFilters
 
 
 class PlayerStatsServiceTests(unittest.TestCase):
+    def test_attachment_groups_follow_weapon_slot_codes(self) -> None:
+        for code in (
+            "Item_Attach_Weapon_Lower_Foregrip_C",
+            "Item_Attach_Weapon_Lower_TiltedGrip_C",
+            "Item_Attach_Weapon_Lower_ThumbGrip_C",
+        ):
+            self.assertEqual(_attachment_group_for_code(code), ("grip", "손잡이"))
+        self.assertEqual(
+            _attachment_group_for_code("Item_Attach_Weapon_Muzzle_Compensator_Large_C"),
+            ("muzzle", "총구"),
+        )
+        self.assertEqual(
+            _attachment_group_for_code("Item_Attach_Weapon_SideRail_DotSight_RMR_C"),
+            ("sight", "조준경"),
+        )
+
+    def test_wilson_interval_contains_observed_rate(self) -> None:
+        low, high = _wilson_interval(2, 3)
+
+        self.assertLess(low, 2 / 3)
+        self.assertGreater(high, 2 / 3)
+        self.assertEqual(_wilson_interval(0, 0), (0.0, 0.0))
+
     def test_weapon_attachment_analysis_never_mixes_other_weapon_rows(self) -> None:
         analysis = _weapon_attachment_analysis(
             [
@@ -55,6 +80,16 @@ class PlayerStatsServiceTests(unittest.TestCase):
         self.assertEqual(len(analysis.individual), 1)
         self.assertEqual(analysis.individual[0].fight_count, 1)
         self.assertEqual(analysis.individual[0].fight_losses, 1)
+        self.assertEqual(analysis.individual[0].attachment_group_code, "grip")
+        self.assertEqual(analysis.individual[0].attachment_group_name, "손잡이")
+        self.assertLessEqual(
+            analysis.individual[0].fight_win_rate_ci_low,
+            analysis.individual[0].fight_win_rate,
+        )
+        self.assertGreaterEqual(
+            analysis.individual[0].fight_win_rate_ci_high,
+            analysis.individual[0].fight_win_rate,
+        )
 
     def test_movement_distance_prefers_official_participant_totals(self) -> None:
         distance = _movement_distance_from_row(
@@ -416,6 +451,17 @@ class PlayerStatsServiceTests(unittest.TestCase):
         self.assertEqual(len(serialized["attachment_analysis"]["individual"]), 2)
         self.assertEqual(serialized["attachment_analysis"]["weapon_code"], "WeapHK416_C")
         self.assertEqual(serialized["attachment_analysis"]["weapon_name"], "M416")
+        self.assertIn(
+            "손잡이",
+            {
+                item["attachment_group_name"]
+                for item in serialized["attachment_analysis"]["individual"]
+            },
+        )
+        self.assertIn(
+            "fight_win_rate_ci_low",
+            serialized["attachment_analysis"]["individual"][0],
+        )
         query, params = connection.executed[2]
         self.assertIn("matches.map_name = %s", query)
         self.assertIn("matches.season_state = %s", query)

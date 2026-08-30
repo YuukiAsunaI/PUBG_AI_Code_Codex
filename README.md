@@ -185,7 +185,15 @@ The local weapon-detail view also compares no-parts, every observed individual a
 combinations from durable fight snapshots for one selected weapon. It rejects rows from any other weapon and counts
 only parts mounted on the selected weapon at that outcome. It keeps fight win rate separate from chicken rate and
 shows each part's percentage-point difference from the no-parts baseline, combat outcome counts, average distance,
-and sample reliability under the same map/mode/season/KST filters.
+and sample reliability under the same map/mode/season/KST filters. The no-parts/individual and observed-combination
+tabs have independent minimum-match controls with no upper cap. Individual parts are grouped by the official item-code
+slot family (grip, muzzle, magazine, stock/rear, sight, lower rail, or quiver), combinations are grouped by part count,
+and every fight win rate includes its Wilson 95% confidence interval.
+
+Player intelligence also exposes time-normalized combat tempo and efficiency: kills, caused DBNOs, fights, and damage
+per 10 minutes, damage per resolved fight, and dealt/taken damage ratio. These metrics appear in KST day/week/month
+graphs and condition comparisons. `timeSurvived` is capped at the completed match duration before normalization so an
+old or malformed survival value cannot inflate the denominator.
 
 Drop-zone recommendations keep their stable cluster ID and raw centroid coordinates in centimeters. A versioned
 official-asset-backed catalog adds a Korean place name only when the centroid is inside a maintained region; unmatched

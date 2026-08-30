@@ -47,6 +47,9 @@ The canonical metric catalog is implemented in `src/pubg_ai/metric_catalog.py` a
 | Headshot hit rate | head hits / all hits | Missed shots are never included. |
 | Fight win rate | resolved fight wins / resolved fights | Kills and DBNOs caused are wins; deaths and DBNOs taken are losses, with follow-up deduplication. |
 | Average damage dealt | total damage dealt / selected matches | All selected matches, including zero-damage matches. |
+| Damage ratio | total damage dealt / total damage taken | Received damage uses a denominator floor of 1 when no damage was recorded. |
+| Kills / DBNOs / fights / damage per 10 minutes | selected total / effective survival seconds x 600 | Positive `timeSurvived`, capped at the completed match duration. |
+| Damage per fight | total damage dealt / resolved fights | Only fights with a durable win/loss outcome enter the denominator. |
 | Total healing amount | sum of all `LogHeal.healAmount` | Only matches processed by the current activity parser. |
 | Item healing amount | `LogHeal` amount with `item.itemId` | Item use count and actual healed health are separate concepts. |
 | Passive healing amount | `LogHeal` amount without `item.itemId` | Boost healing ticks are not interpreted as item-use events. |
@@ -71,7 +74,7 @@ player reaches thousands of matches.
 The local manager progressively exposes:
 
 - `핵심 요약`: high-signal totals, combat probabilities, support, mobility, and coverage.
-- `변화 그래프`: KST day/week/month trends with sample and denominator context.
+- `변화 그래프`: KST day/week/month trends with sample and denominator context, including time-normalized combat tempo.
 - `조건 비교`: map, mode, perspective, match type, hour, and weekday comparisons.
 - `원본·정의`: event support, raw-only evidence, item provenance, and metric definitions.
 

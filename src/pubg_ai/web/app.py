@@ -4921,6 +4921,44 @@ _INDEX_HTML = """<!doctype html>
       flex-wrap: wrap;
       margin-bottom: 10px;
     }
+    .weapon-attachment-filter {
+      display: grid;
+      grid-template-columns: minmax(180px, 240px) auto minmax(220px, 1fr);
+      align-items: end;
+      gap: 8px 12px;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      padding: 10px 0;
+    }
+    .weapon-attachment-filter label { min-width: 0; }
+    .weapon-attachment-filter button { min-height: 34px; }
+    .weapon-attachment-filter output {
+      align-self: center;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.5;
+      text-align: right;
+    }
+    .weapon-attachment-group-list { display: grid; gap: 16px; min-width: 0; }
+    .weapon-attachment-group {
+      min-width: 0;
+      border-top: 1px solid var(--line);
+      padding-top: 10px;
+    }
+    .weapon-attachment-group:first-child { border-top: 0; padding-top: 0; }
+    .weapon-attachment-group summary {
+      cursor: pointer;
+      color: #dce1e5;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .weapon-attachment-group summary small {
+      margin-left: 5px;
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 500;
+    }
+    .weapon-attachment-group .comparison-bars { margin: 10px 0 4px; }
     .trend-control-cluster {
       display: flex;
       align-items: end;
@@ -6412,6 +6450,9 @@ _INDEX_HTML = """<!doctype html>
       .player-discord-editor-grid { grid-template-columns: 1fr; }
       .recommendation-chart-toolbar { justify-content: stretch; }
       .recommendation-chart-toolbar label { width: 100%; }
+      .weapon-attachment-filter { grid-template-columns: 1fr; }
+      .weapon-attachment-filter button { width: 100%; }
+      .weapon-attachment-filter output { text-align: left; }
       .trend-control-cluster { width: 100%; }
       form,
       form.query-form,
@@ -7209,6 +7250,11 @@ _INDEX_HTML = """<!doctype html>
               <option value="headshot_hit_rate">헤드샷 명중 비율</option>
               <option value="avg_damage_dealt">평균 준 피해</option>
               <option value="avg_fights_per_match">경기당 교전</option>
+              <option value="damage_per_10_minutes">10분당 준 피해</option>
+              <option value="fights_per_10_minutes">10분당 교전</option>
+              <option value="kills_per_10_minutes">10분당 킬</option>
+              <option value="damage_per_fight">교전당 준 피해</option>
+              <option value="damage_ratio">피해 교환비</option>
               <option value="avg_survival_seconds">평균 생존</option>
               <option value="avg_heal_amount">경기당 총 체력 회복량</option>
               <option value="avg_revives_caused">경기당 팀원 부활</option>
@@ -8685,6 +8731,8 @@ _INDEX_HTML = """<!doctype html>
     let activeWeaponDetailView = "overview";
     let activeWeaponTrendGranularity = "month";
     let activeWeaponTrendMetric = "fight_win_rate";
+    let activeWeaponAttachmentMinMatches = 1;
+    let activeWeaponCombinationMinMatches = 1;
     let activeRecommendationTarget = "";
     let activeRecommendationShard = "steam";
     let activeRecommendationReport = null;
@@ -11184,6 +11232,8 @@ _INDEX_HTML = """<!doctype html>
         activeWeaponDetail = null;
         activeWeaponTrendGranularity = "month";
         activeWeaponTrendMetric = "fight_win_rate";
+        activeWeaponAttachmentMinMatches = 1;
+        activeWeaponCombinationMinMatches = 1;
         formElement.elements.weapon.innerHTML = '<option value="">유저를 먼저 선택하세요</option>';
         weaponBody.textContent = "조회 대기 중";
       } else if (formElement === recommendationForm) {
@@ -13086,6 +13136,16 @@ _INDEX_HTML = """<!doctype html>
         ["헤드샷 명중 / 피격", "headshot_hits", `${formatInteger(combat.headshot_hits)} / ${formatInteger(combat.headshot_hits_taken)}`],
         ["교전 승 / 패", "fight_count", `${formatInteger(combat.fight_wins)} / ${formatInteger(combat.fight_losses)}`],
       ].map(([label, key, value]) => [label, key, value]))
+      + intelligenceMetricSection(report, "전투 템포와 효율", [
+        ["템포 산정 경기", "tempo_covered_matches", `${formatInteger(combat.tempo_covered_matches)} / ${formatInteger(overview.matches)}`],
+        ["10분당 킬", "kills_per_10_minutes", formatNumber(combat.kills_per_10_minutes, 2)],
+        ["10분당 기절", "dbnos_per_10_minutes", formatNumber(combat.dbnos_per_10_minutes, 2)],
+        ["10분당 교전", "fights_per_10_minutes", formatNumber(combat.fights_per_10_minutes, 2)],
+        ["10분당 준 피해", "damage_per_10_minutes", formatNumber(combat.damage_per_10_minutes, 1)],
+        ["교전당 준 피해", "damage_per_fight", formatNumber(combat.damage_per_fight, 1)],
+        ["피해 교환비", "damage_ratio", formatNumber(combat.damage_ratio, 2)],
+        ["유효 생존시간", "total_survival_seconds", minutes(combat.total_survival_seconds)],
+      ])
       + intelligenceMetricSection(report, "생존과 지원", [
         ["활동 지표 처리 경기", "activity_covered_matches", `${formatInteger(support.activity_covered_matches)} / ${formatInteger(overview.matches)}`],
         ["TOP 10 비율", "top10_rate", survival.top10_rate], ["평균 등수", "avg_placement", survival.avg_placement],
@@ -13585,6 +13645,11 @@ _INDEX_HTML = """<!doctype html>
         avg_fights_per_match: { label: "경기당 평균 교전", value: (bucket) => bucket.avg_fights_per_match, format: (value) => `${formatNumber(value, 2)}회` },
         avg_damage_dealt: { label: "평균 준 피해", value: (bucket) => bucket.avg_damage_dealt, format: (value) => formatNumber(value, 1) },
         avg_damage_taken: { label: "평균 받은 피해", value: (bucket) => bucket.avg_damage_taken, format: (value) => formatNumber(value, 1) },
+        damage_per_10_minutes: { label: "10분당 준 피해", value: (bucket) => bucket.damage_per_10_minutes, format: (value) => formatNumber(value, 1), basis: "총 준 피해 ÷ 유효 생존시간 × 600초" },
+        fights_per_10_minutes: { label: "10분당 교전", value: (bucket) => bucket.fights_per_10_minutes, format: (value) => `${formatNumber(value, 2)}회`, basis: "승패 판정 교전 ÷ 유효 생존시간 × 600초" },
+        kills_per_10_minutes: { label: "10분당 킬", value: (bucket) => bucket.kills_per_10_minutes, format: (value) => `${formatNumber(value, 2)}킬`, basis: "킬 수 ÷ 유효 생존시간 × 600초" },
+        damage_per_fight: { label: "교전당 준 피해", value: (bucket) => bucket.damage_per_fight, format: (value) => formatNumber(value, 1), basis: "총 준 피해 ÷ 승패 판정 교전 수" },
+        damage_ratio: { label: "피해 교환비", value: (bucket) => bucket.damage_ratio, format: (value) => formatNumber(value, 2), basis: "총 준 피해 ÷ 총 받은 피해" },
         avg_survival_seconds: { label: "평균 생존시간", value: (bucket) => bucket.avg_survival_seconds, format: minutes },
         avg_movement_distance_m: { label: "평균 이동거리", value: (bucket) => bucket.avg_movement_distance_m, format: distanceKm },
         hit_head: { label: "머리 명중 비율", value: (bucket) => bucket.hit_part_rates?.head || 0, format: percent, percentage: true },
@@ -14249,7 +14314,20 @@ _INDEX_HTML = """<!doctype html>
       return (item.attachment_names || []).join(" + ") || "파츠 정보 없음";
     }
 
-    function weaponAttachmentDeltaLabel(item) {
+    function normalizedMinimumMatches(value) {
+      const parsed = Math.floor(Number(value));
+      return Number.isFinite(parsed) ? Math.max(1, parsed) : 1;
+    }
+
+    function weaponAttachmentConfidenceLabel(item) {
+      const low = Number(item?.fight_win_rate_ci_low);
+      const high = Number(item?.fight_win_rate_ci_high);
+      if (!Number.isFinite(low) || !Number.isFinite(high)) return "신뢰구간 미계산";
+      return `95% 신뢰구간 ${percent(low)} ~ ${percent(high)}`;
+    }
+
+    function weaponAttachmentDeltaLabel(item, baselineEligible = true) {
+      if (!baselineEligible && item?.kind !== "none") return "노 파츠 최소 경기 기준 미달";
       const value = Number(item?.fight_win_rate_delta_vs_no_attachment);
       if (item?.fight_win_rate_delta_vs_no_attachment === null || item?.fight_win_rate_delta_vs_no_attachment === undefined || !Number.isFinite(value)) {
         return item?.kind === "none" ? "비교 기준" : "노 파츠 표본 없음";
@@ -14258,7 +14336,7 @@ _INDEX_HTML = """<!doctype html>
       return `노 파츠 대비 ${sign}${formatNumber(value * 100, 1)}%p`;
     }
 
-    function weaponAttachmentPerformanceRow(item) {
+    function weaponAttachmentPerformanceRow(item, baselineEligible = true) {
       if (!item) return '<span class="result-caption">노 파츠 교전 표본이 없습니다.</span>';
       const distance = item.avg_distance_m === null || item.avg_distance_m === undefined
         ? "거리 미확인"
@@ -14266,12 +14344,13 @@ _INDEX_HTML = """<!doctype html>
       return `<div class="result-row">
         <span>${item.reliable_sample ? "표본 확보" : "참고 표본"} · ${formatInteger(item.match_count)}경기</span>
         <strong>${escapeHtml(weaponAttachmentLabel(item))} · 교전 승률 ${percent(item.fight_win_rate)}</strong>
-        <p>${formatInteger(item.fight_wins)}승 / ${formatInteger(item.fight_losses)}패 · ${formatInteger(item.fight_count)}교전 · ${escapeHtml(weaponAttachmentDeltaLabel(item))}<br>
+        <p>${formatInteger(item.fight_wins)}승 / ${formatInteger(item.fight_losses)}패 · ${formatInteger(item.fight_count)}교전 · ${escapeHtml(weaponAttachmentDeltaLabel(item, baselineEligible))}<br>
+        ${escapeHtml(weaponAttachmentConfidenceLabel(item))}<br>
         치킨률 ${percent(item.match_win_rate)} (${formatInteger(item.match_wins)}/${formatInteger(item.match_count)}경기) · 킬 ${formatInteger(item.kills)} · 기절 ${formatInteger(item.dbnos)} · 사망 ${formatInteger(item.deaths)} · 당한 기절 ${formatInteger(item.dbnos_taken)} · 헤드샷 결과 ${formatInteger(item.headshots)}건 · ${distance}</p>
       </div>`;
     }
 
-    function weaponAttachmentWinRateChart(items, kind) {
+    function weaponAttachmentWinRateChart(items, kind, baselineEligible = true) {
       const visible = (items || []).filter(Boolean).slice(0, 30);
       if (!visible.length) return '<span class="result-caption">표시할 파츠 교전 표본이 없습니다.</span>';
       const color = kind === "combination" ? "#ffb84d" : "#4bd0a0";
@@ -14279,11 +14358,121 @@ _INDEX_HTML = """<!doctype html>
         const width = Math.max(0, Math.min(100, Number(item.fight_win_rate || 0) * 100));
         const fill = item.kind === "none" ? "#87939d" : color;
         return `<div class="comparison-bar-row">
-          <strong class="comparison-bar-label">${escapeHtml(weaponAttachmentLabel(item))}<small>${formatInteger(item.fight_count)}교전 · ${escapeHtml(weaponAttachmentDeltaLabel(item))}</small></strong>
+          <strong class="comparison-bar-label">${escapeHtml(weaponAttachmentLabel(item))}<small>${formatInteger(item.match_count)}경기 · ${formatInteger(item.fight_count)}교전 · ${escapeHtml(weaponAttachmentConfidenceLabel(item))}<br>${escapeHtml(weaponAttachmentDeltaLabel(item, baselineEligible))}</small></strong>
           <span class="comparison-bar-track"><span class="comparison-bar-fill" style="width:${width.toFixed(2)}%;background:${fill}"></span></span>
           <span class="comparison-bar-value">${percent(item.fight_win_rate)}</span>
         </div>`;
       }).join("")}</div>`;
+    }
+
+    function weaponAttachmentFilterToolbar(kind, minimum, visibleCount, totalCount) {
+      const isCombination = kind === "combination";
+      const inputAttribute = isCombination
+        ? "data-weapon-combination-min-matches"
+        : "data-weapon-attachment-min-matches";
+      const label = isCombination ? "조합 최소 사용 경기 수" : "노 파츠·개별 파츠 최소 사용 경기 수";
+      return `<div class="weapon-attachment-filter">
+        <label>${label}
+          <input type="number" min="1" step="1" inputmode="numeric" value="${attr(minimum)}" ${inputAttribute}>
+        </label>
+        <button class="secondary" type="button" data-reset-weapon-attachment-filter="${kind}">초기화</button>
+        <output data-weapon-filter-summary="${kind}">사용 경기 수 기준 · ${formatInteger(visibleCount)}/${formatInteger(totalCount)}개 표시 · 상한 제한 없음</output>
+      </div>`;
+    }
+
+    function weaponAttachmentGroups(items) {
+      const order = new Map([
+        ["grip", 0],
+        ["muzzle", 1],
+        ["magazine", 2],
+        ["stock", 3],
+        ["sight", 4],
+        ["lower_rail", 5],
+        ["quiver", 6],
+        ["other", 7],
+      ]);
+      const groups = new Map();
+      for (const item of items || []) {
+        const code = item.attachment_group_code || "other";
+        if (!groups.has(code)) {
+          groups.set(code, {
+            code,
+            name: item.attachment_group_name || "기타 파츠",
+            items: [],
+          });
+        }
+        groups.get(code).items.push(item);
+      }
+      return [...groups.values()].sort((left, right) => (
+        (order.get(left.code) ?? 99) - (order.get(right.code) ?? 99)
+        || left.name.localeCompare(right.name, "ko")
+      ));
+    }
+
+    function weaponAttachmentGroupSections(items, baselineEligible) {
+      const groups = weaponAttachmentGroups(items);
+      if (!groups.length) return '<span class="result-caption">최소 경기 수를 충족한 개별 파츠가 없습니다.</span>';
+      return `<div class="weapon-attachment-group-list">${groups.map((group) => `
+        <details class="weapon-attachment-group" data-attachment-group="${attr(group.code)}" open>
+          <summary>${escapeHtml(group.name)}<small>${formatInteger(group.items.length)}개 파츠</small></summary>
+          ${weaponAttachmentWinRateChart(group.items, "single", baselineEligible)}
+          <div class="result-list">${group.items.map((item) => weaponAttachmentPerformanceRow(item, baselineEligible)).join("")}</div>
+        </details>
+      `).join("")}</div>`;
+    }
+
+    function weaponCombinationGroupSections(items, baselineEligible) {
+      const groups = new Map();
+      for (const item of items || []) {
+        const count = Math.max(2, (item.attachment_codes || []).length);
+        if (!groups.has(count)) groups.set(count, []);
+        groups.get(count).push(item);
+      }
+      const ordered = [...groups.entries()].sort((left, right) => left[0] - right[0]);
+      if (!ordered.length) return '<span class="result-caption">최소 경기 수를 충족한 파츠 조합이 없습니다.</span>';
+      return `<div class="weapon-attachment-group-list">${ordered.map(([count, groupItems]) => `
+        <details class="weapon-attachment-group" data-attachment-combination-size="${count}" open>
+          <summary>${formatInteger(count)}개 파츠 조합<small>${formatInteger(groupItems.length)}개 조합</small></summary>
+          <div class="result-list">${groupItems.map((item) => weaponAttachmentPerformanceRow(item, baselineEligible)).join("")}</div>
+        </details>
+      `).join("")}</div>`;
+    }
+
+    function renderWeaponAttachmentPanels() {
+      if (!activeWeaponDetail) return;
+      const attachmentContent = weaponBody.querySelector("[data-weapon-attachment-content]");
+      const combinationContent = weaponBody.querySelector("[data-weapon-combination-content]");
+      if (!attachmentContent || !combinationContent) return;
+      const analysis = activeWeaponDetail.attachment_analysis || {};
+      const matchesWeapon = !analysis.weapon_code || analysis.weapon_code === activeWeaponDetail.weapon_code;
+      const weaponName = analysis.weapon_name || activeWeaponDetail.weapon_name;
+      const noAttachment = matchesWeapon ? (analysis.no_attachment || null) : null;
+      const allIndividuals = matchesWeapon ? (analysis.individual || []) : [];
+      const allCombinations = matchesWeapon ? (analysis.combinations || []) : [];
+      const individualMinimum = normalizedMinimumMatches(activeWeaponAttachmentMinMatches);
+      const combinationMinimum = normalizedMinimumMatches(activeWeaponCombinationMinMatches);
+      const visibleIndividuals = allIndividuals.filter((item) => Number(item.match_count || 0) >= individualMinimum);
+      const visibleCombinations = allCombinations.filter((item) => Number(item.match_count || 0) >= combinationMinimum);
+      const individualBaselineEligible = Boolean(noAttachment && Number(noAttachment.match_count || 0) >= individualMinimum);
+      const combinationBaselineEligible = Boolean(noAttachment && Number(noAttachment.match_count || 0) >= combinationMinimum);
+      const baselineDisplay = individualBaselineEligible
+        ? `<div class="result-list">${weaponAttachmentPerformanceRow(noAttachment, true)}</div>`
+        : `<span class="result-caption">노 파츠 기록 ${formatInteger(noAttachment?.match_count || 0)}경기로 최소 ${formatInteger(individualMinimum)}경기 기준에 미달합니다.</span>`;
+      const attachmentVisibleCount = visibleIndividuals.length + (individualBaselineEligible ? 1 : 0);
+      const attachmentTotalCount = allIndividuals.length + (noAttachment ? 1 : 0);
+
+      attachmentContent.innerHTML = `
+        ${weaponAttachmentFilterToolbar("individual", individualMinimum, attachmentVisibleCount, attachmentTotalCount)}
+        ${resultSection(`${weaponName} 전용 계산 기준`, `<p class="result-caption">${escapeHtml(analysis.basis || `${weaponName} 교전 결과 시점에 그 무기에 장착돼 있던 파츠만 비교합니다.`)} 최소 경기 수는 각 상태가 관측된 고유 경기 수(match_count)에 적용합니다. 95% 신뢰구간이 넓을수록 표본 불확실성이 큽니다.</p>`)}
+        ${resultSection(`${weaponName} 노 파츠 기준`, baselineDisplay)}
+        ${resultSection(`부착 부위별 개별 파츠 · ${formatInteger(visibleIndividuals.length)}/${formatInteger(allIndividuals.length)}개`, weaponAttachmentGroupSections(visibleIndividuals, individualBaselineEligible))}
+      `;
+      combinationContent.innerHTML = `
+        ${weaponAttachmentFilterToolbar("combination", combinationMinimum, visibleCombinations.length, allCombinations.length)}
+        ${resultSection(`${weaponName} 전용 계산 기준`, `<p class="result-caption">${escapeHtml(weaponName)}으로 싸운 같은 교전 결과 시점에 그 무기에 함께 장착된 2개 이상의 파츠만 하나의 조합으로 묶습니다. 다른 무기에 장착된 파츠는 포함하지 않습니다. 최소 경기 수는 조합이 관측된 고유 경기 수에 적용합니다.</p>`)}
+        ${resultSection(`관측 조합 교전 승률 · ${formatInteger(visibleCombinations.length)}/${formatInteger(allCombinations.length)}개`, weaponAttachmentWinRateChart(visibleCombinations, "combination", combinationBaselineEligible))}
+        ${resultSection("파츠 수별 조합 상세", weaponCombinationGroupSections(visibleCombinations, combinationBaselineEligible))}
+      `;
     }
 
     function setWeaponDetailView(view) {
@@ -14336,17 +14525,6 @@ _INDEX_HTML = """<!doctype html>
       activeWeaponDetail = detail;
       activeWeaponDetailView = "overview";
       const totals = detail.totals;
-      const attachmentAnalysis = detail.attachment_analysis || {};
-      const attachmentAnalysisMatchesWeapon = !attachmentAnalysis.weapon_code
-        || attachmentAnalysis.weapon_code === detail.weapon_code;
-      const attachmentWeaponName = attachmentAnalysis.weapon_name || detail.weapon_name;
-      const noAttachment = attachmentAnalysisMatchesWeapon ? (attachmentAnalysis.no_attachment || null) : null;
-      const individualAttachments = attachmentAnalysisMatchesWeapon ? (attachmentAnalysis.individual || []) : [];
-      const attachmentCombinations = attachmentAnalysisMatchesWeapon ? (attachmentAnalysis.combinations || []) : [];
-      const individualAttachmentRows = individualAttachments.slice(0, 50).map(weaponAttachmentPerformanceRow).join("")
-        || '<span class="result-caption">개별 파츠 교전 표본이 없습니다.</span>';
-      const attachmentCombinationRows = attachmentCombinations.slice(0, 40).map(weaponAttachmentPerformanceRow).join("")
-        || '<span class="result-caption">2개 이상 파츠 조합 교전 표본이 없습니다.</span>';
       const effectiveRanges = (detail.effective_ranges || []).map((item, index) => `
         <div class="result-row">
           <span>${index === 0 ? "최우선" : `#${index + 1}`} · ${item.reliable_sample ? "표본 확보" : "표본 부족"}</span>
@@ -14414,17 +14592,13 @@ _INDEX_HTML = """<!doctype html>
         ${resultSection("최근 사용 경기", `<div class="result-list">${recentRows}</div>`)}
         </div>
         <div class="recommendation-panel" data-weapon-detail-panel="attachments" hidden>
-          ${resultSection(`${escapeHtml(attachmentWeaponName)} 전용 계산 기준`, `<p class="result-caption">${escapeHtml(attachmentAnalysis.basis || `${attachmentWeaponName} 교전 결과 시점에 그 무기에 장착돼 있던 파츠만 비교합니다.`)} 노 파츠는 경기 전체가 아니라 해당 무기로 싸운 교전 결과 시점에 그 무기에 장착 파츠가 없었다는 뜻입니다. 치킨률은 해당 상태가 한 번 이상 관측된 경기 중 1위 경기 비율입니다.</p>`)}
-          ${resultSection(`${escapeHtml(attachmentWeaponName)} 노 파츠 기준`, `<div class="result-list">${weaponAttachmentPerformanceRow(noAttachment)}</div>`)}
-          ${resultSection(`${escapeHtml(attachmentWeaponName)} 노 파츠와 개별 파츠 교전 승률 · ${formatInteger(individualAttachments.length)}개`, weaponAttachmentWinRateChart([noAttachment, ...individualAttachments], "single"))}
-          ${resultSection("개별 파츠 상세", `<div class="result-list">${individualAttachmentRows}</div>`)}
+          <div data-weapon-attachment-content></div>
         </div>
         <div class="recommendation-panel" data-weapon-detail-panel="combinations" hidden>
-          ${resultSection(`${escapeHtml(attachmentWeaponName)} 전용 계산 기준`, `<p class="result-caption">${escapeHtml(attachmentWeaponName)}으로 싸운 같은 교전 결과 시점에 그 무기에 함께 장착된 2개 이상의 파츠만 하나의 조합으로 묶습니다. 다른 무기에 장착된 파츠는 포함하지 않습니다. 각 파츠를 따로 평가한 결과는 개별 파츠 탭에서 확인할 수 있습니다.</p>`)}
-          ${resultSection(`${escapeHtml(attachmentWeaponName)} 관측 조합 교전 승률 · ${formatInteger(attachmentCombinations.length)}개`, weaponAttachmentWinRateChart(attachmentCombinations, "combination"))}
-          ${resultSection("파츠 조합 상세", `<div class="result-list">${attachmentCombinationRows}</div>`)}
+          <div data-weapon-combination-content></div>
         </div>
       </div>`;
+      renderWeaponAttachmentPanels();
       renderWeaponTrendChart();
       setWeaponDetailView(activeWeaponDetailView);
     }
@@ -19806,6 +19980,18 @@ _INDEX_HTML = """<!doctype html>
         setWeaponDetailView(viewButton.dataset.weaponDetailView || "overview");
         return;
       }
+      const resetButton = event.target instanceof Element
+        ? event.target.closest("button[data-reset-weapon-attachment-filter]")
+        : null;
+      if (resetButton && activeWeaponDetail) {
+        if (resetButton.dataset.resetWeaponAttachmentFilter === "combination") {
+          activeWeaponCombinationMinMatches = 1;
+        } else {
+          activeWeaponAttachmentMinMatches = 1;
+        }
+        renderWeaponAttachmentPanels();
+        return;
+      }
       const button = event.target instanceof Element
         ? event.target.closest("button[data-weapon-trend-granularity]")
         : null;
@@ -19814,6 +20000,22 @@ _INDEX_HTML = """<!doctype html>
       renderWeaponTrendChart();
     });
     weaponBody.addEventListener("change", (event) => {
+      const attachmentInput = event.target instanceof Element
+        ? event.target.closest("input[data-weapon-attachment-min-matches]")
+        : null;
+      if (attachmentInput && activeWeaponDetail) {
+        activeWeaponAttachmentMinMatches = normalizedMinimumMatches(attachmentInput.value);
+        renderWeaponAttachmentPanels();
+        return;
+      }
+      const combinationInput = event.target instanceof Element
+        ? event.target.closest("input[data-weapon-combination-min-matches]")
+        : null;
+      if (combinationInput && activeWeaponDetail) {
+        activeWeaponCombinationMinMatches = normalizedMinimumMatches(combinationInput.value);
+        renderWeaponAttachmentPanels();
+        return;
+      }
       const select = event.target instanceof Element
         ? event.target.closest("select[data-weapon-trend-metric]")
         : null;

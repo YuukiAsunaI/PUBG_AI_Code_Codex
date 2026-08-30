@@ -268,13 +268,19 @@ class PlayerWeaponAttachmentPerformance:
     kind: str
     attachment_codes: tuple[str, ...]
     attachment_names: tuple[str, ...]
+    attachment_group_code: str
+    attachment_group_name: str
     match_count: int
     match_wins: int
     match_win_rate: float
+    match_win_rate_ci_low: float
+    match_win_rate_ci_high: float
     fight_count: int
     fight_wins: int
     fight_losses: int
     fight_win_rate: float
+    fight_win_rate_ci_low: float
+    fight_win_rate_ci_high: float
     fight_win_rate_delta_vs_no_attachment: float | None
     kills: int
     dbnos: int
@@ -2096,6 +2102,18 @@ def _attachment_performance_from_rows(
     ]
     fight_win_rate = _safe_divide(fight_wins, fight_count)
     match_count = len(match_ids)
+    attachment_group_code, attachment_group_name = _attachment_group_for_codes(
+        attachment_codes,
+        kind=kind,
+    )
+    match_win_rate_ci_low, match_win_rate_ci_high = _wilson_interval(
+        len(match_win_ids),
+        match_count,
+    )
+    fight_win_rate_ci_low, fight_win_rate_ci_high = _wilson_interval(
+        fight_wins,
+        fight_count,
+    )
     return PlayerWeaponAttachmentPerformance(
         kind=kind,
         attachment_codes=attachment_codes,
@@ -2105,13 +2123,19 @@ def _attachment_performance_from_rows(
             else names_by_code.get(code, code)
             for code in attachment_codes
         ),
+        attachment_group_code=attachment_group_code,
+        attachment_group_name=attachment_group_name,
         match_count=match_count,
         match_wins=len(match_win_ids),
         match_win_rate=_safe_divide(len(match_win_ids), match_count),
+        match_win_rate_ci_low=match_win_rate_ci_low,
+        match_win_rate_ci_high=match_win_rate_ci_high,
         fight_count=fight_count,
         fight_wins=fight_wins,
         fight_losses=fight_losses,
         fight_win_rate=fight_win_rate,
+        fight_win_rate_ci_low=fight_win_rate_ci_low,
+        fight_win_rate_ci_high=fight_win_rate_ci_high,
         fight_win_rate_delta_vs_no_attachment=(
             fight_win_rate - baseline_rate if baseline_rate is not None and kind != "none" else None
         ),
@@ -2123,6 +2147,61 @@ def _attachment_performance_from_rows(
         avg_distance_m=_safe_divide(sum(distances), len(distances)) if distances else None,
         reliable_sample=fight_count >= 10 and match_count >= 3,
     )
+
+
+def _attachment_group_for_codes(
+    attachment_codes: tuple[str, ...],
+    *,
+    kind: str,
+) -> tuple[str, str]:
+    if kind == "none" or not attachment_codes:
+        return "none", "노 파츠"
+    if kind == "combination" or len(attachment_codes) > 1:
+        return "combination", "파츠 조합"
+    return _attachment_group_for_code(attachment_codes[0])
+
+
+def _attachment_group_for_code(attachment_code: str) -> tuple[str, str]:
+    normalized = str(attachment_code or "").strip().lower()
+    if "_lower_" in normalized:
+        if "crossbow" in normalized or "quiver" in normalized:
+            return "quiver", "화살통"
+        if "laserpointer" in normalized:
+            return "lower_rail", "하단 레일"
+        if "grip" in normalized or "foregrip" in normalized:
+            return "grip", "손잡이"
+        return "lower_rail", "하단 레일"
+    if "_muzzle_" in normalized:
+        return "muzzle", "총구"
+    if "_magazine_" in normalized:
+        return "magazine", "탄창"
+    if "_stock_" in normalized:
+        return "stock", "스톡·후방 파츠"
+    if "_upper_" in normalized or "_siderail_" in normalized:
+        return "sight", "조준경"
+    return "other", "기타 파츠"
+
+
+def _wilson_interval(successes: int, total: int) -> tuple[float, float]:
+    if total <= 0:
+        return 0.0, 0.0
+    bounded_successes = max(0, min(int(successes), int(total)))
+    sample_size = float(total)
+    proportion = bounded_successes / sample_size
+    z = 1.959963984540054
+    z_squared = z * z
+    denominator = 1.0 + z_squared / sample_size
+    center = (proportion + z_squared / (2.0 * sample_size)) / denominator
+    margin = (
+        z
+        * (
+            (proportion * (1.0 - proportion) / sample_size)
+            + (z_squared / (4.0 * sample_size * sample_size))
+        )
+        ** 0.5
+        / denominator
+    )
+    return max(0.0, center - margin), min(1.0, center + margin)
 
 
 def _weapon_fight_ranges(
