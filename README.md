@@ -8,6 +8,7 @@ Discord command layer, operational controls, and the research and evidence behin
 
 - [Requirement-to-Evidence Audit](docs/REQUIREMENT_EVIDENCE_AUDIT.md)
 - [Whole-Match Tactical Replay Verification](docs/WHOLE_MATCH_TACTICAL_REPLAY_2026-08-28.md)
+- [Flight Path and Circle Analysis](docs/FLIGHT_PATH_AND_CIRCLE_ANALYSIS.md)
 - [PUBG Open API Research](docs/PUBG_OPEN_API_RESEARCH.md)
 - [PUBG Collection Flow](docs/PUBG_COLLECTION_FLOW.md)
 - [Local Architecture and MySQL Model](docs/LOCAL_ARCHITECTURE_AND_MYSQL_MODEL.md)
@@ -383,7 +384,7 @@ GET /replay/artifacts/{artifact_id}/file
 
 The local web app's primary 2D replay is a whole-match tactical replay. A registered player is selected only to find
 that player's completed matches and establish the focus player's team; the generated `match-timeline` contains every
-participant with an account ID, including unregistered enemies and bots. The UI uses cached official map PNG assets
+participant with an account ID, including unregistered enemies and bots. The UI uses cached official map images
 when available and renders all available movement, plane route, phase rings, landing, combat, care-package, DBNO,
 kill/death, and revive markers on one event clock. The raw telemetry event objects are not copied into the replay
 artifact.
@@ -419,14 +420,24 @@ coordinates; the PUBG telemetry schema does not expose a general aim vector for 
 invents one. Initial transport-aircraft points are identified from the plane event window, vehicle state, and altitude
 together because `common.isGame == 0.1` can remain present after the player has jumped.
 
-The separate `비행기 동선` replay view analyzes retained completed-match plane routes rather than one selected
-player timeline. It extends observed aircraft samples to map boundaries and groups frequently repeated physical
-routes by angle and distance from the map center while retaining the dominant travel direction. Map, mode, season,
-custom-match, KST period, player, cluster precision, and source-limit filters are available at:
+The separate `동선·자기장` replay view analyzes retained completed matches rather than one selected timeline.
+It extends observed aircraft samples to map boundaries and groups frequently repeated physical routes by angle and
+distance from the map center while retaining the dominant travel direction. Integer PUBG `common.isGame` states
+are used to extract the numbered target safe circles from `poisonGasWarningPosition` and
+`poisonGasWarningRadius`. The operator can view routes only, circles only, or both; choose all circles or phases
+1-9; and click a route cluster to recompute circle frequency from only the matches in that cluster.
+
+Map, mode, season, custom-match, KST period, player, cluster precision, and source-limit filters are available at:
 
 ```text
 GET /analytics/flight-paths
+GET /analytics/circles
 ```
+
+The current Erangel image is bundled from PUBG's current official Erangel page and is also used by newly generated
+`map-snapshot-v6` JPEG artifacts. See
+[Flight Path and Circle Analysis](docs/FLIGHT_PATH_AND_CIRCLE_ANALYSIS.md) for the phase mapping, clustering contract,
+asset provenance, limits, and verification evidence.
 
 Run the single project Discord bot from the local manager's `Discord 봇 > 앱 봇 제어` view. The app owns its
 start/stop lifecycle; there is no separate CLI bot process that can accidentally create a second runtime. The Discord

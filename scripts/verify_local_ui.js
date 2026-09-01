@@ -670,6 +670,66 @@ async function runExpandedFeatureChecks(page) {
   await page.locator("#match-lookup").scrollIntoViewIfNeeded();
   await page.screenshot({ path: matchScreenshot, fullPage: false });
 
+  await openWorkspaceSection(page, "players", "match-detail");
+  await page.locator('#matchExplorerForm button[type="submit"]').click();
+  const matchExplorerButton = page.locator("#matchExplorerBody [data-match-explorer-open]").first();
+  await matchExplorerButton.waitFor({ timeout: 30000 });
+  const matchExplorerId = await matchExplorerButton.getAttribute("data-match-explorer-open");
+  await matchExplorerButton.click();
+  await page.locator("#matchExplorerSummary .result-shell").waitFor({ timeout: 30000 });
+  const matchExplorerApi = await page.evaluate(async (id) => {
+    const response = await fetch(`/matches/${encodeURIComponent(id)}/detail`);
+    if (!response.ok) throw new Error(`match explorer API ${response.status}`);
+    return (await response.json()).detail;
+  }, matchExplorerId);
+  const explorerSummary = matchExplorerApi.summary || {};
+  const populationMetricText = await page.locator("#matchExplorerSummary .result-metric")
+    .filter({ hasText: "인원" }).first().innerText();
+  const populationRendered = [
+    `총 ${Number(explorerSummary.participants || 0)}명`,
+    `사람 ${Number(explorerSummary.humans || 0)}`,
+    `봇 ${Number(explorerSummary.bots || 0)}`,
+  ].every((part) => populationMetricText.includes(part));
+  const registeredNames = [...new Set(
+    (explorerSummary.registered_player_names || [])
+      .map((value) => String(value || "").trim())
+      .filter(Boolean),
+  )];
+  const registeredMetric = page.locator("#matchExplorerSummary .result-metric")
+    .filter({ hasText: "등록 유저" }).first();
+  const registeredMetricText = await registeredMetric.innerText();
+  const registeredCountRendered = registeredMetricText.includes(
+    `${Number(explorerSummary.registered_players || 0)}명`,
+  );
+  let visibleRegisteredNames = 0;
+  let visibleRegisteredLength = 0;
+  for (const name of registeredNames) {
+    const nextLength = visibleRegisteredLength + name.length + (visibleRegisteredNames ? 2 : 0);
+    if (visibleRegisteredNames >= 3 || nextLength > 42) break;
+    visibleRegisteredNames += 1;
+    visibleRegisteredLength = nextLength;
+  }
+  if (!visibleRegisteredNames && registeredNames.length) visibleRegisteredNames = 1;
+  const disclosureRequired = visibleRegisteredNames < registeredNames.length;
+  const registeredDisclosure = registeredMetric.locator("details.registered-player-disclosure");
+  const disclosurePresent = await registeredDisclosure.count() === 1;
+  let registeredNamesRendered = true;
+  if (disclosureRequired && disclosurePresent) {
+    await registeredDisclosure.locator("summary").click();
+    registeredNamesRendered = await registeredDisclosure.locator(".registered-player-list span").evaluateAll(
+      (items, expected) => (
+        items.length === expected.length
+        && items.every((item, index) => item.textContent?.trim() === expected[index])
+      ),
+      registeredNames,
+    );
+  } else if (registeredNames.length) {
+    registeredNamesRendered = registeredNames.every((name) => registeredMetricText.includes(name));
+  }
+  const matchExplorerScreenshot = path.join(outputDir, "match-detail-desktop.png");
+  await page.locator("#matchExplorerDetail").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: matchExplorerScreenshot, fullPage: false });
+
   await openWorkspaceSection(page, "players", "landing");
   const dropSelection = await selectPlayerForForm(page, "#dropZoneForm");
   await dropSelection.form.locator('button[type="submit"]').click();
@@ -733,8 +793,78 @@ async function runExpandedFeatureChecks(page) {
   });
   const flightPathStatus = await page.locator("#flightPathStatus").innerText();
   const flightMapOptions = await page.locator("#flightPathMapSelect option").count();
-  const flightMapLines = await page.locator("#flightPathOverlay [data-flight-line]").count();
-  const flightRankRows = await page.locator("#flightPathList [data-flight-row]").count();
+  const combinedFlightLines = await page.locator("#flightPathOverlay [data-flight-line]").count();
+  const combinedFlightRows = await page.locator("#flightPathList [data-flight-row]").count();
+  const combinedCircleLines = await page.locator("#flightPathOverlay [data-circle-line]").count();
+  const combinedCircleRows = await page.locator("#circlePathList [data-circle-row]").count();
+  const combinedCircleHeading = await page.locator("#circlePathList").evaluate(
+    (element) => element.previousElementSibling?.textContent?.trim() || "",
+  );
+
+  const erangelOption = page.locator('#flightPathMapSelect option[value="Baltic_Main"]');
+  const erangelAvailable = await erangelOption.count() > 0;
+  let erangelAsset = { available: erangelAvailable, width: 0, height: 0, src: "" };
+  if (erangelAvailable) {
+    const circleResponse = page.waitForResponse(
+      (response) => response.url().includes("/analytics/circles?") && response.ok(),
+      { timeout: 60000 },
+    );
+    await page.locator("#flightPathMapSelect").selectOption("Baltic_Main");
+    await circleResponse;
+    await page.waitForFunction(() => {
+      const image = document.querySelector("#flightPathMapImage");
+      return Boolean(
+        image?.complete
+        && image.naturalWidth === 1008
+        && image.naturalHeight === 1008
+        && image.src.includes("Baltic_Main"),
+      );
+    });
+    erangelAsset = await page.locator("#flightPathMapImage").evaluate((image) => ({
+      available: true,
+      width: image.naturalWidth,
+      height: image.naturalHeight,
+      src: image.src,
+    }));
+  }
+
+  await page.locator("#flightPathPhaseSelect").selectOption("1");
+  await page.waitForFunction(() => {
+    const circles = [...document.querySelectorAll("#flightPathOverlay [data-circle-phase]")];
+    return circles.length > 0 && circles.every((circle) => circle.dataset.circlePhase === "1");
+  }, null, { timeout: 60000 });
+  const phaseOneCircleLines = await page.locator('#flightPathOverlay [data-circle-phase="1"]').count();
+  const phaseOneOnly = await page.locator("#flightPathOverlay [data-circle-phase]").evaluateAll(
+    (circles) => circles.length > 0 && circles.every((circle) => circle.dataset.circlePhase === "1"),
+  );
+
+  await page.locator('[data-flight-analysis-view="flight"]').click();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-flight-analysis-view="flight"]')?.classList.contains("active")
+    && document.querySelector("#flightPathStatus")?.textContent?.includes("분석 완료")
+    && document.querySelectorAll("#flightPathOverlay [data-flight-line]").length > 0
+  ), null, { timeout: 60000 });
+  const flightOnlyFlightLines = await page.locator("#flightPathOverlay [data-flight-line]").count();
+  const flightOnlyCircleLines = await page.locator("#flightPathOverlay [data-circle-line]").count();
+
+  await page.locator('[data-flight-analysis-view="circle"]').click();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-flight-analysis-view="circle"]')?.classList.contains("active")
+    && document.querySelector("#flightPathStatus")?.textContent?.includes("분석 완료")
+    && document.querySelectorAll("#flightPathOverlay [data-circle-line]").length > 0
+  ), null, { timeout: 60000 });
+  const circleOnlyFlightLines = await page.locator("#flightPathOverlay [data-flight-line]").count();
+  const circleOnlyCircleLines = await page.locator("#flightPathOverlay [data-circle-line]").count();
+
+  await page.locator('[data-flight-analysis-view="combined"]').click();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-flight-analysis-view="combined"]')?.classList.contains("active")
+    && document.querySelector("#flightPathStatus")?.textContent?.includes("분석 완료")
+    && document.querySelectorAll("#flightPathOverlay [data-flight-line]").length > 0
+    && document.querySelectorAll("#flightPathOverlay [data-circle-line]").length > 0
+  ), null, { timeout: 60000 });
+  const restoredCombinedFlightLines = await page.locator("#flightPathOverlay [data-flight-line]").count();
+  const restoredCombinedCircleLines = await page.locator("#flightPathOverlay [data-circle-line]").count();
   const flightOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
   const flightScreenshot = path.join(outputDir, "flight-paths-desktop.png");
   await page.locator("#flightPathResult").scrollIntoViewIfNeeded();
@@ -799,6 +929,13 @@ async function runExpandedFeatureChecks(page) {
       usedQuantityMatchesEvents: Number(matchApi.item_summary?.used_quantity || 0) === Number(matchApi.item_summary?.used_events || 0),
       rawItemLabels: items.filter((item) => String(item.item_name || "").startsWith("Item_")).length,
     },
+    matchExplorer: {
+      populationRendered,
+      registeredCountRendered,
+      disclosureRequired,
+      disclosurePresent,
+      registeredNamesRendered,
+    },
     landing: {
       markerCount,
       mapInfo,
@@ -819,8 +956,20 @@ async function runExpandedFeatureChecks(page) {
     flightPaths: {
       status: flightPathStatus,
       mapOptions: flightMapOptions,
-      mapLines: flightMapLines,
-      rankRows: flightRankRows,
+      combinedFlightLines,
+      combinedFlightRows,
+      combinedCircleLines,
+      combinedCircleRows,
+      combinedCircleHeading,
+      erangelAsset,
+      phaseOneCircleLines,
+      phaseOneOnly,
+      flightOnlyFlightLines,
+      flightOnlyCircleLines,
+      circleOnlyFlightLines,
+      circleOnlyCircleLines,
+      restoredCombinedFlightLines,
+      restoredCombinedCircleLines,
       overflow: flightOverflow,
     },
     discordBot: {
@@ -834,6 +983,7 @@ async function runExpandedFeatureChecks(page) {
     iconLoaded,
     screenshots: {
       matchScreenshot,
+      matchExplorerScreenshot,
       weaponScreenshot,
       weaponAttachmentScreenshot,
       landingScreenshot,
@@ -971,6 +1121,11 @@ async function layoutDiagnostics(page) {
       !result.desktop.features.match.hasSummary,
       !result.desktop.features.match.usedQuantityMatchesEvents,
       result.desktop.features.match.rawItemLabels > 0,
+      !result.desktop.features.matchExplorer.populationRendered,
+      !result.desktop.features.matchExplorer.registeredCountRendered,
+      result.desktop.features.matchExplorer.disclosureRequired
+        !== result.desktop.features.matchExplorer.disclosurePresent,
+      !result.desktop.features.matchExplorer.registeredNamesRendered,
       !result.desktop.features.landing.mapSelected,
       result.desktop.features.landing.chartRows < 1,
       result.desktop.features.landing.tableRows < 1,
@@ -982,8 +1137,22 @@ async function layoutDiagnostics(page) {
       result.desktop.features.comparison.trendSeries < 2,
       !result.desktop.features.iconLoaded,
       result.desktop.features.flightPaths.mapOptions < 1,
-      result.desktop.features.flightPaths.mapLines < 1,
-      result.desktop.features.flightPaths.rankRows < 1,
+      result.desktop.features.flightPaths.combinedFlightLines < 1,
+      result.desktop.features.flightPaths.combinedFlightRows < 1,
+      result.desktop.features.flightPaths.combinedCircleLines < 1,
+      result.desktop.features.flightPaths.combinedCircleRows < 1,
+      !result.desktop.features.flightPaths.combinedCircleHeading.includes("선택 항로"),
+      !result.desktop.features.flightPaths.erangelAsset.available,
+      result.desktop.features.flightPaths.erangelAsset.width !== 1008,
+      result.desktop.features.flightPaths.erangelAsset.height !== 1008,
+      result.desktop.features.flightPaths.phaseOneCircleLines < 1,
+      !result.desktop.features.flightPaths.phaseOneOnly,
+      result.desktop.features.flightPaths.flightOnlyFlightLines < 1,
+      result.desktop.features.flightPaths.flightOnlyCircleLines !== 0,
+      result.desktop.features.flightPaths.circleOnlyFlightLines !== 0,
+      result.desktop.features.flightPaths.circleOnlyCircleLines < 1,
+      result.desktop.features.flightPaths.restoredCombinedFlightLines < 1,
+      result.desktop.features.flightPaths.restoredCombinedCircleLines < 1,
       result.desktop.features.flightPaths.overflow,
       !result.desktop.features.discordBot.secretInputsEmpty,
       !result.desktop.features.discordBot.status,
@@ -1075,6 +1244,7 @@ async function layoutDiagnostics(page) {
       numberFormat: result.desktop.features.numberFormat,
       weaponAttachments: result.desktop.features.weaponAttachments,
       matchAnalysis: result.desktop.features.match,
+      matchExplorer: result.desktop.features.matchExplorer,
       landingAnalysis: result.desktop.features.landing,
       ranking: result.desktop.features.ranking,
       comparison: result.desktop.features.comparison,

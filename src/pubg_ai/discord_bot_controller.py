@@ -271,14 +271,29 @@ class DiscordBotController:
                         last_error=_safe_error(exc, token),
                     )
         finally:
+            shutdown_error: str | None = None
             try:
-                if bot is not None and not bot.is_closed():
+                if bot is not None:
                     loop.run_until_complete(bot.close())
-            except Exception:
-                pass
+                loop.run_until_complete(asyncio.sleep(0))
+            except (Exception, asyncio.CancelledError) as exc:
+                shutdown_error = _safe_error(exc, token)
+            try:
+                pending = [task for task in asyncio.all_tasks(loop) if not task.done()]
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    loop.run_until_complete(
+                        asyncio.gather(*pending, return_exceptions=True)
+                    )
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            except (Exception, asyncio.CancelledError) as exc:
+                shutdown_error = shutdown_error or _safe_error(exc, token)
             loop.close()
             with self._lock:
                 previous = self._state
+                if shutdown_error and not previous.last_error:
+                    previous = _replace_state(previous, last_error=shutdown_error)
                 self._loop = None
                 self._loop_ready.clear()
                 self._bot = None

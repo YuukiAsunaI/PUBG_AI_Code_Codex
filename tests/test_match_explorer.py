@@ -45,6 +45,7 @@ class MatchExplorerServiceTests(unittest.TestCase):
             assert detail is not None
             self.assertEqual(detail["summary"]["participants"], 3)
             self.assertEqual(detail["summary"]["registered_players"], 1)
+            self.assertEqual(detail["summary"]["registered_player_names"], ["Alpha"])
             self.assertEqual(detail["telemetry"]["event_count"], 6)
             self.assertEqual(
                 {row["name"] for row in detail["participants"]},

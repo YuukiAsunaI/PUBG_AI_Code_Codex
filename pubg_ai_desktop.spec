@@ -10,6 +10,10 @@ a = Analysis(
     datas=[
         ("src/pubg_ai/assets/app_icon.png", "pubg_ai/assets"),
         ("src/pubg_ai/assets/app_icon.ico", "pubg_ai/assets"),
+        (
+            "src/pubg_ai/assets/maps/Erangel_Remastered_2026_Official.webp",
+            "pubg_ai/assets/maps",
+        ),
     ],
     hiddenimports=hidden_imports,
     hookspath=[],

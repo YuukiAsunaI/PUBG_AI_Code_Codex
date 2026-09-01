@@ -63,12 +63,45 @@ class WebFlightPathStatsTests(unittest.TestCase):
         self.assertIn('id="flight-path-analysis"', body)
         self.assertIn('id="flightPathForm"', body)
         self.assertIn('id="flightPathPlayerSelect"', body)
+        self.assertIn('id="flightPathViewControls"', body)
+        self.assertIn('id="flightPathPhaseSelect"', body)
+        self.assertIn('data-flight-analysis-view="combined"', body)
         self.assertIn('name="angle_bin_degrees"', body)
         self.assertIn('name="offset_bin_m"', body)
         self.assertIn("/analytics/flight-paths?", body)
+        self.assertIn("/analytics/circles?", body)
         self.assertIn('id="flightPathOverlay"', body)
+        self.assertIn('id="circlePathList"', body)
         self.assertIn("marker-end=\"url(#flightArrow)\"", body)
         self.assertIn("방향이 반대여도 같은 물리 항로", body)
+
+    def test_circle_endpoint_returns_integer_phase_clusters(self) -> None:
+        connection = _Connection(
+            [
+                {
+                    "match_id": "match-1",
+                    "common_is_game": 1.0,
+                    "poison_gas_warning_x": 300000.0,
+                    "poison_gas_warning_y": 310000.0,
+                    "poison_gas_warning_radius": 192000.0,
+                    "shard": "steam",
+                    "map_name": "Baltic_Main",
+                    "created_at_kst": datetime(2026, 8, 24, 12, 0),
+                }
+            ]
+        )
+        with patch("pubg_ai.web.app.connect_mysql", return_value=connection):
+            response = TestClient(create_app()).get(
+                "/analytics/circles",
+                params={"shard": "steam", "map_name": "Baltic_Main"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        report = response.json()["circles"]
+        self.assertEqual(report["analyzed_circle_count"], 1)
+        self.assertEqual(report["clusters"][0]["phase_number"], 1)
+        self.assertEqual(report["clusters"][0]["circle_count"], 1)
+        self.assertTrue(connection.closed)
 
 
 class _Cursor:

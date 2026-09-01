@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -22,6 +23,27 @@ pytestmark = pytest.mark.filterwarnings(
 
 
 class DiscordAdminCommandTests(unittest.IsolatedAsyncioTestCase):
+    async def test_bot_close_cancels_managed_background_tasks(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            _, _, bot = _bot_fixture(Path(temp_dir))
+            cancelled = asyncio.Event()
+
+            async def background_task() -> None:
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    cancelled.set()
+
+            task = bot.pubg_create_background_task(
+                background_task(),
+                name="test-managed-background-task",
+            )
+            await asyncio.sleep(0)
+            await bot.close()
+
+            self.assertTrue(task.cancelled())
+            self.assertTrue(cancelled.is_set())
+
     async def test_global_admin_grants_guild_permission_and_checker_updates(self) -> None:
         with TemporaryDirectory() as temp_dir:
             base_dir = Path(temp_dir)

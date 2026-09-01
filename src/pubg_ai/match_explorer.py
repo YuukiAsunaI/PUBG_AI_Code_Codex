@@ -182,6 +182,12 @@ class MatchExplorerService:
                 "humans": sum(not bool(row.get("is_ai_or_bot")) for row in participants),
                 "bots": sum(bool(row.get("is_ai_or_bot")) for row in participants),
                 "registered_players": sum(bool(row.get("is_registered")) for row in participants),
+                "registered_player_names": [
+                    str(row.get("name") or row.get("account_id"))
+                    for row in participants
+                    if row.get("is_registered")
+                    and (row.get("name") or row.get("account_id"))
+                ],
                 "teams": len(teams),
                 "kills": sum(int(row.get("kills") or 0) for row in participants),
                 "assists": sum(int(row.get("assists") or 0) for row in participants),

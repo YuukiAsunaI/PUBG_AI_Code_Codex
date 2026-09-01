@@ -1427,8 +1427,33 @@ def create_discord_bot(
     intents = discord.Intents.default()
     intents.message_content = True
     bot = commands.Bot(command_prefix=command_prefix, intents=intents)
+    managed_background_tasks: set[asyncio.Task[Any]] = set()
+    original_close = bot.close
+
+    def create_managed_background_task(coroutine: Any, *, name: str) -> asyncio.Task[Any]:
+        task = asyncio.create_task(coroutine, name=name)
+        managed_background_tasks.add(task)
+        task.add_done_callback(managed_background_tasks.discard)
+        return task
+
+    async def close_with_managed_background_tasks() -> None:
+        current_task = asyncio.current_task()
+        pending = [
+            task
+            for task in tuple(managed_background_tasks)
+            if task is not current_task and not task.done()
+        ]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        await original_close()
+
+    bot.pubg_create_background_task = create_managed_background_task
+    bot.pubg_managed_background_tasks = managed_background_tasks
+    bot.close = close_with_managed_background_tasks
     permission_manager = DiscordPermissionManager(scope_settings_store) if scope_settings_store is not None else None
-    alert_task_started = False
+    alert_task: asyncio.Task[Any] | None = None
     alert_last_worker_run_id: int | None = None
     sent_storage_alert_keys: set[str] = set()
     custom_prefix_aliases: dict[str, str] = {}
@@ -1884,7 +1909,7 @@ def create_discord_bot(
 
     @bot.event
     async def on_ready() -> None:
-        nonlocal alert_task_started
+        nonlocal alert_task
         print(f"PUBG AI Discord bot logged in as {bot.user}")
         refresh_permission_settings()
         try:
@@ -1896,9 +1921,11 @@ def create_discord_bot(
             print(f"synced Discord application commands for {len(synced)} guilds")
         except Exception as exc:
             print(f"failed to sync Discord application commands: {exc}")
-        if scope_settings_store is not None and not alert_task_started:
-            alert_task_started = True
-            bot.loop.create_task(alert_loop())
+        if scope_settings_store is not None and (alert_task is None or alert_task.done()):
+            alert_task = bot.pubg_create_background_task(
+                alert_loop(),
+                name="pubg-ai-discord-alerts",
+            )
         notify_status(
             "ready",
             bot_user=str(bot.user or ""),

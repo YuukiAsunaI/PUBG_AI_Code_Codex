@@ -1,4 +1,4 @@
 from __future__ import annotations
 
 
-APP_RELEASE = "2026.09.01.1"
+APP_RELEASE = "2026.09.02.1"

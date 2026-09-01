@@ -21,11 +21,11 @@ from pubg_ai.replay_storage import (
 from pubg_ai.time_utils import now_kst, to_kst
 
 
-RENDERER_VERSION = "map-snapshot-v5"
+RENDERER_VERSION = "map-snapshot-v6"
 MAP_ASSET_BASE_URL = "https://raw.githubusercontent.com/pubg/api-assets/master/Assets/Maps"
 
 MAP_ASSET_FILENAMES = {
-    "Baltic_Main": "Erangel_Main_No_Text_Low_Res.png",
+    "Baltic_Main": "Erangel_Remastered_2026_Official.webp",
     "Desert_Main": "Miramar_Main_No_Text_Low_Res.png",
     "DihorOtok_Main": "Vikendi_Main_No_Text_Low_Res.png",
     "Erangel_Main": "Erangel_Main_No_Text_Low_Res.png",
@@ -37,6 +37,12 @@ MAP_ASSET_FILENAMES = {
     "Summerland_Main": "Karakin_Main_No_Text_Low_Res.png",
     "Tiger_Main": "Taego_Main_No_Text_Low_Res.png",
     "Chimera_Main": "Paramo_Main_Low_Res.png",
+}
+
+MAP_ASSET_URLS = {
+    "Baltic_Main": (
+        "https://wstatic-prod.pubg.com/web/live/main_cf7d221/img/590dba7.webp"
+    ),
 }
 
 MAP_WORLD_SIZE_CM = {
@@ -153,22 +159,41 @@ class MapAssetProvider:
         self.cache_root = cache_root.expanduser()
 
     def load_map(self, map_name: str | None) -> Image.Image | None:
-        filename = MAP_ASSET_FILENAMES.get(map_name or "")
-        if filename is None:
+        path = self.asset_path(map_name)
+        if path is None:
             return None
-
-        path = self.cache_root / "map_assets" / filename
-        if not path.exists():
-            self._download(filename, path)
 
         try:
             return Image.open(path).convert("RGB")
         except OSError:
             return None
 
-    def _download(self, filename: str, path: Path) -> None:
+    def asset_path(self, map_name: str | None) -> Path | None:
+        normalized_map_name = map_name or ""
+        filename = MAP_ASSET_FILENAMES.get(normalized_map_name)
+        if filename is None:
+            return None
+        path = self.cache_root / "map_assets" / filename
+        if not path.exists():
+            self._materialize(normalized_map_name, filename, path)
+        return path if path.is_file() else None
+
+    def _materialize(self, map_name: str, filename: str, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        url = f"{MAP_ASSET_BASE_URL}/{filename}"
+        bundled_path = (
+            Path(__file__).resolve().parent / "assets" / "maps" / filename
+        )
+        if bundled_path.is_file():
+            try:
+                atomic_write_bytes(path, bundled_path.read_bytes())
+                return
+            except OSError:
+                return
+
+        url = MAP_ASSET_URLS.get(
+            map_name,
+            f"{MAP_ASSET_BASE_URL}/{filename}",
+        )
         try:
             with urllib.request.urlopen(url, timeout=20) as response:
                 data = response.read()

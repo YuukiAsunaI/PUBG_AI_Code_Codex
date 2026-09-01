@@ -3,7 +3,11 @@ from __future__ import annotations
 from datetime import date, datetime
 import unittest
 
-from pubg_ai.flight_path_stats import FlightPathStatsService, summarize_flight_paths
+from pubg_ai.flight_path_stats import (
+    FlightPathStatsService,
+    cluster_flight_path_match_ids,
+    summarize_flight_paths,
+)
 from pubg_ai.player_trends import PlayerTrendFilters
 
 
@@ -35,6 +39,12 @@ class FlightPathStatsTests(unittest.TestCase):
         self.assertEqual(cluster.forward_count, 1)
         self.assertEqual(cluster.reverse_count, 1)
         self.assertAlmostEqual(cluster.dominant_direction_share, 0.5)
+        memberships = cluster_flight_path_match_ids(
+            rows,
+            angle_bin_degrees=10,
+            offset_bin_m=500,
+        )
+        self.assertEqual(memberships[cluster.cluster_id], {"match-1", "match-2"})
         self.assertTrue(
             0.0 in {
                 round(cluster.start_x_pct, 8),

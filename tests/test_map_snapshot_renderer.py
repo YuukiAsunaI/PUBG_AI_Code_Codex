@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 
 from PIL import Image
@@ -30,6 +31,17 @@ class NoAssetProvider(MapAssetProvider):
 
 
 class MapSnapshotRendererTests(unittest.TestCase):
+    def test_bundled_erangel_remastered_asset_is_materialized(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            provider = MapAssetProvider(Path(temp_dir))
+            path = provider.asset_path("Baltic_Main")
+
+            self.assertIsNotNone(path)
+            assert path is not None
+            self.assertEqual(path.suffix.casefold(), ".webp")
+            with Image.open(path) as image:
+                self.assertEqual(image.size, (1008, 1008))
+
     def test_snapshot_candidates_require_renderable_position_samples(self) -> None:
         connection = QueryConnection()
         processor = MapSnapshotProcessor(

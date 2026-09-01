@@ -26,4 +26,4 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-pubg_ai = ["assets/*.png", "assets/*.ico"]
+pubg_ai = ["assets/*.png", "assets/*.ico", "assets/maps/*.webp"]

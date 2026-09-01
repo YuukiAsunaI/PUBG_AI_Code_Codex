@@ -181,6 +181,36 @@ class FlightPathStatsService:
             recent_limit=normalized_recent,
         )
 
+    def get_cluster_match_ids(
+        self,
+        *,
+        shard: str | None = None,
+        account_id: str | None = None,
+        filters: PlayerTrendFilters | None = None,
+        angle_bin_degrees: float = 10.0,
+        offset_bin_m: float = 500.0,
+        route_limit: int = 50000,
+    ) -> dict[str, set[str]]:
+        normalized_filters = (filters or PlayerTrendFilters()).normalized()
+        normalized_angle_bin = _bounded_float(
+            angle_bin_degrees, "angle_bin_degrees", 1.0, 45.0
+        )
+        normalized_offset_bin = _bounded_float(
+            offset_bin_m, "offset_bin_m", 50.0, 4000.0
+        )
+        normalized_route_limit = _bounded_int(route_limit, "route_limit", 100, 100000)
+        rows = self._get_rows(
+            shard=_optional_text(shard),
+            account_id=_optional_text(account_id),
+            filters=normalized_filters,
+            route_limit=normalized_route_limit,
+        )
+        return cluster_flight_path_match_ids(
+            rows,
+            angle_bin_degrees=normalized_angle_bin,
+            offset_bin_m=normalized_offset_bin,
+        )
+
     def _get_rows(
         self,
         *,
@@ -289,32 +319,11 @@ def summarize_flight_paths(
     recent_limit: int = 50,
 ) -> FlightPathReport:
     normalized_filters = (filters or PlayerTrendFilters()).normalized()
-    angle_bin_count = max(1, round(180.0 / angle_bin_degrees))
-    actual_angle_bin = 180.0 / angle_bin_count
-    prepared: list[_PreparedRoute] = []
-    total = 0
-    for row in rows:
-        total += 1
-        route = _prepare_route(row)
-        if route is not None:
-            prepared.append(route)
-
-    buckets: dict[tuple[str, int, int], list[_PreparedRoute]] = {}
-    for item in prepared:
-        angle_degrees = degrees(item.canonical_angle_radians)
-        angle_index = int(
-            floor((angle_degrees + actual_angle_bin / 2.0) / actual_angle_bin)
-        ) % angle_bin_count
-        bin_angle = angle_index * actual_angle_bin * pi / 180.0
-        bin_normal_x, bin_normal_y = -sin(bin_angle), cos(bin_angle)
-        bin_offset_m = (
-            item.center_dx_cm * bin_normal_x + item.center_dy_cm * bin_normal_y
-        ) / 100.0
-        offset_index = int(floor(bin_offset_m / offset_bin_m + 0.5))
-        key = (item.route.map_name, angle_index, offset_index)
-        buckets.setdefault(key, []).append(
-            replace(item, offset_from_center_m=bin_offset_m)
-        )
+    total, prepared, buckets, actual_angle_bin = _cluster_flight_path_rows(
+        rows,
+        angle_bin_degrees=angle_bin_degrees,
+        offset_bin_m=offset_bin_m,
+    )
 
     map_route_counts: dict[str, int] = {}
     for item in prepared:
@@ -393,6 +402,69 @@ def summarize_flight_paths(
         maps=maps,
         recent_routes=recent_routes,
     )
+
+
+def cluster_flight_path_match_ids(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    angle_bin_degrees: float = 10.0,
+    offset_bin_m: float = 500.0,
+) -> dict[str, set[str]]:
+    _, _, buckets, actual_angle_bin = _cluster_flight_path_rows(
+        rows,
+        angle_bin_degrees=angle_bin_degrees,
+        offset_bin_m=offset_bin_m,
+    )
+    return {
+        _flight_cluster_id(
+            map_name,
+            angle_index,
+            offset_index,
+            angle_bin_degrees=actual_angle_bin,
+            offset_bin_m=offset_bin_m,
+        ): {item.route.match_id for item in items}
+        for (map_name, angle_index, offset_index), items in buckets.items()
+    }
+
+
+def _cluster_flight_path_rows(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    angle_bin_degrees: float,
+    offset_bin_m: float,
+) -> tuple[
+    int,
+    list[_PreparedRoute],
+    dict[tuple[str, int, int], list[_PreparedRoute]],
+    float,
+]:
+    angle_bin_count = max(1, round(180.0 / angle_bin_degrees))
+    actual_angle_bin = 180.0 / angle_bin_count
+    prepared: list[_PreparedRoute] = []
+    total = 0
+    for row in rows:
+        total += 1
+        route = _prepare_route(row)
+        if route is not None:
+            prepared.append(route)
+
+    buckets: dict[tuple[str, int, int], list[_PreparedRoute]] = {}
+    for item in prepared:
+        angle_degrees = degrees(item.canonical_angle_radians)
+        angle_index = int(
+            floor((angle_degrees + actual_angle_bin / 2.0) / actual_angle_bin)
+        ) % angle_bin_count
+        bin_angle = angle_index * actual_angle_bin * pi / 180.0
+        bin_normal_x, bin_normal_y = -sin(bin_angle), cos(bin_angle)
+        bin_offset_m = (
+            item.center_dx_cm * bin_normal_x + item.center_dy_cm * bin_normal_y
+        ) / 100.0
+        offset_index = int(floor(bin_offset_m / offset_bin_m + 0.5))
+        key = (item.route.map_name, angle_index, offset_index)
+        buckets.setdefault(key, []).append(
+            replace(item, offset_from_center_m=bin_offset_m)
+        )
+    return total, prepared, buckets, actual_angle_bin
 
 
 def _prepare_route(row: Mapping[str, Any]) -> _PreparedRoute | None:
@@ -511,9 +583,12 @@ def _build_cluster(
         if item.route.created_at_kst is not None
     ]
     return FlightPathCluster(
-        cluster_id=(
-            f"{map_name}:angle{angle_index}:offset{offset_index}:"
-            f"a{angle_bin_degrees:g}:o{offset_bin_m:g}"
+        cluster_id=_flight_cluster_id(
+            map_name,
+            angle_index,
+            offset_index,
+            angle_bin_degrees=angle_bin_degrees,
+            offset_bin_m=offset_bin_m,
         ),
         map_name=map_name,
         map_name_ko=translate_code(map_name, "map"),
@@ -537,6 +612,20 @@ def _build_cluster(
         ),
         first_seen_at_kst=min(seen) if seen else None,
         last_seen_at_kst=max(seen) if seen else None,
+    )
+
+
+def _flight_cluster_id(
+    map_name: str,
+    angle_index: int,
+    offset_index: int,
+    *,
+    angle_bin_degrees: float,
+    offset_bin_m: float,
+) -> str:
+    return (
+        f"{map_name}:angle{angle_index}:offset{offset_index}:"
+        f"a{angle_bin_degrees:g}:o{offset_bin_m:g}"
     )
 
 
