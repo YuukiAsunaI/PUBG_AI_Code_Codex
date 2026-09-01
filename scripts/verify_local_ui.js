@@ -69,6 +69,10 @@ async function runPlayerAnalysis(page) {
   await page.locator('[data-intelligence-view="evidence"]').click();
   await page.locator("#intelligenceBody .intelligence-definition").first().waitFor();
   const definitionCount = await page.locator("#intelligenceBody .intelligence-definition").count();
+  await page.locator('[data-intelligence-view="tactics"]').click();
+  await page.locator("#intelligenceBody").filter({ hasText: "고급 판단 분석" }).waitFor({ timeout: 30000 });
+  const tacticsText = await page.locator("#intelligenceBody").innerText();
+  const tacticsSections = await page.locator("#intelligenceBody .intelligence-data-section").count();
   const unconvertedLargeNumbers = [...overview.matchAll(/\b\d{1,3}(?:,\d{3})+(?:\.\d+)?\b/g)]
     .map((match) => match[0])
     .filter((text) => Number(text.replaceAll(",", "")) >= 10000);
@@ -77,8 +81,76 @@ async function runPlayerAnalysis(page) {
     hasPlayer: overview.includes("명중률") && overview.includes("교전"),
     chartCount,
     definitionCount,
+    tacticsSections,
+    tacticsReady: [
+      "교전 의사결정",
+      "자기장과 로테이션",
+      "팀 협동",
+      "파밍 준비",
+      "최근 변화 신호",
+      "최근 패배 교전 복기",
+    ].every((label) => tacticsText.includes(label)),
+    tacticsBackfillWaiting: tacticsText.includes("고급 판단 분석 백필 대기"),
     hasKoreanLargeUnit: /\d+(?:억|만)(?:\s|\d)/.test(overview),
     unconvertedLargeNumbers: [...new Set(unconvertedLargeNumbers)].slice(0, 20),
+  };
+}
+
+async function runRecommendationChecks(page) {
+  await openWorkspaceSection(page, "players", "recommendations");
+  const selection = await selectPlayerForForm(page, "#recommendationForm");
+  const form = selection.form;
+  const details = form.locator("details.advanced-filters");
+  await details.locator("summary").click();
+  const filterFields = await details.locator("[name]").evaluateAll((items) => (
+    items.map((item) => item.getAttribute("name")).filter(Boolean)
+  ));
+  await page.waitForFunction(() => (
+    [...document.querySelectorAll('#recommendationForm select[name="map_name"] option')]
+      .some((option) => option.value)
+  ));
+  const mapSelect = form.locator('select[name="map_name"]');
+  const selectedMap = await mapSelect.locator("option").evaluateAll((options) => {
+    const option = options.find((item) => item.value);
+    return option ? { value: option.value, label: option.textContent.trim() } : { value: "", label: "" };
+  });
+  await mapSelect.selectOption(selectedMap.value);
+  await form.locator('[name="min_matches"]').fill("3");
+  await form.locator('button[type="submit"]').click();
+  await page.locator("#recommendationBody .result-shell").waitFor({ timeout: 60000 });
+
+  const summaryText = await page.locator("#recommendationBody").innerText();
+  const weaponSummary = page.locator("#recommendationBody summary").filter({ hasText: "무기별 상세" }).first();
+  if (await weaponSummary.count()) await weaponSummary.click();
+  const weaponScoreSummary = page.locator("#recommendationBody summary").filter({ hasText: "무기 점수 계산" }).first();
+  if (await weaponScoreSummary.count()) await weaponScoreSummary.click();
+  const scoreText = await page.locator("#recommendationBody").innerText();
+
+  await page.locator('[data-recommendation-view="chart"]').click();
+  const chartPanel = page.locator('[data-recommendation-panel="chart"]');
+  await chartPanel.locator(".metric-chart-row").first().waitFor({ timeout: 30000 });
+  const chartRows = await chartPanel.locator(".metric-chart-row").count();
+  await chartPanel.locator("[data-recommendation-chart-metric]").selectOption("fight_win_rate");
+  const chartText = await chartPanel.innerText();
+  const screenshot = path.join(outputDir, "recommendation-confidence-desktop.png");
+  await page.locator("#recommendation-lookup").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: screenshot, fullPage: false });
+
+  return {
+    filterFields,
+    hasDetailedFilters: [
+      "map_name", "game_mode", "team_mode", "perspective", "match_type", "season_state",
+      "year", "quarter", "month", "exact_date_kst", "hour", "from_date_kst", "to_date_kst",
+    ].every((name) => filterFields.includes(name)),
+    hasLoadoutRecommendation: summaryText.includes("추천 2주무기 조합"),
+    selectedMap,
+    appliedMapCondition: Boolean(selectedMap.label) && summaryText.includes(selectedMap.label),
+    hasAdjustedRates: scoreText.includes("표본 보정")
+      && scoreText.includes("승률 표본 신뢰도")
+      && scoreText.includes("최종 점수 반영 계수"),
+    chartRows,
+    chartMetricApplied: chartText.includes("무기 · 교전 승리 확률"),
+    screenshot,
   };
 }
 
@@ -801,6 +873,7 @@ async function layoutDiagnostics(page) {
     const desktopResponse = await openManager(desktopPage);
     const workspaceContent = await runWorkspaceContentCheck(desktopPage);
     const player = await runPlayerAnalysis(desktopPage);
+    const recommendations = await runRecommendationChecks(desktopPage);
     const playerScreenshot = path.join(outputDir, "player-intelligence-desktop.png");
     await desktopPage.screenshot({ path: playerScreenshot, fullPage: false });
     const features = await runExpandedFeatureChecks(desktopPage);
@@ -834,6 +907,7 @@ async function layoutDiagnostics(page) {
       desktop: {
         status: desktopResponse?.status(),
         player,
+        recommendations,
         workspaceContent,
         features,
         registryDimensions,
@@ -852,6 +926,7 @@ async function layoutDiagnostics(page) {
       },
       screenshots: {
         playerScreenshot,
+        recommendationScreenshot: recommendations.screenshot,
         auditScreenshot,
         mobileScreenshot,
         ...features.screenshots,
@@ -860,13 +935,23 @@ async function layoutDiagnostics(page) {
         mobileRegistry: mobileRegistry.screenshot,
       },
     };
-    console.log(JSON.stringify(result, null, 2));
     const failed = [
       result.desktop.status !== 200,
       result.mobile.status !== 200,
       !result.desktop.player.hasPlayer,
+      !result.desktop.player.tacticsReady,
+      result.desktop.player.tacticsBackfillWaiting,
+      result.desktop.player.tacticsSections < 6,
+      !result.desktop.recommendations.hasDetailedFilters,
+      !result.desktop.recommendations.hasLoadoutRecommendation,
+      !result.desktop.recommendations.appliedMapCondition,
+      !result.desktop.recommendations.hasAdjustedRates,
+      result.desktop.recommendations.chartRows < 1,
+      !result.desktop.recommendations.chartMetricApplied,
       !result.desktop.workspaceContent.valid,
       !result.mobile.player.hasPlayer,
+      !result.mobile.player.tacticsReady,
+      result.mobile.player.tacticsBackfillWaiting,
       !result.desktop.features.numberFormat.koreanUnitsRendered,
       result.desktop.features.weaponAttachments.tabCount !== 3,
       !result.desktop.features.weaponAttachments.attachmentPanelVisible,
@@ -961,6 +1046,8 @@ async function layoutDiagnostics(page) {
       result.mobile.consoleErrors.length > 0,
       result.desktop.requestFailures.length > 0,
       result.mobile.requestFailures.length > 0,
+      result.desktop.httpErrors.length > 0,
+      result.mobile.httpErrors.length > 0,
       result.desktop.layout.blank || result.mobile.layout.blank,
       result.desktop.layout.overlay || result.mobile.layout.overlay,
       result.desktop.layout.documentWidth > result.desktop.layout.viewportWidth + 1,
@@ -968,6 +1055,54 @@ async function layoutDiagnostics(page) {
       result.desktop.layout.overflowingButtons.length > 0,
       result.mobile.layout.overflowingButtons.length > 0,
     ].some(Boolean);
+    const compactResult = {
+      passed: !failed,
+      baseUrl,
+      status: {
+        desktop: result.desktop.status,
+        mobile: result.mobile.status,
+      },
+      playerAnalysis: {
+        desktopHasPlayer: result.desktop.player.hasPlayer,
+        desktopTacticsReady: result.desktop.player.tacticsReady,
+        desktopTacticsSections: result.desktop.player.tacticsSections,
+        desktopBackfillWaiting: result.desktop.player.tacticsBackfillWaiting,
+        mobileHasPlayer: result.mobile.player.hasPlayer,
+        mobileTacticsReady: result.mobile.player.tacticsReady,
+        mobileBackfillWaiting: result.mobile.player.tacticsBackfillWaiting,
+      },
+      recommendations: result.desktop.recommendations,
+      numberFormat: result.desktop.features.numberFormat,
+      weaponAttachments: result.desktop.features.weaponAttachments,
+      matchAnalysis: result.desktop.features.match,
+      landingAnalysis: result.desktop.features.landing,
+      ranking: result.desktop.features.ranking,
+      comparison: result.desktop.features.comparison,
+      flightPaths: result.desktop.features.flightPaths,
+      discordBot: result.desktop.features.discordBot,
+      registryDimensions: result.desktop.registryDimensions,
+      wholeMatchReplay: result.desktop.wholeMatchReplay,
+      audit: result.desktop.audit,
+      workspaceContent: {
+        checked: result.desktop.workspaceContent.checked,
+        valid: result.desktop.workspaceContent.valid,
+        failures: result.desktop.workspaceContent.failures.length,
+      },
+      workspaceNavigation: result.desktop.workspaceNavigation,
+      errors: {
+        desktopConsole: result.desktop.consoleErrors.length,
+        mobileConsole: result.mobile.consoleErrors.length,
+        desktopRequests: result.desktop.requestFailures.length,
+        mobileRequests: result.mobile.requestFailures.length,
+        desktopHttp: result.desktop.httpErrors.length,
+        mobileHttp: result.mobile.httpErrors.length,
+      },
+      layout: {
+        desktop: result.desktop.layout,
+        mobile: result.mobile.layout,
+      },
+    };
+    console.log(JSON.stringify(process.argv.includes("--compact") ? compactResult : result, null, 2));
     process.exitCode = failed ? 1 : 0;
   } finally {
     await browser.close();

@@ -116,6 +116,9 @@ class WebSettingsTests(unittest.TestCase):
         self.assertIn("/collector/worker/start", body)
         self.assertIn("/collector/worker/status", body)
         self.assertIn('id="postProcessingWorkerForm"', body)
+        self.assertIn('name="advanced_analysis_limit"', body)
+        self.assertIn("교전·자기장·팀·파밍 분석", body)
+        self.assertIn("`판단 분석 ${formatInteger(lastCycle.advanced_analysis?.parsed_payloads)}`", body)
         self.assertIn("/post-processing/worker/start", body)
         self.assertIn("/post-processing/worker/status", body)
         self.assertIn('id="worker-runs"', body)
@@ -422,6 +425,42 @@ class WebSettingsTests(unittest.TestCase):
         self.assertFalse(payload["running"])
         self.assertFalse(payload["stop_requested"])
         self.assertEqual(payload["cycle_count"], 0)
+
+    def test_post_processing_worker_start_forwards_advanced_analysis_limit(self) -> None:
+        captured: dict[str, object] = {}
+
+        class FakeWorkerState:
+            def to_record(self) -> dict[str, object]:
+                return {"running": True, "cycle_count": 0}
+
+        def fake_start(_controller: object, options: object) -> FakeWorkerState:
+            captured["options"] = options
+            return FakeWorkerState()
+
+        with patch("pubg_ai.web.app.PostProcessingWorkerController.start", new=fake_start):
+            client = TestClient(create_app())
+            response = client.post(
+                "/post-processing/worker/start",
+                json={
+                    "combat_limit": 11,
+                    "activity_limit": 12,
+                    "item_limit": 13,
+                    "movement_limit": 14,
+                    "advanced_analysis_limit": 37,
+                    "loadout_limit": 38,
+                    "fight_outcome_limit": 15,
+                    "map_snapshot_limit": 16,
+                    "timeline_limit": 17,
+                    "force": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["worker"]["running"])
+        options = captured["options"]
+        self.assertEqual(options.advanced_analysis_limit, 37)  # type: ignore[attr-defined]
+        self.assertEqual(options.loadout_limit, 38)  # type: ignore[attr-defined]
+        self.assertTrue(options.force)  # type: ignore[attr-defined]
 
     def test_worker_runs_endpoint_returns_recent_history(self) -> None:
         connection = FakeWorkerRunConnection()

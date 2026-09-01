@@ -55,6 +55,7 @@ class WebRecommendationTests(unittest.TestCase):
             response = client.get(
                 "/players/recommendations"
                 "?shard=steam&name=Yuuki_Asuna---&min_matches=10000"
+                "&map_name=Tiger_Main&team_mode=squad&from_date_kst=2026-08-01&hour=21"
             )
 
         self.assertEqual(response.status_code, 200)
@@ -66,6 +67,14 @@ class WebRecommendationTests(unittest.TestCase):
         self.assertEqual(payload["weapons"][0]["headshot_hit_rate"], 0.2)
         self.assertEqual(payload["weapons"][0]["fight_count"], 0)
         self.assertEqual(payload["attachments"], [])
+        self.assertEqual(payload["filters"]["map_name"], "Tiger_Main")
+        self.assertEqual(payload["filters"]["team_mode"], "squad")
+        self.assertEqual(payload["filters"]["from_date_kst"], "2026-08-01")
+        self.assertEqual(payload["filters"]["hour"], 21)
+        filtered_queries = [query for query, _ in connection.executed if "analysis_matches AS matches" in query]
+        self.assertTrue(filtered_queries)
+        self.assertTrue(all("matches.map_name = %s" in query for query in filtered_queries))
+        self.assertTrue(all("HOUR(matches.created_at_kst) = %s" in query for query in filtered_queries))
         self.assertTrue(connection.closed)
 
     def test_index_exposes_explainable_recommendation_metrics(self) -> None:
@@ -77,6 +86,10 @@ class WebRecommendationTests(unittest.TestCase):
         self.assertIn("무기 점수 계산", body)
         self.assertIn("헤드샷 명중 확률", body)
         self.assertIn("교전 승리 확률", body)
+        self.assertIn("상세 조건", body)
+        self.assertIn('name="is_custom_match"', body)
+        self.assertIn("recommendationConditionLabel", body)
+        self.assertIn("표본 보정", body)
         self.assertNotIn(
             "clearRegisteredPlayerSearch(event.currentTarget)",
             body,
@@ -86,6 +99,14 @@ class WebRecommendationTests(unittest.TestCase):
             handler_start : body.index('dropZoneForm.addEventListener("submit"', handler_start)
         ]
         self.assertNotIn("event.currentTarget.reset()", recommendation_handler)
+
+    def test_player_selection_populates_recommendation_and_drop_zone_catalogs(self) -> None:
+        body = TestClient(create_app()).get("/").text
+
+        self.assertIn("const catalogAnalysisForms = [", body)
+        self.assertIn("recommendationForm,\n      dropZoneForm,\n      matchForm,", body)
+        self.assertIn("for (const formElement of catalogAnalysisForms)", body)
+        self.assertIn("if (catalogAnalysisForms.includes(formElement))", body)
 
     def test_drop_zone_view_limits_default_chart_without_hiding_detail_rows(self) -> None:
         body = TestClient(create_app()).get("/").text
@@ -176,6 +197,7 @@ class FakeConnection:
     def __init__(self, results: list[object]) -> None:
         self.results = list(results)
         self.closed = False
+        self.executed: list[tuple[str, list[object]]] = []
 
     def cursor(self) -> "FakeCursor":
         return FakeCursor(self)
@@ -195,7 +217,7 @@ class FakeCursor:
         return None
 
     def execute(self, query: str, params: tuple[object, ...] | list[object]) -> None:
-        return None
+        self.connection.executed.append((query, list(params)))
 
     def fetchone(self) -> object:
         return self.connection.results.pop(0)

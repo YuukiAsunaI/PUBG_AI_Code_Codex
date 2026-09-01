@@ -50,6 +50,7 @@ class PostProcessingWorkerTests(unittest.TestCase):
             activity_limit=2,
             item_limit=4,
             movement_limit=5,
+            advanced_analysis_limit=11,
             loadout_limit=6,
             fight_outcome_limit=9,
             map_snapshot_limit=7,
@@ -66,6 +67,7 @@ class PostProcessingWorkerTests(unittest.TestCase):
             activity_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("activity", *args, calls=calls),
             item_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("items", *args, calls=calls),
             movement_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("movement", *args, calls=calls),
+            advanced_analysis_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("advanced_analysis", *args, calls=calls),
             loadout_processor_factory=lambda *args, **kwargs: FakeLoadoutProcessor(*args, calls=calls),
             fight_outcome_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("fight_outcomes", *args, calls=calls),
             map_snapshot_processor_factory=lambda *args, **kwargs: FakeReplayProcessor("map_snapshots", *args, calls=calls),
@@ -79,6 +81,7 @@ class PostProcessingWorkerTests(unittest.TestCase):
         self.assertEqual(result.activity, {"parsed_payloads": 2, "failed_payloads": 0})
         self.assertEqual(result.items, {"parsed_payloads": 4, "failed_payloads": 0})
         self.assertEqual(result.movement, {"parsed_payloads": 5, "failed_payloads": 0})
+        self.assertEqual(result.advanced_analysis, {"parsed_payloads": 11, "failed_payloads": 0})
         self.assertEqual(result.loadout_snapshots, {"generated_snapshots": 6, "failed_matches": 0})
         self.assertEqual(result.fight_outcomes, {"parsed_payloads": 9, "failed_payloads": 0})
         self.assertEqual(result.map_snapshots, {"generated_snapshots": 7, "failed_snapshots": 0, "artifacts": []})
@@ -91,6 +94,7 @@ class PostProcessingWorkerTests(unittest.TestCase):
         self.assertIn(("activity", (2, True)), calls)
         self.assertIn(("items", (4, True)), calls)
         self.assertIn(("movement", (5, True)), calls)
+        self.assertIn(("advanced_analysis", (11, True)), calls)
         self.assertIn(("loadout", (6, True)), calls)
         self.assertIn(("fight_outcomes", (9, True)), calls)
         self.assertIn(("map_snapshots", (7, True)), calls)
@@ -111,6 +115,7 @@ class PostProcessingWorkerTests(unittest.TestCase):
             activity_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("activity", *args, calls=[]),
             item_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("items", *args, calls=[]),
             movement_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("movement", *args, calls=[]),
+            advanced_analysis_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("advanced_analysis", *args, calls=[]),
             loadout_processor_factory=lambda *args, **kwargs: FakeLoadoutProcessor(*args, calls=[]),
             fight_outcome_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("fight_outcomes", *args, calls=[]),
             map_snapshot_processor_factory=lambda *args, **kwargs: FakeReplayProcessor("map_snapshots", *args, calls=[]),
@@ -153,6 +158,7 @@ class PostProcessingWorkerTests(unittest.TestCase):
             activity_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("activity", *args, calls=[]),
             item_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("items", *args, calls=[]),
             movement_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("movement", *args, calls=[]),
+            advanced_analysis_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("advanced_analysis", *args, calls=[]),
             loadout_processor_factory=lambda *args, **kwargs: FakeLoadoutProcessor(*args, calls=[]),
             fight_outcome_processor_factory=lambda *args, **kwargs: FakeTelemetryProcessor("fight_outcomes", *args, calls=[]),
             map_snapshot_processor_factory=lambda *args, **kwargs: FakeReplayProcessor("map_snapshots", *args, calls=[]),

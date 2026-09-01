@@ -8,11 +8,54 @@ from pubg_ai.player_recommendations import (
     PlayerRecommendationService,
     WeaponRecommendation,
     _aggregate_drop_regions,
+    _beta_binomial_posterior,
     _inventory_burden,
+    _performance_score_components,
 )
 
 
 class PlayerRecommendationServiceTests(unittest.TestCase):
+    def test_beta_binomial_shrinkage_prevents_one_match_perfect_rate_from_leading(self) -> None:
+        one_match = _beta_binomial_posterior(
+            1,
+            1,
+            prior_rate=0.10,
+            prior_strength=12,
+        )
+        established = _beta_binomial_posterior(
+            8,
+            12,
+            prior_rate=0.10,
+            prior_strength=12,
+        )
+
+        self.assertLess(one_match, established)
+        self.assertLess(one_match, 1.0)
+
+    def test_performance_score_exposes_observed_and_adjusted_win_rates(self) -> None:
+        one_match = _performance_score_components(
+            match_count=1,
+            wins=1,
+            kills=1,
+            damage_dealt=100,
+            win_prior_rate=0.10,
+        )
+        established = _performance_score_components(
+            match_count=12,
+            wins=8,
+            kills=8,
+            damage_dealt=1200,
+            win_prior_rate=0.10,
+        )
+
+        self.assertEqual(one_match["observed_win_rate"], 1.0)
+        self.assertLess(one_match["posterior_win_rate"], established["posterior_win_rate"])
+        self.assertLess(one_match["win_rate_confidence"], established["win_rate_confidence"])
+        self.assertLess(
+            one_match["confidence_adjusted_score"],
+            established["confidence_adjusted_score"],
+        )
+
     def test_drop_region_aggregation_preserves_weighted_map_position(self) -> None:
         zones = [
             DropZoneRecommendation(

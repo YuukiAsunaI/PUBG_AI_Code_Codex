@@ -8,6 +8,7 @@ from pubg_ai.player_intelligence import (
     _chunks,
     _merge_activity_detail_rows,
     _merge_item_rows,
+    summarize_advanced_analysis,
     summarize_player_intelligence,
 )
 from pubg_ai.telemetry_activity_processor import PARSER_VERSION as ACTIVITY_PARSER_VERSION
@@ -188,6 +189,119 @@ class PlayerIntelligenceTests(unittest.TestCase):
         self.assertEqual(activity_rows[0]["event_count"], 5)
         self.assertEqual(activity_rows[0]["damage"], 75)
         self.assertEqual(activity_rows[0]["max_speed"], 60)
+
+    def test_advanced_analysis_builds_reviews_and_detects_sustained_change(self) -> None:
+        match_rows = []
+        fight_rows = []
+        zone_rows = []
+        team_rows = []
+        loot_rows = []
+        for index in range(20):
+            match_id = f"advanced-{index:02d}"
+            improved = index >= 10
+            match_rows.append(
+                {
+                    "match_id": match_id,
+                    "created_at_kst": datetime(2026, 8, index + 1, 20, 0),
+                    "map_name": "Baltic_Main",
+                    "game_mode": "squad-fpp",
+                }
+            )
+            fight_rows.append(
+                {
+                    "match_id": match_id,
+                    "episode_index": 1,
+                    "started_at_kst": datetime(2026, 8, index + 1, 20, 5),
+                    "duration_seconds": 12,
+                    "phase_number": 1,
+                    "outcome": "win" if improved else "loss",
+                    "opening_actor": "self" if improved else "opponent",
+                    "first_hit_actor": "self" if improved else "opponent",
+                    "primary_opponent_account_id": "enemy",
+                    "opponent_count": 1,
+                    "opponent_team_count": 1,
+                    "shots_fired": 10,
+                    "shots_hit": 5 if improved else 2,
+                    "damage_dealt": 100 if improved else 30,
+                    "damage_taken": 20 if improved else 100,
+                    "dbnos_caused": 1 if improved else 0,
+                    "dbnos_taken": 0 if improved else 1,
+                    "kills": 1 if improved else 0,
+                    "deaths": 0 if improved else 1,
+                    "trade_opportunities": 0 if improved else 1,
+                    "trade_successes": 0,
+                    "is_third_party": False,
+                    "weapon_codes": '["WeapHK416_C"]',
+                    "opponent_weapon_codes": '["WeapAK47_C"]',
+                    "avg_distance_m": 50,
+                    "summary_reason": "교전 승리" if improved else "교전 패배",
+                }
+            )
+            zone_rows.append(
+                {
+                    "match_id": match_id,
+                    "phase_number": 1,
+                    "sample_count": 3,
+                    "late_entry_seconds": 5,
+                    "blue_zone_exposure_seconds": 0 if improved else 60,
+                    "outside_safe_zone_seconds": 0 if improved else 40,
+                    "avg_center_distance_ratio": 0.5,
+                    "rotation_distance_m": 1000,
+                    "vehicle_distance_m": 500,
+                    "dbnos_taken": 0 if improved else 1,
+                    "deaths": 0 if improved else 1,
+                }
+            )
+            team_rows.append(
+                {
+                    "match_id": match_id,
+                    "sample_count": 3,
+                    "avg_nearest_teammate_distance_m": 40 if improved else 200,
+                    "avg_visible_teammates": 2,
+                    "isolated_seconds": 0 if improved else 100,
+                    "close_support_seconds": 30 if improved else 0,
+                    "regroup_count": 1,
+                    "trade_opportunities": 1,
+                    "trade_successes": 1 if improved else 0,
+                    "avg_revive_latency_seconds": 8,
+                }
+            )
+            loot_rows.append(
+                {
+                    "match_id": match_id,
+                    "second_primary_weapon_code": "Item_Weapon_M24_C",
+                    "ready_before_first_fight": improved,
+                    "readiness_score": 100 if improved else 50,
+                    "seconds_to_first_primary_weapon": 15,
+                    "seconds_to_second_primary_weapon": 45,
+                    "seconds_to_first_fight": 90,
+                    "pickup_events": 8,
+                    "ground_pickups": 7,
+                    "loot_box_pickups": 1,
+                    "care_package_pickups": 0,
+                }
+            )
+
+        report = summarize_advanced_analysis(
+            match_rows=match_rows,
+            fight_episodes=fight_rows,
+            zone_phases=zone_rows,
+            team_summaries=team_rows,
+            loot_summaries=loot_rows,
+        )
+
+        self.assertEqual(report["fights"]["episodes"], 20)
+        self.assertEqual(report["fights"]["win_rate"], 0.5)
+        self.assertEqual(report["zone_rotation"]["covered_matches"], 20)
+        self.assertEqual(report["team"]["trade_rate"], 0.5)
+        self.assertEqual(report["loot_readiness"]["avg_readiness_score"], 75)
+        self.assertEqual(len(report["death_reviews"]), 10)
+        signals = {item["key"]: item for item in report["change_signals"]}
+        self.assertTrue(signals["fight_win_rate"]["detected"])
+        self.assertEqual(signals["fight_win_rate"]["direction"], "improved")
+        self.assertEqual(signals["blue_exposure"]["direction"], "improved")
+        self.assertEqual(signals["isolation"]["direction"], "improved")
+        self.assertEqual(signals["readiness"]["direction"], "improved")
 
 
 def _row(**overrides: object) -> dict[str, object]:

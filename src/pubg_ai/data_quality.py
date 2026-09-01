@@ -5,6 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
+from pubg_ai.advanced_analysis import PARSER_VERSION as ADVANCED_ANALYSIS_PARSER_VERSION
 from pubg_ai.code_translator import CodeTranslator
 from pubg_ai.database import SCHEMA_VERSION
 from pubg_ai.fight_outcome_processor import FIGHT_OUTCOME_PARSER_VERSION
@@ -24,6 +25,7 @@ PROCESSOR_SPECS = (
     ("activity", "행동", ACTIVITY_PARSER_VERSION),
     ("items", "아이템", ITEM_PARSER_VERSION),
     ("movement", "이동·좌표", MOVEMENT_PARSER_VERSION),
+    ("advanced_analysis", "교전·자기장·팀·파밍 분석", ADVANCED_ANALYSIS_PARSER_VERSION),
 )
 
 
@@ -127,6 +129,7 @@ def audit_player_intelligence(connection: Any) -> PlayerIntelligenceAudit:
     item_summary_mismatches = _item_summary_mismatches(connection)
     item_use_quantity_mismatches = _item_use_quantity_mismatches(connection)
     movement_output_mismatches = _movement_output_mismatches(connection)
+    advanced_analysis_mismatches = _advanced_analysis_mismatches(connection)
     fight_outcome_mismatches = _fight_outcome_mismatches(connection)
     negative_activity_rows = _negative_activity_rows(connection)
     negative_item_rows = _negative_item_rows(connection)
@@ -243,6 +246,11 @@ def audit_player_intelligence(connection: Any) -> PlayerIntelligenceAudit:
                 "movement_output_reconciliation",
                 "이동 상태·좌표·낙하·요약·교전 위치 행 수 일치",
                 movement_output_mismatches,
+            ),
+            _zero_check(
+                "advanced_analysis_reconciliation",
+                "고급 분석 상태·교전·자기장·팀·파밍 행 수 일치",
+                advanced_analysis_mismatches,
             ),
             _zero_check(
                 "fight_outcome_reconciliation",
@@ -546,6 +554,40 @@ def _movement_output_mismatches(connection: Any) -> int:
           AND states.output_count <> COALESCE(outputs.output_count, 0)
         """,
         (MOVEMENT_PARSER_VERSION,),
+    )
+
+
+def _advanced_analysis_mismatches(connection: Any) -> int:
+    return _scalar(
+        connection,
+        """
+        SELECT COUNT(*) AS value
+        FROM player_telemetry_processing_states states
+        INNER JOIN analysis_matches matches ON matches.match_id = states.match_id
+        LEFT JOIN (
+            SELECT match_id, account_id, SUM(row_count) AS output_count
+            FROM (
+                SELECT match_id, account_id, COUNT(*) AS row_count
+                FROM player_fight_episodes GROUP BY match_id, account_id
+                UNION ALL
+                SELECT match_id, account_id, COUNT(*) AS row_count
+                FROM player_zone_phase_summaries GROUP BY match_id, account_id
+                UNION ALL
+                SELECT match_id, account_id, COUNT(*) AS row_count
+                FROM player_team_coordination_summaries GROUP BY match_id, account_id
+                UNION ALL
+                SELECT match_id, account_id, COUNT(*) AS row_count
+                FROM player_loot_readiness_summaries GROUP BY match_id, account_id
+            ) rows_by_table
+            GROUP BY match_id, account_id
+        ) outputs
+            ON outputs.match_id = states.match_id
+           AND outputs.account_id = states.account_id
+        WHERE states.processor_name = 'advanced_analysis'
+          AND states.parser_version = %s
+          AND states.output_count <> COALESCE(outputs.output_count, 0)
+        """,
+        (ADVANCED_ANALYSIS_PARSER_VERSION,),
     )
 
 

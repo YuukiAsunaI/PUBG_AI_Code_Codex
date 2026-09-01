@@ -5,6 +5,7 @@ from datetime import datetime
 from threading import Event, Lock, Thread
 from typing import Any, Callable
 
+from pubg_ai.advanced_analysis_processor import AdvancedAnalysisProcessor
 from pubg_ai.config import RuntimeConfig
 from pubg_ai.database import connect_mysql
 from pubg_ai.fight_outcome_processor import FightOutcomeProcessor
@@ -33,6 +34,7 @@ _STAGE_LABELS = {
     "activity": "행동 처리",
     "items": "아이템 처리",
     "movement": "이동·좌표 처리",
+    "advanced_analysis": "교전·자기장·팀·파밍 분석",
     "loadout_snapshots": "장비 스냅샷 처리",
     "fight_outcomes": "교전 승패 처리",
     "map_snapshots": "2D 지도 생성",
@@ -54,6 +56,7 @@ class PostProcessingWorkerOptions:
     activity_limit: int = 10
     item_limit: int = 10
     movement_limit: int = 10
+    advanced_analysis_limit: int = 10
     loadout_limit: int = 50
     fight_outcome_limit: int = 10
     map_snapshot_limit: int = 10
@@ -74,6 +77,7 @@ class PostProcessingCycleResult:
     activity: dict[str, Any] | None
     items: dict[str, Any] | None
     movement: dict[str, Any] | None
+    advanced_analysis: dict[str, Any] | None
     loadout_snapshots: dict[str, Any] | None
     fight_outcomes: dict[str, Any] | None
     map_snapshots: dict[str, Any] | None
@@ -124,6 +128,7 @@ def run_post_processing_cycle(
     activity_processor_factory: ProcessorFactory = TelemetryActivityProcessor,
     item_processor_factory: ProcessorFactory = TelemetryItemProcessor,
     movement_processor_factory: ProcessorFactory = TelemetryMovementProcessor,
+    advanced_analysis_processor_factory: ProcessorFactory = AdvancedAnalysisProcessor,
     loadout_processor_factory: ProcessorFactory = LoadoutSnapshotProcessor,
     fight_outcome_processor_factory: ProcessorFactory = FightOutcomeProcessor,
     map_snapshot_processor_factory: ProcessorFactory = MapSnapshotProcessor,
@@ -138,6 +143,7 @@ def run_post_processing_cycle(
     activity: dict[str, Any] | None = None
     items: dict[str, Any] | None = None
     movement: dict[str, Any] | None = None
+    advanced_analysis: dict[str, Any] | None = None
     loadout_snapshots: dict[str, Any] | None = None
     fight_outcomes: dict[str, Any] | None = None
     map_snapshots: dict[str, Any] | None = None
@@ -153,6 +159,7 @@ def run_post_processing_cycle(
             activity=activity,
             items=items,
             movement=movement,
+            advanced_analysis=advanced_analysis,
             loadout_snapshots=loadout_snapshots,
             fight_outcomes=fight_outcomes,
             map_snapshots=map_snapshots,
@@ -224,6 +231,23 @@ def run_post_processing_cycle(
             errors.append(_safe_error("movement", exc))
 
         try:
+            advanced_analysis = advanced_analysis_processor_factory(
+                connection,
+                raw_store,
+            ).process_raw_telemetry(
+                limit=worker_options.advanced_analysis_limit,
+                force=worker_options.force,
+            ).to_record()
+            _append_reported_failures(
+                errors,
+                "advanced_analysis",
+                advanced_analysis,
+                "failed_payloads",
+            )
+        except Exception as exc:
+            errors.append(_safe_error("advanced_analysis", exc))
+
+        try:
             loadout_snapshots = loadout_processor_factory(connection).process_matches(
                 limit=worker_options.loadout_limit,
                 force=worker_options.force,
@@ -276,6 +300,7 @@ class PostProcessingWorkerController:
         activity_processor_factory: ProcessorFactory = TelemetryActivityProcessor,
         item_processor_factory: ProcessorFactory = TelemetryItemProcessor,
         movement_processor_factory: ProcessorFactory = TelemetryMovementProcessor,
+        advanced_analysis_processor_factory: ProcessorFactory = AdvancedAnalysisProcessor,
         loadout_processor_factory: ProcessorFactory = LoadoutSnapshotProcessor,
         fight_outcome_processor_factory: ProcessorFactory = FightOutcomeProcessor,
         map_snapshot_processor_factory: ProcessorFactory = MapSnapshotProcessor,
@@ -290,6 +315,7 @@ class PostProcessingWorkerController:
         self._activity_processor_factory = activity_processor_factory
         self._item_processor_factory = item_processor_factory
         self._movement_processor_factory = movement_processor_factory
+        self._advanced_analysis_processor_factory = advanced_analysis_processor_factory
         self._loadout_processor_factory = loadout_processor_factory
         self._fight_outcome_processor_factory = fight_outcome_processor_factory
         self._map_snapshot_processor_factory = map_snapshot_processor_factory
@@ -374,6 +400,7 @@ class PostProcessingWorkerController:
                         activity_processor_factory=self._activity_processor_factory,
                         item_processor_factory=self._item_processor_factory,
                         movement_processor_factory=self._movement_processor_factory,
+                        advanced_analysis_processor_factory=self._advanced_analysis_processor_factory,
                         loadout_processor_factory=self._loadout_processor_factory,
                         fight_outcome_processor_factory=self._fight_outcome_processor_factory,
                         map_snapshot_processor_factory=self._map_snapshot_processor_factory,
@@ -457,6 +484,7 @@ def _validate_options(options: PostProcessingWorkerOptions) -> None:
         ("activity_limit", options.activity_limit, 200),
         ("item_limit", options.item_limit, 200),
         ("movement_limit", options.movement_limit, 200),
+        ("advanced_analysis_limit", options.advanced_analysis_limit, 200),
         ("loadout_limit", options.loadout_limit, 500),
         ("fight_outcome_limit", options.fight_outcome_limit, 200),
         ("map_snapshot_limit", options.map_snapshot_limit, 200),

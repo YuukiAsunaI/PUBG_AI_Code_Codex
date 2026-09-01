@@ -280,6 +280,7 @@ def main(argv: list[str] | None = None) -> int:
     post_process_parser.add_argument("--activity-limit", default=10, type=int)
     post_process_parser.add_argument("--item-limit", default=10, type=int)
     post_process_parser.add_argument("--movement-limit", default=10, type=int)
+    post_process_parser.add_argument("--advanced-analysis-limit", default=10, type=int)
     post_process_parser.add_argument("--loadout-limit", default=50, type=int)
     post_process_parser.add_argument("--fight-outcome-limit", default=10, type=int)
     post_process_parser.add_argument("--map-snapshot-limit", default=10, type=int)
@@ -824,6 +825,7 @@ def main(argv: list[str] | None = None) -> int:
             activity_limit=args.activity_limit,
             item_limit=args.item_limit,
             movement_limit=args.movement_limit,
+            advanced_analysis_limit=args.advanced_analysis_limit,
             loadout_limit=args.loadout_limit,
             fight_outcome_limit=args.fight_outcome_limit,
             map_snapshot_limit=args.map_snapshot_limit,

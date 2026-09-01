@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, time, timedelta
 from math import ceil, sqrt
 from typing import Any, Mapping
 import json
@@ -11,6 +12,7 @@ from pubg_ai.map_regions import resolve_map_region
 from pubg_ai.map_snapshot_renderer import DEFAULT_WORLD_SIZE_CM, MAP_WORLD_SIZE_CM
 from pubg_ai.player_registry import RegisteredPlayer
 from pubg_ai.player_scope import PLAYER_GUILD_SCOPE_CONDITION
+from pubg_ai.player_trends import PlayerTrendFilters
 from pubg_ai.weapon_accuracy import (
     WeaponAccuracyMetric,
     distance_weapon_family,
@@ -22,6 +24,8 @@ from pubg_ai.weapon_stats import normalize_weapon_code
 
 
 DROP_ZONE_GRID_SIZE = 20
+DEFAULT_WIN_PRIOR_RATE = 0.05
+BETA_BINOMIAL_PRIOR_STRENGTH = 12.0
 
 
 AMMO_TYPE_BY_WEAPON = {
@@ -159,6 +163,8 @@ class WeaponAttachmentRecommendation:
     headshots: int = 0
     avg_distance_m: float | None = None
     source: str = "attach_events"
+    posterior_win_rate: float = 0.0
+    win_rate_confidence: float = 0.0
 
     def to_record(self) -> dict[str, Any]:
         return asdict(self)
@@ -184,6 +190,8 @@ class WeaponAttachmentCombinationRecommendation:
     avg_distance_m: float | None
     reason: str
     score_components: dict[str, float] = field(default_factory=dict)
+    posterior_win_rate: float = 0.0
+    win_rate_confidence: float = 0.0
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
@@ -279,6 +287,9 @@ class WeaponRecommendation:
     range_score: float = 0.0
     top_distance_buckets: list[WeaponDistanceBucketRecommendation] = field(default_factory=list)
     score_components: dict[str, float] = field(default_factory=dict)
+    posterior_win_rate: float = 0.0
+    win_rate_confidence: float = 0.0
+    posterior_fight_win_rate: float = 0.0
 
     def to_record(self) -> dict[str, Any]:
         return asdict(self)
@@ -491,11 +502,13 @@ class PlayerRecommendationReport:
     drop_zones: list[DropZoneRecommendation]
     attachment_combinations: list[WeaponAttachmentCombinationRecommendation] = field(default_factory=list)
     loadouts: list[WeaponLoadoutRecommendation] = field(default_factory=list)
+    filters: PlayerTrendFilters = field(default_factory=PlayerTrendFilters)
 
     def to_record(self) -> dict[str, Any]:
         return {
             "player": self.player.to_record(),
             "min_matches": self.min_matches,
+            "filters": self.filters.to_record(),
             "loadouts": [item.to_record() for item in self.loadouts],
             "weapons": [item.to_record() for item in self.weapons],
             "weapon_attachments": [item.to_record() for item in self.weapon_attachments],
@@ -522,6 +535,7 @@ class PlayerRecommendationService:
         global_scope: bool = False,
         limit: int = 5,
         min_matches: int = 1,
+        filters: PlayerTrendFilters | None = None,
     ) -> PlayerRecommendationReport | None:
         player = self._get_player(
             shard=shard,
@@ -535,17 +549,24 @@ class PlayerRecommendationService:
 
         limit = max(1, min(int(limit), 20))
         min_matches = max(1, int(min_matches))
-        weapon_ranges = self._weapon_distance_recommendations(player, limit=max(limit * 4, 12))
+        normalized_filters = (filters or PlayerTrendFilters()).normalized()
+        weapon_ranges = self._weapon_distance_recommendations(
+            player,
+            limit=max(limit * 4, 12),
+            filters=normalized_filters,
+        )
         weapon_candidates = self._weapon_recommendations(
             player,
             limit=max(limit * 4, 20),
             min_matches=min_matches,
             distance_by_weapon=_distance_by_weapon(weapon_ranges),
+            filters=normalized_filters,
         )
         attachment_candidates, attachment_combinations = self._weapon_attachment_recommendations(
             player,
             limit=max(limit * 8, 40),
             min_matches=min_matches,
+            filters=normalized_filters,
         )
         return PlayerRecommendationReport(
             player=player,
@@ -553,10 +574,10 @@ class PlayerRecommendationService:
             weapons=weapon_candidates[:limit],
             weapon_attachments=attachment_candidates,
             weapon_ranges=weapon_ranges,
-            attachments=self._attachment_recommendations(player, limit=limit, min_matches=min_matches),
-            maps=self._map_recommendations(player, limit=limit, min_matches=min_matches),
-            teammates=self._teammate_recommendations(player, limit=limit, min_matches=min_matches),
-            drop_zones=self._drop_zone_recommendations(player, limit=limit, min_matches=min_matches),
+            attachments=self._attachment_recommendations(player, limit=limit, min_matches=min_matches, filters=normalized_filters),
+            maps=self._map_recommendations(player, limit=limit, min_matches=min_matches, filters=normalized_filters),
+            teammates=self._teammate_recommendations(player, limit=limit, min_matches=min_matches, filters=normalized_filters),
+            drop_zones=self._drop_zone_recommendations(player, limit=limit, min_matches=min_matches, filters=normalized_filters),
             attachment_combinations=attachment_combinations,
             loadouts=_build_weapon_loadouts(
                 weapon_candidates,
@@ -564,6 +585,7 @@ class PlayerRecommendationService:
                 attachment_combinations,
                 limit=limit,
             ),
+            filters=normalized_filters,
         )
 
     def get_drop_zone_analysis(
@@ -695,10 +717,12 @@ class PlayerRecommendationService:
         limit: int,
         min_matches: int,
         distance_by_weapon: Mapping[str, list[WeaponDistanceBucketRecommendation]],
+        filters: PlayerTrendFilters,
     ) -> list[WeaponRecommendation]:
+        match_filter_sql, match_filter_params = _match_filter_sql(filters)
         with self.connection.cursor() as cursor:
             cursor.execute(
-                """
+                f"""
                 SELECT
                     outcomes.weapon_code,
                     COUNT(*) AS fight_count,
@@ -711,13 +735,14 @@ class PlayerRecommendationService:
                   AND matches.shard = %s
                   AND outcomes.is_friendly_fire = 0
                   AND outcomes.weapon_code IS NOT NULL
+                  {match_filter_sql}
                 GROUP BY outcomes.weapon_code
                 """,
-                (player.account_id, player.shard),
+                (player.account_id, player.shard, *match_filter_params),
             )
             fight_rows = cursor.fetchall()
             cursor.execute(
-                """
+                f"""
                 SELECT
                     weapon_stats.weapon_code,
                     COUNT(DISTINCT weapon_stats.match_id) AS match_count,
@@ -741,12 +766,13 @@ class PlayerRecommendationService:
                    AND participants.account_id = weapon_stats.account_id
                 WHERE weapon_stats.account_id = %s
                   AND matches.shard = %s
+                  {match_filter_sql}
                 GROUP BY weapon_stats.weapon_code
                 HAVING match_count >= %s
                    AND (damage_dealt > 0 OR kills > 0 OR dbnos > 0 OR shots_fired > 0)
                 LIMIT 100
                 """,
-                (player.account_id, player.shard, min_matches),
+                (player.account_id, player.shard, *match_filter_params, min_matches),
             )
             rows = cursor.fetchall()
 
@@ -755,6 +781,12 @@ class PlayerRecommendationService:
             for row in fight_rows
             if row.get("weapon_code")
         }
+        total_weapon_matches = sum(_int(row.get("match_count")) for row in rows)
+        weapon_win_prior = (
+            _safe_divide(sum(_int(row.get("wins")) for row in rows), total_weapon_matches)
+            if total_weapon_matches
+            else DEFAULT_WIN_PRIOR_RATE
+        )
         recommendations: list[WeaponRecommendation] = []
         for row in rows:
             match_count = _int(row.get("match_count"))
@@ -795,14 +827,25 @@ class PlayerRecommendationService:
                 dbnos=dbnos,
                 damage_dealt=damage_dealt,
                 accuracy_score=recommendation_accuracy_score(accuracy_metric),
+                win_prior_rate=weapon_win_prior,
             )
-            fight_confidence = min(1.0, sqrt(fight_count / 20)) if fight_count else 0.0
-            fight_adjustment = (fight_win_rate - 0.5) * 40 * fight_confidence if fight_count else 0.0
+            posterior_fight_win_rate = _beta_binomial_posterior(
+                fight_wins,
+                fight_wins + fight_losses,
+                prior_rate=0.5,
+            )
+            fight_confidence = _sample_confidence(fight_count)
+            fight_adjustment = (
+                (posterior_fight_win_rate - 0.5) * 40 * fight_confidence
+                if fight_count
+                else 0.0
+            )
             score = score_components["confidence_adjusted_score"] + range_score + fight_adjustment
             score_components["range_bonus"] = range_score
             score_components["range_evidence_events"] = float(range_evidence_events)
             score_components["range_bonus_cap"] = 12.0
             score_components["fight_win_rate"] = fight_win_rate
+            score_components["posterior_fight_win_rate"] = posterior_fight_win_rate
             score_components["fight_confidence"] = fight_confidence
             score_components["fight_adjustment"] = fight_adjustment
             score_components["total_score"] = score
@@ -829,7 +872,8 @@ class PlayerRecommendationService:
                     avg_damage_dealt=_safe_divide(damage_dealt, match_count),
                     accuracy=accuracy,
                     reason=(
-                        f"{match_count}경기 · 승률 {_safe_divide(wins, match_count) * 100:.1f}% · "
+                        f"{match_count}경기 · 관측 승률 {_safe_divide(wins, match_count) * 100:.1f}% · "
+                        f"표본 보정 {score_components['posterior_win_rate'] * 100:.1f}% · "
                         f"평균 피해 {_safe_divide(damage_dealt, match_count):.1f} · "
                         f"경기당 킬 {_safe_divide(kills, match_count):.2f}"
                     ),
@@ -843,6 +887,9 @@ class PlayerRecommendationService:
                     range_score=range_score,
                     top_distance_buckets=top_distance_buckets,
                     score_components=score_components,
+                    posterior_win_rate=score_components["posterior_win_rate"],
+                    win_rate_confidence=score_components["win_rate_confidence"],
+                    posterior_fight_win_rate=posterior_fight_win_rate,
                 )
             )
         return _top(recommendations, limit)
@@ -852,10 +899,12 @@ class PlayerRecommendationService:
         player: RegisteredPlayer,
         *,
         limit: int,
+        filters: PlayerTrendFilters,
     ) -> list[WeaponDistanceBucketRecommendation]:
+        match_filter_sql, match_filter_params = _match_filter_sql(filters)
         with self.connection.cursor() as cursor:
             cursor.execute(
-                """
+                f"""
                 SELECT
                     location_events.damage_causer_name,
                     location_events.action,
@@ -873,10 +922,11 @@ class PlayerRecommendationService:
                   AND location_events.damage_causer_name IS NOT NULL
                   AND location_events.distance_m IS NOT NULL
                   AND location_events.distance_m >= 0
+                  {match_filter_sql}
                 ORDER BY matches.created_at_kst DESC, location_events.match_id DESC, location_events.event_index DESC
                 LIMIT 5000
                 """,
-                (player.account_id, player.shard),
+                (player.account_id, player.shard, *match_filter_params),
             )
             rows = cursor.fetchall()
 
@@ -946,6 +996,7 @@ class PlayerRecommendationService:
         *,
         limit: int,
         min_matches: int,
+        filters: PlayerTrendFilters,
     ) -> tuple[
         list[WeaponAttachmentRecommendation],
         list[WeaponAttachmentCombinationRecommendation],
@@ -954,6 +1005,7 @@ class PlayerRecommendationService:
             player,
             limit=limit,
             min_matches=min_matches,
+            filters=filters,
         )
         if snapshot_recommendations:
             return snapshot_recommendations, combinations
@@ -962,6 +1014,7 @@ class PlayerRecommendationService:
                 player,
                 limit=limit,
                 min_matches=min_matches,
+                filters=filters,
             ),
             combinations,
         )
@@ -972,13 +1025,15 @@ class PlayerRecommendationService:
         *,
         limit: int,
         min_matches: int,
+        filters: PlayerTrendFilters,
     ) -> tuple[
         list[WeaponAttachmentRecommendation],
         list[WeaponAttachmentCombinationRecommendation],
     ]:
+        match_filter_sql, match_filter_params = _match_filter_sql(filters)
         with self.connection.cursor() as cursor:
             cursor.execute(
-                """
+                f"""
                 SELECT
                     snapshots.match_id,
                     snapshots.weapon_code,
@@ -1002,10 +1057,11 @@ class PlayerRecommendationService:
                 WHERE snapshots.account_id = %s
                   AND matches.shard = %s
                   AND snapshots.attachment_count > 0
+                  {match_filter_sql}
                 ORDER BY matches.created_at_kst DESC, snapshots.match_id DESC, snapshots.combat_event_index DESC
                 LIMIT 5000
                 """,
-                (player.account_id, player.shard),
+                (player.account_id, player.shard, *match_filter_params),
             )
             rows = cursor.fetchall()
 
@@ -1064,6 +1120,13 @@ class PlayerRecommendationService:
                     record["distance_sum"] += distance_m
                     record["distance_count"] += 1
 
+        weapon_prior_totals: dict[str, dict[str, int]] = {}
+        for record in combos.values():
+            weapon_code = str(record["weapon_code"])
+            totals = weapon_prior_totals.setdefault(weapon_code, {"matches": 0, "wins": 0})
+            totals["matches"] += len(record["match_ids"])
+            totals["wins"] += len(record["win_match_ids"])
+
         recommendations: list[WeaponAttachmentRecommendation] = []
         for record in combos.values():
             match_count = len(record["match_ids"])
@@ -1076,16 +1139,28 @@ class PlayerRecommendationService:
             headshots = _int(record["headshots"])
             event_count = _int(record["event_count"])
             damage_dealt = sum(_float(value) for value in record["damage_by_match"].values())
-            score = (
-                kills * 120
-                + dbnos * 70
-                + finishes * 40
-                + headshots * 20
-                + event_count * 8
-                + wins * 50
+            weapon_code = str(record["weapon_code"])
+            prior_totals = weapon_prior_totals.get(weapon_code, {})
+            prior_rate = _safe_divide(
+                _int(prior_totals.get("wins")),
+                _int(prior_totals.get("matches")),
+            ) if _int(prior_totals.get("matches")) else DEFAULT_WIN_PRIOR_RATE
+            posterior_win_rate = _beta_binomial_posterior(
+                wins,
+                match_count,
+                prior_rate=prior_rate,
+            )
+            win_rate_confidence = _sample_confidence(match_count)
+            raw_score = (
+                _safe_divide(kills, match_count) * 120
+                + _safe_divide(dbnos, match_count) * 70
+                + _safe_divide(finishes, match_count) * 40
+                + _safe_divide(headshots, match_count) * 20
+                + _safe_divide(event_count, match_count) * 8
+                + posterior_win_rate * 50
                 + _safe_divide(damage_dealt, match_count) * 0.15
             )
-            weapon_code = str(record["weapon_code"])
+            score = max(0.0, raw_score) * (0.55 + win_rate_confidence * 0.45)
             attachment_code = str(record["attachment_code"])
             recommendations.append(
                 WeaponAttachmentRecommendation(
@@ -1118,6 +1193,8 @@ class PlayerRecommendationService:
                         else None
                     ),
                     source="loadout_snapshots",
+                    posterior_win_rate=posterior_win_rate,
+                    win_rate_confidence=win_rate_confidence,
                 )
             )
         return (
@@ -1135,10 +1212,12 @@ class PlayerRecommendationService:
         *,
         limit: int,
         min_matches: int,
+        filters: PlayerTrendFilters,
     ) -> list[WeaponAttachmentRecommendation]:
+        match_filter_sql, match_filter_params = _match_filter_sql(filters)
         with self.connection.cursor() as cursor:
             cursor.execute(
-                """
+                f"""
                 SELECT
                     item_events.match_id,
                     item_events.parent_item_code,
@@ -1166,13 +1245,14 @@ class PlayerRecommendationService:
                   AND item_events.parent_item_code IS NOT NULL
                   AND item_events.item_code IS NOT NULL
                   AND item_events.item_code LIKE %s
+                  {match_filter_sql}
                 GROUP BY
                     item_events.match_id,
                     item_events.parent_item_code,
                     item_events.item_code
                 LIMIT 1000
                 """,
-                (player.account_id, player.shard, "Item_Attach_%"),
+                (player.account_id, player.shard, "Item_Attach_%", *match_filter_params),
             )
             rows = cursor.fetchall()
 
@@ -1347,10 +1427,12 @@ class PlayerRecommendationService:
         *,
         limit: int,
         min_matches: int,
+        filters: PlayerTrendFilters,
     ) -> list[AttachmentRecommendation]:
+        match_filter_sql, match_filter_params = _match_filter_sql(filters)
         with self.connection.cursor() as cursor:
             cursor.execute(
-                """
+                f"""
                 SELECT
                     item_stats.item_code,
                     item_stats.item_name_ko,
@@ -1376,6 +1458,7 @@ class PlayerRecommendationService:
                     OR item_stats.item_category = %s
                     OR item_stats.item_code LIKE %s
                   )
+                  {match_filter_sql}
                 GROUP BY
                     item_stats.item_code,
                     item_stats.item_name_ko,
@@ -1385,7 +1468,7 @@ class PlayerRecommendationService:
                    AND attached_events > 0
                 LIMIT 100
                 """,
-                (player.account_id, player.shard, "Attachment", "Item_Attach_%", min_matches),
+                (player.account_id, player.shard, "Attachment", "Item_Attach_%", *match_filter_params, min_matches),
             )
             rows = cursor.fetchall()
 
@@ -1424,10 +1507,12 @@ class PlayerRecommendationService:
         *,
         limit: int,
         min_matches: int,
+        filters: PlayerTrendFilters,
     ) -> list[MapRecommendation]:
+        match_filter_sql, match_filter_params = _match_filter_sql(filters)
         with self.connection.cursor() as cursor:
             cursor.execute(
-                """
+                f"""
                 SELECT
                     matches.map_name,
                     COUNT(DISTINCT summaries.match_id) AS match_count,
@@ -1453,11 +1538,12 @@ class PlayerRecommendationService:
                 WHERE summaries.account_id = %s
                   AND matches.shard = %s
                   AND matches.map_name IS NOT NULL
+                  {match_filter_sql}
                 GROUP BY matches.map_name
                 HAVING match_count >= %s
                 LIMIT 100
                 """,
-                (player.account_id, player.shard, min_matches),
+                (player.account_id, player.shard, *match_filter_params, min_matches),
             )
             rows = cursor.fetchall()
 
@@ -1507,10 +1593,12 @@ class PlayerRecommendationService:
         *,
         limit: int,
         min_matches: int,
+        filters: PlayerTrendFilters,
     ) -> list[TeammateRecommendation]:
+        match_filter_sql, match_filter_params = _match_filter_sql(filters)
         with self.connection.cursor() as cursor:
             cursor.execute(
-                """
+                f"""
                 SELECT
                     teammate.account_id,
                     COALESCE(MAX(teammate.name), teammate.account_id) AS name,
@@ -1541,11 +1629,12 @@ class PlayerRecommendationService:
                 WHERE summaries.account_id = %s
                   AND matches.shard = %s
                   AND teammate.is_ai_or_bot = 0
+                  {match_filter_sql}
                 GROUP BY teammate.account_id
                 HAVING match_count >= %s
                 LIMIT 100
                 """,
-                (player.account_id, player.shard, min_matches),
+                (player.account_id, player.shard, *match_filter_params, min_matches),
             )
             rows = cursor.fetchall()
 
@@ -1594,10 +1683,13 @@ class PlayerRecommendationService:
         *,
         limit: int,
         min_matches: int,
+        filters: PlayerTrendFilters | None = None,
     ) -> list[DropZoneRecommendation]:
+        normalized_filters = (filters or PlayerTrendFilters()).normalized()
+        match_filter_sql, match_filter_params = _match_filter_sql(normalized_filters)
         with self.connection.cursor() as cursor:
             cursor.execute(
-                """
+                f"""
                 SELECT
                     matches.match_id,
                     matches.map_name,
@@ -1625,10 +1717,11 @@ class PlayerRecommendationService:
                   AND matches.map_name IS NOT NULL
                   AND movement.landing_x IS NOT NULL
                   AND movement.landing_y IS NOT NULL
+                  {match_filter_sql}
                 ORDER BY matches.created_at_kst DESC, movement.match_id DESC
                 LIMIT 1000
                 """,
-                (player.account_id, player.shard),
+                (player.account_id, player.shard, *match_filter_params),
             )
             rows = cursor.fetchall()
 
@@ -1925,6 +2018,13 @@ def _attachment_combinations_from_snapshot_rows(
             record["distance_sum"] += distance_m
             record["distance_count"] += 1
 
+    weapon_prior_totals: dict[str, dict[str, int]] = {}
+    for record in grouped.values():
+        weapon_code = str(record["weapon_code"])
+        totals = weapon_prior_totals.setdefault(weapon_code, {"matches": 0, "wins": 0})
+        totals["matches"] += len(record["match_ids"])
+        totals["wins"] += len(record["win_match_ids"])
+
     combinations: list[WeaponAttachmentCombinationRecommendation] = []
     for record in grouped.values():
         match_count = len(record["match_ids"])
@@ -1937,17 +2037,39 @@ def _attachment_combinations_from_snapshot_rows(
         finishes = _int(record["finishes"])
         headshots = _int(record["headshots"])
         damage_dealt = sum(_float(value) for value in record["damage_by_match"].values())
+        weapon_code = str(record["weapon_code"])
+        prior_totals = weapon_prior_totals.get(weapon_code, {})
+        prior_rate = _safe_divide(
+            _int(prior_totals.get("wins")),
+            _int(prior_totals.get("matches")),
+        ) if _int(prior_totals.get("matches")) else DEFAULT_WIN_PRIOR_RATE
+        posterior_win_rate = _beta_binomial_posterior(
+            wins,
+            match_count,
+            prior_rate=prior_rate,
+        )
+        win_rate_confidence = _sample_confidence(match_count)
         score_components = {
-            "kills": kills * 120.0,
-            "dbnos": dbnos * 70.0,
-            "finishes": finishes * 40.0,
-            "headshots": headshots * 20.0,
-            "events": event_count * 8.0,
-            "wins": wins * 50.0,
+            "kills": _safe_divide(kills, match_count) * 120.0,
+            "dbnos": _safe_divide(dbnos, match_count) * 70.0,
+            "finishes": _safe_divide(finishes, match_count) * 40.0,
+            "headshots": _safe_divide(headshots, match_count) * 20.0,
+            "events": _safe_divide(event_count, match_count) * 8.0,
+            "wins": posterior_win_rate * 50.0,
             "average_damage": _safe_divide(damage_dealt, match_count) * 0.15,
         }
-        score = sum(score_components.values())
-        weapon_code = str(record["weapon_code"])
+        raw_score = sum(score_components.values())
+        confidence_factor = 0.55 + win_rate_confidence * 0.45
+        score = max(0.0, raw_score) * confidence_factor
+        score_components.update({
+            "raw_score": raw_score,
+            "observed_win_rate": _safe_divide(wins, match_count),
+            "posterior_win_rate": posterior_win_rate,
+            "win_prior_rate": prior_rate,
+            "win_rate_confidence": win_rate_confidence,
+            "confidence_factor": confidence_factor,
+            "total_score": score,
+        })
         attachment_codes = tuple(record["attachment_codes"])
         attachment_names = tuple(translate_code(code, "item") for code in attachment_codes)
         combinations.append(
@@ -1974,9 +2096,12 @@ def _attachment_combinations_from_snapshot_rows(
                 ),
                 reason=(
                     f"{match_count}경기 · {event_count}교전 · {kills}킬 · "
-                    f"{dbnos}기절 · 승률 {_safe_divide(wins, match_count) * 100:.1f}%"
+                    f"{dbnos}기절 · 관측 승률 {_safe_divide(wins, match_count) * 100:.1f}% · "
+                    f"표본 보정 {posterior_win_rate * 100:.1f}%"
                 ),
                 score_components=score_components,
+                posterior_win_rate=posterior_win_rate,
+                win_rate_confidence=win_rate_confidence,
             )
         )
     ranked = _top(combinations, max(1, min(int(limit), 100)))
@@ -2343,6 +2468,88 @@ def _weapon_family(weapon_code: str) -> WeaponFamily:
     return distance_weapon_family(weapon_code)
 
 
+def _match_filter_sql(
+    filters: PlayerTrendFilters,
+    *,
+    alias: str = "matches",
+) -> tuple[str, list[Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    for column, value in (
+        ("game_mode", filters.game_mode),
+        ("team_mode", filters.team_mode),
+        ("perspective", filters.perspective),
+        ("match_type", filters.match_type),
+        ("map_name", filters.map_name),
+        ("season_state", filters.season_state),
+    ):
+        if value is not None:
+            clauses.append(f"{alias}.{column} = %s")
+            params.append(value)
+    if filters.is_custom_match is not None:
+        clauses.append(f"{alias}.is_custom_match = %s")
+        params.append(1 if filters.is_custom_match else 0)
+    for expression, value in (
+        (f"YEAR({alias}.created_at_kst)", filters.year),
+        (f"QUARTER({alias}.created_at_kst)", filters.quarter),
+        (f"MONTH({alias}.created_at_kst)", filters.month),
+        (f"HOUR({alias}.created_at_kst)", filters.hour),
+    ):
+        if value is not None:
+            clauses.append(f"{expression} = %s")
+            params.append(value)
+    if filters.exact_date_kst is not None:
+        clauses.extend(
+            (
+                f"{alias}.created_at_kst >= %s",
+                f"{alias}.created_at_kst < %s",
+            )
+        )
+        params.extend(
+            (
+                datetime.combine(filters.exact_date_kst, time.min),
+                datetime.combine(filters.exact_date_kst + timedelta(days=1), time.min),
+            )
+        )
+    if filters.from_date_kst is not None:
+        clauses.append(f"{alias}.created_at_kst >= %s")
+        params.append(datetime.combine(filters.from_date_kst, time.min))
+    if filters.to_date_kst is not None:
+        clauses.append(f"{alias}.created_at_kst < %s")
+        params.append(datetime.combine(filters.to_date_kst + timedelta(days=1), time.min))
+    return "".join(f" AND {clause}" for clause in clauses), params
+
+
+def _beta_binomial_posterior(
+    successes: int,
+    trials: int,
+    *,
+    prior_rate: float = DEFAULT_WIN_PRIOR_RATE,
+    prior_strength: float = BETA_BINOMIAL_PRIOR_STRENGTH,
+) -> float:
+    normalized_trials = max(0, int(trials))
+    normalized_successes = min(normalized_trials, max(0, int(successes)))
+    normalized_prior = min(1.0, max(0.0, float(prior_rate)))
+    normalized_strength = max(0.0, float(prior_strength))
+    denominator = normalized_trials + normalized_strength
+    if denominator <= 0:
+        return normalized_prior
+    return (
+        normalized_successes + normalized_prior * normalized_strength
+    ) / denominator
+
+
+def _sample_confidence(
+    sample_count: int,
+    *,
+    prior_strength: float = BETA_BINOMIAL_PRIOR_STRENGTH,
+) -> float:
+    normalized_count = max(0, int(sample_count))
+    normalized_strength = max(0.0, float(prior_strength))
+    denominator = normalized_count + normalized_strength
+    return normalized_count / denominator if denominator else 0.0
+
+
 def _performance_score(
     *,
     match_count: int,
@@ -2353,6 +2560,8 @@ def _performance_score(
     dbnos: int = 0,
     damage_dealt: float = 0.0,
     accuracy_score: float = 0.0,
+    win_prior_rate: float = DEFAULT_WIN_PRIOR_RATE,
+    win_prior_strength: float = BETA_BINOMIAL_PRIOR_STRENGTH,
 ) -> float:
     return _performance_score_components(
         match_count=match_count,
@@ -2363,6 +2572,8 @@ def _performance_score(
         dbnos=dbnos,
         damage_dealt=damage_dealt,
         accuracy_score=accuracy_score,
+        win_prior_rate=win_prior_rate,
+        win_prior_strength=win_prior_strength,
     )["confidence_adjusted_score"]
 
 
@@ -2376,6 +2587,8 @@ def _performance_score_components(
     dbnos: int = 0,
     damage_dealt: float = 0.0,
     accuracy_score: float = 0.0,
+    win_prior_rate: float = DEFAULT_WIN_PRIOR_RATE,
+    win_prior_strength: float = BETA_BINOMIAL_PRIOR_STRENGTH,
 ) -> dict[str, float]:
     if match_count <= 0:
         return {
@@ -2387,7 +2600,11 @@ def _performance_score_components(
             "accuracy": 0.0,
             "deaths_penalty": 0.0,
             "raw_score": 0.0,
-            "confidence_factor": 0.65,
+            "observed_win_rate": 0.0,
+            "posterior_win_rate": min(1.0, max(0.0, win_prior_rate)),
+            "win_prior_rate": min(1.0, max(0.0, win_prior_rate)),
+            "win_rate_confidence": 0.0,
+            "confidence_factor": 0.55,
             "confidence_adjusted_score": 0.0,
         }
     avg_damage = _safe_divide(damage_dealt, match_count)
@@ -2396,21 +2613,34 @@ def _performance_score_components(
     assists_per_match = _safe_divide(assists, match_count)
     deaths_per_match = _safe_divide(deaths, match_count)
     win_rate = _safe_divide(wins, match_count)
-    confidence = min(1.0, match_count / 5)
+    posterior_win_rate = _beta_binomial_posterior(
+        wins,
+        match_count,
+        prior_rate=win_prior_rate,
+        prior_strength=win_prior_strength,
+    )
+    confidence = _sample_confidence(
+        match_count,
+        prior_strength=win_prior_strength,
+    )
     components = {
         "average_damage": avg_damage,
         "kills": kills_per_match * 85,
         "dbnos": dbnos_per_match * 35,
         "assists": assists_per_match * 20,
-        "wins": win_rate * 120,
+        "wins": posterior_win_rate * 120,
         "accuracy": accuracy_score * 60,
         "deaths_penalty": -(deaths_per_match * 25),
     }
     raw_score = sum(components.values())
-    confidence_factor = 0.65 + confidence * 0.35
+    confidence_factor = 0.55 + confidence * 0.45
     return {
         **components,
         "raw_score": raw_score,
+        "observed_win_rate": win_rate,
+        "posterior_win_rate": posterior_win_rate,
+        "win_prior_rate": min(1.0, max(0.0, win_prior_rate)),
+        "win_rate_confidence": confidence,
         "confidence_factor": confidence_factor,
         "confidence_adjusted_score": max(0.0, raw_score) * confidence_factor,
     }

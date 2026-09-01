@@ -522,6 +522,7 @@ class PostProcessingWorkerStartRequest(BaseModel):
     activity_limit: int = Field(default=10, ge=1, le=200)
     item_limit: int = Field(default=10, ge=1, le=200)
     movement_limit: int = Field(default=10, ge=1, le=200)
+    advanced_analysis_limit: int = Field(default=10, ge=1, le=200)
     loadout_limit: int = Field(default=50, ge=1, le=500)
     fight_outcome_limit: int = Field(default=10, ge=1, le=200)
     map_snapshot_limit: int = Field(default=10, ge=1, le=200)
@@ -1261,6 +1262,7 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
                     activity_limit=request.activity_limit,
                     item_limit=request.item_limit,
                     movement_limit=request.movement_limit,
+                    advanced_analysis_limit=request.advanced_analysis_limit,
                     loadout_limit=request.loadout_limit,
                     fight_outcome_limit=request.fight_outcome_limit,
                     map_snapshot_limit=request.map_snapshot_limit,
@@ -3125,10 +3127,43 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
         account_id: str | None = None,
         limit: int = 5,
         min_matches: int = Query(default=1, ge=1, le=2_147_483_647),
+        game_mode: str | None = None,
+        team_mode: str | None = None,
+        perspective: str | None = None,
+        match_type: str | None = None,
+        map_name: str | None = None,
+        season_state: str | None = None,
+        is_custom_match: str | None = None,
+        year: int | None = Query(default=None, ge=2000, le=2100),
+        quarter: int | None = Query(default=None, ge=1, le=4),
+        month: int | None = Query(default=None, ge=1, le=12),
+        exact_date_kst: str | None = None,
+        hour: int | None = Query(default=None, ge=0, le=23),
+        from_date_kst: str | None = None,
+        to_date_kst: str | None = None,
     ) -> dict[str, Any]:
         if not name and not account_id:
             raise HTTPException(status_code=400, detail="name or account_id is required.")
 
+        try:
+            filters = PlayerTrendFilters(
+                game_mode=game_mode,
+                team_mode=team_mode,
+                perspective=perspective,
+                match_type=match_type,
+                map_name=map_name,
+                season_state=season_state,
+                is_custom_match=parse_optional_bool(is_custom_match, "is_custom_match"),
+                year=year,
+                quarter=quarter,
+                month=month,
+                exact_date_kst=parse_trend_date(exact_date_kst, "exact_date_kst"),
+                hour=hour,
+                from_date_kst=parse_trend_date(from_date_kst, "from_date_kst"),
+                to_date_kst=parse_trend_date(to_date_kst, "to_date_kst"),
+            ).normalized()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         connection = connect_mysql(config.database)
         try:
             recommendations = PlayerRecommendationService(connection).get_recommendations(
@@ -3138,6 +3173,7 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
                 global_scope=True,
                 limit=limit,
                 min_matches=min_matches,
+                filters=filters,
             )
             if recommendations is None:
                 raise HTTPException(status_code=404, detail="registered player recommendations not found.")
@@ -6044,6 +6080,38 @@ _INDEX_HTML = """<!doctype html>
     .intelligence-definition strong { color: var(--text); }
     .intelligence-definition span,
     .intelligence-definition small { color: var(--muted); overflow-wrap: anywhere; }
+    .intelligence-signal-list,
+    .intelligence-review-list { display: grid; gap: 0; }
+    .intelligence-signal-row,
+    .intelligence-review-row {
+      display: grid;
+      grid-template-columns: minmax(150px, .75fr) minmax(0, 1.8fr) auto;
+      align-items: center;
+      gap: 14px;
+      min-width: 0;
+      padding: 10px 0;
+      border-bottom: 1px solid #20272b;
+    }
+    .intelligence-signal-row > span,
+    .intelligence-review-row > span { min-width: 0; color: var(--muted); }
+    .intelligence-signal-row strong,
+    .intelligence-review-row strong { display: block; color: var(--text); overflow-wrap: anywhere; }
+    .intelligence-signal-row small,
+    .intelligence-review-row small { display: block; margin-top: 3px; color: var(--muted); overflow-wrap: anywhere; }
+    .intelligence-signal-state {
+      min-width: 66px;
+      padding: 4px 7px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      color: var(--muted);
+      text-align: center;
+      font-size: 10px;
+      font-weight: 800;
+    }
+    .intelligence-signal-state.improved { border-color: #245b4a; color: var(--accent); }
+    .intelligence-signal-state.declined { border-color: #6c3038; color: #ff8d98; }
+    .intelligence-review-row { grid-template-columns: minmax(140px, .7fr) minmax(0, 2fr) auto; }
+    .intelligence-review-row button { white-space: nowrap; }
     .intelligence-empty { padding: 18px 0; color: var(--muted); }
     main > section[data-view] {
       display: none;
@@ -6410,6 +6478,10 @@ _INDEX_HTML = """<!doctype html>
       .intelligence-metric-grid,
       .intelligence-list { grid-template-columns: 1fr; }
       .intelligence-definition { grid-template-columns: 1fr; gap: 3px; }
+      .intelligence-signal-row,
+      .intelligence-review-row { grid-template-columns: 1fr; gap: 6px; align-items: start; }
+      .intelligence-signal-state { width: max-content; }
+      .intelligence-review-row button { width: 100%; }
       .grid { grid-template-columns: 1fr; }
       #statusGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .query-primary, .filter-grid { grid-template-columns: 1fr; }
@@ -7234,6 +7306,7 @@ _INDEX_HTML = """<!doctype html>
       <div class="intelligence-view-toolbar" id="intelligenceViewControls" hidden>
         <div class="segmented-control" role="group" aria-label="종합 분석 보기">
           <button type="button" class="active" data-intelligence-view="overview">핵심 요약</button>
+          <button type="button" data-intelligence-view="tactics">판단 분석</button>
           <button type="button" data-intelligence-view="trends">변화 그래프</button>
           <button type="button" data-intelligence-view="breakdowns">조건 비교</button>
           <button type="button" data-intelligence-view="evidence">원본·정의</button>
@@ -7534,21 +7607,39 @@ _INDEX_HTML = """<!doctype html>
     </section>
     <section id="recommendation-lookup" data-view="players">
       <h2>추천 조회</h2>
-      <form id="recommendationForm" class="query-form">
-        <label>플랫폼
-          <select name="shard">
-            <option value="steam">steam</option>
-            <option value="kakao">kakao</option>
-          </select>
-        </label>
-        <label>등록 유저
-          <input class="registered-player-input" name="target" list="registeredPlayerOptions" autocomplete="off" placeholder="닉네임 일부 입력" required>
-        </label>
-        <label>추천 최소 표본 경기
-          <input name="min_matches" type="number" min="1" step="1" value="1" inputmode="numeric" title="무기·파츠 추천에 포함할 최소 경기 수">
-        </label>
-        <button type="submit">조회</button>
-        <button class="secondary" type="button" data-reset-analysis-form="recommendationForm">필터 초기화</button>
+      <form id="recommendationForm" class="analysis-form">
+        <div class="query-primary">
+          <label>플랫폼
+            <select name="shard"><option value="steam">steam</option><option value="kakao">kakao</option></select>
+          </label>
+          <label>등록 유저
+            <input class="registered-player-input" name="target" list="registeredPlayerOptions" autocomplete="off" placeholder="닉네임 일부 입력" required>
+          </label>
+          <label>추천 최소 표본 경기
+            <input name="min_matches" type="number" min="1" step="1" value="1" inputmode="numeric" title="현재 조건에서 무기·파츠 추천에 포함할 최소 경기 수">
+          </label>
+          <button type="submit">조회</button>
+          <button class="secondary" type="button" data-reset-analysis-form="recommendationForm">필터 초기화</button>
+        </div>
+        <details class="advanced-filters">
+          <summary>상세 조건</summary>
+          <div class="filter-grid">
+            <label>맵<select name="map_name" data-catalog-facet="maps"><option value="">전체</option></select></label>
+            <label>게임 모드<select name="game_mode" data-catalog-facet="game_modes"><option value="">전체</option></select></label>
+            <label>팀 모드<select name="team_mode" data-catalog-facet="team_modes"><option value="">전체</option></select></label>
+            <label>시점<select name="perspective" data-catalog-facet="perspectives"><option value="">전체</option></select></label>
+            <label>매치 유형<select name="match_type" data-catalog-facet="match_types"><option value="">전체</option></select></label>
+            <label>시즌 상태<select name="season_state" data-catalog-facet="season_states"><option value="">전체</option></select></label>
+            <label>연도<select name="year" data-catalog-facet="years"><option value="">전체</option></select></label>
+            <label>분기<select name="quarter"><option value="">전체</option><option value="1">1분기</option><option value="2">2분기</option><option value="3">3분기</option><option value="4">4분기</option></select></label>
+            <label>월<select name="month"><option value="">전체</option><option value="1">1월</option><option value="2">2월</option><option value="3">3월</option><option value="4">4월</option><option value="5">5월</option><option value="6">6월</option><option value="7">7월</option><option value="8">8월</option><option value="9">9월</option><option value="10">10월</option><option value="11">11월</option><option value="12">12월</option></select></label>
+            <label>특정 일자 (KST)<input name="exact_date_kst" type="date"></label>
+            <label>시간대 (KST)<select name="hour"><option value="">전체</option><option value="0">00시</option><option value="1">01시</option><option value="2">02시</option><option value="3">03시</option><option value="4">04시</option><option value="5">05시</option><option value="6">06시</option><option value="7">07시</option><option value="8">08시</option><option value="9">09시</option><option value="10">10시</option><option value="11">11시</option><option value="12">12시</option><option value="13">13시</option><option value="14">14시</option><option value="15">15시</option><option value="16">16시</option><option value="17">17시</option><option value="18">18시</option><option value="19">19시</option><option value="20">20시</option><option value="21">21시</option><option value="22">22시</option><option value="23">23시</option></select></label>
+            <label>커스텀 매치<select name="is_custom_match"><option value="">전체</option><option value="false">일반</option><option value="true">커스텀</option></select></label>
+            <label>시작일 (KST)<input name="from_date_kst" type="date"></label>
+            <label>종료일 (KST)<input name="to_date_kst" type="date"></label>
+          </div>
+        </details>
       </form>
       <div class="status" id="recommendationBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
@@ -7866,6 +7957,9 @@ _INDEX_HTML = """<!doctype html>
         </label>
         <label>이동 파싱
           <input name="movement_limit" type="number" min="1" max="200" value="10" required>
+        </label>
+        <label>교전·자기장·팀·파밍 분석
+          <input name="advanced_analysis_limit" type="number" min="1" max="200" value="10" required>
         </label>
         <label>장비 조합
           <input name="loadout_limit" type="number" min="1" max="500" value="50" required>
@@ -8419,6 +8513,16 @@ _INDEX_HTML = """<!doctype html>
     const matchEventDialogSummary = document.querySelector("#matchEventDialogSummary");
     const matchEventDialogRaw = document.querySelector("#matchEventDialogRaw");
     const analysisForms = [intelligenceForm, profileForm, trendForm, timeInsightForm, comparisonForm, weaponForm, recommendationForm, dropZoneForm, matchForm];
+    const catalogAnalysisForms = [
+      intelligenceForm,
+      trendForm,
+      timeInsightForm,
+      comparisonForm,
+      weaponForm,
+      recommendationForm,
+      dropZoneForm,
+      matchForm,
+    ];
     const rankingForm = document.querySelector("#rankingForm");
     const rankingGuildSelect = document.querySelector("#rankingGuildSelect");
     const rankingGuildRefresh = document.querySelector("#rankingGuildRefresh");
@@ -11152,7 +11256,7 @@ _INDEX_HTML = """<!doctype html>
       ) {
         return activeAnalysisPlayer;
       }
-      for (const formElement of [intelligenceForm, trendForm, timeInsightForm, comparisonForm, weaponForm, matchForm]) {
+      for (const formElement of catalogAnalysisForms) {
         applyPlayerCatalog(formElement, catalog);
       }
       return refreshedPlayer;
@@ -11254,7 +11358,7 @@ _INDEX_HTML = """<!doctype html>
           input.dataset.accountId = preservedPlayer.account_id;
         }
         if (formElement.elements.shard) formElement.elements.shard.value = preservedPlayer.shard;
-        if ([intelligenceForm, trendForm, timeInsightForm, comparisonForm, weaponForm, matchForm].includes(formElement)) {
+        if (catalogAnalysisForms.includes(formElement)) {
           const catalog = await loadPlayerCatalog(preservedPlayer);
           if (
             !activeAnalysisPlayer
@@ -13057,12 +13161,17 @@ _INDEX_HTML = """<!doctype html>
     function intelligenceValue(key, value) {
       if (value === null || value === undefined) return "미수집";
       if (typeof value === "string") return value;
-      if (["win_rate", "top10_rate", "accuracy", "headshot_hit_rate", "headshot_hit_taken_rate", "fight_win_rate"].includes(key)) {
+      if ([
+        "win_rate", "top10_rate", "accuracy", "headshot_hit_rate", "headshot_hit_taken_rate",
+        "fight_win_rate", "fight_accuracy", "self_opening_rate", "self_first_hit_rate",
+        "knock_conversion_rate", "trade_rate", "third_party_rate", "vehicle_rotation_rate",
+        "ready_before_first_fight_rate", "full_primary_loadout_rate",
+      ].includes(key)) {
         return percent(value);
       }
       if (key.includes("survival_seconds")) return minutes(value);
-      if (key.endsWith("distance_m") || key.endsWith("distance_meters")) return distanceKm(value);
       if (key === "longest_kill_m" || key === "avg_landing_distance_m") return distanceM(value);
+      if (key.endsWith("distance_m") || key.endsWith("distance_meters")) return distanceKm(value);
       if (key === "kda" || key.startsWith("avg_") || key === "heal_amount" || key === "vehicle_damage") {
         return formatNumber(value, 2);
       }
@@ -13166,6 +13275,145 @@ _INDEX_HTML = """<!doctype html>
         ["트렁크에서 획득", "vehicle_trunk_pickup_events", loot.vehicle_trunk_pickup_events], ["트렁크에 보관", "vehicle_trunk_put_events", loot.vehicle_trunk_put_events],
       ])
       + `<div class="intelligence-data-section"><h3>주요 획득 아이템</h3>${itemList}</div>`;
+    }
+
+    function intelligenceDuration(value) {
+      const seconds = Number(value);
+      if (!Number.isFinite(seconds)) return "미수집";
+      if (Math.abs(seconds) < 60) return `${formatNumber(seconds, 1)}초`;
+      return minutes(seconds);
+    }
+
+    function intelligenceWeaponNames(values) {
+      const names = (values || []).map((value) => String(value || "").trim()).filter(Boolean);
+      if (!names.length) return "무기 미확인";
+      return names.map((name) => /^(Item_|Weap|BP_|Proj)/i.test(name) ? "미분류 무기" : name).join(" + ");
+    }
+
+    function intelligenceChangeValue(signal, value) {
+      if (value === null || value === undefined) return "-";
+      if (["fight_win_rate", "first_hit_rate"].includes(signal.key)) return percent(value);
+      if (["blue_exposure", "isolation"].includes(signal.key)) return intelligenceDuration(value);
+      return `${formatNumber(value, 1)}점`;
+    }
+
+    function renderIntelligenceTactics(report) {
+      const advanced = report.advanced || {};
+      const coverage = advanced.coverage || {};
+      const fights = advanced.fights || {};
+      const zone = advanced.zone_rotation || {};
+      const team = advanced.team || {};
+      const loot = advanced.loot_readiness || {};
+      const eligible = Number(coverage.eligible_matches || 0);
+      const covered = Number(coverage.team_summary_matches || coverage.loot_summary_matches || 0);
+      const coverageRate = eligible > 0 ? covered / eligible : 0;
+      const coverageTone = covered <= 0 ? "error" : (covered < eligible ? "warning" : "");
+      const coverageTitle = covered <= 0
+        ? "고급 판단 분석 백필 대기"
+        : (covered < eligible ? "고급 판단 분석 일부 처리" : "고급 판단 분석 처리 완료");
+      const coverageDetail = covered <= 0
+        ? "수집·처리 메뉴에서 후처리를 실행하면 저장된 텔레메트리로 분석됩니다."
+        : `교전 ${formatInteger(coverage.fight_episode_matches)}경기 · 자기장 ${formatInteger(coverage.zone_phase_matches)}경기 · 팀 ${formatInteger(coverage.team_summary_matches)}경기 · 파밍 ${formatInteger(coverage.loot_summary_matches)}경기`;
+      const quality = `<div class="intelligence-quality-strip ${coverageTone}">
+        <div><strong>${escapeHtml(coverageTitle)}</strong><small>${escapeHtml(coverageDetail)}</small></div>
+        <output>${escapeHtml(percent(coverageRate))}</output>
+      </div>`;
+      if (!covered) {
+        return intelligenceQuality(report) + quality
+          + '<div class="intelligence-empty">처리된 고급 분석 기록이 없어 수치를 추정하지 않습니다.</div>';
+      }
+
+      const phases = (zone.phase_breakdown || []).map((row) => `<tr>
+        <td>${formatInteger(row.phase_number)}페이즈</td>
+        <td>${formatInteger(row.matches)}</td>
+        <td>${intelligenceDuration(row.avg_late_entry_seconds)}</td>
+        <td>${intelligenceDuration(row.avg_blue_exposure_seconds)}</td>
+        <td>${distanceM(row.avg_rotation_distance_m)}</td>
+        <td>${formatNumber(row.avg_center_distance_ratio, 2)}</td>
+        <td>${formatInteger(row.dbnos_taken)} / ${formatInteger(row.deaths)}</td>
+      </tr>`).join("") || '<tr><td colspan="7">자기장 페이즈 기록이 없습니다.</td></tr>';
+
+      const signalRows = (advanced.change_signals || []).map((signal) => {
+        const directionLabels = {
+          improved: "개선 신호",
+          declined: "악화 신호",
+          stable: signal.status === "insufficient" ? "표본 부족" : "변화 없음",
+        };
+        const comparison = signal.status === "insufficient"
+          ? `${formatInteger(signal.sample_count)}경기 · 최소 20경기 필요`
+          : `기준 ${intelligenceChangeValue(signal, signal.baseline)} → 최근 ${intelligenceChangeValue(signal, signal.recent)}`;
+        return `<div class="intelligence-signal-row">
+          <span><strong>${escapeHtml(signal.label || "변화 지표")}</strong><small>${formatInteger(signal.sample_count)}경기 분석</small></span>
+          <span><strong>${escapeHtml(comparison)}</strong><small>${escapeHtml(signal.detail || "최근 구간과 이전 기준 구간을 비교합니다.")}</small></span>
+          <span class="intelligence-signal-state ${attr(signal.direction || "stable")}">${escapeHtml(directionLabels[signal.direction] || "변화 없음")}</span>
+        </div>`;
+      }).join("") || '<div class="intelligence-empty">변화 감지 대상 기록이 없습니다.</div>';
+
+      const reviewRows = (advanced.death_reviews || []).map((review) => {
+        const playerWeapons = intelligenceWeaponNames(review.weapon_names_ko);
+        const opponentWeapons = intelligenceWeaponNames(review.opponent_weapon_names_ko);
+        const combat = `준/받은 피해 ${formatNumber(review.damage_dealt, 1)} / ${formatNumber(review.damage_taken, 1)} · 발사/명중 ${formatInteger(review.shots_fired)} / ${formatInteger(review.shots_hit)} · 거리 ${review.distance_m === null || review.distance_m === undefined ? "미확인" : distanceM(review.distance_m)}`;
+        const context = `${formatInteger(review.phase_number || 0)}페이즈 · 자기장 ${intelligenceDuration(review.blue_zone_exposure_seconds)} · 고립 ${intelligenceDuration(review.isolated_seconds)} · 준비 ${formatNumber(review.readiness_score, 1)}점`;
+        return `<div class="intelligence-review-row">
+          <span><strong>${escapeHtml(formatKstShort(review.started_at_kst || review.created_at_kst))}</strong><small>${escapeHtml(review.map_name_ko || "맵 미상")} · ${escapeHtml(review.game_mode_ko || "모드 미상")}</small></span>
+          <span><strong>${escapeHtml(review.summary_reason || "패배 원인 미분류")}</strong><small>내 무기 ${escapeHtml(playerWeapons)} · 상대 무기 ${escapeHtml(opponentWeapons)}${review.third_party ? " · 제3팀 개입" : ""}<br>${escapeHtml(combat)}<br>${escapeHtml(context)}</small></span>
+          <button type="button" class="secondary" data-intelligence-match-open="${attr(review.match_id)}">매치 상세</button>
+        </div>`;
+      }).join("") || '<div class="intelligence-empty">현재 조건에서 복기할 패배 교전이 없습니다.</div>';
+
+      return intelligenceQuality(report) + quality + intelligenceKpis([
+        ["교전 승리", "fight_win_rate", fights.win_rate],
+        ["선제 명중", "self_first_hit_rate", fights.self_first_hit_rate],
+        ["팀 트레이드", "trade_rate", team.trade_rate],
+        ["첫 교전 준비", "avg_readiness_score", `${formatNumber(loot.avg_readiness_score, 1)}점`],
+        ["자기장 노출", "blue_zone_exposure_seconds", intelligenceDuration(zone.blue_zone_exposure_seconds)],
+        ["경기당 고립", "isolated_seconds_per_match", intelligenceDuration(team.isolated_seconds_per_match)],
+        ["평균 교전 거리", "avg_distance_m", fights.avg_distance_m === null || fights.avg_distance_m === undefined ? "미수집" : distanceM(fights.avg_distance_m)],
+        ["첫 교전 전 준비", "ready_before_first_fight_rate", loot.ready_before_first_fight_rate],
+      ])
+      + intelligenceMetricSection(report, "교전 의사결정", [
+        ["교전 / 승 / 패", "fight_episode_count", `${formatInteger(fights.episodes)} / ${formatInteger(fights.wins)} / ${formatInteger(fights.losses)}`],
+        ["내가 먼저 연 교전", "self_opening_rate", fights.self_opening_rate],
+        ["내가 먼저 맞힌 교전", "self_first_hit_rate", fights.self_first_hit_rate],
+        ["교전 명중률", "fight_accuracy", fights.accuracy],
+        ["평균 교전 시간", "avg_fight_duration_seconds", intelligenceDuration(fights.avg_duration_seconds)],
+        ["평균 피해 우위", "avg_damage_advantage", fights.avg_damage_advantage],
+        ["기절 후 킬 전환", "knock_conversion_rate", fights.knock_conversion_rate],
+        ["제3팀 개입", "third_party_rate", fights.third_party_rate],
+        ["평균 상대 인원", "avg_opponents", fights.avg_opponents],
+      ])
+      + intelligenceMetricSection(report, "자기장과 로테이션", [
+        ["분석 페이즈", "zone_phase_rows", zone.phase_rows],
+        ["안전구역 밖 체류", "outside_safe_zone_seconds", intelligenceDuration(zone.outside_safe_zone_seconds)],
+        ["블루존 노출", "blue_zone_exposure_seconds", intelligenceDuration(zone.blue_zone_exposure_seconds)],
+        ["총 로테이션", "rotation_distance_m", zone.rotation_distance_m],
+        ["차량 로테이션", "vehicle_distance_m", zone.vehicle_distance_m],
+        ["차량 이동 비중", "vehicle_rotation_rate", zone.vehicle_rotation_rate],
+        ["평균 진입 지연", "avg_late_entry_seconds", intelligenceDuration(zone.avg_late_entry_seconds)],
+        ["평균 중심 거리 비율", "avg_center_distance_ratio", zone.avg_center_distance_ratio],
+      ])
+      + intelligenceMetricSection(report, "팀 협동", [
+        ["위치 분석 경기", "team_position_covered_matches", `${formatInteger(team.position_covered_matches)} / ${formatInteger(team.covered_matches)}`],
+        ["가장 가까운 팀원", "avg_nearest_teammate_distance_m", team.avg_nearest_teammate_distance_m === null || team.avg_nearest_teammate_distance_m === undefined ? "미수집" : distanceM(team.avg_nearest_teammate_distance_m)],
+        ["평균 관측 팀원", "avg_visible_teammates", team.avg_visible_teammates],
+        ["경기당 고립", "isolated_seconds_per_match", intelligenceDuration(team.isolated_seconds_per_match)],
+        ["경기당 근접 지원", "close_support_seconds_per_match", intelligenceDuration(team.close_support_seconds_per_match)],
+        ["재집결", "regroup_count", team.regroup_count],
+        ["트레이드 성공", "trade_rate", `${percent(team.trade_rate)} · ${formatInteger(team.trade_successes)}/${formatInteger(team.trade_opportunities)}`],
+        ["평균 부활 지연", "avg_revive_latency_seconds", intelligenceDuration(team.avg_revive_latency_seconds)],
+      ])
+      + intelligenceMetricSection(report, "파밍 준비", [
+        ["평균 준비 점수", "avg_readiness_score", `${formatNumber(loot.avg_readiness_score, 1)} / 100`],
+        ["첫 교전 전 준비 완료", "ready_before_first_fight_rate", loot.ready_before_first_fight_rate],
+        ["주무기 2개 확보", "full_primary_loadout_rate", loot.full_primary_loadout_rate],
+        ["첫 주무기까지", "avg_seconds_to_first_primary_weapon", intelligenceDuration(loot.avg_seconds_to_first_primary_weapon)],
+        ["두 번째 주무기까지", "avg_seconds_to_second_primary_weapon", intelligenceDuration(loot.avg_seconds_to_second_primary_weapon)],
+        ["첫 교전까지", "avg_seconds_to_first_fight", intelligenceDuration(loot.avg_seconds_to_first_fight)],
+        ["바닥 / 상자 / 보급 획득", "pickup_events", `${formatInteger(loot.ground_pickups)} / ${formatInteger(loot.loot_box_pickups)} / ${formatInteger(loot.care_package_pickups)}`],
+      ])
+      + `<div class="intelligence-data-section"><h3>페이즈별 로테이션</h3><div class="table-scroll"><table class="intelligence-table"><thead><tr><th>페이즈</th><th>경기</th><th>진입 지연</th><th>블루존</th><th>이동</th><th>중심 거리 비율</th><th>기절 / 사망</th></tr></thead><tbody>${phases}</tbody></table></div></div>`
+      + `<div class="intelligence-data-section"><h3>최근 변화 신호</h3><div class="intelligence-signal-list">${signalRows}</div></div>`
+      + `<div class="intelligence-data-section"><h3>최근 패배 교전 복기</h3><div class="intelligence-review-list">${reviewRows}</div></div>`;
     }
 
     function intelligenceChartDefinition(metric) {
@@ -13302,6 +13550,7 @@ _INDEX_HTML = """<!doctype html>
       }
       const renderers = {
         overview: renderIntelligenceOverview,
+        tactics: renderIntelligenceTactics,
         trends: renderIntelligenceTrends,
         breakdowns: renderIntelligenceBreakdowns,
         evidence: renderIntelligenceEvidence,
@@ -14831,7 +15080,26 @@ _INDEX_HTML = """<!doctype html>
         `사전: ${escapeHtml(region.catalog_version)} · 출처: ${escapeHtml(String(region.source_commit || "-").slice(0, 7))}`,
       ].join("<br>");
     }
-    async function loadPlayerRecommendations(target, shard, minMatches) {
+    function recommendationConditionLabel(filters) {
+      const values = [];
+      if (filters?.map_name) values.push(displayCode(filters.map_name, "map"));
+      if (filters?.game_mode) values.push(displayCode(filters.game_mode, "game_mode"));
+      if (filters?.team_mode) values.push(displayCode(filters.team_mode, "team_mode"));
+      if (filters?.perspective) values.push(displayCode(filters.perspective, "perspective"));
+      if (filters?.match_type) values.push(displayCode(filters.match_type, "match_type"));
+      if (filters?.season_state) values.push(displayCode(filters.season_state, "season_state"));
+      if (filters?.year) values.push(`${formatInteger(filters.year)}년`);
+      if (filters?.quarter) values.push(`${formatInteger(filters.quarter)}분기`);
+      if (filters?.month) values.push(`${formatInteger(filters.month)}월`);
+      if (filters?.exact_date_kst) values.push(`${filters.exact_date_kst} KST`);
+      if (filters?.hour !== null && filters?.hour !== undefined) values.push(`${String(filters.hour).padStart(2, "0")}시 KST`);
+      if (filters?.from_date_kst || filters?.to_date_kst) values.push(`${filters.from_date_kst || "처음"}~${filters.to_date_kst || "현재"}`);
+      if (filters?.is_custom_match === true) values.push("커스텀 매치");
+      if (filters?.is_custom_match === false) values.push("일반 매치");
+      return values.length ? values.join(" · ") : "전체 저장 경기";
+    }
+
+    async function loadPlayerRecommendations(target, shard, minMatches, formElement = null) {
       activeRecommendationTarget = target;
       activeRecommendationShard = shard;
       const params = new URLSearchParams({
@@ -14843,6 +15111,13 @@ _INDEX_HTML = """<!doctype html>
         params.set("account_id", target);
       } else {
         params.set("name", target);
+      }
+      if (formElement) {
+        appendAnalysisFilters(new FormData(formElement), params, [
+          "game_mode", "team_mode", "perspective", "match_type", "map_name", "season_state",
+          "is_custom_match", "year", "quarter", "month", "exact_date_kst", "hour",
+          "from_date_kst", "to_date_kst",
+        ]);
       }
       const response = await fetch(`/players/recommendations?${params.toString()}`);
       if (!response.ok) {
@@ -14866,7 +15141,7 @@ _INDEX_HTML = """<!doctype html>
             ? `확인 슬롯 ${formatInteger(plan.selected_slot_count)}/${formatInteger(plan.known_slot_count)}`
             : "호환 파츠 표본 부족";
           const evidence = combo
-            ? `${formatInteger(combo.match_count)}경기 · ${formatInteger(combo.event_count)}교전 · 승률 ${percent(combo.win_rate)} · 평균 딜 ${formatNumber(combo.avg_damage_dealt, 1)}`
+            ? `${formatInteger(combo.match_count)}경기 · ${formatInteger(combo.event_count)}교전 · 관측 ${percent(combo.win_rate)} · 표본 보정 ${percent(combo.posterior_win_rate)} · 평균 딜 ${formatNumber(combo.avg_damage_dealt, 1)}`
             : `${formatInteger(plan.evidence_match_count || 0)}경기 근거`;
           return `${plan.basis || "무기별 파츠 성과 조합"} · ${coverage} · 신뢰도 ${plan.confidence || "낮음"} · ${evidence}`;
         };
@@ -14913,8 +15188,8 @@ _INDEX_HTML = """<!doctype html>
         return `<div class="result-row">
           <span>${formatInteger(index + 1)}위 · ${formatInteger(item.match_count)}경기</span>
           <strong>${escapeHtml(item.weapon_name)}</strong>
-          <p>점수 ${formatNumber(item.score, 1)} · 평균 딜 ${formatNumber(item.avg_damage_dealt, 1)} · 승률 ${percent(item.win_rate)} · ${escapeHtml(accuracyMetricText(item.accuracy, item.accuracy_metric))}<br>
-          헤드샷 명중 ${percent(item.headshot_hit_rate)} (${formatInteger(item.headshot_hits)}/${formatInteger(characterHitCount(item))} 캐릭터 명중) · 차량 명중 ${formatInteger(item.vehicle_hits)}회 · 교전 승률 ${percent(item.fight_win_rate)} (${formatInteger(item.fight_wins)}승/${formatInteger(item.fight_losses)}패)<br>${escapeHtml(item.reason || "")}</p>
+          <p>점수 ${formatNumber(item.score, 1)} · 평균 딜 ${formatNumber(item.avg_damage_dealt, 1)} · 관측 승률 ${percent(item.win_rate)} · 표본 보정 ${percent(item.posterior_win_rate)} · ${escapeHtml(accuracyMetricText(item.accuracy, item.accuracy_metric))}<br>
+          헤드샷 명중 ${percent(item.headshot_hit_rate)} (${formatInteger(item.headshot_hits)}/${formatInteger(characterHitCount(item))} 캐릭터 명중) · 차량 명중 ${formatInteger(item.vehicle_hits)}회 · 교전 관측 ${percent(item.fight_win_rate)} / 보정 ${percent(item.posterior_fight_win_rate)} (${formatInteger(item.fight_wins)}승/${formatInteger(item.fight_losses)}패)<br>${escapeHtml(item.reason || "")}</p>
           <details class="result-disclosure">
             <summary>무기 점수 계산</summary>
             ${resultTextRows([
@@ -14925,9 +15200,13 @@ _INDEX_HTML = """<!doctype html>
               ["치킨 기여", formatNumber(score.wins, 1)],
               ["명중 기여", formatNumber(score.accuracy, 1)],
               ["사망 감점", formatNumber(score.deaths_penalty, 1)],
-              ["표본 신뢰도", percent(score.confidence_factor || 0)],
+              ["관측 / 표본 보정 승률", `${percent(score.observed_win_rate)} / ${percent(score.posterior_win_rate)}`],
+              ["무기 표본 기준 승률", percent(score.win_prior_rate)],
+              ["승률 표본 신뢰도", percent(score.win_rate_confidence || 0)],
+              ["최종 점수 반영 계수", percent(score.confidence_factor || 0)],
               ["거리 표본 보너스", `${formatNumber(score.range_bonus, 1)} / 상한 ${formatNumber(score.range_bonus_cap || 12, 0)}`],
               ["거리 성과 이벤트 표본", `${formatInteger(score.range_evidence_events)}건`],
+              ["교전 관측 / 보정 승률", `${percent(score.fight_win_rate)} / ${percent(score.posterior_fight_win_rate)}`],
               ["교전 승률 조정", formatNumber(score.fight_adjustment, 1)],
             ])}
           </details>
@@ -14938,7 +15217,7 @@ _INDEX_HTML = """<!doctype html>
           <span>${formatInteger(item.match_count)}경기 · ${formatInteger(item.event_count || item.attached_events)}교전</span>
           <strong>${escapeHtml(item.attachment_name)}</strong>
           <div class="result-row-tail">
-            <p>점수 ${formatNumber(item.score, 1)} · ${formatInteger(item.event_count || item.attached_events)}회 · ${distanceM(item.avg_distance_m)}</p>
+            <p>점수 ${formatNumber(item.score, 1)} · 관측 ${percent(item.win_rate)} · 표본 보정 ${item.source === "loadout_snapshots" ? percent(item.posterior_win_rate) : "스냅샷 없음"} · 신뢰 ${item.source === "loadout_snapshots" ? percent(item.win_rate_confidence) : "-"} · ${distanceM(item.avg_distance_m)}</p>
             <button class="secondary" type="button" data-evidence="weapon-attachment" data-weapon-code="${attr(item.weapon_code)}" data-attachment-code="${attr(item.attachment_code)}">근거</button>
           </div>
         </div>`);
@@ -14946,7 +15225,7 @@ _INDEX_HTML = """<!doctype html>
         <div class="result-row">
           <span>${formatInteger(item.match_count)}경기 · ${formatInteger(item.event_count)}교전</span>
           <strong>${escapeHtml((item.attachment_names || []).join(" + "))}</strong>
-          <p>조합 점수 ${formatNumber(item.score, 1)} · 승률 ${percent(item.win_rate)} · ${formatInteger(item.kills)}킬 · ${formatInteger(item.dbnos)}기절 · 평균 딜 ${formatNumber(item.avg_damage_dealt, 1)} · 평균 ${distanceM(item.avg_distance_m)}</p>
+          <p>조합 점수 ${formatNumber(item.score, 1)} · 관측 승률 ${percent(item.win_rate)} · 표본 보정 ${percent(item.posterior_win_rate)} · 신뢰 ${percent(item.win_rate_confidence)} · ${formatInteger(item.kills)}킬 · ${formatInteger(item.dbnos)}기절 · 평균 딜 ${formatNumber(item.avg_damage_dealt, 1)} · 평균 ${distanceM(item.avg_distance_m)}</p>
           <details class="result-disclosure">
             <summary>조합 점수 계산</summary>
             ${resultTextRows([
@@ -14957,6 +15236,10 @@ _INDEX_HTML = """<!doctype html>
               ["교전 표본 기여", formatNumber(item.score_components?.events, 1)],
               ["치킨 기여", formatNumber(item.score_components?.wins, 1)],
               ["평균 피해 기여", formatNumber(item.score_components?.average_damage, 1)],
+              ["관측 / 표본 보정 승률", `${percent(item.score_components?.observed_win_rate)} / ${percent(item.score_components?.posterior_win_rate)}`],
+              ["무기별 기준 승률", percent(item.score_components?.win_prior_rate)],
+              ["표본 신뢰도", percent(item.score_components?.win_rate_confidence)],
+              ["최종 점수 반영 계수", percent(item.score_components?.confidence_factor)],
             ])}
           </details>
         </div>`);
@@ -14969,7 +15252,7 @@ _INDEX_HTML = """<!doctype html>
       const teammates = recommendationRows(report.teammates, (item) => `
         <div class="result-row"><span>${item.registered ? "등록 유저" : `${formatInteger(item.match_count)}경기`}</span><strong>${escapeHtml(item.name)}</strong><p>점수 ${formatNumber(item.score, 1)} · 승률 ${percent(item.win_rate)}</p></div>`);
       recommendationBody.innerHTML = `<div class="result-shell">
-        ${resultHeading(report.player.current_name, `추천 채택 기준 · 최소 ${formatInteger(report.min_matches || minMatches || 1)}경기`, "추천 분석")}
+        ${resultHeading(report.player.current_name, `최소 ${formatInteger(report.min_matches || minMatches || 1)}경기 · ${recommendationConditionLabel(report.filters || {})}`, "추천 분석")}
         <div class="recommendation-view-switch" role="tablist" aria-label="추천 결과 보기">
           <button type="button" role="tab" data-recommendation-view="summary">요약</button>
           <button type="button" role="tab" data-recommendation-view="chart">그래프</button>
@@ -19522,6 +19805,7 @@ _INDEX_HTML = """<!doctype html>
             `행동 ${formatInteger(lastCycle.activity?.parsed_payloads)}`,
             `아이템 ${formatInteger(lastCycle.items?.parsed_payloads)}`,
             `이동 ${formatInteger(lastCycle.movement?.parsed_payloads)}`,
+            `판단 분석 ${formatInteger(lastCycle.advanced_analysis?.parsed_payloads)}`,
             `장비 조합 ${formatInteger(lastCycle.loadout_snapshots?.generated_snapshots)}`,
             `지도 ${formatInteger(lastCycle.map_snapshots?.generated_snapshots)}`,
             `타임라인 ${formatInteger(lastCycle.replay_timelines?.generated_timelines)}`,
@@ -19545,6 +19829,7 @@ _INDEX_HTML = """<!doctype html>
         activity_limit: Number(form.get("activity_limit") || 10),
         item_limit: Number(form.get("item_limit") || 10),
         movement_limit: Number(form.get("movement_limit") || 10),
+        advanced_analysis_limit: Number(form.get("advanced_analysis_limit") || 10),
         loadout_limit: Number(form.get("loadout_limit") || 50),
         fight_outcome_limit: Number(form.get("fight_outcome_limit") || 10),
         map_snapshot_limit: Number(form.get("map_snapshot_limit") || 10),
@@ -19845,6 +20130,24 @@ _INDEX_HTML = """<!doctype html>
       activeIntelligenceView = button.dataset.intelligenceView || "overview";
       renderIntelligenceReport();
     });
+    intelligenceBody.addEventListener("click", async (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest("[data-intelligence-match-open]")
+        : null;
+      if (!button) return;
+      const matchId = button.dataset.intelligenceMatchOpen || "";
+      if (!matchId) return;
+      button.disabled = true;
+      try {
+        activateWorkspace("players", { focusId: "match-explorer", updateUrl: true, smooth: true });
+        await loadMatchExplorerDetail(matchId);
+        banner.textContent = "패배 교전 매치 상세 조회 완료";
+      } catch (error) {
+        banner.textContent = `오류: ${error.message}`;
+      } finally {
+        button.disabled = false;
+      }
+    });
     intelligenceTrendGranularity.addEventListener("change", renderIntelligenceReport);
     intelligenceTrendMetric.addEventListener("change", renderIntelligenceReport);
     intelligenceBreakdownDimension.addEventListener("change", renderIntelligenceReport);
@@ -20044,6 +20347,7 @@ _INDEX_HTML = """<!doctype html>
           player.account_id,
           player.shard,
           Number(form.get("min_matches") || 1),
+          formElement,
         );
         banner.textContent = "추천 조회 완료";
       } catch (error) {

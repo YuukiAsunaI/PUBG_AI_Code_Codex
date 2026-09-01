@@ -62,6 +62,10 @@ _NORMALIZED_TABLES = {
     "player_combat_location_events",
     "player_combat_loadout_snapshots",
     "player_fight_outcomes",
+    "player_fight_episodes",
+    "player_zone_phase_summaries",
+    "player_team_coordination_summaries",
+    "player_loot_readiness_summaries",
     "player_fight_outcome_processing_states",
     "player_telemetry_processing_states",
 }

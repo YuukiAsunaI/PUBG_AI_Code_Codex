@@ -126,6 +126,10 @@ class DatabaseSchemaTests(unittest.TestCase):
             "player_combat_location_events",
             "player_combat_loadout_snapshots",
             "player_fight_outcomes",
+            "player_fight_episodes",
+            "player_zone_phase_summaries",
+            "player_team_coordination_summaries",
+            "player_loot_readiness_summaries",
             "player_fight_outcome_processing_states",
             "player_telemetry_processing_states",
             "match_care_package_events",
@@ -135,7 +139,7 @@ class DatabaseSchemaTests(unittest.TestCase):
         ]:
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table_name}", schema)
 
-        self.assertEqual(SCHEMA_VERSION, 33)
+        self.assertEqual(SCHEMA_VERSION, 34)
         self.assertIn("CREATE OR REPLACE VIEW analysis_matches", schema)
         self.assertIn("WHERE excluded_matches.match_id IS NULL", schema)
         self.assertIn("vehicle_type VARCHAR(64)", schema)

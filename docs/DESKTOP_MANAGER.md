@@ -56,6 +56,12 @@ keeps the same text inputs and hides the native-only buttons.
 - Player intelligence includes kills, caused DBNOs, fights, and damage per 10 minutes, damage per resolved fight, and
   dealt/taken damage ratio. The same metrics can be selected in KST day/week/month graphs; time normalization uses
   positive `timeSurvived` capped at the completed match duration.
+- The `판단 분석` tab combines telemetry-derived fight decisions, circle-phase rotation, team coordination, loot
+  readiness, recent defeated-fight reviews, and recent-vs-baseline change signals. Each block carries independent
+  processing coverage so the manager never substitutes an estimate for an unprocessed match.
+- Recommendation results expose observed and beta-binomial-adjusted win rates, sample confidence, and score factors.
+  The detailed map/mode/season/KST filters are applied consistently to weapon, distance, part, map, teammate, and drop
+  analyses; the graph switch uses the same filtered report as the readable summary.
 - Default backup and quarantine directories are created during manager startup. Missing-path alerts resolve on the
   next status refresh while remaining available as resolved history records.
 
@@ -162,10 +168,11 @@ entrypoint searches upward from the executable and current directory for the pro
 Set `PUBG_AI_BASE_DIR` when the executable is stored elsewhere. Secrets and local settings are not embedded into the
 executable.
 
-The verified `2026.08.30.2` artifact is 51,845,035 bytes with SHA-256
-`78A2CBBB4D33FB3F285D8E49D83ED18E687B843C0F58CA11377BEAB7087D01BE`. Its localhost-only health endpoint returned
-the same release. The packaged Playwright audit reached all 33 workspaces, verified the two uncapped attachment
-minimum-match controls and reset paths, rendered five M416 attachment-slot groups plus four combination-size groups,
-and processed an all-target 93-player replay with 17,418 retained events, 240 visible event rows, and a 157 ms filter
-refresh. Desktop and 390px mobile layouts had no blank view, overlay, overflow, console error, failed request, or HTTP
-error.
+The verified `2026.09.01.1` artifact is 51,909,181 bytes with SHA-256
+`010C81FDE067D257C94D6D7ACA1C8BBF66659C2F4678E5B8C6FB38F2A20D2124`. Its localhost-only health endpoint returned
+the same release. The packaged Playwright audit reached all 33 workspaces, rendered all seven advanced decision-analysis
+sections, applied a real map condition to the confidence-adjusted recommendation report, verified the two uncapped
+attachment minimum-match controls and reset paths, and rendered five M416 attachment-slot groups plus four
+combination-size groups. The all-target 93-player replay retained 17,418 events, virtualized 240 visible event rows,
+and refreshed in 140 ms. Desktop and 390px mobile layouts had no blank view, overlay, overflow, console error, failed
+request, or HTTP error. The MySQL-backed 30-check player-intelligence audit also passed in full.

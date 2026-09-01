@@ -33,6 +33,7 @@ class PlayerIntelligenceReport:
     mobility: dict[str, Any]
     vehicle: dict[str, Any]
     environment: dict[str, Any]
+    advanced: dict[str, Any]
     breakdowns: dict[str, Any]
     trends: dict[str, Any]
     activity_details: dict[str, Any]
@@ -53,6 +54,7 @@ class PlayerIntelligenceReport:
             "mobility": self.mobility,
             "vehicle": self.vehicle,
             "environment": self.environment,
+            "advanced": self.advanced,
             "breakdowns": self.breakdowns,
             "trends": self.trends,
             "activity_details": self.activity_details,
@@ -95,6 +97,7 @@ class PlayerIntelligenceService:
         fights_by_match = {str(row["match_id"]): row for row in fight_rows}
         item_rows = self._get_item_rows(player, match_ids)
         details = self._get_activity_details(player, match_ids)
+        advanced_rows = self._get_advanced_rows(player, match_ids)
         core_trends = PlayerTrendService(self.connection).get_report(
             shard=player.shard,
             account_id=player.account_id,
@@ -130,6 +133,13 @@ class PlayerIntelligenceService:
             mobility=summary["mobility"],
             vehicle=summary["vehicle"],
             environment=summary["environment"],
+            advanced=summarize_advanced_analysis(
+                match_rows=rows,
+                fight_episodes=advanced_rows["fight_episodes"],
+                zone_phases=advanced_rows["zone_phases"],
+                team_summaries=advanced_rows["team_summaries"],
+                loot_summaries=advanced_rows["loot_summaries"],
+            ),
             breakdowns=summary["breakdowns"],
             trends=summary["trends"],
             activity_details=details,
@@ -321,6 +331,106 @@ class PlayerIntelligenceService:
                 )
                 rows.extend(dict(row) for row in cursor.fetchall())
         return _merge_item_rows(rows)
+
+    def _get_advanced_rows(
+        self,
+        player: RegisteredPlayer,
+        match_ids: list[str],
+    ) -> dict[str, list[dict[str, Any]]]:
+        result: dict[str, list[dict[str, Any]]] = {
+            "fight_episodes": [],
+            "zone_phases": [],
+            "team_summaries": [],
+            "loot_summaries": [],
+        }
+        if not match_ids:
+            return result
+        with self.connection.cursor() as cursor:
+            for match_id_chunk in _chunks(match_ids):
+                placeholders = ", ".join(["%s"] * len(match_id_chunk))
+                params = [player.account_id, *match_id_chunk]
+                cursor.execute(
+                    """
+                    SELECT
+                        match_id, episode_index, start_event_index, end_event_index,
+                        started_at_kst, ended_at_kst, duration_seconds, phase_number,
+                        outcome, opening_actor, first_hit_actor,
+                        primary_opponent_account_id, primary_opponent_team_id,
+                        opponent_count, opponent_team_count, shots_fired, shots_hit,
+                        damage_dealt, damage_taken, dbnos_caused, dbnos_taken,
+                        kills, deaths, assists, revives_given, revives_received,
+                        trade_opportunities, trade_successes, is_third_party,
+                        weapon_codes, opponent_weapon_codes, min_distance_m,
+                        avg_distance_m, max_distance_m, summary_reason, parser_version
+                    FROM player_fight_episodes
+                    WHERE account_id = %s AND match_id IN (
+                    """
+                    + placeholders
+                    + ") ORDER BY started_at_kst ASC, episode_index ASC",
+                    params,
+                )
+                result["fight_episodes"].extend(dict(row) for row in cursor.fetchall())
+
+                cursor.execute(
+                    """
+                    SELECT
+                        match_id, phase_number, sample_count,
+                        phase_started_elapsed_seconds, phase_ended_elapsed_seconds,
+                        first_inside_elapsed_seconds, late_entry_seconds,
+                        outside_safe_zone_seconds, blue_zone_exposure_seconds,
+                        max_outside_distance_m, avg_center_distance_ratio,
+                        edge_position_seconds, center_position_seconds,
+                        rotation_distance_m, foot_distance_m, vehicle_distance_m,
+                        vehicle_seconds, dbnos_taken, deaths, parser_version
+                    FROM player_zone_phase_summaries
+                    WHERE account_id = %s AND match_id IN (
+                    """
+                    + placeholders
+                    + ") ORDER BY match_id ASC, phase_number ASC",
+                    params,
+                )
+                result["zone_phases"].extend(dict(row) for row in cursor.fetchall())
+
+                cursor.execute(
+                    """
+                    SELECT
+                        match_id, sample_count, avg_nearest_teammate_distance_m,
+                        max_nearest_teammate_distance_m, avg_visible_teammates,
+                        isolated_seconds, close_support_seconds, regroup_count,
+                        trade_opportunities, trade_successes, revives_given,
+                        revives_received, avg_revive_latency_seconds,
+                        team_dbnos_taken, team_deaths, parser_version
+                    FROM player_team_coordination_summaries
+                    WHERE account_id = %s AND match_id IN (
+                    """
+                    + placeholders
+                    + ") ORDER BY match_id ASC",
+                    params,
+                )
+                result["team_summaries"].extend(dict(row) for row in cursor.fetchall())
+
+                cursor.execute(
+                    """
+                    SELECT
+                        match_id, landed_at_kst, first_fight_at_kst,
+                        first_primary_weapon_code, second_primary_weapon_code,
+                        seconds_to_first_primary_weapon,
+                        seconds_to_second_primary_weapon, seconds_to_vest,
+                        seconds_to_helmet, seconds_to_heal, seconds_to_throwable,
+                        seconds_to_scope, seconds_to_first_fight,
+                        ready_before_first_fight, pickup_events, ground_pickups,
+                        loot_box_pickups, care_package_pickups,
+                        vehicle_trunk_pickups, readiness_score, early_inventory,
+                        parser_version
+                    FROM player_loot_readiness_summaries
+                    WHERE account_id = %s AND match_id IN (
+                    """
+                    + placeholders
+                    + ") ORDER BY match_id ASC",
+                    params,
+                )
+                result["loot_summaries"].extend(dict(row) for row in cursor.fetchall())
+        return result
 
     def _get_activity_details(
         self,
@@ -537,6 +647,485 @@ def _match_filter_sql(
         conditions.append("matches.created_at_kst < %s")
         params.append(datetime.combine(filters.to_date_kst + timedelta(days=1), time.min))
     return conditions, params
+
+
+def summarize_advanced_analysis(
+    *,
+    match_rows: list[dict[str, Any]],
+    fight_episodes: list[dict[str, Any]],
+    zone_phases: list[dict[str, Any]],
+    team_summaries: list[dict[str, Any]],
+    loot_summaries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    match_by_id = {str(row["match_id"]): row for row in match_rows}
+    fight_by_match = _rows_by_match(fight_episodes)
+    zone_by_match = _rows_by_match(zone_phases)
+    team_by_match = {
+        str(row["match_id"]): row for row in team_summaries
+    }
+    loot_by_match = {
+        str(row["match_id"]): row for row in loot_summaries
+    }
+
+    resolved_fights = [
+        row for row in fight_episodes if str(row.get("outcome")) in {"win", "loss"}
+    ]
+    fight_wins = sum(str(row.get("outcome")) == "win" for row in resolved_fights)
+    self_openings = sum(str(row.get("opening_actor")) == "self" for row in fight_episodes)
+    self_first_hits = sum(str(row.get("first_hit_actor")) == "self" for row in fight_episodes)
+    shots_fired = sum(_int(row.get("shots_fired")) for row in fight_episodes)
+    shots_hit = sum(_int(row.get("shots_hit")) for row in fight_episodes)
+    trade_opportunities = sum(
+        _int(row.get("trade_opportunities")) for row in fight_episodes
+    )
+    trade_successes = sum(_int(row.get("trade_successes")) for row in fight_episodes)
+
+    phase_groups: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for row in zone_phases:
+        phase = _optional_int(row.get("phase_number"))
+        if phase is not None:
+            phase_groups[phase].append(row)
+    phase_breakdown = [
+        {
+            "phase_number": phase,
+            "samples": sum(_int(row.get("sample_count")) for row in rows),
+            "matches": len({str(row.get("match_id")) for row in rows}),
+            "avg_late_entry_seconds": _average(
+                _optional_float(row.get("late_entry_seconds")) for row in rows
+            ),
+            "avg_blue_exposure_seconds": _average(
+                _float(row.get("blue_zone_exposure_seconds")) for row in rows
+            ),
+            "avg_outside_safe_zone_seconds": _average(
+                _float(row.get("outside_safe_zone_seconds")) for row in rows
+            ),
+            "avg_center_distance_ratio": _average(
+                _optional_float(row.get("avg_center_distance_ratio")) for row in rows
+            ),
+            "avg_rotation_distance_m": _average(
+                _float(row.get("rotation_distance_m")) for row in rows
+            ),
+            "dbnos_taken": sum(_int(row.get("dbnos_taken")) for row in rows),
+            "deaths": sum(_int(row.get("deaths")) for row in rows),
+        }
+        for phase, rows in sorted(phase_groups.items())
+    ]
+
+    zone_rotation_distance = sum(
+        _float(row.get("rotation_distance_m")) for row in zone_phases
+    )
+    zone_vehicle_distance = sum(
+        _float(row.get("vehicle_distance_m")) for row in zone_phases
+    )
+    team_sample_rows = [
+        row for row in team_summaries if _int(row.get("sample_count")) > 0
+    ]
+    loot_with_fight = [
+        row
+        for row in loot_summaries
+        if row.get("ready_before_first_fight") is not None
+    ]
+
+    death_reviews = _death_review_rows(
+        fight_episodes,
+        match_by_id=match_by_id,
+        zone_by_match=zone_by_match,
+        team_by_match=team_by_match,
+        loot_by_match=loot_by_match,
+    )
+    change_signals = _advanced_change_signals(
+        match_rows,
+        fight_by_match=fight_by_match,
+        zone_by_match=zone_by_match,
+        team_by_match=team_by_match,
+        loot_by_match=loot_by_match,
+    )
+
+    return {
+        "coverage": {
+            "eligible_matches": len(match_rows),
+            "fight_episode_matches": len(fight_by_match),
+            "zone_phase_matches": len(zone_by_match),
+            "team_summary_matches": len(team_by_match),
+            "loot_summary_matches": len(loot_by_match),
+        },
+        "fights": {
+            "episodes": len(fight_episodes),
+            "resolved_fights": len(resolved_fights),
+            "wins": fight_wins,
+            "losses": len(resolved_fights) - fight_wins,
+            "win_rate": _ratio(fight_wins, len(resolved_fights)),
+            "self_opening_rate": _ratio(self_openings, len(fight_episodes)),
+            "self_first_hit_rate": _ratio(self_first_hits, len(fight_episodes)),
+            "accuracy": _ratio(shots_hit, shots_fired),
+            "avg_duration_seconds": _average(
+                _float(row.get("duration_seconds")) for row in fight_episodes
+            ),
+            "avg_damage_advantage": _average(
+                _float(row.get("damage_dealt")) - _float(row.get("damage_taken"))
+                for row in fight_episodes
+            ),
+            "knock_conversion_rate": _ratio(
+                sum(_int(row.get("kills")) for row in fight_episodes),
+                sum(_int(row.get("dbnos_caused")) for row in fight_episodes),
+            ),
+            "trade_rate": _ratio(trade_successes, trade_opportunities),
+            "trade_opportunities": trade_opportunities,
+            "trade_successes": trade_successes,
+            "third_party_rate": _ratio(
+                sum(_bool(row.get("is_third_party")) for row in fight_episodes),
+                len(fight_episodes),
+            ),
+            "avg_opponents": _average(
+                _float(row.get("opponent_count")) for row in fight_episodes
+            ),
+            "avg_distance_m": _average(
+                _optional_float(row.get("avg_distance_m")) for row in fight_episodes
+            ),
+        },
+        "zone_rotation": {
+            "phase_rows": len(zone_phases),
+            "covered_matches": len(zone_by_match),
+            "blue_zone_exposure_seconds": sum(
+                _float(row.get("blue_zone_exposure_seconds")) for row in zone_phases
+            ),
+            "outside_safe_zone_seconds": sum(
+                _float(row.get("outside_safe_zone_seconds")) for row in zone_phases
+            ),
+            "rotation_distance_m": zone_rotation_distance,
+            "vehicle_distance_m": zone_vehicle_distance,
+            "vehicle_rotation_rate": _ratio(
+                zone_vehicle_distance,
+                zone_rotation_distance,
+            ),
+            "avg_late_entry_seconds": _average(
+                _optional_float(row.get("late_entry_seconds")) for row in zone_phases
+            ),
+            "avg_center_distance_ratio": _average(
+                _optional_float(row.get("avg_center_distance_ratio"))
+                for row in zone_phases
+            ),
+            "phase_breakdown": phase_breakdown,
+        },
+        "team": {
+            "covered_matches": len(team_by_match),
+            "position_covered_matches": len(team_sample_rows),
+            "avg_nearest_teammate_distance_m": _average(
+                _optional_float(row.get("avg_nearest_teammate_distance_m"))
+                for row in team_sample_rows
+            ),
+            "avg_visible_teammates": _average(
+                _optional_float(row.get("avg_visible_teammates"))
+                for row in team_sample_rows
+            ),
+            "isolated_seconds_per_match": _average(
+                _float(row.get("isolated_seconds")) for row in team_summaries
+            ),
+            "close_support_seconds_per_match": _average(
+                _float(row.get("close_support_seconds")) for row in team_summaries
+            ),
+            "regroup_count": sum(_int(row.get("regroup_count")) for row in team_summaries),
+            "trade_opportunities": sum(
+                _int(row.get("trade_opportunities")) for row in team_summaries
+            ),
+            "trade_successes": sum(
+                _int(row.get("trade_successes")) for row in team_summaries
+            ),
+            "trade_rate": _ratio(
+                sum(_int(row.get("trade_successes")) for row in team_summaries),
+                sum(_int(row.get("trade_opportunities")) for row in team_summaries),
+            ),
+            "avg_revive_latency_seconds": _average(
+                _optional_float(row.get("avg_revive_latency_seconds"))
+                for row in team_summaries
+            ),
+        },
+        "loot_readiness": {
+            "covered_matches": len(loot_summaries),
+            "avg_readiness_score": _average(
+                _float(row.get("readiness_score")) for row in loot_summaries
+            ),
+            "ready_before_first_fight_rate": _ratio(
+                sum(_bool(row.get("ready_before_first_fight")) for row in loot_with_fight),
+                len(loot_with_fight),
+            ),
+            "full_primary_loadout_rate": _ratio(
+                sum(bool(row.get("second_primary_weapon_code")) for row in loot_summaries),
+                len(loot_summaries),
+            ),
+            "avg_seconds_to_first_primary_weapon": _average(
+                _optional_float(row.get("seconds_to_first_primary_weapon"))
+                for row in loot_summaries
+            ),
+            "avg_seconds_to_second_primary_weapon": _average(
+                _optional_float(row.get("seconds_to_second_primary_weapon"))
+                for row in loot_summaries
+            ),
+            "avg_seconds_to_first_fight": _average(
+                _optional_float(row.get("seconds_to_first_fight"))
+                for row in loot_summaries
+            ),
+            "pickup_events": sum(_int(row.get("pickup_events")) for row in loot_summaries),
+            "ground_pickups": sum(_int(row.get("ground_pickups")) for row in loot_summaries),
+            "loot_box_pickups": sum(
+                _int(row.get("loot_box_pickups")) for row in loot_summaries
+            ),
+            "care_package_pickups": sum(
+                _int(row.get("care_package_pickups")) for row in loot_summaries
+            ),
+        },
+        "death_reviews": death_reviews,
+        "change_signals": change_signals,
+    }
+
+
+def _rows_by_match(rows: Iterable[Mapping[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        match_id = str(row.get("match_id") or "")
+        if match_id:
+            grouped[match_id].append(dict(row))
+    return grouped
+
+
+def _death_review_rows(
+    fight_episodes: list[dict[str, Any]],
+    *,
+    match_by_id: Mapping[str, Mapping[str, Any]],
+    zone_by_match: Mapping[str, list[dict[str, Any]]],
+    team_by_match: Mapping[str, Mapping[str, Any]],
+    loot_by_match: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    losses = sorted(
+        (row for row in fight_episodes if str(row.get("outcome")) == "loss"),
+        key=lambda row: (
+            _datetime(row.get("started_at_kst")) or datetime.min,
+            _int(row.get("episode_index")),
+        ),
+        reverse=True,
+    )
+    reviews: list[dict[str, Any]] = []
+    for row in losses[:12]:
+        match_id = str(row.get("match_id") or "")
+        match = match_by_id.get(match_id, {})
+        phase_number = _optional_int(row.get("phase_number"))
+        phase_row = next(
+            (
+                item
+                for item in zone_by_match.get(match_id, [])
+                if _optional_int(item.get("phase_number")) == phase_number
+            ),
+            {},
+        )
+        team = team_by_match.get(match_id, {})
+        loot = loot_by_match.get(match_id, {})
+        weapon_codes = _json_values(row.get("weapon_codes"))
+        opponent_weapon_codes = _json_values(row.get("opponent_weapon_codes"))
+        reviews.append(
+            {
+                "match_id": match_id,
+                "created_at_kst": _iso(match.get("created_at_kst")),
+                "started_at_kst": _iso(row.get("started_at_kst")),
+                "map_name": match.get("map_name"),
+                "map_name_ko": (
+                    translate_code(str(match.get("map_name")), "map")
+                    if match.get("map_name")
+                    else "맵 미상"
+                ),
+                "game_mode": match.get("game_mode"),
+                "game_mode_ko": (
+                    translate_code(str(match.get("game_mode")), "game_mode")
+                    if match.get("game_mode")
+                    else "모드 미상"
+                ),
+                "phase_number": phase_number,
+                "duration_seconds": _float(row.get("duration_seconds")),
+                "summary_reason": str(row.get("summary_reason") or "패배 원인 미분류"),
+                "opponent_account_id": row.get("primary_opponent_account_id"),
+                "weapon_codes": weapon_codes,
+                "weapon_names_ko": [_translated_weapon(code) for code in weapon_codes],
+                "opponent_weapon_codes": opponent_weapon_codes,
+                "opponent_weapon_names_ko": [
+                    _translated_weapon(code) for code in opponent_weapon_codes
+                ],
+                "damage_dealt": _float(row.get("damage_dealt")),
+                "damage_taken": _float(row.get("damage_taken")),
+                "shots_fired": _int(row.get("shots_fired")),
+                "shots_hit": _int(row.get("shots_hit")),
+                "dbnos_caused": _int(row.get("dbnos_caused")),
+                "dbnos_taken": _int(row.get("dbnos_taken")),
+                "distance_m": _optional_float(row.get("avg_distance_m")),
+                "third_party": _bool(row.get("is_third_party")),
+                "blue_zone_exposure_seconds": _float(
+                    phase_row.get("blue_zone_exposure_seconds")
+                ),
+                "outside_safe_zone_seconds": _float(
+                    phase_row.get("outside_safe_zone_seconds")
+                ),
+                "nearest_teammate_distance_m": _optional_float(
+                    team.get("avg_nearest_teammate_distance_m")
+                ),
+                "isolated_seconds": _float(team.get("isolated_seconds")),
+                "readiness_score": _float(loot.get("readiness_score")),
+                "ready_before_first_fight": (
+                    _bool(loot.get("ready_before_first_fight"))
+                    if loot.get("ready_before_first_fight") is not None
+                    else None
+                ),
+            }
+        )
+    return reviews
+
+
+def _advanced_change_signals(
+    match_rows: list[dict[str, Any]],
+    *,
+    fight_by_match: Mapping[str, list[dict[str, Any]]],
+    zone_by_match: Mapping[str, list[dict[str, Any]]],
+    team_by_match: Mapping[str, Mapping[str, Any]],
+    loot_by_match: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    ordered_matches = sorted(
+        match_rows,
+        key=lambda row: (
+            _datetime(row.get("created_at_kst")) or datetime.min,
+            str(row.get("match_id") or ""),
+        ),
+    )
+    metrics: dict[str, list[float]] = defaultdict(list)
+    for match in ordered_matches:
+        match_id = str(match.get("match_id") or "")
+        fights = fight_by_match.get(match_id, [])
+        resolved = [
+            row for row in fights if str(row.get("outcome")) in {"win", "loss"}
+        ]
+        if resolved:
+            metrics["fight_win_rate"].append(
+                _ratio(
+                    sum(str(row.get("outcome")) == "win" for row in resolved),
+                    len(resolved),
+                )
+            )
+            metrics["first_hit_rate"].append(
+                _ratio(
+                    sum(str(row.get("first_hit_actor")) == "self" for row in fights),
+                    len(fights),
+                )
+            )
+        phases = zone_by_match.get(match_id, [])
+        if phases:
+            metrics["blue_exposure"].append(
+                sum(_float(row.get("blue_zone_exposure_seconds")) for row in phases)
+            )
+        team = team_by_match.get(match_id)
+        if team is not None:
+            metrics["isolation"].append(_float(team.get("isolated_seconds")))
+        loot = loot_by_match.get(match_id)
+        if loot is not None:
+            metrics["readiness"].append(_float(loot.get("readiness_score")))
+
+    specifications = (
+        ("fight_win_rate", "교전 승리율", True, 0.08),
+        ("first_hit_rate", "선제 명중률", True, 0.08),
+        ("blue_exposure", "자기장 노출 시간", False, 20.0),
+        ("isolation", "팀 고립 시간", False, 30.0),
+        ("readiness", "첫 교전 준비 점수", True, 8.0),
+    )
+    return [
+        _change_signal(
+            key=key,
+            label=label,
+            values=metrics.get(key, []),
+            higher_is_better=higher_is_better,
+            practical_delta=practical_delta,
+        )
+        for key, label, higher_is_better, practical_delta in specifications
+    ]
+
+
+def _change_signal(
+    *,
+    key: str,
+    label: str,
+    values: list[float],
+    higher_is_better: bool,
+    practical_delta: float,
+) -> dict[str, Any]:
+    sample_count = len(values)
+    if sample_count < 20:
+        return {
+            "key": key,
+            "label": label,
+            "sample_count": sample_count,
+            "status": "insufficient",
+            "detected": False,
+            "direction": "stable",
+            "baseline": None,
+            "recent": None,
+            "delta": None,
+            "method": "CUSUM",
+            "detail": "최소 20경기가 필요합니다.",
+        }
+    recent_size = min(10, sample_count // 2)
+    baseline_values = values[:-recent_size]
+    recent_values = values[-recent_size:]
+    baseline = sum(baseline_values) / len(baseline_values)
+    recent = sum(recent_values) / len(recent_values)
+    delta = recent - baseline
+    variance = sum((value - baseline) ** 2 for value in baseline_values) / max(
+        1,
+        len(baseline_values) - 1,
+    )
+    deviation = variance**0.5
+    upper = 0.0
+    lower = 0.0
+    peak = 0.0
+    if deviation > 1e-9:
+        for value in recent_values:
+            standardized = (value - baseline) / deviation
+            upper = max(0.0, upper + standardized - 0.5)
+            lower = min(0.0, lower + standardized + 0.5)
+            peak = max(peak, upper, abs(lower))
+        detected = peak >= 5.0 and abs(delta) >= practical_delta
+    else:
+        detected = abs(delta) >= practical_delta
+    direction = "stable"
+    if detected:
+        improved = delta > 0 if higher_is_better else delta < 0
+        direction = "improved" if improved else "declined"
+    return {
+        "key": key,
+        "label": label,
+        "sample_count": sample_count,
+        "status": "detected" if detected else "stable",
+        "detected": detected,
+        "direction": direction,
+        "baseline": baseline,
+        "recent": recent,
+        "delta": delta,
+        "method": "CUSUM",
+        "detail": (
+            "최근 10경기와 이전 기준 구간을 비교하며 작은 누적 변화와 실질 변화폭을 함께 검사합니다."
+        ),
+    }
+
+
+def _json_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return [value] if value else []
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [str(item) for item in value if str(item).strip()]
+
+
+def _translated_weapon(code: str) -> str:
+    translated = translate_code(code, "damage_causer")
+    if translated == code:
+        translated = translate_code(code, "item")
+    return translated
 
 
 def summarize_player_intelligence(
@@ -1155,3 +1744,16 @@ def _bool(value: Any) -> bool:
 
 def _iso(value: Any) -> str | None:
     return value.isoformat() if isinstance(value, datetime) else None
+
+
+def _datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    if isinstance(value, str) and value.strip():
+        try:
+            return datetime.fromisoformat(value.strip().replace("Z", "+00:00")).replace(
+                tzinfo=None
+            )
+        except ValueError:
+            return None
+    return None

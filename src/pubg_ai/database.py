@@ -9,7 +9,7 @@ import re
 from pubg_ai.config import DatabaseConfig
 
 
-SCHEMA_VERSION = 33
+SCHEMA_VERSION = 34
 
 
 class DatabaseError(RuntimeError):
@@ -98,7 +98,7 @@ def initialize_database(config: DatabaseConfig) -> SchemaInitializationResult:
                 """,
                 (
                     SCHEMA_VERSION,
-                    "exclude historical custom and training matches from analysis",
+                    "add fight, zone, team-coordination, and loot-readiness analysis",
                 ),
             )
             applied += 1
@@ -1582,6 +1582,149 @@ def schema_statements() -> list[str]:
             ),
             KEY idx_player_fight_outcomes_opponent (opponent_account_id, match_id),
             CONSTRAINT fk_player_fight_outcomes_match
+                FOREIGN KEY (match_id) REFERENCES matches(match_id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS player_fight_episodes (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            match_id VARCHAR(191) NOT NULL,
+            account_id VARCHAR(128) NOT NULL,
+            episode_index INT NOT NULL,
+            start_event_index INT NOT NULL,
+            end_event_index INT NOT NULL,
+            started_at_kst DATETIME(6) NULL,
+            ended_at_kst DATETIME(6) NULL,
+            duration_seconds FLOAT NOT NULL DEFAULT 0,
+            phase_number INT NULL,
+            outcome VARCHAR(16) NOT NULL,
+            opening_actor VARCHAR(16) NOT NULL,
+            first_hit_actor VARCHAR(16) NOT NULL,
+            primary_opponent_account_id VARCHAR(128) NULL,
+            primary_opponent_team_id INT NULL,
+            opponent_count INT UNSIGNED NOT NULL DEFAULT 0,
+            opponent_team_count INT UNSIGNED NOT NULL DEFAULT 0,
+            shots_fired INT UNSIGNED NOT NULL DEFAULT 0,
+            shots_hit INT UNSIGNED NOT NULL DEFAULT 0,
+            damage_dealt FLOAT NOT NULL DEFAULT 0,
+            damage_taken FLOAT NOT NULL DEFAULT 0,
+            dbnos_caused INT UNSIGNED NOT NULL DEFAULT 0,
+            dbnos_taken INT UNSIGNED NOT NULL DEFAULT 0,
+            kills INT UNSIGNED NOT NULL DEFAULT 0,
+            deaths INT UNSIGNED NOT NULL DEFAULT 0,
+            assists INT UNSIGNED NOT NULL DEFAULT 0,
+            revives_given INT UNSIGNED NOT NULL DEFAULT 0,
+            revives_received INT UNSIGNED NOT NULL DEFAULT 0,
+            trade_opportunities INT UNSIGNED NOT NULL DEFAULT 0,
+            trade_successes INT UNSIGNED NOT NULL DEFAULT 0,
+            is_third_party TINYINT(1) NOT NULL DEFAULT 0,
+            weapon_codes JSON NULL,
+            opponent_weapon_codes JSON NULL,
+            min_distance_m FLOAT NULL,
+            avg_distance_m FLOAT NULL,
+            max_distance_m FLOAT NULL,
+            summary_reason VARCHAR(255) NOT NULL,
+            parser_version VARCHAR(64) NOT NULL,
+            updated_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_player_fight_episodes (match_id, account_id, episode_index),
+            KEY idx_player_fight_episodes_account_time (account_id, started_at_kst, match_id),
+            KEY idx_player_fight_episodes_opponent (primary_opponent_account_id, match_id),
+            CONSTRAINT fk_player_fight_episodes_match
+                FOREIGN KEY (match_id) REFERENCES matches(match_id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS player_zone_phase_summaries (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            match_id VARCHAR(191) NOT NULL,
+            account_id VARCHAR(128) NOT NULL,
+            phase_number INT NOT NULL,
+            sample_count INT UNSIGNED NOT NULL DEFAULT 0,
+            phase_started_elapsed_seconds FLOAT NULL,
+            phase_ended_elapsed_seconds FLOAT NULL,
+            first_inside_elapsed_seconds FLOAT NULL,
+            late_entry_seconds FLOAT NULL,
+            outside_safe_zone_seconds FLOAT NOT NULL DEFAULT 0,
+            blue_zone_exposure_seconds FLOAT NOT NULL DEFAULT 0,
+            max_outside_distance_m FLOAT NOT NULL DEFAULT 0,
+            avg_center_distance_ratio FLOAT NULL,
+            edge_position_seconds FLOAT NOT NULL DEFAULT 0,
+            center_position_seconds FLOAT NOT NULL DEFAULT 0,
+            rotation_distance_m FLOAT NOT NULL DEFAULT 0,
+            foot_distance_m FLOAT NOT NULL DEFAULT 0,
+            vehicle_distance_m FLOAT NOT NULL DEFAULT 0,
+            vehicle_seconds FLOAT NOT NULL DEFAULT 0,
+            dbnos_taken INT UNSIGNED NOT NULL DEFAULT 0,
+            deaths INT UNSIGNED NOT NULL DEFAULT 0,
+            parser_version VARCHAR(64) NOT NULL,
+            updated_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_player_zone_phase_summaries (match_id, account_id, phase_number),
+            KEY idx_player_zone_phase_account (account_id, phase_number, match_id),
+            CONSTRAINT fk_player_zone_phase_summaries_match
+                FOREIGN KEY (match_id) REFERENCES matches(match_id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS player_team_coordination_summaries (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            match_id VARCHAR(191) NOT NULL,
+            account_id VARCHAR(128) NOT NULL,
+            sample_count INT UNSIGNED NOT NULL DEFAULT 0,
+            avg_nearest_teammate_distance_m FLOAT NULL,
+            max_nearest_teammate_distance_m FLOAT NULL,
+            avg_visible_teammates FLOAT NULL,
+            isolated_seconds FLOAT NOT NULL DEFAULT 0,
+            close_support_seconds FLOAT NOT NULL DEFAULT 0,
+            regroup_count INT UNSIGNED NOT NULL DEFAULT 0,
+            trade_opportunities INT UNSIGNED NOT NULL DEFAULT 0,
+            trade_successes INT UNSIGNED NOT NULL DEFAULT 0,
+            revives_given INT UNSIGNED NOT NULL DEFAULT 0,
+            revives_received INT UNSIGNED NOT NULL DEFAULT 0,
+            avg_revive_latency_seconds FLOAT NULL,
+            team_dbnos_taken INT UNSIGNED NOT NULL DEFAULT 0,
+            team_deaths INT UNSIGNED NOT NULL DEFAULT 0,
+            parser_version VARCHAR(64) NOT NULL,
+            updated_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_player_team_coordination_summaries (match_id, account_id),
+            KEY idx_player_team_coordination_account (account_id, match_id),
+            CONSTRAINT fk_player_team_coordination_summaries_match
+                FOREIGN KEY (match_id) REFERENCES matches(match_id)
+                ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS player_loot_readiness_summaries (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            match_id VARCHAR(191) NOT NULL,
+            account_id VARCHAR(128) NOT NULL,
+            landed_at_kst DATETIME(6) NULL,
+            first_fight_at_kst DATETIME(6) NULL,
+            first_primary_weapon_code VARCHAR(128) NULL,
+            second_primary_weapon_code VARCHAR(128) NULL,
+            seconds_to_first_primary_weapon FLOAT NULL,
+            seconds_to_second_primary_weapon FLOAT NULL,
+            seconds_to_vest FLOAT NULL,
+            seconds_to_helmet FLOAT NULL,
+            seconds_to_heal FLOAT NULL,
+            seconds_to_throwable FLOAT NULL,
+            seconds_to_scope FLOAT NULL,
+            seconds_to_first_fight FLOAT NULL,
+            ready_before_first_fight TINYINT(1) NULL,
+            pickup_events INT UNSIGNED NOT NULL DEFAULT 0,
+            ground_pickups INT UNSIGNED NOT NULL DEFAULT 0,
+            loot_box_pickups INT UNSIGNED NOT NULL DEFAULT 0,
+            care_package_pickups INT UNSIGNED NOT NULL DEFAULT 0,
+            vehicle_trunk_pickups INT UNSIGNED NOT NULL DEFAULT 0,
+            readiness_score FLOAT NOT NULL DEFAULT 0,
+            early_inventory JSON NULL,
+            parser_version VARCHAR(64) NOT NULL,
+            updated_at_kst DATETIME(6) NOT NULL,
+            UNIQUE KEY uq_player_loot_readiness_summaries (match_id, account_id),
+            KEY idx_player_loot_readiness_account (account_id, match_id),
+            CONSTRAINT fk_player_loot_readiness_summaries_match
                 FOREIGN KEY (match_id) REFERENCES matches(match_id)
                 ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci

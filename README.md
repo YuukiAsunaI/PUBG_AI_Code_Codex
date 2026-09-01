@@ -195,6 +195,19 @@ per 10 minutes, damage per resolved fight, and dealt/taken damage ratio. These m
 graphs and condition comparisons. `timeSurvived` is capped at the completed match duration before normalization so an
 old or malformed survival value cannot inflate the denominator.
 
+The `판단 분석` view reconstructs bounded fight episodes, circle-phase rotations, teammate spacing/trades, and loot
+readiness from retained telemetry. It shows first-hit and opening rates, fight accuracy and damage advantage, DBNO-to-
+kill conversion, third-party involvement, blue-zone exposure, late entry, vehicle rotation share, isolation/support,
+revive latency, regrouping, and readiness before the first fight. Recent defeated fights link directly to the complete
+match view, and CUSUM-style change signals compare a recent window with the preceding player baseline. Coverage is
+reported separately for each derived table; missing telemetry is displayed as unavailable rather than estimated.
+
+Recommendation win rates use a beta-binomial prior derived from the player's eligible weapon sample, and fight rates
+use the same shrinkage principle. The manager displays observed and adjusted rates, sample confidence, the final score
+factor, and all score components. Map, mode, perspective, match type, season state, year/quarter/month/date/KST hour,
+custom-match policy, and KST date-range filters are applied to every recommendation subquery so rows from different
+conditions cannot leak into the result.
+
 Drop-zone recommendations keep their stable cluster ID and raw centroid coordinates in centimeters. A versioned
 official-asset-backed catalog adds a Korean place name only when the centroid is inside a maintained region; unmatched
 points retain the map/grid label, and Paramo is explicitly treated as a dynamic map.
