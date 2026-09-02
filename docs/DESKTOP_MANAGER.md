@@ -168,11 +168,14 @@ entrypoint searches upward from the executable and current directory for the pro
 Set `PUBG_AI_BASE_DIR` when the executable is stored elsewhere. Secrets and local settings are not embedded into the
 executable.
 
-The verified `2026.09.01.1` artifact is 51,909,181 bytes with SHA-256
-`010C81FDE067D257C94D6D7ACA1C8BBF66659C2F4678E5B8C6FB38F2A20D2124`. Its localhost-only health endpoint returned
+The verified `2026.09.02.2` artifact is 52,103,250 bytes with SHA-256
+`4C99E4886735F69EEEA22A48A69161DAA21FBBAB562441D5FADD5BA28F508E06`. Its localhost-only health endpoint returned
 the same release. The packaged Playwright audit reached all 33 workspaces, rendered all seven advanced decision-analysis
 sections, applied a real map condition to the confidence-adjusted recommendation report, verified the two uncapped
 attachment minimum-match controls and reset paths, and rendered five M416 attachment-slot groups plus four
-combination-size groups. The all-target 93-player replay retained 17,418 events, virtualized 240 visible event rows,
-and refreshed in 140 ms. Desktop and 390px mobile layouts had no blank view, overlay, overflow, console error, failed
-request, or HTTP error. The MySQL-backed 30-check player-intelligence audit also passed in full.
+combination-size groups. The all-target 99-player replay retained 10,088 events, virtualized 240 visible event rows,
+and refreshed in 135 ms. The map audit rendered one selected route by default, eight ranked Sanhok phase-7 circles,
+Korean nearest-place descriptions, a focused 150 x 150 SVG viewport, and a 338 x 338 mobile map. Desktop and 390px
+mobile layouts had no blank view, overlay, overflow, console error, failed request, or HTTP error. The MySQL-backed
+30-check player-intelligence audit also passed in full. Closing the native window removed both one-file package
+processes and the port-8000 listener.

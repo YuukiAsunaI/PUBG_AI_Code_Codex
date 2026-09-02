@@ -72,6 +72,13 @@ class WebFlightPathStatsTests(unittest.TestCase):
         self.assertIn("/analytics/circles?", body)
         self.assertIn('id="flightPathOverlay"', body)
         self.assertIn('id="circlePathList"', body)
+        self.assertIn('id="circleMapPhaseSelect"', body)
+        self.assertIn('id="flightPathShowAllRoutes"', body)
+        self.assertIn('id="flightMapResetViewport"', body)
+        self.assertIn('class="circle-location-label"', body)
+        self.assertIn("다른 항로 겹쳐보기", body)
+        self.assertIn("전체 단계 겹쳐보기", body)
+        self.assertIn("가장 가까운 지도 지명 기준", body)
         self.assertIn("marker-end=\"url(#flightArrow)\"", body)
         self.assertIn("방향이 반대여도 같은 물리 항로", body)
 

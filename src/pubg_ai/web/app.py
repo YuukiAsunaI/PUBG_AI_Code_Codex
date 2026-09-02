@@ -4896,6 +4896,25 @@ _INDEX_HTML = """<!doctype html>
       align-items: start;
       min-width: 0;
     }
+    .flight-map-toolbar { align-items: flex-end; flex-wrap: wrap; }
+    .flight-map-toolbar h3 { margin-right: auto; }
+    .flight-map-toolbar-controls {
+      display: flex;
+      flex: 1 1 520px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .drop-map-toolbar .flight-map-toolbar-controls > label {
+      width: min(180px, 100%);
+      margin: 0;
+    }
+    .drop-map-toolbar .flight-map-toolbar-controls > .checkbox-line {
+      width: auto;
+      min-height: 38px;
+      align-self: flex-end;
+      white-space: nowrap;
+    }
     .flight-analysis-view-controls { margin: 4px 0 12px; }
     .flight-path-map-stage {
       position: relative;
@@ -4915,7 +4934,48 @@ _INDEX_HTML = """<!doctype html>
       height: 100%;
     }
     .flight-path-map-stage img { object-fit: contain; }
+    .flight-path-map-stage .flight-map-preload { display: none; }
     .flight-path-map-stage svg { overflow: visible; }
+    .flight-map-controls {
+      position: absolute;
+      z-index: 3;
+      top: 9px;
+      right: 9px;
+      display: flex;
+      gap: 4px;
+    }
+    .flight-map-controls button {
+      width: 32px;
+      min-width: 32px;
+      min-height: 32px;
+      padding: 4px;
+      border-color: rgba(255, 255, 255, 0.3);
+      background: rgba(8, 11, 13, 0.9);
+      color: var(--text);
+      font-size: 17px;
+      line-height: 1;
+    }
+    .flight-map-controls .flight-map-fit-button {
+      width: auto;
+      min-width: 72px;
+      padding-inline: 9px;
+      font-size: 10px;
+    }
+    .flight-map-controls button:disabled { opacity: 0.42; }
+    .flight-map-context {
+      position: absolute;
+      z-index: 3;
+      left: 9px;
+      bottom: 9px;
+      max-width: calc(100% - 18px);
+      border-left: 3px solid var(--accent);
+      padding: 6px 9px;
+      background: rgba(8, 11, 13, 0.9);
+      color: #dce3e7;
+      font-size: 10px;
+      line-height: 1.45;
+      pointer-events: none;
+    }
     .flight-route-line {
       cursor: pointer;
       transition: opacity 120ms ease, stroke-width 120ms ease;
@@ -4928,18 +4988,29 @@ _INDEX_HTML = """<!doctype html>
       outline: none;
       filter: drop-shadow(0 0 3px #ffffff);
     }
+    .flight-route-line.context-route { opacity: 0.16 !important; }
     .circle-zone {
-      pointer-events: none;
+      pointer-events: stroke;
       vector-effect: non-scaling-stroke;
       filter: drop-shadow(0 0 2px rgb(0 0 0 / 80%));
+    }
+    .circle-cluster-marker {
+      cursor: pointer;
+      transition: opacity 120ms ease;
+    }
+    .circle-cluster-marker.context-circle { opacity: 0.2; }
+    .circle-rank-hit { fill: transparent; pointer-events: all; }
+    .circle-rank-dot {
+      fill: rgba(8, 11, 13, 0.94);
+      stroke: currentColor;
+      vector-effect: non-scaling-stroke;
+      pointer-events: all;
     }
     .circle-zone-label {
       pointer-events: none;
       paint-order: stroke;
       stroke: #080b0d;
-      stroke-width: 4px;
       stroke-linejoin: round;
-      font-size: 18px;
       font-weight: 800;
       text-anchor: middle;
       dominant-baseline: central;
@@ -4948,8 +5019,25 @@ _INDEX_HTML = """<!doctype html>
       opacity: 1 !important;
       filter: drop-shadow(0 0 5px #ffffff);
     }
+    [data-circle-line].active .circle-rank-dot {
+      fill: currentColor;
+      stroke: #ffffff;
+      filter: drop-shadow(0 0 4px #ffffff);
+    }
+    [data-circle-line].active .circle-zone-label { fill: #080b0d !important; stroke: #ffffff; }
     .flight-analysis-side { min-width: 0; }
     .flight-analysis-side > h3 { margin-top: 0; }
+    .flight-analysis-scope {
+      margin: 0 0 6px;
+      border-left: 2px solid var(--accent);
+      padding: 5px 8px;
+      background: var(--panel-soft);
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.45;
+    }
+    .flight-analysis-side.combined .flight-route-list { max-height: 238px; }
+    .flight-analysis-side.combined .circle-result-list { max-height: 390px; }
     .circle-phase-group + .circle-phase-group { margin-top: 12px; }
     .circle-phase-group h4 {
       margin: 0;
@@ -4994,6 +5082,7 @@ _INDEX_HTML = """<!doctype html>
     .flight-path-row small { display: block; overflow-wrap: anywhere; }
     .flight-path-row strong { font-size: 11px; }
     .flight-path-row small { margin-top: 3px; color: var(--muted); font-size: 10px; }
+    .flight-path-row .circle-location-label { font-size: 12px; }
     .flight-path-share { color: var(--accent); font-size: 12px; font-weight: 700; }
     .flight-path-detail {
       min-height: 66px;
@@ -5030,6 +5119,9 @@ _INDEX_HTML = """<!doctype html>
     @media (max-width: 1050px) {
       .flight-path-layout { grid-template-columns: 1fr; }
       .flight-path-list { max-height: 360px; }
+      .flight-analysis-side.combined .flight-route-list,
+      .flight-analysis-side.combined .circle-result-list { max-height: 320px; }
+      .flight-map-toolbar-controls { justify-content: flex-start; }
     }
     .recommendation-view-switch {
       display: inline-flex;
@@ -17066,6 +17158,10 @@ _INDEX_HTML = """<!doctype html>
     let activeCircleClusterId = "";
     let activeCircleQueryParams = null;
     let circleRequestSequence = 0;
+    let flightMapCatalogByName = new Map();
+    let showAllCombinedFlightPaths = false;
+    let activeCircleDisplayPhase = "";
+    let activeFlightMapViewport = { x: 0, y: 0, size: 1000 };
 
     function setFlightAnalysisView(view) {
       activeFlightAnalysisView = ["flight", "circle", "combined"].includes(view) ? view : "combined";
@@ -17083,6 +17179,7 @@ _INDEX_HTML = """<!doctype html>
       const maps = (payload.map_region_catalog?.maps || [])
         .filter((item) => item.world_size_cm && item.canonical_map_name)
         .sort((left, right) => String(left.map_name_ko).localeCompare(String(right.map_name_ko)));
+      flightMapCatalogByName = new Map(maps.map((item) => [item.map_name, item]));
       flightPathMapFilter.innerHTML = '<option value="">전체 맵</option>' + maps.map((item) => (
         '<option value="' + attr(item.map_name) + '">' + escapeHtml(item.map_name_ko || item.map_name) + '</option>'
       )).join("");
@@ -17107,28 +17204,194 @@ _INDEX_HTML = """<!doctype html>
       `;
     }
 
+    function mapSectorLabel(xPct, yPct) {
+      const column = xPct < 1 / 3 ? 0 : (xPct > 2 / 3 ? 2 : 1);
+      const row = yPct < 1 / 3 ? 0 : (yPct > 2 / 3 ? 2 : 1);
+      if (row === 1 && column === 1) return "맵 중앙";
+      if (row === 1) return column === 0 ? "서부 중앙" : "동부 중앙";
+      if (column === 1) return row === 0 ? "북부 중앙" : "남부 중앙";
+      return `${row === 0 ? "북" : "남"}${column === 0 ? "서" : "동"}부`;
+    }
+
+    function relativeMapDirection(deltaX, deltaY) {
+      if (Math.hypot(deltaX, deltaY) < 0.00001) return "중심 부근";
+      const directions = ["동쪽", "남동쪽", "남쪽", "남서쪽", "서쪽", "북서쪽", "북쪽", "북동쪽"];
+      const degrees = (Math.atan2(deltaY, deltaX) * 180 / Math.PI + 360) % 360;
+      return directions[Math.round(degrees / 45) % directions.length];
+    }
+
+    function circleLocationContext(cluster) {
+      const xPct = Number(cluster?.center_x_pct);
+      const yPct = Number(cluster?.center_y_pct);
+      const hasPoint = Number.isFinite(xPct) && Number.isFinite(yPct);
+      const sector = hasPoint ? mapSectorLabel(xPct, yPct) : "위치 확인 불가";
+      const mapRecord = flightMapCatalogByName.get(cluster?.map_name || "");
+      const worldSizeCm = Number(mapRecord?.world_size_cm || 0);
+      const regions = (mapRecord?.regions || []).filter((region) => (
+        Number.isFinite(Number(region.center_x_pct))
+        && Number.isFinite(Number(region.center_y_pct))
+        && Number(region.radius_pct) > 0
+      ));
+      if (!hasPoint || !worldSizeCm || !regions.length) {
+        return {
+          primary: sector,
+          secondary: "지도 구역 기준",
+          title: `중심 X ${formatNumber(xPct * 100, 1)}% · Y ${formatNumber(yPct * 100, 1)}%`,
+        };
+      }
+      const measured = regions.map((region) => {
+        const distancePct = Math.hypot(xPct - Number(region.center_x_pct), yPct - Number(region.center_y_pct));
+        return {
+          region,
+          distancePct,
+          distanceM: distancePct * worldSizeCm / 100,
+          normalizedDistance: distancePct / Number(region.radius_pct),
+        };
+      }).sort((left, right) => left.distancePct - right.distancePct);
+      const matched = measured
+        .filter((item) => item.distancePct <= Number(item.region.radius_pct))
+        .sort((left, right) => left.normalizedDistance - right.normalizedDistance)[0];
+      if (matched) {
+        const name = matched.region.name_ko || matched.region.name;
+        return {
+          primary: name,
+          secondary: `${sector} · 지명 범위 중심에서 ${formatNumber(matched.distanceM, 0)}m`,
+          title: `${name} 지명 범위 안 · 중심 X ${formatNumber(xPct * 100, 1)}% · Y ${formatNumber(yPct * 100, 1)}%`,
+        };
+      }
+      const nearest = measured[0];
+      const name = nearest.region.name_ko || nearest.region.name;
+      const direction = relativeMapDirection(
+        xPct - Number(nearest.region.center_x_pct),
+        yPct - Number(nearest.region.center_y_pct),
+      );
+      return {
+        primary: `${name} ${direction} ${formatNumber(nearest.distanceM, 0)}m`,
+        secondary: `${sector} · 가장 가까운 지도 지명 기준`,
+        title: `${name} 중심에서 ${direction} ${formatNumber(nearest.distanceM, 0)}m · 중심 X ${formatNumber(xPct * 100, 1)}% · Y ${formatNumber(yPct * 100, 1)}%`,
+      };
+    }
+
+    function availableCirclePhases(report, mapName) {
+      return [...new Set(
+        (report?.clusters || [])
+          .filter((item) => item.map_name === mapName)
+          .map((item) => Number(item.phase_number))
+          .filter(Number.isFinite),
+      )].sort((left, right) => left - right);
+    }
+
+    function syncCircleMapPhaseSelect(report, mapName) {
+      const select = flightPathResult.querySelector("#circleMapPhaseSelect");
+      const field = flightPathResult.querySelector("#circleMapPhaseField");
+      const phases = availableCirclePhases(report, mapName);
+      if (field) field.hidden = activeFlightAnalysisView === "flight" || !phases.length;
+      if (!select) return phases;
+      const requestedPhase = String(report?.phase_number || "");
+      const phaseValues = phases.map(String);
+      if (requestedPhase && phaseValues.includes(requestedPhase)) {
+        activeCircleDisplayPhase = requestedPhase;
+      } else if (activeCircleDisplayPhase === "all" && phases.length > 1) {
+        activeCircleDisplayPhase = "all";
+      } else if (!phaseValues.includes(String(activeCircleDisplayPhase))) {
+        activeCircleDisplayPhase = phaseValues[0] || "";
+      }
+      select.innerHTML = phases.map((phase) => (
+        `<option value="${phase}">${formatInteger(phase)}서클</option>`
+      )).join("") + (phases.length > 1 ? '<option value="all">전체 단계 겹쳐보기</option>' : "");
+      select.value = activeCircleDisplayPhase;
+      select.disabled = phases.length <= 1;
+      return phases;
+    }
+
+    function visibleCircleClustersForMap(report, mapName) {
+      const clusters = (report?.clusters || []).filter((item) => item.map_name === mapName);
+      if (!activeCircleDisplayPhase || activeCircleDisplayPhase === "all") return clusters;
+      return clusters.filter((item) => String(item.phase_number) === activeCircleDisplayPhase);
+    }
+
+    function applyFlightMapViewport(x = 0, y = 0, size = 1000) {
+      const overlay = flightPathResult.querySelector("#flightPathOverlay");
+      if (!overlay) return;
+      const nextSize = Math.max(70, Math.min(1000, Number(size) || 1000));
+      const nextX = Math.max(0, Math.min(1000 - nextSize, Number(x) || 0));
+      const nextY = Math.max(0, Math.min(1000 - nextSize, Number(y) || 0));
+      activeFlightMapViewport = { x: nextX, y: nextY, size: nextSize };
+      overlay.setAttribute("viewBox", `${nextX} ${nextY} ${nextSize} ${nextSize}`);
+      const scale = nextSize / 1000;
+      flightPathResult.querySelectorAll(".circle-rank-hit").forEach((item) => item.setAttribute("r", String(27 * scale)));
+      flightPathResult.querySelectorAll(".circle-rank-dot").forEach((item) => item.setAttribute("r", String(17 * scale)));
+      flightPathResult.querySelectorAll(".circle-zone-label").forEach((item) => {
+        item.setAttribute("font-size", String(17 * scale));
+        item.setAttribute("stroke-width", String(3.5 * scale));
+      });
+      const reset = flightPathResult.querySelector("#flightMapResetViewport");
+      if (reset) reset.disabled = nextSize >= 999.5;
+    }
+
+    function resetFlightMapViewport() {
+      applyFlightMapViewport(0, 0, 1000);
+    }
+
+    function zoomFlightMap(multiplier) {
+      const viewport = activeFlightMapViewport;
+      const nextSize = Math.max(70, Math.min(1000, viewport.size * multiplier));
+      const centerX = viewport.x + viewport.size / 2;
+      const centerY = viewport.y + viewport.size / 2;
+      applyFlightMapViewport(centerX - nextSize / 2, centerY - nextSize / 2, nextSize);
+    }
+
+    function focusCircleOnMap(cluster) {
+      if (!cluster) return;
+      const centerX = Number(cluster.center_x_pct) * 1000;
+      const centerY = Number(cluster.center_y_pct) * 1000;
+      const radius = Math.max(0, Number(cluster.radius_pct || 0) * 1000);
+      const size = Math.min(1000, Math.max(150, radius * 6));
+      applyFlightMapViewport(centerX - size / 2, centerY - size / 2, size);
+    }
+
+    function updateFlightMapContext(cluster) {
+      const context = flightPathResult.querySelector("#flightMapContext");
+      if (!context) return;
+      if (!cluster) {
+        context.textContent = "서클 순위나 지도 번호를 누르면 주변 지역을 확대합니다.";
+        return;
+      }
+      const location = circleLocationContext(cluster);
+      context.innerHTML = `<strong>${escapeHtml(location.primary)}</strong> · ${escapeHtml(location.secondary)}`;
+    }
+
     function circleClusterDetail(cluster, report) {
       if (!cluster) return "서클 빈도 행을 선택하면 위치와 반경 근거가 표시됩니다.";
       const sourceText = report?.flight_cluster_id
         ? `선택 항로 ${formatInteger(report.route_match_count || 0)}경기 기준`
         : `현재 조건 ${formatInteger(report?.analyzed_match_count || 0)}경기 기준`;
+      const location = circleLocationContext(cluster);
       return `
-        <strong>${escapeHtml(cluster.map_name_ko)} · ${formatInteger(cluster.phase_number)}서클</strong>
-        ${formatInteger(cluster.circle_count)}회 / 이 단계 ${formatInteger(cluster.phase_circle_count)}회 · 출현 ${percent(cluster.phase_share)}<br>
+        <strong>${escapeHtml(cluster.map_name_ko)} · ${formatInteger(cluster.phase_number)}서클 · ${escapeHtml(location.primary)}</strong>
+        ${escapeHtml(location.secondary)} · ${formatInteger(cluster.circle_count)}회 / 이 단계 ${formatInteger(cluster.phase_circle_count)}회 · 출현 ${percent(cluster.phase_share)}<br>
         중심 X ${formatNumber(Number(cluster.center_x_pct || 0) * 100, 1)}% · Y ${formatNumber(Number(cluster.center_y_pct || 0) * 100, 1)}%
         · 평균 반경 ${formatNumber(cluster.radius_m, 0)}m<br>
         ${escapeHtml(sourceText)} · 기간 ${escapeHtml(formatKstShort(cluster.first_seen_at_kst))} ~ ${escapeHtml(formatKstShort(cluster.last_seen_at_kst))}
       `;
     }
 
-    function selectCircleCluster(clusterId) {
+    function selectCircleCluster(clusterId, focusMap = true) {
       activeCircleClusterId = clusterId;
-      flightPathResult.querySelectorAll("[data-circle-line]").forEach((item) => item.classList.toggle("active", item.dataset.circleLine === clusterId));
+      flightPathResult.querySelectorAll("[data-circle-line]").forEach((item) => {
+        const selected = item.dataset.circleLine === clusterId;
+        item.classList.toggle("active", selected);
+        item.classList.toggle("context-circle", Boolean(clusterId) && !selected);
+      });
       flightPathResult.querySelectorAll("[data-circle-row]").forEach((item) => item.classList.toggle("active", item.dataset.circleRow === clusterId));
       const cluster = (activeCircleReport?.clusters || []).find((item) => item.cluster_id === clusterId);
       const detail = flightPathResult.querySelector("#flightPathDetail");
       if (detail) detail.innerHTML = circleClusterDetail(cluster, activeCircleReport);
-      flightPathResult.querySelector('[data-circle-row="' + CSS.escape(clusterId) + '"]')?.scrollIntoView({ block: "nearest" });
+      updateFlightMapContext(cluster);
+      if (focusMap && cluster) focusCircleOnMap(cluster);
+      if (focusMap) {
+        flightPathResult.querySelector('[data-circle-row="' + CSS.escape(clusterId) + '"]')?.scrollIntoView({ block: "nearest" });
+      }
     }
 
     async function requestCircleReport(clusterId = "") {
@@ -17168,19 +17431,22 @@ _INDEX_HTML = """<!doctype html>
     }
 
     function circleRowsForMap(report, mapName) {
-      const clusters = (report?.clusters || []).filter((item) => item.map_name === mapName);
+      const clusters = visibleCircleClustersForMap(report, mapName);
       const phases = [...new Set(clusters.map((item) => Number(item.phase_number)))].sort((left, right) => left - right);
       return phases.map((phase) => {
         const phaseRows = clusters.filter((item) => Number(item.phase_number) === phase);
         const color = circlePhaseColors[(phase - 1) % circlePhaseColors.length];
         return `<div class="circle-phase-group">
           <h4 style="color:${color}">${formatInteger(phase)}서클 · ${formatInteger(phaseRows[0]?.phase_circle_count || 0)}경기 표본</h4>
-          ${phaseRows.map((cluster, index) => `
-            <button type="button" class="flight-path-row" data-circle-row="${attr(cluster.cluster_id)}">
+          ${phaseRows.map((cluster, index) => {
+            const location = circleLocationContext(cluster);
+            return `
+            <button type="button" class="flight-path-row" data-circle-row="${attr(cluster.cluster_id)}" title="${attr(location.title)}">
               <span class="flight-path-rank" style="color:${color}">#${formatInteger(index + 1)}</span>
-              <span><strong>반경 ${formatNumber(cluster.radius_m, 0)}m · 중심 ${formatNumber(Number(cluster.center_x_pct || 0) * 100, 1)}%, ${formatNumber(Number(cluster.center_y_pct || 0) * 100, 1)}%</strong><small>${formatInteger(cluster.circle_count)}회 / ${formatInteger(cluster.phase_circle_count)}회</small></span>
+              <span><strong class="circle-location-label">${escapeHtml(location.primary)}</strong><small>${escapeHtml(location.secondary)}<br>반경 ${formatNumber(cluster.radius_m, 0)}m · ${formatInteger(cluster.circle_count)}회 / ${formatInteger(cluster.phase_circle_count)}회 · 중심 ${formatNumber(Number(cluster.center_x_pct || 0) * 100, 1)}%, ${formatNumber(Number(cluster.center_y_pct || 0) * 100, 1)}%</small></span>
               <span class="flight-path-share">${percent(cluster.phase_share)}</span>
-            </button>`).join("")}
+            </button>`;
+          }).join("")}
         </div>`;
       }).join("") || '<div class="status">선택한 맵과 단계에 조건을 충족한 서클이 없습니다.</div>';
     }
@@ -17193,42 +17459,70 @@ _INDEX_HTML = """<!doctype html>
       if (!image || !overlay || !list || !circleList) return;
       activeFlightMapName = mapName;
       const clusters = (report.clusters || []).filter((item) => item.map_name === mapName);
-      const circleClusters = (circleReport?.clusters || []).filter((item) => item.map_name === mapName);
       const showFlight = activeFlightAnalysisView !== "circle";
       const showCircles = activeFlightAnalysisView !== "flight";
-      image.src = mapName ? "/replay/map-assets/" + encodeURIComponent(mapName) : "";
+      const circlePhases = syncCircleMapPhaseSelect(circleReport, mapName);
+      const circleClusters = visibleCircleClustersForMap(circleReport, mapName);
+      const mapAssetUrl = mapName ? "/replay/map-assets/" + encodeURIComponent(mapName) : "";
+      image.src = mapAssetUrl;
       const mapLabel = [...(report.maps || []), ...(circleReport?.maps || [])].find((item) => item.map_name === mapName)?.map_name_ko || "맵";
       image.alt = `${mapLabel} 비행기 동선과 자기장 지도`;
+      const selectedFlightId = clusters.some((item) => item.cluster_id === activeFlightClusterId)
+        ? activeFlightClusterId
+        : (clusters[0]?.cluster_id || "");
+      const renderedFlightClusters = (
+        activeFlightAnalysisView === "combined" && !showAllCombinedFlightPaths
+          ? clusters.filter((item) => item.cluster_id === selectedFlightId)
+          : clusters
+      );
+      const phaseRanks = new Map();
+      const circleRankById = new Map();
+      for (const cluster of circleClusters) {
+        const phase = Number(cluster.phase_number || 1);
+        const rank = (phaseRanks.get(phase) || 0) + 1;
+        phaseRanks.set(phase, rank);
+        circleRankById.set(cluster.cluster_id, rank);
+      }
+      const singleCirclePhase = new Set(circleClusters.map((item) => Number(item.phase_number))).size <= 1;
       overlay.innerHTML = `
         <defs>
           <marker id="flightArrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto" markerUnits="strokeWidth">
             <path d="M0,0 L7,3.5 L0,7 Z" fill="#ffffff"></path>
           </marker>
         </defs>
-        ${showCircles ? circleClusters.map((cluster, index) => {
-          const phase = Number(cluster.phase_number || 1);
-          const color = circlePhaseColors[(phase - 1) % circlePhaseColors.length];
-          const radius = Math.max(2.5, Number(cluster.radius_pct || 0) * 1000);
-          const opacity = Math.min(0.95, 0.35 + 0.55 * Math.sqrt(Math.max(0, Number(cluster.phase_share || 0))));
-          const firstForPhase = circleClusters.findIndex((item) => Number(item.phase_number) === phase) === index;
-          return `<g data-circle-line="${attr(cluster.cluster_id)}" data-circle-phase="${phase}">
-            <circle class="circle-zone" cx="${Number(cluster.center_x_pct) * 1000}" cy="${Number(cluster.center_y_pct) * 1000}" r="${radius.toFixed(3)}"
-              fill="${color}" fill-opacity="0.035" stroke="${color}" stroke-width="${firstForPhase ? "2.4" : "1.3"}" stroke-dasharray="${firstForPhase ? "0" : "6 5"}" opacity="${opacity.toFixed(3)}">
-              <title>${formatInteger(phase)}서클 · ${formatInteger(cluster.circle_count)}회 (${percent(cluster.phase_share)}) · 평균 반경 ${formatNumber(cluster.radius_m, 0)}m</title>
-            </circle>
-            ${firstForPhase ? `<text class="circle-zone-label" x="${Number(cluster.center_x_pct) * 1000}" y="${Number(cluster.center_y_pct) * 1000}" fill="${color}">${formatInteger(phase)}</text>` : ""}
-          </g>`;
-        }).join("") : ""}
-        ${showFlight ? clusters.map((cluster, index) => {
+        ${mapAssetUrl ? `<image href="${attr(mapAssetUrl)}" x="0" y="0" width="1000" height="1000" preserveAspectRatio="none"></image>` : ""}
+        ${showFlight ? renderedFlightClusters.map((cluster) => {
+          const index = clusters.findIndex((item) => item.cluster_id === cluster.cluster_id);
           const color = flightPathColors[index % flightPathColors.length];
           const width = 2 + 8 * Math.sqrt(Math.max(0, Number(cluster.map_share || 0)));
           const opacity = 0.38 + 0.58 * Math.sqrt(Math.max(0, Number(cluster.map_share || 0)));
-          return `<line class="flight-route-line" tabindex="0" role="button"
+          const isContextRoute = activeFlightAnalysisView === "combined"
+            && showAllCombinedFlightPaths
+            && cluster.cluster_id !== selectedFlightId;
+          return `<line class="flight-route-line${isContextRoute ? " context-route" : ""}" tabindex="0" role="button"
             x1="${Number(cluster.start_x_pct) * 1000}" y1="${Number(cluster.start_y_pct) * 1000}"
             x2="${Number(cluster.end_x_pct) * 1000}" y2="${Number(cluster.end_y_pct) * 1000}"
             stroke="${color}" stroke-width="${width.toFixed(2)}" opacity="${opacity.toFixed(3)}"
             marker-end="url(#flightArrow)" data-flight-line="${attr(cluster.cluster_id)}"
           ><title>#${formatInteger(index + 1)} · ${escapeHtml(cluster.dominant_direction_ko)} · ${formatInteger(cluster.route_count)}회 (${percent(cluster.map_share)})</title></line>`;
+        }).join("") : ""}
+        ${showCircles ? circleClusters.map((cluster) => {
+          const phase = Number(cluster.phase_number || 1);
+          const rank = circleRankById.get(cluster.cluster_id) || 1;
+          const color = circlePhaseColors[(phase - 1) % circlePhaseColors.length];
+          const radius = Math.max(2.5, Number(cluster.radius_pct || 0) * 1000);
+          const opacity = Math.min(0.95, 0.35 + 0.55 * Math.sqrt(Math.max(0, Number(cluster.phase_share || 0))));
+          const location = circleLocationContext(cluster);
+          const markerLabel = singleCirclePhase ? `#${rank}` : `${phase}·${rank}`;
+          return `<g class="circle-cluster-marker" data-circle-line="${attr(cluster.cluster_id)}" data-circle-phase="${phase}" data-circle-rank="${rank}" tabindex="0" role="button" aria-label="${attr(`${markerLabel} ${location.primary}`)}" style="color:${color}">
+            <circle class="circle-zone" cx="${Number(cluster.center_x_pct) * 1000}" cy="${Number(cluster.center_y_pct) * 1000}" r="${radius.toFixed(3)}"
+              fill="${color}" fill-opacity="0.04" stroke="${color}" stroke-width="${rank === 1 ? "2.4" : "1.3"}" stroke-dasharray="${rank === 1 ? "0" : "6 5"}" opacity="${opacity.toFixed(3)}">
+              <title>${escapeHtml(location.primary)} · ${formatInteger(phase)}서클 #${formatInteger(rank)} · ${formatInteger(cluster.circle_count)}회 (${percent(cluster.phase_share)}) · 평균 반경 ${formatNumber(cluster.radius_m, 0)}m</title>
+            </circle>
+            <circle class="circle-rank-hit" cx="${Number(cluster.center_x_pct) * 1000}" cy="${Number(cluster.center_y_pct) * 1000}" r="27"></circle>
+            <circle class="circle-rank-dot" cx="${Number(cluster.center_x_pct) * 1000}" cy="${Number(cluster.center_y_pct) * 1000}" r="17"></circle>
+            <text class="circle-zone-label" x="${Number(cluster.center_x_pct) * 1000}" y="${Number(cluster.center_y_pct) * 1000}" fill="${color}" font-size="17" stroke-width="3.5">${escapeHtml(markerLabel)}</text>
+          </g>`;
         }).join("") : ""}
       `;
       list.innerHTML = clusters.map((cluster, index) => {
@@ -17254,16 +17548,40 @@ _INDEX_HTML = """<!doctype html>
         row.addEventListener("click", () => selectFlightPathCluster(row.dataset.flightRow || ""));
       });
       circleList.innerHTML = circleRowsForMap(circleReport, mapName);
+      flightPathResult.querySelectorAll("[data-circle-line]").forEach((marker) => {
+        marker.addEventListener("click", () => selectCircleCluster(marker.dataset.circleLine || ""));
+        marker.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            selectCircleCluster(marker.dataset.circleLine || "");
+          }
+        });
+      });
       flightPathResult.querySelectorAll("[data-circle-row]").forEach((row) => {
         row.addEventListener("click", () => selectCircleCluster(row.dataset.circleRow || ""));
       });
+      const circleScope = flightPathResult.querySelector("#flightCircleScope");
+      if (circleScope) {
+        const phaseText = activeCircleDisplayPhase === "all"
+          ? `${formatInteger(circlePhases.length)}개 단계 겹쳐보기`
+          : `${formatInteger(activeCircleDisplayPhase || circlePhases[0] || 0)}서클`;
+        const routeText = circleReport?.flight_cluster_id
+          ? `선택 항로 ${formatInteger(circleReport.route_match_count || 0)}경기`
+          : `현재 조건 ${formatInteger(circleReport?.analyzed_match_count || 0)}경기`;
+        circleScope.textContent = `${routeText} · 지도 표시 ${phaseText} · 원과 번호를 누르면 주변 지역 확대`;
+      }
+      resetFlightMapViewport();
+      updateFlightMapContext(null);
       const detail = flightPathResult.querySelector("#flightPathDetail");
       const selectedFlight = clusters.find((item) => item.cluster_id === activeFlightClusterId) || clusters[0];
       const selectedCircle = circleClusters.find((item) => item.cluster_id === activeCircleClusterId) || circleClusters[0];
       if (showFlight && selectedFlight) {
         selectFlightPathCluster(selectedFlight.cluster_id, false);
+      } else if (showCircles && activeCircleClusterId && selectedCircle) {
+        selectCircleCluster(selectedCircle.cluster_id, false);
       } else if (showCircles && selectedCircle) {
-        selectCircleCluster(selectedCircle.cluster_id);
+        activeCircleClusterId = "";
+        detail.textContent = "지도 번호나 오른쪽 순위를 누르면 해당 서클의 주변 지역을 확대합니다.";
       } else if (detail) {
         detail.textContent = "조건을 충족한 지도 분석 결과가 없습니다.";
       }
@@ -17313,24 +17631,38 @@ _INDEX_HTML = """<!doctype html>
         ])}
         <div class="flight-path-layout">
           <div class="drop-map-panel">
-            <div class="drop-map-toolbar">
+            <div class="drop-map-toolbar flight-map-toolbar">
               <h3>빈도 지도</h3>
-              <label>표시할 맵<select id="flightPathMapSelect">${maps.map((item) => `<option value="${attr(item.map_name)}"${item.map_name === initialMap ? " selected" : ""}>${escapeHtml(item.map_name_ko)}</option>`).join("")}</select></label>
+              <div class="flight-map-toolbar-controls">
+                <label>표시할 맵<select id="flightPathMapSelect">${maps.map((item) => `<option value="${attr(item.map_name)}"${item.map_name === initialMap ? " selected" : ""}>${escapeHtml(item.map_name_ko)}</option>`).join("")}</select></label>
+                <label id="circleMapPhaseField"${showCircles ? "" : " hidden"}>지도 표시 단계<select id="circleMapPhaseSelect"><option value="">서클 없음</option></select></label>
+                <label class="checkbox-line"${activeFlightAnalysisView === "combined" ? "" : " hidden"}>
+                  <input type="checkbox" id="flightPathShowAllRoutes"${showAllCombinedFlightPaths ? " checked" : ""}>
+                  다른 항로 겹쳐보기
+                </label>
+              </div>
             </div>
             <div class="flight-path-map-stage">
-              <img id="flightPathMapImage" alt="비행기 항로 지도">
+              <img id="flightPathMapImage" class="flight-map-preload" alt="">
               <svg id="flightPathOverlay" viewBox="0 0 1000 1000" aria-label="빈도별 비행기 항로"></svg>
+              <div class="flight-map-controls" aria-label="지도 확대 도구">
+                <button class="secondary" type="button" id="flightMapZoomOut" title="지도 축소" aria-label="지도 축소">−</button>
+                <button class="secondary" type="button" id="flightMapZoomIn" title="지도 확대" aria-label="지도 확대">+</button>
+                <button class="secondary flight-map-fit-button" type="button" id="flightMapResetViewport" title="전체 지도 보기">전체 지도</button>
+              </div>
+              <div class="flight-map-context" id="flightMapContext">서클 순위나 지도 번호를 누르면 주변 지역을 확대합니다.</div>
             </div>
             <div class="flight-path-detail" id="flightPathDetail">항로를 선택하세요.</div>
           </div>
-          <div class="flight-analysis-side">
+          <div class="flight-analysis-side${activeFlightAnalysisView === "combined" ? " combined" : ""}">
             <div${showFlight ? "" : " hidden"}>
               <h3>선택 맵 항로 순위</h3>
-              <div class="flight-path-list" id="flightPathList"></div>
+              <div class="flight-path-list flight-route-list" id="flightPathList"></div>
             </div>
             <div${showCircles ? "" : " hidden"} style="margin-top:${showFlight ? "16px" : "0"}">
               <h3>${circleReport?.flight_cluster_id ? "선택 항로의 자기장 빈도" : "자기장 빈도"}</h3>
-              <div class="flight-path-list" id="circlePathList"></div>
+              <div class="flight-analysis-scope" id="flightCircleScope">표시 범위를 준비하는 중입니다.</div>
+              <div class="flight-path-list circle-result-list" id="circlePathList"></div>
             </div>
           </div>
         </div>
@@ -17344,6 +17676,8 @@ _INDEX_HTML = """<!doctype html>
       mapSelect?.addEventListener("change", async () => {
         activeFlightMapName = mapSelect.value;
         activeCircleClusterId = "";
+        activeCircleDisplayPhase = "";
+        resetFlightMapViewport();
         if (activeFlightAnalysisView === "combined") {
           const firstCluster = (report.clusters || []).find((item) => item.map_name === mapSelect.value);
           activeFlightClusterId = firstCluster?.cluster_id || "";
@@ -17353,6 +17687,18 @@ _INDEX_HTML = """<!doctype html>
         }
         renderFlightPathMap(report, circleReport, mapSelect.value);
       });
+      flightPathResult.querySelector("#circleMapPhaseSelect")?.addEventListener("change", (event) => {
+        activeCircleDisplayPhase = event.target.value;
+        activeCircleClusterId = "";
+        renderFlightPathMap(report, activeCircleReport, activeFlightMapName);
+      });
+      flightPathResult.querySelector("#flightPathShowAllRoutes")?.addEventListener("change", (event) => {
+        showAllCombinedFlightPaths = event.target.checked;
+        renderFlightPathMap(report, activeCircleReport, activeFlightMapName);
+      });
+      flightPathResult.querySelector("#flightMapZoomIn")?.addEventListener("click", () => zoomFlightMap(0.72));
+      flightPathResult.querySelector("#flightMapZoomOut")?.addEventListener("click", () => zoomFlightMap(1.38));
+      flightPathResult.querySelector("#flightMapResetViewport")?.addEventListener("click", resetFlightMapViewport);
       renderFlightPathMap(report, circleReport, initialMap);
     }
 
@@ -17382,6 +17728,9 @@ _INDEX_HTML = """<!doctype html>
     async function loadFlightPathAnalysis() {
       const flightParams = buildFlightAnalysisParams("flight");
       activeCircleQueryParams = buildFlightAnalysisParams("circle");
+      activeCircleDisplayPhase = String(flightPathPhaseSelect.value || "");
+      showAllCombinedFlightPaths = false;
+      activeFlightMapViewport = { x: 0, y: 0, size: 1000 };
       flightPathStatus.textContent = "저장된 동선과 자기장을 분석하는 중";
       const response = await fetch("/analytics/flight-paths?" + flightParams.toString());
       const payload = await response.json();
@@ -22078,6 +22427,9 @@ _INDEX_HTML = """<!doctype html>
       activeFlightMapName = "";
       activeFlightClusterId = "";
       activeCircleClusterId = "";
+      activeCircleDisplayPhase = "";
+      showAllCombinedFlightPaths = false;
+      activeFlightMapViewport = { x: 0, y: 0, size: 1000 };
       flightPathResult.hidden = true;
       flightPathResult.innerHTML = "";
       flightPathStatus.textContent = "분석 대기 중";

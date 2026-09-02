@@ -11,8 +11,9 @@ denominators:
 - Where does each numbered safe circle occur most often?
 - For matches in one selected aircraft-route cluster, which circle patterns occurred?
 
-The UI exposes these as `비행기 동선`, `자기장 서클`, and `동선 + 자기장`. Circle phases can be viewed together
-or individually from phase 1 through phase 9.
+The UI exposes these as `비행기 동선`, `자기장 서클`, and `동선 + 자기장`. The query form can limit the
+server-side aggregation to one phase from 1 through 9. A separate map display selector changes only the visible phase
+inside an already returned report, so the operator can compare phases without another database query.
 
 ## Official Evidence
 
@@ -52,6 +53,23 @@ In combined mode, selecting a route calls the circle analysis with that route cl
 route cluster with the same parameters and limits circle rows to its exact match membership. It does not approximate
 the relationship from nearby coordinates.
 
+## Map Reading and Clutter Controls
+
+- A circle report defaults to one visible phase. `전체 단계 겹쳐보기` is an explicit opt-in rather than the default.
+- Every visible cluster has the same rank on the map and in the side list. A single-phase map uses `#1` through
+  `#N`; an all-phase map uses `phase.rank` labels.
+- Clicking a late-circle marker or rank row focuses a square viewport around that circle. The minimum viewport shows
+  15% of the map width, preserving nearby roads and place labels while making small circles legible. Operators can
+  zoom further, zoom out, or return to `전체 지도`.
+- Combined mode draws only the selected aircraft route by default. `다른 항로 겹쳐보기` adds the remaining ranked
+  routes as low-emphasis context.
+- Circle centers inside a maintained map-label radius use that Korean place name. Centers outside every radius are
+  described as the nearest place name plus cardinal direction and exact distance, for example
+  `파이난 북동쪽 387m`. This is deliberately labelled as the nearest-place basis and is not presented as an official
+  administrative boundary.
+- The map and analytical layers share one SVG viewport. Zooming therefore cannot separate the background image from
+  its circles or routes.
+
 ## Filters and Limits
 
 Both analyses support shard, registered player, map, game mode, team mode, perspective, match type, season state,
@@ -82,11 +100,15 @@ On 2026-09-02 KST:
 - Playwright loaded the Erangel asset at 1008 x 1008 and verified combined, route-only, circle-only, and phase-1-only
   modes;
 - combined-mode route conditioning produced both route and circle SVG layers;
+- combined mode rendered one selected route by default and expanded to five only after the comparison toggle;
+- the Sanhok phase-7 check rendered eight ranked circles, eight Korean location descriptions, and focused the selected
+  circle from the full `0 0 1000 1000` viewport to a `150 x 150` viewport;
+- a 390 x 844 mobile viewport kept the 338 x 338 map, toolbar, and zoom controls inside the viewport;
 - desktop and mobile checks reported no console errors, request failures, HTTP errors, or horizontal overflow.
 - all 685 Python tests passed;
-- packaged release `2026.09.02.1` rendered all 33 workspaces and returned the same localhost-only health release;
-- `dist/PUBG_AI_Manager.exe` was 52,099,316 bytes with SHA-256
-  `65FE614900B626024C5F4A8CE0E2FA561A5050B7C6FA759F669477901A69C83B`;
+- packaged release `2026.09.02.2` rendered all 33 workspaces and returned the same localhost-only health release;
+- `dist/PUBG_AI_Manager.exe` was 52,103,250 bytes with SHA-256
+  `4C99E4886735F69EEEA22A48A69161DAA21FBBAB562441D5FADD5BA28F508E06`;
 - closing the packaged native window removed both PyInstaller processes and the local listener, while a real Discord
   start/stop cycle emitted no unclosed-session or pending-task warning.
 

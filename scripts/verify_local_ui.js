@@ -515,6 +515,47 @@ async function runMobileRegistryCheck(page) {
   };
 }
 
+async function runMobileFlightPathCheck(page) {
+  await openWorkspaceSection(page, "replay", "flight-paths");
+  await page.locator('#flightPathForm button[type="submit"]').click();
+  await page.locator("#flightPathStatus").filter({ hasText: "분석 완료" }).waitFor({ timeout: 60000 });
+  await page.waitForFunction(() => (
+    document.querySelectorAll("#flightPathOverlay [data-flight-line]").length === 1
+    && document.querySelectorAll("#flightPathOverlay [data-circle-line]").length > 0
+  ), null, { timeout: 60000 });
+  const geometry = await page.evaluate(() => {
+    const stage = document.querySelector(".flight-path-map-stage")?.getBoundingClientRect();
+    const controls = document.querySelector(".flight-map-controls")?.getBoundingClientRect();
+    const toolbar = document.querySelector(".flight-map-toolbar-controls")?.getBoundingClientRect();
+    return {
+      stageWidth: Math.round(stage?.width || 0),
+      stageHeight: Math.round(stage?.height || 0),
+      controlsInsideStage: Boolean(
+        stage && controls
+        && controls.left >= stage.left - 1
+        && controls.right <= stage.right + 1
+        && controls.top >= stage.top - 1
+      ),
+      toolbarFitsViewport: Boolean(
+        toolbar
+        && toolbar.left >= -1
+        && toolbar.right <= window.innerWidth + 1
+      ),
+      documentOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+    };
+  });
+  const screenshot = path.join(outputDir, "flight-paths-mobile.png");
+  await page.locator("#flightPathResult").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: screenshot, fullPage: false });
+  return {
+    flightLines: await page.locator("#flightPathOverlay [data-flight-line]").count(),
+    circleLines: await page.locator("#flightPathOverlay [data-circle-line]").count(),
+    phaseValue: await page.locator("#circleMapPhaseSelect").inputValue(),
+    geometry,
+    screenshot,
+  };
+}
+
 async function runWorkspaceNavigationCheck(page) {
   const snapshot = (label) => page.evaluate((label) => {
     const main = document.querySelector("main");
@@ -800,6 +841,31 @@ async function runExpandedFeatureChecks(page) {
   const combinedCircleHeading = await page.locator("#circlePathList").evaluate(
     (element) => element.previousElementSibling?.textContent?.trim() || "",
   );
+  const combinedCircleDisplayPhase = await page.locator("#circleMapPhaseSelect").inputValue();
+  const combinedVisibleCirclePhases = await page.locator("#flightPathOverlay [data-circle-phase]").evaluateAll(
+    (markers) => [...new Set(markers.map((marker) => marker.dataset.circlePhase))],
+  );
+  const combinedCircleLocationLabels = await page.locator("#circlePathList .circle-location-label").allTextContents();
+  const combinedCircleRankLabels = await page.locator("#flightPathOverlay .circle-zone-label").allTextContents();
+  const combinedInitialViewBox = await page.locator("#flightPathOverlay").getAttribute("viewBox");
+  let focusedCircleViewBox = combinedInitialViewBox;
+  let focusedCircleContext = "";
+  if (combinedCircleRows > 1) {
+    await page.locator("#circlePathList [data-circle-row]").nth(1).click();
+    focusedCircleViewBox = await page.locator("#flightPathOverlay").getAttribute("viewBox");
+    focusedCircleContext = await page.locator("#flightMapContext").innerText();
+    if (!(await page.locator("#flightMapResetViewport").isDisabled())) {
+      await page.locator("#flightMapResetViewport").click();
+    }
+  }
+  let combinedExpandedFlightLines = combinedFlightLines;
+  if (combinedFlightRows > 1) {
+    await page.locator("#flightPathShowAllRoutes").check();
+    await page.waitForFunction(() => document.querySelectorAll("#flightPathOverlay [data-flight-line]").length > 1);
+    combinedExpandedFlightLines = await page.locator("#flightPathOverlay [data-flight-line]").count();
+    await page.locator("#flightPathShowAllRoutes").uncheck();
+    await page.waitForFunction(() => document.querySelectorAll("#flightPathOverlay [data-flight-line]").length === 1);
+  }
 
   const erangelOption = page.locator('#flightPathMapSelect option[value="Baltic_Main"]');
   const erangelAvailable = await erangelOption.count() > 0;
@@ -869,6 +935,46 @@ async function runExpandedFeatureChecks(page) {
   const flightScreenshot = path.join(outputDir, "flight-paths-desktop.png");
   await page.locator("#flightPathResult").scrollIntoViewIfNeeded();
   await page.screenshot({ path: flightScreenshot, fullPage: false });
+
+  await page.locator('[data-flight-analysis-view="circle"]').click();
+  await page.waitForFunction(() => (
+    document.querySelector('[data-flight-analysis-view="circle"]')?.classList.contains("active")
+    && document.querySelector("#flightPathStatus")?.textContent?.includes("분석 완료")
+  ), null, { timeout: 60000 });
+  await page.locator("#flightPathMapFilter").selectOption("Savage_Main");
+  const sanhokPhaseResponse = page.waitForResponse(
+    (response) => {
+      const url = new URL(response.url());
+      return url.pathname === "/analytics/circles"
+        && url.searchParams.get("map_name") === "Savage_Main"
+        && url.searchParams.get("phase_number") === "7"
+        && response.ok();
+    },
+    { timeout: 60000 },
+  );
+  await page.locator("#flightPathPhaseSelect").selectOption("7");
+  await sanhokPhaseResponse;
+  await page.waitForFunction(() => (
+    document.querySelector("#flightPathStatus")?.textContent?.includes("분석 완료")
+    && document.querySelectorAll('#flightPathOverlay [data-circle-phase="7"]').length > 0
+  ), null, { timeout: 60000 });
+  const sanhokPhaseSevenRows = await page.locator("#circlePathList [data-circle-row]").count();
+  const sanhokPhaseSevenMarkers = await page.locator('#flightPathOverlay [data-circle-phase="7"]').count();
+  const sanhokPhaseSevenLabels = await page.locator("#circlePathList .circle-location-label").allTextContents();
+  const sanhokPhaseSevenRanks = await page.locator("#flightPathOverlay .circle-zone-label").allTextContents();
+  const sanhokFullViewBox = await page.locator("#flightPathOverlay").getAttribute("viewBox");
+  let sanhokFocusedViewBox = sanhokFullViewBox;
+  let sanhokFocusedContext = "";
+  if (sanhokPhaseSevenRows > 1) {
+    await page.locator("#circlePathList [data-circle-row]").nth(1).click();
+    sanhokFocusedViewBox = await page.locator("#flightPathOverlay").getAttribute("viewBox");
+    sanhokFocusedContext = await page.locator("#flightMapContext").innerText();
+  }
+  const sanhokCircleZoomed = sanhokPhaseSevenRows <= 1
+    || Number(String(sanhokFocusedViewBox || "").split(/\s+/)[2]) < 1000;
+  const sanhokCircleScreenshot = path.join(outputDir, "circle-sanhok-phase7-desktop.png");
+  await page.locator("#flightPathResult").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: sanhokCircleScreenshot, fullPage: false });
 
   await openWorkspaceSection(page, "discord", "bot");
   await page.locator("#discordBotStatus").filter({ hasNotText: "확인 중" }).waitFor({ timeout: 30000 });
@@ -961,6 +1067,14 @@ async function runExpandedFeatureChecks(page) {
       combinedCircleLines,
       combinedCircleRows,
       combinedCircleHeading,
+      combinedCircleDisplayPhase,
+      combinedVisibleCirclePhases,
+      combinedCircleLocationLabels,
+      combinedCircleRankLabels,
+      combinedInitialViewBox,
+      focusedCircleViewBox,
+      focusedCircleContext,
+      combinedExpandedFlightLines,
       erangelAsset,
       phaseOneCircleLines,
       phaseOneOnly,
@@ -970,6 +1084,14 @@ async function runExpandedFeatureChecks(page) {
       circleOnlyCircleLines,
       restoredCombinedFlightLines,
       restoredCombinedCircleLines,
+      sanhokPhaseSevenRows,
+      sanhokPhaseSevenMarkers,
+      sanhokPhaseSevenLabels,
+      sanhokPhaseSevenRanks,
+      sanhokFullViewBox,
+      sanhokFocusedViewBox,
+      sanhokFocusedContext,
+      sanhokCircleZoomed,
       overflow: flightOverflow,
     },
     discordBot: {
@@ -989,6 +1111,7 @@ async function runExpandedFeatureChecks(page) {
       landingScreenshot,
       comparisonScreenshot,
       flightScreenshot,
+      sanhokCircleScreenshot,
       discordScreenshot,
     },
   };
@@ -1049,6 +1172,7 @@ async function layoutDiagnostics(page) {
     const mobileScreenshot = path.join(outputDir, "player-intelligence-mobile.png");
     await mobilePage.screenshot({ path: mobileScreenshot, fullPage: false });
     const mobileRegistry = await runMobileRegistryCheck(mobilePage);
+    const mobileFlightPaths = await runMobileFlightPathCheck(mobilePage);
     const mobileLayout = await layoutDiagnostics(mobilePage);
     await mobileContext.close();
 
@@ -1071,6 +1195,7 @@ async function layoutDiagnostics(page) {
         status: mobileResponse?.status(),
         player: mobilePlayer,
         registry: mobileRegistry,
+        flightPaths: mobileFlightPaths,
         layout: mobileLayout,
         ...mobileMonitor,
       },
@@ -1083,6 +1208,7 @@ async function layoutDiagnostics(page) {
         ...registryDimensions.screenshots,
         wholeMatchReplay: wholeMatchReplay.screenshot,
         mobileRegistry: mobileRegistry.screenshot,
+        mobileFlightPaths: mobileFlightPaths.screenshot,
       },
     };
     const failed = [
@@ -1137,11 +1263,23 @@ async function layoutDiagnostics(page) {
       result.desktop.features.comparison.trendSeries < 2,
       !result.desktop.features.iconLoaded,
       result.desktop.features.flightPaths.mapOptions < 1,
-      result.desktop.features.flightPaths.combinedFlightLines < 1,
+      result.desktop.features.flightPaths.combinedFlightLines !== 1,
       result.desktop.features.flightPaths.combinedFlightRows < 1,
       result.desktop.features.flightPaths.combinedCircleLines < 1,
       result.desktop.features.flightPaths.combinedCircleRows < 1,
       !result.desktop.features.flightPaths.combinedCircleHeading.includes("선택 항로"),
+      result.desktop.features.flightPaths.combinedCircleDisplayPhase === "all",
+      result.desktop.features.flightPaths.combinedVisibleCirclePhases.length !== 1,
+      result.desktop.features.flightPaths.combinedCircleLocationLabels.length
+        !== result.desktop.features.flightPaths.combinedCircleRows,
+      result.desktop.features.flightPaths.combinedCircleLocationLabels.some((label) => !label.trim()),
+      result.desktop.features.flightPaths.combinedCircleRankLabels.length
+        !== result.desktop.features.flightPaths.combinedCircleLines,
+      result.desktop.features.flightPaths.combinedCircleRankLabels.some((label) => !label.trim().startsWith("#")),
+      result.desktop.features.flightPaths.combinedCircleRows > 1
+        && !result.desktop.features.flightPaths.focusedCircleContext.trim(),
+      result.desktop.features.flightPaths.combinedFlightRows > 1
+        && result.desktop.features.flightPaths.combinedExpandedFlightLines <= 1,
       !result.desktop.features.flightPaths.erangelAsset.available,
       result.desktop.features.flightPaths.erangelAsset.width !== 1008,
       result.desktop.features.flightPaths.erangelAsset.height !== 1008,
@@ -1153,6 +1291,18 @@ async function layoutDiagnostics(page) {
       result.desktop.features.flightPaths.circleOnlyCircleLines < 1,
       result.desktop.features.flightPaths.restoredCombinedFlightLines < 1,
       result.desktop.features.flightPaths.restoredCombinedCircleLines < 1,
+      result.desktop.features.flightPaths.sanhokPhaseSevenRows < 2,
+      result.desktop.features.flightPaths.sanhokPhaseSevenMarkers
+        !== result.desktop.features.flightPaths.sanhokPhaseSevenRows,
+      result.desktop.features.flightPaths.sanhokPhaseSevenLabels.length
+        !== result.desktop.features.flightPaths.sanhokPhaseSevenRows,
+      result.desktop.features.flightPaths.sanhokPhaseSevenLabels.some((label) => !label.trim()),
+      result.desktop.features.flightPaths.sanhokPhaseSevenRanks.length
+        !== result.desktop.features.flightPaths.sanhokPhaseSevenMarkers,
+      result.desktop.features.flightPaths.sanhokPhaseSevenRanks.some((label) => !label.trim().startsWith("#")),
+      !result.desktop.features.flightPaths.sanhokCircleZoomed,
+      result.desktop.features.flightPaths.sanhokPhaseSevenRows > 1
+        && !result.desktop.features.flightPaths.sanhokFocusedContext.trim(),
       result.desktop.features.flightPaths.overflow,
       !result.desktop.features.discordBot.secretInputsEmpty,
       !result.desktop.features.discordBot.status,
@@ -1208,6 +1358,14 @@ async function layoutDiagnostics(page) {
       !result.desktop.wholeMatchReplay.playbackAdvanced,
       result.mobile.registry.rows < 1,
       result.mobile.registry.editors < result.mobile.registry.rows,
+      result.mobile.flightPaths.flightLines !== 1,
+      result.mobile.flightPaths.circleLines < 1,
+      result.mobile.flightPaths.phaseValue === "all",
+      result.mobile.flightPaths.geometry.stageWidth < 250,
+      result.mobile.flightPaths.geometry.stageWidth !== result.mobile.flightPaths.geometry.stageHeight,
+      !result.mobile.flightPaths.geometry.controlsInsideStage,
+      !result.mobile.flightPaths.geometry.toolbarFitsViewport,
+      result.mobile.flightPaths.geometry.documentOverflow,
       result.desktop.audit.failedRows > 0,
       !result.desktop.audit.hasScopeAndFreshness,
       !result.desktop.workspaceNavigation.stable,
