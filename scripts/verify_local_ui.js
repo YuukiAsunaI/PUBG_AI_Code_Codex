@@ -941,40 +941,89 @@ async function runExpandedFeatureChecks(page) {
     document.querySelector('[data-flight-analysis-view="circle"]')?.classList.contains("active")
     && document.querySelector("#flightPathStatus")?.textContent?.includes("분석 완료")
   ), null, { timeout: 60000 });
-  await page.locator("#flightPathMapFilter").selectOption("Savage_Main");
-  const sanhokPhaseResponse = page.waitForResponse(
-    (response) => {
-      const url = new URL(response.url());
-      return url.pathname === "/analytics/circles"
-        && url.searchParams.get("map_name") === "Savage_Main"
-        && url.searchParams.get("phase_number") === "7"
-        && response.ok();
-    },
-    { timeout: 60000 },
-  );
-  await page.locator("#flightPathPhaseSelect").selectOption("7");
-  await sanhokPhaseResponse;
-  await page.waitForFunction(() => (
-    document.querySelector("#flightPathStatus")?.textContent?.includes("분석 완료")
-    && document.querySelectorAll('#flightPathOverlay [data-circle-phase="7"]').length > 0
-  ), null, { timeout: 60000 });
-  const sanhokPhaseSevenRows = await page.locator("#circlePathList [data-circle-row]").count();
-  const sanhokPhaseSevenMarkers = await page.locator('#flightPathOverlay [data-circle-phase="7"]').count();
-  const sanhokPhaseSevenLabels = await page.locator("#circlePathList .circle-location-label").allTextContents();
-  const sanhokPhaseSevenRanks = await page.locator("#flightPathOverlay .circle-zone-label").allTextContents();
-  const sanhokFullViewBox = await page.locator("#flightPathOverlay").getAttribute("viewBox");
-  let sanhokFocusedViewBox = sanhokFullViewBox;
-  let sanhokFocusedContext = "";
-  if (sanhokPhaseSevenRows > 1) {
-    await page.locator("#circlePathList [data-circle-row]").nth(1).click();
-    sanhokFocusedViewBox = await page.locator("#flightPathOverlay").getAttribute("viewBox");
-    sanhokFocusedContext = await page.locator("#flightMapContext").innerText();
+  if (await page.locator('#flightPathPlayerSelect option[value=""]').count()) {
+    await page.locator("#flightPathPlayerSelect").selectOption("");
+    await page.waitForFunction(() => document.querySelectorAll("#flightPathMapFilter option").length > 1);
   }
-  const sanhokCircleZoomed = sanhokPhaseSevenRows <= 1
-    || Number(String(sanhokFocusedViewBox || "").split(/\s+/)[2]) < 1000;
-  const sanhokCircleScreenshot = path.join(outputDir, "circle-sanhok-phase7-desktop.png");
+  const phaseSevenCatalog = await page.evaluate(async () => {
+    const response = await fetch(
+      "/analytics/circles?phase_number=7&top_per_phase=8&circle_limit=200000&route_limit=100000",
+    );
+    if (!response.ok) throw new Error(`circle catalog ${response.status}`);
+    return (await response.json()).circles;
+  });
+  const phaseSevenMapNames = [...new Set(
+    (phaseSevenCatalog.maps || [])
+      .map((item) => String(item.map_name || ""))
+      .filter(Boolean),
+  )];
+  const allMapCircleChecks = [];
+  for (const mapName of phaseSevenMapNames) {
+    const mapOption = page.locator(`#flightPathMapFilter option[value="${mapName}"]`);
+    const availableInFilter = await mapOption.count() > 0;
+    if (!availableInFilter) {
+      allMapCircleChecks.push({ mapName, availableInFilter, rows: 0, markers: 0 });
+      continue;
+    }
+    await page.locator("#flightPathMapFilter").selectOption(mapName);
+    const circleResponse = page.waitForResponse(
+      (response) => {
+        const url = new URL(response.url());
+        return url.pathname === "/analytics/circles"
+          && url.searchParams.get("map_name") === mapName
+          && url.searchParams.get("phase_number") === "7"
+          && response.ok();
+      },
+      { timeout: 60000 },
+    );
+    await page.locator("#flightPathPhaseSelect").evaluate((select) => {
+      select.value = "7";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await circleResponse;
+    await page.waitForFunction((expectedMap) => (
+      document.querySelector("#flightPathStatus")?.textContent?.includes("분석 완료")
+      && document.querySelector("#flightPathMapImage")?.src.includes(expectedMap)
+      && document.querySelectorAll('#flightPathOverlay [data-circle-phase="7"]').length > 0
+    ), mapName, { timeout: 60000 });
+
+    const rows = await page.locator("#circlePathList [data-circle-row]").count();
+    const markers = await page.locator('#flightPathOverlay [data-circle-phase="7"]').count();
+    const labels = await page.locator("#circlePathList .circle-location-label").allTextContents();
+    const ranks = await page.locator("#flightPathOverlay .circle-zone-label").allTextContents();
+    const fullViewBox = await page.locator("#flightPathOverlay").getAttribute("viewBox");
+    const focusIndex = rows > 1 ? 1 : 0;
+    if (rows > 0) {
+      await page.locator("#circlePathList [data-circle-row]").nth(focusIndex).click();
+    }
+    const focusedViewBox = await page.locator("#flightPathOverlay").getAttribute("viewBox");
+    const focusedContext = await page.locator("#flightMapContext").innerText();
+    const focusedWidth = Number(String(focusedViewBox || "").split(/\s+/)[2]);
+    const mapAsset = await page.locator("#flightPathMapImage").evaluate((image) => ({
+      loaded: image.complete && image.naturalWidth > 0 && image.naturalHeight > 0,
+      width: image.naturalWidth,
+      height: image.naturalHeight,
+    }));
+    allMapCircleChecks.push({
+      mapName,
+      availableInFilter,
+      rows,
+      markers,
+      labels,
+      ranks,
+      fullViewBox,
+      focusedViewBox,
+      focusedContext,
+      zoomed: Number.isFinite(focusedWidth) && focusedWidth < 1000,
+      mapAsset,
+    });
+    if (!(await page.locator("#flightMapResetViewport").isDisabled())) {
+      await page.locator("#flightMapResetViewport").click();
+    }
+  }
+  const allMapsCircleScreenshot = path.join(outputDir, "circle-all-maps-phase7-desktop.png");
   await page.locator("#flightPathResult").scrollIntoViewIfNeeded();
-  await page.screenshot({ path: sanhokCircleScreenshot, fullPage: false });
+  await page.screenshot({ path: allMapsCircleScreenshot, fullPage: false });
 
   await openWorkspaceSection(page, "discord", "bot");
   await page.locator("#discordBotStatus").filter({ hasNotText: "확인 중" }).waitFor({ timeout: 30000 });
@@ -1084,14 +1133,8 @@ async function runExpandedFeatureChecks(page) {
       circleOnlyCircleLines,
       restoredCombinedFlightLines,
       restoredCombinedCircleLines,
-      sanhokPhaseSevenRows,
-      sanhokPhaseSevenMarkers,
-      sanhokPhaseSevenLabels,
-      sanhokPhaseSevenRanks,
-      sanhokFullViewBox,
-      sanhokFocusedViewBox,
-      sanhokFocusedContext,
-      sanhokCircleZoomed,
+      phaseSevenMapNames,
+      allMapCircleChecks,
       overflow: flightOverflow,
     },
     discordBot: {
@@ -1111,7 +1154,7 @@ async function runExpandedFeatureChecks(page) {
       landingScreenshot,
       comparisonScreenshot,
       flightScreenshot,
-      sanhokCircleScreenshot,
+      allMapsCircleScreenshot,
       discordScreenshot,
     },
   };
@@ -1291,18 +1334,22 @@ async function layoutDiagnostics(page) {
       result.desktop.features.flightPaths.circleOnlyCircleLines < 1,
       result.desktop.features.flightPaths.restoredCombinedFlightLines < 1,
       result.desktop.features.flightPaths.restoredCombinedCircleLines < 1,
-      result.desktop.features.flightPaths.sanhokPhaseSevenRows < 2,
-      result.desktop.features.flightPaths.sanhokPhaseSevenMarkers
-        !== result.desktop.features.flightPaths.sanhokPhaseSevenRows,
-      result.desktop.features.flightPaths.sanhokPhaseSevenLabels.length
-        !== result.desktop.features.flightPaths.sanhokPhaseSevenRows,
-      result.desktop.features.flightPaths.sanhokPhaseSevenLabels.some((label) => !label.trim()),
-      result.desktop.features.flightPaths.sanhokPhaseSevenRanks.length
-        !== result.desktop.features.flightPaths.sanhokPhaseSevenMarkers,
-      result.desktop.features.flightPaths.sanhokPhaseSevenRanks.some((label) => !label.trim().startsWith("#")),
-      !result.desktop.features.flightPaths.sanhokCircleZoomed,
-      result.desktop.features.flightPaths.sanhokPhaseSevenRows > 1
-        && !result.desktop.features.flightPaths.sanhokFocusedContext.trim(),
+      result.desktop.features.flightPaths.phaseSevenMapNames.length < 1,
+      result.desktop.features.flightPaths.allMapCircleChecks.length
+        !== result.desktop.features.flightPaths.phaseSevenMapNames.length,
+      result.desktop.features.flightPaths.allMapCircleChecks.some((item) => !item.availableInFilter),
+      result.desktop.features.flightPaths.allMapCircleChecks.some((item) => item.rows < 1),
+      result.desktop.features.flightPaths.allMapCircleChecks.some((item) => item.markers !== item.rows),
+      result.desktop.features.flightPaths.allMapCircleChecks.some(
+        (item) => item.labels.length !== item.rows || item.labels.some((label) => !label.trim()),
+      ),
+      result.desktop.features.flightPaths.allMapCircleChecks.some(
+        (item) => item.ranks.length !== item.markers
+          || item.ranks.some((label) => !label.trim().startsWith("#")),
+      ),
+      result.desktop.features.flightPaths.allMapCircleChecks.some((item) => !item.zoomed),
+      result.desktop.features.flightPaths.allMapCircleChecks.some((item) => !item.focusedContext.trim()),
+      result.desktop.features.flightPaths.allMapCircleChecks.some((item) => !item.mapAsset.loaded),
       result.desktop.features.flightPaths.overflow,
       !result.desktop.features.discordBot.secretInputsEmpty,
       !result.desktop.features.discordBot.status,

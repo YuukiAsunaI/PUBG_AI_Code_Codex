@@ -134,13 +134,14 @@ the active time window. Persistent DBNO, revive, kill, and death markers keep th
 
 ## Discord Report Readability
 
-Recommendation reports use separate scan-friendly fields for each weapon, two-weapon loadout, attachment combination,
-individual attachment, range, map, teammate, and drop zone. Five fields are shown per page with previous/next controls.
-Leaving a player nickname blank opens a private picker scoped to active registrations in the current Discord server;
-it supports 25 registrations per page plus partial nickname/account-ID search, so server registrations are not capped
-at 25. The picker remains caller-only to protect the guild registration catalog, then posts the completed report as a
-new public channel message. Help and normal direct query replies are public. Permission-management inputs and personal
-validation errors remain caller-only, while interactive report paging is visible to everyone and owner-locked.
+Recommendation reports use separate scan-friendly fields for weapons, two-weapon loadouts, attachment evidence, and
+ranges, plus compact map, teammate, and drop summaries. Five fields are shown per page with previous/next controls and
+a page-jump menu. Leaving a player nickname blank opens a public picker scoped to registrations in the current Discord
+server; it supports 25 registrations per page plus partial nickname/account-ID search, so server registrations are not
+capped at 25. The picker and completed result are visible to the channel, while controls remain owner-locked. Weapon
+analysis follows with a second paged picker containing only weapons that player actually used. Comprehensive, KST
+time-of-day, landing, comparison, and whole-match participant analysis use the same readable flow. Permission-management
+inputs and personal validation errors remain caller-only.
 
 ## Launch
 
@@ -168,14 +169,14 @@ entrypoint searches upward from the executable and current directory for the pro
 Set `PUBG_AI_BASE_DIR` when the executable is stored elsewhere. Secrets and local settings are not embedded into the
 executable.
 
-The verified `2026.09.02.2` artifact is 52,103,250 bytes with SHA-256
-`4C99E4886735F69EEEA22A48A69161DAA21FBBAB562441D5FADD5BA28F508E06`. Its localhost-only health endpoint returned
-the same release. The packaged Playwright audit reached all 33 workspaces, rendered all seven advanced decision-analysis
-sections, applied a real map condition to the confidence-adjusted recommendation report, verified the two uncapped
-attachment minimum-match controls and reset paths, and rendered five M416 attachment-slot groups plus four
-combination-size groups. The all-target 99-player replay retained 10,088 events, virtualized 240 visible event rows,
-and refreshed in 135 ms. The map audit rendered one selected route by default, eight ranked Sanhok phase-7 circles,
-Korean nearest-place descriptions, a focused 150 x 150 SVG viewport, and a 338 x 338 mobile map. Desktop and 390px
-mobile layouts had no blank view, overlay, overflow, console error, failed request, or HTTP error. The MySQL-backed
-30-check player-intelligence audit also passed in full. Closing the native window removed both one-file package
-processes and the port-8000 listener.
+The verified `2026.09.03.1` artifact is 52,142,035 bytes with SHA-256
+`AEB8847FF452F1FEABDC15739A4F6DCC00243DB44A681CEA4EBA5440D1AD7A45`. Its localhost-only health endpoint returned
+the same release and the one app-managed Discord bot reached ready state in all four configured guilds. The packaged
+Playwright audit reached all 33 workspaces, rendered all seven advanced decision-analysis sections, applied a real map
+condition to the confidence-adjusted recommendation report, and verified the uncapped weapon-attachment sample
+controls and reset paths. The all-target 99-player replay retained 10,088 events, virtualized 240 visible event rows,
+and refreshed in 171 ms. The map audit dynamically discovered every map with stored phase-7 data and passed Deston,
+Rondo, Miramar, Vikendi, Sanhok, remastered Erangel, Karakin, Taego, and Paramo; every selected small circle focused to
+a 150 x 150 SVG viewport with a non-empty location context. Desktop and 390px mobile layouts had no blank view,
+overlay, overflow, console error, failed request, or HTTP error. Closing the native window removed both one-file
+package processes and the port-8000 listener without an error dialog.

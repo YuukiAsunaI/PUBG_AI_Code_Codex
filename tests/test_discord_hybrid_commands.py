@@ -14,8 +14,15 @@ from pubg_ai.discord_bot import create_discord_bot
 from pubg_ai.discord_command_catalog import DISCORD_COMMAND_SPECS
 from pubg_ai.discord_permissions import DiscordPermissionChecker
 from pubg_ai.local_settings import DEFAULT_COMMAND_GROUPS, DiscordPermissionSettings, LocalSettingsStore
+from pubg_ai.match_explorer import MatchExplorerService
 from pubg_ai.player_registry import PlayerRegistry, RegisteredPlayer
-from pubg_ai.player_stats import PlayerCatalogMatch, PlayerLookupCatalog, PlayerStatsService
+from pubg_ai.player_stats import (
+    PlayerCatalogMatch,
+    PlayerCatalogWeapon,
+    PlayerLookupCatalog,
+    PlayerStatsService,
+)
+from pubg_ai.player_trends import PlayerTrendFilters
 
 
 class DiscordHybridCommandTests(unittest.IsolatedAsyncioTestCase):
@@ -195,6 +202,45 @@ class DiscordHybridCommandTests(unittest.IsolatedAsyncioTestCase):
                 recommendation_names = {item["name"] for item in payloads["추천"]["options"]}
                 self.assertIn("최소_표본_경기", recommendation_names)
                 self.assertIn("결과_수", recommendation_names)
+                self.assertTrue({"맵", "팀_모드", "시작일_kst", "종료일_kst"} <= recommendation_names)
+
+                self.assertTrue(
+                    {"닉네임", "맵", "게임_모드", "시작일_kst", "종료일_kst"}
+                    <= {item["name"] for item in payloads["종합분석"]["options"]}
+                )
+                self.assertTrue(
+                    {"닉네임", "맵", "팀_모드", "시점"}
+                    <= {item["name"] for item in payloads["시간대"]["options"]}
+                )
+                weapon_options = {
+                    item["name"]: item for item in payloads["무기"]["options"]
+                }
+                self.assertTrue(
+                    {
+                        "개별_파츠_최소_경기",
+                        "파츠_조합_최소_경기",
+                        "파츠_표시_수",
+                    }
+                    <= set(weapon_options)
+                )
+                self.assertTrue(weapon_options["무기"]["autocomplete"])
+                self.assertTrue(
+                    {"비교_유형", "대상_닉네임", "대표_지표", "표시_항목"}
+                    <= {item["name"] for item in payloads["비교"]["options"]}
+                )
+                comparison_options = {
+                    item["name"]: item for item in payloads["비교"]["options"]
+                }
+                self.assertTrue(comparison_options["맵"]["autocomplete"])
+                self.assertTrue(comparison_options["게임_모드"]["autocomplete"])
+                self.assertTrue(
+                    {"닉네임", "최소_착지_횟수", "표시_지역_수"}
+                    <= {item["name"] for item in payloads["낙하"]["options"]}
+                )
+                self.assertEqual(
+                    {"검색어", "플랫폼", "원본_저장_완료만"},
+                    {item["name"] for item in payloads["매치상세"]["options"]},
+                )
 
                 match_options = {item["name"]: item for item in payloads["매치"]["options"]}
                 self.assertFalse(match_options["닉네임"].get("required", False))
@@ -215,10 +261,13 @@ class DiscordHybridCommandTests(unittest.IsolatedAsyncioTestCase):
                 registered_player_parameters = {
                     "유저조회": "name",
                     "전적": "name",
+                    "종합분석": "name",
                     "교전": "name",
                     "추세": "name",
+                    "시간대": "name",
                     "무기": "name",
                     "추천": "name",
+                    "낙하": "name",
                     "매치": "name",
                     "유저삭제": "target",
                     "최근스냅샷": "name",
@@ -235,6 +284,96 @@ class DiscordHybridCommandTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("현재 Discord 서버", option["description"])
                     self.assertIn("페이지·검색", option["description"])
                     self.assertFalse(option.get("required", False))
+            finally:
+                await bot.close()
+
+    async def test_weapon_command_without_weapon_opens_paged_player_weapon_picker(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            checker = DiscordPermissionChecker(
+                DiscordPermissionSettings(
+                    command_groups=DEFAULT_COMMAND_GROUPS,
+                    user_grants={"7": ["profile_read"]},
+                    guild_user_grants={},
+                    global_admin_user_ids=[],
+                )
+            )
+            config = RuntimeConfig(
+                app=AppConfig(raw_data_dir=base_dir / "raw", replay_data_dir=base_dir / "replay"),
+                database=DatabaseConfig(),
+                secrets=SecretConfig(discord_bot_token="test-token"),
+            )
+            bot = create_discord_bot(
+                config=config,
+                permission_checker=checker,
+                scope_settings_store=None,
+            )
+            player = RegisteredPlayer(
+                id=1,
+                account_id="account.test",
+                shard="steam",
+                current_name="Yuuki_Asuna---",
+                active=True,
+                public_profile=True,
+            )
+            weapons = [
+                PlayerCatalogWeapon(
+                    weapon_code=f"WeapTest{index:02d}_C",
+                    weapon_name=f"테스트 무기 {index:02d}",
+                    weapon_family="AR" if index % 2 == 0 else "DMR",
+                    match_count=100 - index,
+                )
+                for index in range(40)
+            ]
+            catalog = PlayerLookupCatalog(
+                player=player,
+                weapons=weapons,
+                matches=[],
+                facets={},
+            )
+            connection = SimpleNamespace(close=lambda: None)
+            ctx = SimpleNamespace(
+                author=SimpleNamespace(id=7),
+                guild=SimpleNamespace(id=100),
+                channel=SimpleNamespace(id=200, send=AsyncMock()),
+                interaction=None,
+                reply=AsyncMock(),
+            )
+            try:
+                command = bot.get_command("무기")
+                ctx.command = command
+                with (
+                    patch("pubg_ai.discord_bot.connect_mysql", return_value=connection),
+                    patch.object(
+                        PlayerStatsService,
+                        "get_lookup_catalog",
+                        return_value=catalog,
+                    ) as get_catalog,
+                ):
+                    await command.callback(ctx, player.current_name, None, "steam")
+
+                get_catalog.assert_called_once_with(
+                    shard="steam",
+                    account_id=None,
+                    name=player.current_name,
+                    guild_id="100",
+                    global_scope=False,
+                    match_limit=1,
+                )
+                reply = ctx.reply.await_args.kwargs
+                self.assertNotIn("ephemeral", reply)
+                self.assertIn(player.current_name, reply["embed"].title)
+                picker = reply["view"]
+                weapon_select = next(item for item in picker.children if hasattr(item, "options"))
+                self.assertEqual(len(weapon_select.options), 25)
+                self.assertEqual(weapon_select.max_values, 1)
+                self.assertIn("사용 100경기", weapon_select.options[0].description)
+                self.assertTrue(
+                    any(
+                        getattr(item, "label", None) == "다음 25개"
+                        for item in picker.children
+                    )
+                )
             finally:
                 await bot.close()
 
@@ -318,7 +457,8 @@ class DiscordHybridCommandTests(unittest.IsolatedAsyncioTestCase):
                         "검색 결과 40명",
                         ctx.reply.await_args.kwargs["embed"].fields[2].value,
                     )
-                    self.assertTrue(ctx.reply.await_args.kwargs["ephemeral"])
+                    self.assertNotIn("ephemeral", ctx.reply.await_args.kwargs)
+                    self.assertIn("채널 전체에 공개", ctx.reply.await_args.kwargs["embed"].footer.text)
 
                     search_button = next(
                         item for item in picker.children if getattr(item, "label", None) == "검색"
@@ -450,6 +590,124 @@ class DiscordHybridCommandTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await bot.close()
 
+    async def test_comparison_and_full_match_pickers_are_public_searchable_and_paged(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            checker = DiscordPermissionChecker(
+                DiscordPermissionSettings(
+                    command_groups=DEFAULT_COMMAND_GROUPS,
+                    user_grants={"7": ["profile_read"]},
+                    guild_user_grants={},
+                    global_admin_user_ids=[],
+                )
+            )
+            config = RuntimeConfig(
+                app=AppConfig(raw_data_dir=base_dir / "raw", replay_data_dir=base_dir / "replay"),
+                database=DatabaseConfig(),
+                secrets=SecretConfig(discord_bot_token="test-token"),
+            )
+            bot = create_discord_bot(
+                config=config,
+                permission_checker=checker,
+                scope_settings_store=None,
+            )
+            connection = SimpleNamespace(close=lambda: None)
+            players = [
+                RegisteredPlayer(
+                    id=index,
+                    account_id=f"account.{index:04d}",
+                    shard="steam",
+                    current_name=f"ComparePlayer{index:02d}",
+                    active=True,
+                    public_profile=True,
+                )
+                for index in range(40)
+            ]
+            matches = [
+                {
+                    "match_id": f"00000000-0000-0000-0000-{index:012d}",
+                    "created_at_kst": f"2026-08-{(index % 28) + 1:02d}T20:10:00+09:00",
+                    "map_name": "Tiger_Main",
+                    "map_label": "태이고",
+                    "game_mode": "squad-fpp",
+                    "game_mode_label": "스쿼드 1인칭",
+                    "participant_count": 100,
+                    "registered_participant_count": 3,
+                }
+                for index in range(30)
+            ]
+            ctx = SimpleNamespace(
+                author=SimpleNamespace(id=7),
+                guild=SimpleNamespace(id=100),
+                channel=SimpleNamespace(id=200, send=AsyncMock()),
+                interaction=None,
+                reply=AsyncMock(),
+            )
+            try:
+                comparison = bot.get_command("비교")
+                ctx.command = comparison
+
+                def player_page(**kwargs):
+                    offset = int(kwargs["offset"])
+                    limit = int(kwargs["limit"])
+                    return players[offset : offset + limit], len(players)
+
+                with (
+                    patch("pubg_ai.discord_bot.connect_mysql", return_value=connection),
+                    patch.object(PlayerRegistry, "list_players_page", side_effect=player_page) as list_players,
+                ):
+                    await comparison.callback(ctx)
+
+                comparison_reply = ctx.reply.await_args.kwargs
+                self.assertNotIn("ephemeral", comparison_reply)
+                comparison_picker = comparison_reply["view"]
+                comparison_select = next(
+                    item for item in comparison_picker.children if hasattr(item, "options")
+                )
+                self.assertEqual(len(comparison_select.options), 25)
+                self.assertEqual(comparison_select.max_values, 4)
+                self.assertIn("2~4명", comparison_reply["embed"].description)
+                list_players.assert_called_once_with(
+                    shard="steam",
+                    registered_guild_id="100",
+                    search=None,
+                    active_only=False,
+                    limit=25,
+                    offset=0,
+                )
+
+                ctx.reply.reset_mock()
+                match_command = bot.get_command("매치상세")
+                ctx.command = match_command
+                with (
+                    patch("pubg_ai.discord_bot.connect_mysql", return_value=connection),
+                    patch.object(
+                        MatchExplorerService,
+                        "list_matches",
+                        return_value={"matches": matches[:25], "total": len(matches)},
+                    ) as list_matches,
+                ):
+                    await match_command.callback(ctx, "태이고", "steam", True)
+
+                match_reply = ctx.reply.await_args.kwargs
+                self.assertNotIn("ephemeral", match_reply)
+                match_picker = match_reply["view"]
+                match_select = next(item for item in match_picker.children if hasattr(item, "options"))
+                self.assertEqual(len(match_select.options), 25)
+                self.assertEqual(match_select.max_values, 1)
+                self.assertTrue(all("태이고" in option.label for option in match_select.options))
+                self.assertTrue(all("명 · 등록 유저" in option.description for option in match_select.options))
+                self.assertTrue(all("00000000" not in option.label for option in match_select.options))
+                list_matches.assert_called_once_with(
+                    shard="steam",
+                    search="태이고",
+                    telemetry_only=True,
+                    limit=25,
+                    offset=0,
+                )
+            finally:
+                await bot.close()
+
     async def test_recommendation_and_latest_match_commands_forward_clear_options_and_reply_with_embeds(self) -> None:
         with TemporaryDirectory() as temp_dir:
             base_dir = Path(temp_dir)
@@ -509,6 +767,7 @@ class DiscordHybridCommandTests(unittest.IsolatedAsyncioTestCase):
                     global_scope=False,
                     limit=7,
                     min_matches=987,
+                    filters=PlayerTrendFilters(),
                 )
                 reply_kwargs = ctx.reply.await_args.kwargs
                 self.assertNotIn("content", reply_kwargs)

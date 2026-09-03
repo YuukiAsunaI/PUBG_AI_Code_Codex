@@ -6,6 +6,7 @@ Discord command layer, operational controls, and the research and evidence behin
 
 ## Current Documents
 
+- [Discord and All-Map Release Audit - 2026-09-03](docs/PROJECT_AUDIT_2026-09-03_DISCORD_AND_ALL_MAPS.md)
 - [Requirement-to-Evidence Audit](docs/REQUIREMENT_EVIDENCE_AUDIT.md)
 - [Whole-Match Tactical Replay Verification](docs/WHOLE_MATCH_TACTICAL_REPLAY_2026-08-28.md)
 - [Flight Path and Circle Analysis](docs/FLIGHT_PATH_AND_CIRCLE_ANALYSIS.md)
@@ -472,11 +473,16 @@ Initial commands are:
 !유저등록 steam 닉네임
 !유저조회 [닉네임] [shard]
 !전적 닉네임 [shard]
+!종합분석 [닉네임] [shard] [팀모드] [시점] [맵] [게임모드] [매치유형] [시작일] [종료일]
 !교전 닉네임 [shard]
 !추세 닉네임 [집계단위] [shard] [팀모드] [시점] [맵] [게임모드] [매치유형] [시작일] [종료일] [표시구간]
-!무기 닉네임 무기명 [shard]
+!시간대 [닉네임] [shard] [팀모드] [시점] [맵] [게임모드] [매치유형] [시작일] [종료일]
+!무기 [닉네임] [무기명] [shard] [상세필터] [파츠 최소표본·표시수]
 !추천 닉네임 [shard] [최소표본경기] [결과수]
+!비교 [비교유형] [대상닉네임] [대표지표] [shard] [상세필터]
+!낙하 [닉네임] [shard] [최소착지횟수] [표시지역수]
 !매치 닉네임 [match_id] [shard]
+!매치상세 [날짜·맵·모드·참가자 검색어] [shard] [원본저장완료만]
 !랭킹 [지표] [shard] [표시인원] [configured|guild|global] [최소경기]
 !최근스냅샷 닉네임 [match_id] [shard]
 !pubg-alerts
@@ -501,20 +507,21 @@ Initial commands are:
 
 Command access is checked through local Discord permission settings in `config/local_settings.json`. Slash commands are
 the recommended interactive surface: every option has a Korean name and description, finite values use choices, and
-players are selected only from registrations in the current Discord guild. Leaving the nickname blank opens a private
-picker with 25 registrations per page, previous/next controls, and a partial nickname/account-ID search modal. This
+players are selected only from registrations in the current Discord guild. Leaving the nickname blank opens a public,
+owner-controlled picker with 25 registrations per page, previous/next controls, and a partial nickname/account-ID
+search modal. This
 avoids Discord's 25-option component limit without capping the guild registration count. Direct nickname entry remains
 available. Match and replay commands show recent matches as KST date, Korean map/mode, placement, kills, and damage
 while retaining the match ID only as the hidden option value.
 
-The private picker protects the current guild's registration catalog, but the completed analysis is sent as a new
-public channel message so every channel member can read it. `/배그도움말` is public as well. Security-sensitive
-permission-management inputs and per-user validation errors remain caller-only; their controls cannot be used by
-other members.
+The picker and completed analysis are visible to the channel, while only the command caller can operate the controls.
+`/배그도움말` is public as well. Security-sensitive permission-management inputs and per-user validation errors
+remain caller-only; their controls cannot be used by other members. The weapon command opens the registered-player
+picker first and then a second paged picker containing only weapons actually used by that player.
 
-Recommendation replies are split into one concise field per weapon, two-weapon loadout, attachment combination,
-individual attachment, range, map, teammate, or drop zone. Five fields are shown per page with previous/next controls,
-so large result sets remain readable instead of becoming one continuous paragraph.
+Recommendation replies are split into concise fields for weapons, two-weapon loadouts, attachment evidence, ranges,
+and compact map/teammate/drop summaries. Five fields are shown per page with previous/next controls and a page-jump
+menu, while overflow detail remains available through the local-manager link.
 Recommendation lookup is available through `!추천 닉네임 [shard] [최소표본경기] [결과수]` and the equivalent slash
 command; minimum sample size is caller-selectable from 1 to 100,000.
 Named drop-zone rows show the Korean region when matched and preserve a map/grid fallback otherwise.
@@ -523,7 +530,8 @@ controls for granularity, team mode, perspective, map, game mode, match type, KS
 there is no opaque catch-all option. It shares the `profile_read` permission group with `!pubg-trends`. When
 `PUBG_LOCAL_WEB_BASE_URL` is set, trend replies include a prefilled local manager link.
 
-The local player-analysis view also provides KST time-of-day analysis and player, weapon, and map comparison. Time
+The local player-analysis view and Discord bot both provide comprehensive analysis, KST time-of-day analysis, landing
+analysis, whole-match participant summaries, and player, weapon, and map comparison. Time
 rows separate match share, chicken/win rate, fights per match, accuracy, headshot share among hits, and average
 damage with their sample denominators. Comparison supports two to five catalog-selected subjects, shared detailed
 filters, selectable metrics, and chart/table views. Player selection is retained while moving between weapon,
@@ -661,8 +669,9 @@ raw or replay artifacts. The local player manager can change collection/public-p
 connect one PUBG account to multiple known Discord guilds. See
 [`docs/MULTI_DISCORD_AND_DIMENSION_ANALYTICS_2026-08-23.md`](docs/MULTI_DISCORD_AND_DIMENSION_ANALYTICS_2026-08-23.md)
 for the data contract and live validation evidence. See also
-[`docs/PROJECT_AUDIT_2026-08-28_FULL_SYSTEM.md`](docs/PROJECT_AUDIT_2026-08-28_FULL_SYSTEM.md) for the latest full
-validation evidence. The previous 2026-08-24 baseline remains in
+[`docs/PROJECT_AUDIT_2026-09-03_DISCORD_AND_ALL_MAPS.md`](docs/PROJECT_AUDIT_2026-09-03_DISCORD_AND_ALL_MAPS.md) for the latest packaged
+Discord and all-map validation evidence. The prior full-system audit remains in
+[`docs/PROJECT_AUDIT_2026-08-28_FULL_SYSTEM.md`](docs/PROJECT_AUDIT_2026-08-28_FULL_SYSTEM.md), and the 2026-08-24 baseline remains in
 [`docs/PROJECT_AUDIT_2026-08-24.md`](docs/PROJECT_AUDIT_2026-08-24.md).
 
 Each packet is guarded by six `ON DELETE RESTRICT` foreign keys. Generation appends only one version 20 audit row; it
@@ -708,7 +717,8 @@ the same local link when the base URL is configured, and matching usage/error re
 supplied run ID can be parsed. `pubg-alerts` settings unavailable/load errors also include a local `#alerts` link
 when the base URL is configured. `유저삭제` not-found responses include a local `#registered-players` link when the
 base URL is configured. The local manager exposes stable anchors for profile, weapon, recommendation, match,
-replay player, and replay artifact sections, and Discord `전적`, `무기`, `추천`, `매치`, and `최근스냅샷`
+replay player, and replay artifact sections, and Discord `전적`, `종합분석`, `시간대`, `무기`, `추천`, `비교`,
+`낙하`, `매치`, `매치상세`, and `최근스냅샷`
 not-found/file error responses include those section links when the base URL is configured. Those lookup/replay links
 carry shard, target, match, weapon, account, and replay artifact query parameters where the command has that context,
 and the local page pre-fills the matching form or replay artifact filter from the URL. Successful `전적`, `무기`,
@@ -786,9 +796,9 @@ With the local manager and app-managed bot running, verify the command definitio
 python scripts\verify_discord_command_deployment.py
 ```
 
-The verifier reads the token through the existing `.env` loader without printing it, checks every managed guild
-through Discord's API, and fails when command counts, Korean option descriptions, autocomplete flags, or static-choice
-limits do not match the expected deployment.
+The verifier reads the token through the existing `.env` loader without printing it, compares every managed guild
+against the app's current command catalog and that guild's visibility settings through Discord's API, and fails when
+commands, Korean option descriptions, autocomplete flags, or static-choice limits do not match the expected deployment.
 
 Run the browser-only local manager instead:
 

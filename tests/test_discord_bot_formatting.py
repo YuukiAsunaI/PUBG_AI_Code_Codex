@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from types import SimpleNamespace
 import unittest
 
 from pubg_ai.discord_bot import (
@@ -984,7 +985,7 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("10전 2치킨 (20.0%)", body)
         self.assertIn("25/8/5", body)
         self.assertIn("KDA 3.75", body)
-        self.assertIn("베릴 M762 12킬 1200딜", body)
+        self.assertIn("베릴 M762 12킬 1,200딜", body)
         self.assertIn("match-12 #1 5킬/550딜", body)
 
         body_with_link = format_player_profile_stats(profile, detail_base_url="http://127.0.0.1:8000/")
@@ -1030,6 +1031,68 @@ class DiscordBotFormattingTests(unittest.TestCase):
                 hit_parts={"head": 30, "torso": 140},
                 taken_hit_parts={"arm": 1},
             ),
+            attachment_analysis=SimpleNamespace(
+                no_attachment=SimpleNamespace(
+                    match_count=3,
+                    match_wins=0,
+                    match_win_rate=0.0,
+                    fight_wins=2,
+                    fight_losses=3,
+                    fight_win_rate=0.4,
+                ),
+                individual=[
+                    SimpleNamespace(
+                        attachment_group_name="손잡이",
+                        attachment_names=("수직 손잡이",),
+                        match_count=8,
+                        match_win_rate=0.25,
+                        fight_wins=9,
+                        fight_losses=6,
+                        fight_win_rate=0.6,
+                        reliable_sample=True,
+                    ),
+                    SimpleNamespace(
+                        attachment_group_name="손잡이",
+                        attachment_names=("틸티드 그립",),
+                        match_count=2,
+                        match_win_rate=0.0,
+                        fight_wins=1,
+                        fight_losses=2,
+                        fight_win_rate=1 / 3,
+                        reliable_sample=False,
+                    ),
+                ],
+                combinations=[
+                    SimpleNamespace(
+                        attachment_names=("수직 손잡이", "보정기", "레드 도트 사이트"),
+                        match_count=6,
+                        match_win_rate=1 / 6,
+                        fight_wins=7,
+                        fight_losses=5,
+                        fight_win_rate=7 / 12,
+                        reliable_sample=True,
+                    )
+                ],
+            ),
+            trend_series={
+                "date": SimpleNamespace(
+                    points=[
+                        SimpleNamespace(
+                            period_label="2026-06-29",
+                            totals=SimpleNamespace(
+                                match_count=2,
+                                win_rate=0.5,
+                                avg_damage_dealt=310.5,
+                                accuracy=0.28,
+                                fight_win_rate=0.625,
+                            ),
+                        )
+                    ],
+                    available_point_count=1,
+                    truncated=False,
+                ),
+                "month": SimpleNamespace(points=[], available_point_count=0, truncated=False),
+            },
             recent_matches=[
                 PlayerWeaponRecentMatch(
                     match_id="match-123456789",
@@ -1056,6 +1119,13 @@ class DiscordBotFormattingTests(unittest.TestCase):
         self.assertIn("20/4/16", body)
         self.assertIn("23.0%", body)
         self.assertIn("몸통 140", body)
+        self.assertIn("노파츠 기준", body)
+        self.assertIn("무기 장착 파츠 없음", body)
+        self.assertIn("파츠 종류별 실전 성과", body)
+        self.assertIn("수직 손잡이", body)
+        self.assertIn("틸티드 그립", body)
+        self.assertIn("관측 파츠 조합", body)
+        self.assertIn("2026-06-29", body)
         self.assertIn("match-12 #1 4킬/3기절/520딜", body)
 
         body_with_link = format_player_weapon_detail(detail, detail_base_url="http://127.0.0.1:8000/")

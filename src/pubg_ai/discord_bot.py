@@ -43,13 +43,19 @@ from pubg_ai.discord_permission_manager import DiscordPermissionManager
 from pubg_ai.discord_permissions import DiscordCommandIdentity, DiscordPermissionChecker
 from pubg_ai.fight_outcome_stats import FightOutcomeStatsService, PlayerFightOutcomeReport
 from pubg_ai.local_settings import CollectorSettings, LocalSettingsError, LocalSettingsStore
+from pubg_ai.match_explorer import MatchExplorerError, MatchExplorerService
+from pubg_ai.player_intelligence import PlayerIntelligenceReport, PlayerIntelligenceService
 from pubg_ai.player_rankings import (
     RANKING_METRIC_ALIASES,
     RANKING_METRICS,
     PlayerRanking,
     PlayerRankingService,
 )
-from pubg_ai.player_recommendations import PlayerRecommendationReport, PlayerRecommendationService
+from pubg_ai.player_recommendations import (
+    PlayerDropZoneReport,
+    PlayerRecommendationReport,
+    PlayerRecommendationService,
+)
 from pubg_ai.player_registry import DiscordCommandContext, PlayerRegistry, RegisteredPlayer
 from pubg_ai.player_stats import PlayerMatchDetail, PlayerProfileStats, PlayerStatsService, PlayerWeaponDetail
 from pubg_ai.player_trends import (
@@ -93,6 +99,19 @@ DISCORD_REGISTERED_PLAYER_OPTION_DESCRIPTION = (
 DISCORD_MATCH_AUTOCOMPLETE_CATALOG_LIMIT = 500
 DISCORD_MATCH_AUTOCOMPLETE_CACHE_TTL_SECONDS = 60.0
 DISCORD_MATCH_AUTOCOMPLETE_CACHE_MAX_ENTRIES = 128
+DISCORD_COMPARISON_METRICS: dict[str, tuple[str, str]] = {
+    "match_count": ("경기 수", "integer"),
+    "wins": ("치킨 수", "integer"),
+    "win_rate": ("치킨 승률", "percent"),
+    "kda": ("KDA", "decimal"),
+    "avg_kills": ("경기당 킬", "decimal"),
+    "avg_damage_dealt": ("평균 준 피해", "decimal"),
+    "accuracy": ("명중률", "percent"),
+    "headshot_hit_rate": ("헤드샷 명중률", "percent"),
+    "fight_win_rate": ("교전 승률", "percent"),
+    "avg_fights_per_match": ("경기당 교전", "decimal"),
+    "avg_survival_seconds": ("평균 생존", "duration"),
+}
 ALERT_HISTORY_PRESETS: dict[str, dict[str, str]] = {
     "current-errors": {
         "source": "all",
@@ -128,11 +147,16 @@ DISCORD_COMMAND_USAGE_KO: dict[str, str] = {
     "배그도움말": "/배그도움말",
     "유저조회": "/유저조회 [닉네임] [플랫폼]",
     "전적": "/전적 [닉네임] [플랫폼]",
+    "종합분석": "/종합분석 [닉네임] [플랫폼] [맵·모드·기간 필터]",
     "교전": "/교전 [닉네임] [플랫폼]",
     "추세": "/추세 [닉네임] [집계] [플랫폼] [팀·시점·맵·기간 필터]",
-    "무기": "/무기 [닉네임] 무기 [플랫폼]",
+    "시간대": "/시간대 [닉네임] [플랫폼] [맵·모드·기간 필터]",
+    "무기": "/무기 [닉네임] [무기] [플랫폼] [파츠 표본 조건]",
     "추천": "/추천 [닉네임] [플랫폼] [최소 표본 경기] [결과 수]",
+    "비교": "/비교 비교_유형 [닉네임] [지표] [플랫폼]",
+    "낙하": "/낙하 [닉네임] [플랫폼] [최소 착지 경기] [표시 수]",
     "매치": "/매치 [닉네임] [최근 매치] [플랫폼]",
+    "매치상세": "/매치상세 [검색어] [플랫폼] [원본 저장 완료만]",
     "랭킹": "/랭킹 [지표] [플랫폼] [인원] [범위] [최소 경기]",
     "유저등록": "/유저등록 플랫폼 닉네임",
     "유저삭제": "/유저삭제 플랫폼 [닉네임]",
@@ -966,6 +990,342 @@ def format_player_profile_stats(profile: PlayerProfileStats, *, detail_base_url:
     return "\n".join(lines)
 
 
+def format_player_intelligence(
+    report: PlayerIntelligenceReport,
+    *,
+    detail_base_url: str | None = None,
+) -> str:
+    overview = report.overview
+    combat = report.combat
+    survival = report.survival
+    support = report.support
+    loot = report.loot
+    mobility = report.mobility
+    vehicle = report.vehicle
+    advanced = report.advanced
+    fight = advanced.get("fights", {})
+    team = advanced.get("team", {})
+    readiness = advanced.get("loot_readiness", {})
+    coverage = report.coverage
+    lines = [
+        f"{report.player.current_name} 종합 분석 ({translate_code(report.player.shard, 'shard')})",
+        (
+            f"- 핵심 성과: **{_number(overview.get('matches', 0), 0)}경기** · "
+            f"{_number(overview.get('wins', 0), 0)}치킨 ({_percent(float(overview.get('win_rate') or 0))}) · "
+            f"KDA **{_number(float(overview.get('kda') or 0), 2)}** · "
+            f"평균 피해 **{_number(float(overview.get('avg_damage_dealt') or 0), 1)}**"
+        ),
+        (
+            f"- 교전 성과: 경기당 **{_number(float(overview.get('avg_fights_per_match') or 0), 2)}회** · "
+            f"승률 **{_percent(float(overview.get('fight_win_rate') or 0))}** · "
+            f"10분당 킬 {_number(float(combat.get('kills_per_10_minutes') or 0), 2)} · "
+            f"교전당 피해 {_number(float(combat.get('damage_per_fight') or 0), 1)}"
+        ),
+        (
+            f"- 사격 지표: 발사 {_number(combat.get('shots_fired', 0), 0)}회 · "
+            f"전체 명중 {_number(combat.get('shots_hit', 0), 0)}회 · "
+            f"캐릭터 명중 {_number(combat.get('character_hits', 0), 0)}회 · "
+            f"차량 명중 {_number(combat.get('vehicle_hits', 0), 0)}회 · "
+            f"헤드샷 명중률 **{_percent(float(combat.get('headshot_hit_rate') or 0))}**"
+        ),
+        (
+            f"- 기절·피해 교환: 가한/당한 기절 "
+            f"{_number(combat.get('dbnos_caused', 0), 0)}/{_number(combat.get('dbnos_taken', 0), 0)} · "
+            f"준/받은 피해 {_number(float(combat.get('damage_dealt') or 0), 1)}/"
+            f"{_number(float(combat.get('damage_taken') or 0), 1)} · "
+            f"피해 교환비 {_number(float(combat.get('damage_ratio') or 0), 2)}"
+        ),
+        (
+            f"- 생존: 평균 {_minutes(float(survival.get('avg_survival_seconds') or 0))} · "
+            f"TOP 10 {_number(survival.get('top10', 0), 0)}회 "
+            f"({_percent(float(survival.get('top10_rate') or 0))}) · "
+            f"평균 등수 {_number(float(survival.get('avg_placement') or 0), 1)}등 · "
+            f"최장 킬 거리 {_number(float(survival.get('longest_kill_m') or 0), 0)}m"
+        ),
+        (
+            f"- 지원·소모품: 경기당 회복량 {_number(float(support.get('avg_heal_amount') or 0), 1)} · "
+            f"경기당 투척물 {_number(float(support.get('avg_throwable_uses') or 0), 2)}회 · "
+            f"팀원 부활 {_number(support.get('revives_caused', 0), 0)}회 · "
+            f"부활 받음 {_number(support.get('revives_received', 0), 0)}회"
+        ),
+        (
+            f"- 루팅·이동: 경기당 획득 {_number(float(loot.get('avg_pickups_per_match') or 0), 1)}회 · "
+            f"경기당 사용 {_number(float(loot.get('avg_uses_per_match') or 0), 1)}회 · "
+            f"평균 이동 {_distance_km(float(overview.get('avg_total_distance_m') or 0))} · "
+            f"차량 탑승 {_number(vehicle.get('rides', 0), 0)}회"
+        ),
+        (
+            f"- 교전 판단: 선공 {_percent(float(fight.get('self_opening_rate') or 0))} · "
+            f"선제 명중 {_percent(float(fight.get('self_first_hit_rate') or 0))} · "
+            f"제3자 개입 {_percent(float(fight.get('third_party_rate') or 0))} · "
+            f"평균 교전 거리 {_number(float(fight.get('avg_distance_m') or 0), 0)}m"
+        ),
+        (
+            f"- 팀 합류: 평균 최근접 팀원 {_number(float(team.get('avg_nearest_teammate_distance_m') or 0), 0)}m · "
+            f"경기당 고립 {_minutes(float(team.get('isolated_seconds_per_match') or 0))} · "
+            f"트레이드 성공률 {_percent(float(team.get('trade_rate') or 0))} · "
+            f"평균 부활 소요 {_number(float(team.get('avg_revive_latency_seconds') or 0), 1)}초"
+        ),
+        (
+            f"- 첫 교전 준비: 준비 점수 {_number(float(readiness.get('avg_readiness_score') or 0), 1)} · "
+            f"준비 완료율 {_percent(float(readiness.get('ready_before_first_fight_rate') or 0))} · "
+            f"2주무기 확보율 {_percent(float(readiness.get('full_primary_loadout_rate') or 0))} · "
+            f"첫 교전까지 {_number(float(readiness.get('avg_seconds_to_first_fight') or 0), 1)}초"
+        ),
+        (
+            f"- 데이터 품질: {coverage.get('status', 'unknown')} · "
+            f"전체 {_number(coverage.get('total_matches', 0), 0)}경기 중 "
+            f"텔레메트리 {_number(coverage.get('telemetry_matches', 0), 0)}경기 · "
+            f"분석 완료 {_number(coverage.get('processed_matches', 0), 0)}경기 "
+            f"({_percent(float(coverage.get('coverage_rate') or 0))})"
+        ),
+        f"- 적용 조건: {_trend_filter_label(report.filters)}",
+    ]
+    detected = [
+        item
+        for item in advanced.get("change_signals", [])
+        if item.get("detected")
+    ]
+    if detected:
+        labels = ", ".join(
+            f"{item.get('label', item.get('key', '지표'))} "
+            f"{'상승' if item.get('direction') == 'improved' else '하락'}"
+            for item in detected[:5]
+        )
+        lines.append(f"- 최근 변화 감지: {labels}")
+    top_items = loot.get("top_used_items") or []
+    if top_items:
+        lines.append(
+            "- 자주 사용한 아이템: "
+            + ", ".join(
+                f"{item.get('item_name_ko') or translate_code(item.get('item_code'), 'item')} "
+                f"{_number(item.get('used_events', 0), 0)}회"
+                for item in top_items[:5]
+            )
+        )
+    local_link = _local_section_url(
+        detail_base_url,
+        "intelligence-analysis",
+        {"shard": report.player.shard, "account_id": report.player.account_id},
+    )
+    if local_link:
+        lines.append(f"- 로컬 앱 전체 분석: [열기]({local_link})")
+    return "\n".join(lines)
+
+
+def format_player_time_insights(
+    report: PlayerTrendReport,
+    *,
+    detail_base_url: str | None = None,
+) -> str:
+    buckets = sorted(report.buckets, key=lambda item: item.period_key)
+    busiest = max(buckets, key=lambda item: item.metrics.match_count, default=None)
+    most_chickens = max(buckets, key=lambda item: item.metrics.wins, default=None)
+    reliable_win = [item for item in buckets if item.metrics.match_count >= 5]
+    reliable_fights = [item for item in buckets if item.metrics.fight_count >= 10]
+    best_win = max(reliable_win, key=lambda item: item.metrics.win_rate, default=None)
+    best_fight = max(reliable_fights, key=lambda item: item.metrics.fight_win_rate, default=None)
+    lines = [
+        f"{report.player.current_name} KST 시간대 분석 ({translate_code(report.player.shard, 'shard')})",
+        f"- 적용 조건: {_trend_filter_label(report.filters)}",
+        (
+            f"- 전체: {_number(report.totals.match_count, 0)}경기 · "
+            f"{_number(report.totals.wins, 0)}치킨 ({_percent(report.totals.win_rate)}) · "
+            f"KDA {_number(report.totals.kda, 2)}"
+        ),
+    ]
+    if busiest:
+        lines.append(
+            f"- 가장 자주 플레이: {busiest.period_label} · "
+            f"{_number(busiest.metrics.match_count, 0)}경기"
+        )
+    if most_chickens:
+        lines.append(
+            f"- 치킨이 가장 많은 시간: {most_chickens.period_label} · "
+            f"{_number(most_chickens.metrics.wins, 0)}회"
+        )
+    if best_win:
+        lines.append(
+            f"- 표본 5경기 이상 최고 치킨률: {best_win.period_label} · "
+            f"{_percent(best_win.metrics.win_rate)} "
+            f"({_number(best_win.metrics.wins, 0)}/{_number(best_win.metrics.match_count, 0)})"
+        )
+    if best_fight:
+        lines.append(
+            f"- 표본 10교전 이상 최고 교전 승률: {best_fight.period_label} · "
+            f"{_percent(best_fight.metrics.fight_win_rate)} "
+            f"({_number(best_fight.metrics.fight_wins, 0)}승/"
+            f"{_number(best_fight.metrics.fight_losses, 0)}패)"
+        )
+    for bucket in buckets:
+        metrics = bucket.metrics
+        lines.append(
+            f"- {bucket.period_label}: **{_number(metrics.match_count, 0)}경기** · "
+            f"치킨 {_percent(metrics.win_rate)} · KDA {_number(metrics.kda, 2)} · "
+            f"평균 피해 {_number(metrics.avg_damage_dealt, 1)} · "
+            f"명중 {_percent(metrics.accuracy)} · "
+            f"교전 {_percent(metrics.fight_win_rate)} ({_number(metrics.fight_count, 0)}회)"
+        )
+    local_link = _local_section_url(
+        detail_base_url,
+        "time-analysis",
+        {"shard": report.player.shard, "account_id": report.player.account_id},
+    )
+    if local_link:
+        lines.append(f"- 로컬 앱 시간대 그래프: [열기]({local_link})")
+    return "\n".join(lines)
+
+
+def format_player_drop_zones(
+    report: PlayerDropZoneReport,
+    *,
+    detail_base_url: str | None = None,
+) -> str:
+    lines = [
+        f"{report.player.current_name} 낙하 지역 분석 ({translate_code(report.player.shard, 'shard')})",
+        f"- 분석 기준: 최소 **{_number(report.min_matches, 0)}회 착지** · KST 완료 경기",
+    ]
+    if report.regions:
+        for index, item in enumerate(report.regions, start=1):
+            lines.append(
+                f"- 지역 {index} · {item.map_name_ko} {item.region_name_ko}: "
+                f"**{_number(item.match_count, 0)}회 착지** · "
+                f"치킨 {_percent(item.win_rate)} · "
+                f"경기당 킬 {_number(item.kills / item.match_count if item.match_count else 0, 2)} · "
+                f"평균 피해 {_number(item.damage_dealt / item.match_count if item.match_count else 0, 1)} · "
+                f"평균 생존 {_minutes(item.avg_survival_seconds)}"
+            )
+    elif report.zones:
+        for index, item in enumerate(report.zones, start=1):
+            lines.append(
+                f"- 착지 구역 {index} · {item.map_name_ko} {_drop_zone_location_label(item)}: "
+                f"{_number(item.match_count, 0)}회 · 치킨 {_percent(item.win_rate)} · "
+                f"평균 피해 {_number(item.avg_damage_dealt, 1)}"
+            )
+    else:
+        lines.append("- 결과: 조건에 맞는 착지 표본이 없습니다.")
+    local_link = _local_section_url(
+        detail_base_url,
+        "landing-analysis",
+        {
+            "shard": report.player.shard,
+            "account_id": report.player.account_id,
+            "min_matches": report.min_matches,
+        },
+    )
+    if local_link:
+        lines.append(f"- 로컬 앱 지도·전체 지역: [열기]({local_link})")
+    return "\n".join(lines)
+
+
+def format_player_comparison(
+    rows: list[tuple[str, Any]],
+    *,
+    title: str,
+    metric: str,
+    filters: PlayerTrendFilters,
+    detail_base_url: str | None = None,
+) -> str:
+    metric_label, metric_kind = DISCORD_COMPARISON_METRICS[metric]
+    normalized: list[tuple[str, dict[str, Any]]] = []
+    for label, metrics in rows:
+        record = metrics.to_record() if hasattr(metrics, "to_record") else dict(metrics)
+        normalized.append((label, record))
+    normalized.sort(
+        key=lambda item: float(item[1].get(metric) or 0),
+        reverse=True,
+    )
+    lines = [
+        title,
+        f"- 대표 지표: **{metric_label}** · 적용 조건 {_trend_filter_label(filters)}",
+        f"- 비교 대상: {_number(len(normalized), 0)}개",
+    ]
+    for index, (label, values) in enumerate(normalized, start=1):
+        score = _format_comparison_score(values.get(metric), metric_kind)
+        lines.append(
+            f"- #{index} {label}: **{metric_label} {score}** · "
+            f"{_number(values.get('match_count', 0), 0)}경기 · "
+            f"치킨 {_percent(float(values.get('win_rate') or 0))} · "
+            f"KDA {_number(float(values.get('kda') or 0), 2)} · "
+            f"평균 피해 {_number(float(values.get('avg_damage_dealt') or 0), 1)} · "
+            f"교전 {_percent(float(values.get('fight_win_rate') or 0))}"
+        )
+    local_link = _local_section_url(detail_base_url, "comparison-analysis")
+    if local_link:
+        lines.append(f"- 로컬 앱 그래프·기간 비교: [열기]({local_link})")
+    return "\n".join(lines)
+
+
+def _format_comparison_score(value: Any, kind: str) -> str:
+    number = float(value or 0)
+    if kind == "percent":
+        return _percent(number)
+    if kind == "integer":
+        return _number(number, 0)
+    if kind == "duration":
+        return _minutes(number)
+    return _number(number, 2)
+
+
+def format_match_explorer_detail(
+    detail: dict[str, Any],
+    *,
+    detail_base_url: str | None = None,
+) -> str:
+    match = detail.get("match") or {}
+    summary = detail.get("summary") or {}
+    telemetry = detail.get("telemetry") or {}
+    participants = detail.get("participants") or []
+    registered_names = summary.get("registered_player_names") or []
+    created = str(match.get("created_at_kst") or "-").replace("T", " ")[:16]
+    lines = [
+        f"전체 매치 상세 · {match.get('map_label') or translate_code(match.get('map_name'), 'map')}",
+        f"- 경기 시각(KST): {created}",
+        (
+            f"- 모드: {match.get('game_mode_label') or translate_code(match.get('game_mode'), 'game_mode')} · "
+            f"{match.get('match_type_label') or translate_code(match.get('match_type'), 'match_type')} · "
+            f"{match.get('perspective_label') or translate_code(match.get('perspective'), 'perspective')}"
+        ),
+        (
+            f"- 참가자: 총 **{_number(summary.get('participants', 0), 0)}명** "
+            f"(사람 {_number(summary.get('humans', 0), 0)}명 · 봇 {_number(summary.get('bots', 0), 0)}명) · "
+            f"{_number(summary.get('teams', 0), 0)}팀"
+        ),
+        (
+            f"- 경기 합계: {_number(summary.get('kills', 0), 0)}킬 · "
+            f"{_number(summary.get('assists', 0), 0)}어시스트 · "
+            f"{_number(float(summary.get('damage_dealt') or 0), 1)} 피해"
+        ),
+        (
+            f"- 등록 유저: {_number(summary.get('registered_players', 0), 0)}명 · "
+            + (", ".join(registered_names) if registered_names else "없음")
+        ),
+        (
+            f"- 원본 텔레메트리: {'저장 완료' if telemetry.get('available') else '없음'} · "
+            f"이벤트 {_number(telemetry.get('event_count', 0), 0)}건"
+        ),
+    ]
+    for index, participant in enumerate(participants[:20], start=1):
+        name = participant.get("name") or f"ID …{str(participant.get('account_id') or '')[-8:]}"
+        bot_label = "봇" if participant.get("is_ai_or_bot") else "사람"
+        registered = " · 등록 유저" if participant.get("is_registered") else ""
+        place = participant.get("win_place")
+        lines.append(
+            f"- 참가자 {index} · {name}: "
+            f"{_number(place, 0) if place is not None else '-'}등 · "
+            f"{_number(participant.get('kills', 0), 0)}킬/"
+            f"{_number(participant.get('assists', 0), 0)}어시 · "
+            f"{_number(float(participant.get('damage_dealt') or 0), 1)} 피해 · "
+            f"{bot_label}{registered}"
+        )
+    if len(participants) > 20:
+        lines.append(f"- 참가자 목록: 상위 20/{_number(len(participants), 0)}명 표시")
+    local_link = _local_section_url(detail_base_url, "match-explorer")
+    if local_link:
+        lines.append(f"- 로컬 앱 참가자·팀·이벤트 전체: [열기]({local_link})")
+    return "\n".join(lines)
+
+
 
 def format_player_trends(
     report: PlayerTrendReport,
@@ -1115,8 +1475,18 @@ def format_player_fight_outcomes(
     return "\n".join(lines)
 
 
-def format_player_weapon_detail(detail: PlayerWeaponDetail, *, detail_base_url: str | None = None) -> str:
+def format_player_weapon_detail(
+    detail: PlayerWeaponDetail,
+    *,
+    detail_base_url: str | None = None,
+    individual_min_matches: int = 1,
+    combination_min_matches: int = 1,
+    attachment_limit: int = 10,
+) -> str:
     totals = detail.totals
+    individual_min_matches = max(1, int(individual_min_matches))
+    combination_min_matches = max(1, int(combination_min_matches))
+    attachment_limit = max(1, min(int(attachment_limit), 25))
     character_hits = (
         totals.character_hits
         if totals.character_hits or totals.vehicle_hits
@@ -1124,17 +1494,28 @@ def format_player_weapon_detail(detail: PlayerWeaponDetail, *, detail_base_url: 
     )
     lines = [
         f"{detail.player.current_name} {detail.weapon_name} 무기 통계",
-        f"- 사용 경기/치킨: {totals.match_count}전 {totals.wins}치킨 ({_percent(totals.win_rate)})",
-        f"- 킬/어시/기절: {totals.kills}/{totals.assists}/{totals.dbnos}",
+        f"- 적용 조건: {_trend_filter_label(detail.filters)}",
+        f"- 사용 경기/치킨: {_number(totals.match_count, 0)}전 "
+        f"{_number(totals.wins, 0)}치킨 ({_percent(totals.win_rate)})",
+        f"- 킬/어시/기절: {_number(totals.kills, 0)}/"
+        f"{_number(totals.assists, 0)}/{_number(totals.dbnos, 0)}",
         f"- 딜/평균 딜: {_number(totals.damage_dealt, 0)} / {_number(totals.avg_damage_dealt, 1)}",
         f"- 명중 지표: {_accuracy_metric_text(totals.accuracy, totals.accuracy_metric)} "
-        f"({totals.shots_hit}/{totals.shots_fired})",
+        f"({_number(totals.shots_hit, 0)}/{_number(totals.shots_fired, 0)})",
         f"- 헤드샷 명중: {_percent(totals.to_record()['headshot_hit_rate'])} "
-        f"({totals.headshot_hits}/{character_hits} 캐릭터 명중, 차량 제외)",
-        f"- 차량 명중/피해: {totals.vehicle_hits}회 / {_number(totals.vehicle_damage_dealt, 1)}",
-        f"- 헤드샷 킬/기절: {totals.headshot_kills}/{totals.headshot_dbnos}",
+        f"({_number(totals.headshot_hits, 0)}/{_number(character_hits, 0)} 캐릭터 명중, 차량 제외)",
+        f"- 차량 명중/피해: {_number(totals.vehicle_hits, 0)}회 / "
+        f"{_number(totals.vehicle_damage_dealt, 1)}",
+        f"- 헤드샷 킬/기절: {_number(totals.headshot_kills, 0)}/"
+        f"{_number(totals.headshot_dbnos, 0)}",
         f"- 교전 승률: {_percent(totals.fight_win_rate)} "
-        f"({totals.fight_wins}승/{totals.fight_losses}패, 경기당 {_number(totals.avg_fights_per_match, 2)}회)",
+        f"({_number(totals.fight_wins, 0)}승/{_number(totals.fight_losses, 0)}패, "
+        f"경기당 {_number(totals.avg_fights_per_match, 2)}회)",
+        (
+            f"- 파츠 표시 기준: 노파츠·개별 파츠 최소 {_number(individual_min_matches, 0)}경기 · "
+            f"관측 조합 최소 {_number(combination_min_matches, 0)}경기 · "
+            f"각 목록 최대 {_number(attachment_limit, 0)}개"
+        ),
     ]
 
     hit_parts = _top_parts(totals.hit_parts)
@@ -1147,6 +1528,95 @@ def format_player_weapon_detail(detail: PlayerWeaponDetail, *, detail_base_url: 
             f"({item.wins}승/{item.losses}패)"
             for item in detail.effective_ranges
         ))
+
+    attachment_analysis = detail.attachment_analysis
+    no_attachment = attachment_analysis.no_attachment
+    if no_attachment is not None and no_attachment.match_count >= individual_min_matches:
+        lines.append("노파츠 기준")
+        lines.append(
+            f"- 무기 장착 파츠 없음: **{_number(no_attachment.match_count, 0)}경기** · "
+            f"치킨 {_percent(no_attachment.match_win_rate)} "
+            f"({_number(no_attachment.match_wins, 0)}회) · "
+            f"교전 {_percent(no_attachment.fight_win_rate)} "
+            f"({_number(no_attachment.fight_wins, 0)}승/{_number(no_attachment.fight_losses, 0)}패)"
+        )
+
+    eligible_individual = [
+        item
+        for item in attachment_analysis.individual
+        if item.match_count >= individual_min_matches
+    ]
+    visible_individual = eligible_individual[:attachment_limit]
+    if visible_individual:
+        grouped_attachments: dict[str, list[Any]] = {}
+        for item in visible_individual:
+            grouped_attachments.setdefault(item.attachment_group_name or "기타 파츠", []).append(item)
+        lines.append("파츠 종류별 실전 성과")
+        for group_name, items in grouped_attachments.items():
+            lines.append(f"- {group_name}")
+            for item in items:
+                part_name = " / ".join(item.attachment_names) or "이름 미상 파츠"
+                reliability = "표본 충족" if item.reliable_sample else "표본 주의"
+                lines.append(
+                    f"  {part_name}: **{_number(item.match_count, 0)}경기** · "
+                    f"치킨 {_percent(item.match_win_rate)} · "
+                    f"교전 {_percent(item.fight_win_rate)} "
+                    f"({_number(item.fight_wins, 0)}승/{_number(item.fight_losses, 0)}패) · {reliability}"
+                )
+        hidden_count = len(eligible_individual) - len(visible_individual)
+        if hidden_count:
+            lines.append(f"- 개별 파츠 추가 결과: {_number(hidden_count, 0)}개 · 로컬 앱에서 전체 확인")
+    else:
+        lines.append(
+            f"- 개별 파츠 결과: 최소 {_number(individual_min_matches, 0)}경기를 충족한 표본 없음"
+        )
+
+    eligible_combinations = [
+        item
+        for item in attachment_analysis.combinations
+        if item.match_count >= combination_min_matches
+    ]
+    visible_combinations = eligible_combinations[:attachment_limit]
+    if visible_combinations:
+        lines.append("관측 파츠 조합")
+        for item in visible_combinations:
+            part_names = " + ".join(item.attachment_names) or "파츠 없음"
+            reliability = "표본 충족" if item.reliable_sample else "표본 주의"
+            lines.append(
+                f"- {part_names}: **{_number(item.match_count, 0)}경기** · "
+                f"치킨 {_percent(item.match_win_rate)} · "
+                f"교전 {_percent(item.fight_win_rate)} "
+                f"({_number(item.fight_wins, 0)}승/{_number(item.fight_losses, 0)}패) · {reliability}"
+            )
+        hidden_count = len(eligible_combinations) - len(visible_combinations)
+        if hidden_count:
+            lines.append(f"- 파츠 조합 추가 결과: {_number(hidden_count, 0)}개 · 로컬 앱에서 전체 확인")
+    else:
+        lines.append(
+            f"- 관측 파츠 조합: 최소 {_number(combination_min_matches, 0)}경기를 충족한 표본 없음"
+        )
+
+    trend_labels = {"date": "최근 일자별 변화", "month": "최근 월별 변화"}
+    for granularity in ("date", "month"):
+        series = detail.trend_series.get(granularity)
+        if series is None or not series.points:
+            continue
+        visible_points = series.points[-7:] if granularity == "date" else series.points[-6:]
+        lines.append(trend_labels[granularity])
+        for point in visible_points:
+            point_totals = point.totals
+            lines.append(
+                f"- {point.period_label}: {_number(point_totals.match_count, 0)}경기 · "
+                f"치킨 {_percent(point_totals.win_rate)} · "
+                f"평균 피해 {_number(point_totals.avg_damage_dealt, 1)} · "
+                f"명중 {_percent(point_totals.accuracy)} · "
+                f"교전 {_percent(point_totals.fight_win_rate)}"
+            )
+        if series.truncated:
+            lines.append(
+                f"- 표시 범위: 최근 {_number(len(visible_points), 0)}/"
+                f"{_number(series.available_point_count, 0)}개 구간"
+            )
 
     if detail.recent_matches:
         lines.append("최근 사용 경기")
@@ -1273,23 +1743,25 @@ def format_player_recommendations(
     evidence_base_url: str | None = None,
     detail_base_url: str | None = None,
 ) -> str:
+    supplemental_limit = max(5, min(len(report.weapons) * 2, 15))
     lines = [
         f"{report.player.current_name} 추천 분석 ({translate_code(report.player.shard, 'shard')})",
-        f"- 분석 기준: 최소 표본 **{report.min_matches}경기** · 완료된 저장 경기 기준",
+        f"- 분석 기준: 최소 표본 **{_number(report.min_matches, 0)}경기** · 완료된 저장 경기 기준",
+        f"- 적용 조건: {_trend_filter_label(report.filters)}",
     ]
     if report.weapons:
         for index, item in enumerate(report.weapons, start=1):
             lines.extend(
                 [
                     f"- 추천 무기 {index} · {item.weapon_name}: "
-                    f"점수 **{_number(item.score, 1)}** · 표본 **{item.match_count}경기**",
+                    f"점수 **{_number(item.score, 1)}** · 표본 **{_number(item.match_count, 0)}경기**",
                     f"  평균 딜 **{_number(item.avg_damage_dealt, 1)}** · "
                     f"치킨률 **{_percent(item.win_rate)}** · "
-                    f"킬 **{item.kills}** · 기절 **{item.dbnos}**",
+                    f"킬 **{_number(item.kills, 0)}** · 기절 **{_number(item.dbnos, 0)}**",
                     f"  {_accuracy_metric_text(item.accuracy, item.accuracy_metric)} · "
                     f"헤드샷 명중 **{_percent(item.headshot_hit_rate)}** · "
                     f"교전 승률 **{_percent(item.fight_win_rate)}** "
-                    f"({item.fight_wins}승/{item.fight_losses}패)",
+                    f"({_number(item.fight_wins, 0)}승/{_number(item.fight_losses, 0)}패)",
                 ]
             )
     else:
@@ -1321,43 +1793,50 @@ def format_player_recommendations(
                 ]
             )
 
-    if report.attachment_combinations:
-        for index, item in enumerate(report.attachment_combinations, start=1):
+    visible_combinations = report.attachment_combinations[:supplemental_limit]
+    if visible_combinations:
+        for index, item in enumerate(visible_combinations, start=1):
             part_names = " / ".join(
                 translate_code(code, "item") for code in item.attachment_codes
             )
             lines.extend(
                 [
                     f"- 실전 파츠 조합 {index} · {item.weapon_name}: {part_names}",
-                    f"  표본 **{item.match_count}경기 · {item.event_count}교전 스냅샷** · "
+                    f"  표본 **{_number(item.match_count, 0)}경기 · "
+                    f"{_number(item.event_count, 0)}교전 스냅샷** · "
                     f"치킨률 **{_percent(item.win_rate)}**",
-                    f"  킬 {item.kills} · 기절 {item.dbnos} · 피니시 {item.finishes} · "
+                    f"  킬 {_number(item.kills, 0)} · 기절 {_number(item.dbnos, 0)} · "
+                    f"피니시 {_number(item.finishes, 0)} · "
                     f"평균 딜 {_number(item.avg_damage_dealt, 1)}",
                 ]
             )
 
-    if report.weapon_attachments:
-        for index, item in enumerate(report.weapon_attachments, start=1):
+    visible_weapon_attachments = report.weapon_attachments[:supplemental_limit]
+    if visible_weapon_attachments:
+        for index, item in enumerate(visible_weapon_attachments, start=1):
             lines.extend(
                 [
                     f"- 파츠 성과 {index} · {item.weapon_name} + "
                     f"{translate_code(item.attachment_code, 'item')}: "
                     f"점수 **{_number(item.score, 1)}**"
                     f"{_recommendation_evidence_link(report, item, evidence_base_url)}",
-                    f"  표본 **{item.match_count}경기 · {item.event_count or item.attached_events}회 관측** · "
+                    f"  표본 **{_number(item.match_count, 0)}경기 · "
+                    f"{_number(item.event_count or item.attached_events, 0)}회 관측** · "
                     f"치킨률 **{_percent(item.win_rate)}**",
                     f"  평균 딜 {_number(item.avg_damage_dealt, 1)} · "
-                    f"킬 {item.kills} · 기절 {item.dbnos}",
+                    f"킬 {_number(item.kills, 0)} · 기절 {_number(item.dbnos, 0)}",
                 ]
             )
     else:
         lines.append("- 파츠별 개별 성과: 표본 없음")
 
-    if report.weapon_ranges:
-        for index, item in enumerate(report.weapon_ranges, start=1):
+    visible_weapon_ranges = report.weapon_ranges[:supplemental_limit]
+    if visible_weapon_ranges:
+        for index, item in enumerate(visible_weapon_ranges, start=1):
             lines.append(
                 f"- 성과 거리 {index} · {item.weapon_name} {item.bucket_label}: "
-                f"**{item.event_count}교전** · {item.kills}킬 · {item.dbnos}기절 · "
+                f"**{_number(item.event_count, 0)}교전** · {_number(item.kills, 0)}킬 · "
+                f"{_number(item.dbnos, 0)}기절 · "
                 f"평균 거리 {_number(item.avg_distance_m, 0)}m"
             )
     else:
@@ -1365,41 +1844,51 @@ def format_player_recommendations(
 
     if report.attachments:
         lines.append("- 전체 파츠 장착 빈도: " + ", ".join(
-            f"{translate_code(item.item_code, 'item')} ({item.attached_events}회 장착)"
+            f"{translate_code(item.item_code, 'item')} ({_number(item.attached_events, 0)}회 장착)"
             for item in report.attachments
         ))
     else:
         lines.append("- 전체 파츠: 표본 없음")
 
     if report.maps:
-        for index, item in enumerate(report.maps, start=1):
-            lines.append(
-                f"- 맵 성과 {index} · {translate_code(item.map_name, 'map')}: "
-                f"**{item.match_count}경기** · 치킨률 **{_percent(item.win_rate)}** · "
-                f"KDA {_number(item.kda, 2)} · 평균 딜 {_number(item.avg_damage_dealt, 1)}"
-            )
+        lines.append("- 맵 성과 요약: " + " / ".join(
+            f"{translate_code(item.map_name, 'map')} {_number(item.match_count, 0)}경기·"
+            f"치킨 {_percent(item.win_rate)}·KDA {_number(item.kda, 2)}"
+            for item in report.maps
+        ))
     else:
         lines.append("- 맵: 표본 없음")
 
     if report.teammates:
-        for index, item in enumerate(report.teammates, start=1):
-            lines.append(
-                f"- 팀원 성과 {index} · {item.name}{' (등록 유저)' if item.registered else ''}: "
-                f"**{item.match_count}경기** · 치킨률 **{_percent(item.win_rate)}** · "
-                f"KDA {_number(item.kda, 2)}"
-            )
+        lines.append("- 팀원 성과 요약: " + " / ".join(
+            f"{item.name}{' (등록 유저)' if item.registered else ''} "
+            f"{_number(item.match_count, 0)}경기·치킨 {_percent(item.win_rate)}·KDA {_number(item.kda, 2)}"
+            for item in report.teammates
+        ))
     else:
         lines.append("- 팀원: 표본 없음")
 
     if report.drop_zones:
-        for index, item in enumerate(report.drop_zones, start=1):
-            lines.append(
-                f"- 낙하 지역 {index} · {translate_code(item.map_name, 'map')} "
-                f"{_drop_zone_location_label(item)}: **{item.match_count}경기** · "
-                f"치킨률 **{_percent(item.win_rate)}** · 평균 딜 {_number(item.avg_damage_dealt, 1)}"
-            )
+        lines.append("- 낙하 지역 요약: " + " / ".join(
+            f"{translate_code(item.map_name, 'map')} {_drop_zone_location_label(item)} "
+            f"{_number(item.match_count, 0)}경기·치킨 {_percent(item.win_rate)}"
+            for item in report.drop_zones
+        ))
     else:
         lines.append("- 낙하 지역: 표본 없음")
+
+    omitted = {
+        "파츠 조합": len(report.attachment_combinations) - len(visible_combinations),
+        "개별 파츠": len(report.weapon_attachments) - len(visible_weapon_attachments),
+        "교전 거리": len(report.weapon_ranges) - len(visible_weapon_ranges),
+    }
+    omitted_labels = [
+        f"{label} {_number(count, 0)}개"
+        for label, count in omitted.items()
+        if count > 0
+    ]
+    if omitted_labels:
+        lines.append("- 추가 상세 결과: " + " · ".join(omitted_labels) + " · 로컬 앱에서 전체 확인")
 
     local_link = _local_section_url(
         detail_base_url,
@@ -1499,6 +1988,19 @@ def create_discord_bot(
         app_commands.Choice(name="앱에 설정된 범위", value="configured"),
         app_commands.Choice(name="현재 Discord 서버", value="guild"),
         app_commands.Choice(name="전체 서버(글로벌 관리자)", value="global"),
+    ]
+    comparison_type_choices = [
+        app_commands.Choice(name="등록 유저끼리", value="player"),
+        app_commands.Choice(name="맵별", value="map"),
+        app_commands.Choice(name="무기별", value="weapon"),
+        app_commands.Choice(name="게임 모드별", value="game_mode"),
+        app_commands.Choice(name="팀 모드별", value="team_mode"),
+        app_commands.Choice(name="시점별", value="perspective"),
+        app_commands.Choice(name="매치 유형별", value="match_type"),
+    ]
+    comparison_metric_choices = [
+        app_commands.Choice(name=label, value=key)
+        for key, (label, _kind) in DISCORD_COMPARISON_METRICS.items()
     ]
     settings_section_choices = [
         app_commands.Choice(name="현재 설정 조회", value="status"),
@@ -1642,6 +2144,18 @@ def create_discord_bot(
             return guild_id
         await ctx.reply("이 명령어는 디스코드 서버 채널에서 사용해 주세요.", mention_author=False)
         return None
+
+    async def defer_public_response(ctx: Any) -> None:
+        """Acknowledge a slash command before running potentially slow local queries."""
+        if getattr(ctx, "interaction", None) is None:
+            return
+        defer = getattr(ctx, "defer", None)
+        if not callable(defer):
+            return
+        try:
+            await defer(ephemeral=False)
+        except (discord.InteractionResponded, AttributeError):
+            return
 
     async def send_alert_to_channel(
         channel_id: str,
@@ -1964,6 +2478,43 @@ def create_discord_bot(
         await bot.process_commands(message)
 
     @bot.event
+    async def on_command_error(ctx: Any, error: Exception) -> None:
+        if isinstance(error, commands.CommandNotFound):
+            return
+        command_name = str(getattr(getattr(ctx, "command", None), "name", "알 수 없는 명령"))
+        if isinstance(error, commands.MissingRequiredArgument):
+            usage = DISCORD_COMMAND_USAGE_KO.get(command_name, f"/{command_name}")
+            message = (
+                f"필수 입력값 **{error.param.name}**이(가) 빠졌습니다.\n"
+                f"사용 예시: `{usage}`\n"
+                "`/배그도움말`에서 옵션 설명과 선택 방법을 확인할 수 있습니다."
+            )
+            colour = 0xE2A84A
+        elif isinstance(error, (commands.BadArgument, commands.BadUnionArgument)):
+            message = (
+                f"입력값을 해석하지 못했습니다: {error}\n"
+                "슬래시 명령의 선택 항목을 사용하거나 `/배그도움말`에서 형식을 확인하세요."
+            )
+            colour = 0xE2A84A
+        else:
+            original = getattr(error, "original", error)
+            print(f"Discord command failed ({command_name}): {original}")
+            notify_status(
+                "command_error",
+                command=command_name,
+                error_type=type(original).__name__,
+            )
+            message = (
+                f"**{command_name}** 처리 중 오류가 발생했습니다.\n"
+                "잠시 후 다시 시도하고, 반복되면 로컬 앱의 **운영·알림**에서 상태를 확인하세요."
+            )
+            colour = 0xD85C5C
+        try:
+            await reply_report(ctx, f"Discord 명령 처리 안내\n- {message}", colour=colour)
+        except Exception as reply_error:
+            print(f"failed to publish Discord command error: {reply_error}")
+
+    @bot.event
     async def on_disconnect() -> None:
         notify_status("disconnected")
 
@@ -2069,6 +2620,37 @@ def create_discord_bot(
             self.add_item(indicator)
             self.add_item(following)
 
+            block_start = (self.page_index // 25) * 25
+            block_end = min(block_start + 25, len(self.pages))
+            options = []
+            for index in range(block_start, block_end):
+                page = self.pages[index]
+                fields = list(page.get("fields") or [])
+                first_label = str(fields[0][0]) if fields else str(page.get("title") or "상세")
+                clean_label = re.sub(r"[*_`~]", "", first_label).strip() or "상세"
+                options.append(
+                    discord.SelectOption(
+                        label=f"{index + 1}. {clean_label}"[:100],
+                        value=str(index),
+                        default=index == self.page_index,
+                    )
+                )
+            jump = discord.ui.Select(
+                placeholder=f"페이지 바로 이동 ({block_start + 1}-{block_end})",
+                min_values=1,
+                max_values=1,
+                options=options,
+                row=1,
+            )
+
+            async def jump_callback(interaction: Any) -> None:
+                self.page_index = int(jump.values[0])
+                self.rebuild()
+                await interaction.response.edit_message(embed=self.make_embed(), view=self)
+
+            jump.callback = jump_callback
+            self.add_item(jump)
+
     async def reply_report(
         ctx: Any,
         text: str,
@@ -2149,6 +2731,10 @@ def create_discord_bot(
 
         async def send(self, content: str | None = None, **kwargs: Any) -> Any:
             return await self.reply(content, **kwargs)
+
+        async def defer(self, **kwargs: Any) -> None:
+            # The picker button interaction is already deferred before the command runner starts.
+            return None
 
     class DiscordRegisteredPlayerSearchModal(discord.ui.Modal):
         def __init__(self, picker: Any) -> None:
@@ -2282,7 +2868,7 @@ def create_discord_bot(
                 )
             embed.set_footer(
                 text=(
-                    "선택 화면은 실행자만 볼 수 있고 조회 결과는 채널 전체에 공개됩니다. "
+                    "선택 화면과 조회 결과는 채널 전체에 공개되며 조작은 실행자만 가능합니다. "
                     "25명씩 표시하며 검색은 현재 서버의 전체 등록자를 대상으로 합니다."
                 )
             )
@@ -2455,16 +3041,14 @@ def create_discord_bot(
         shard: str,
         runner: Callable[[Any, RegisteredPlayer], Any],
     ) -> bool:
-        if getattr(ctx, "interaction", None) is None:
-            return False
         guild_id = guild_id_for(ctx)
         if guild_id is None:
             await ctx.reply(
                 "등록 유저 선택 화면은 Discord 서버 채널에서만 사용할 수 있습니다.",
-                ephemeral=True,
                 mention_author=False,
             )
             return True
+        await defer_public_response(ctx)
         view = DiscordRegisteredPlayerPickerView(
             source_ctx=ctx,
             command=command,
@@ -2477,9 +3061,529 @@ def create_discord_bot(
         await ctx.reply(
             embed=view.make_embed(),
             view=view,
-            ephemeral=True,
             mention_author=False,
         )
+        return True
+
+    class DiscordCatalogSearchModal(discord.ui.Modal):
+        def __init__(self, picker: Any) -> None:
+            super().__init__(title=picker.search_title[:45])
+            self.picker = picker
+            self.query_input = discord.ui.TextInput(
+                label=picker.search_label[:45],
+                placeholder=picker.search_placeholder[:100],
+                default=picker.search,
+                required=False,
+                max_length=100,
+            )
+            self.add_item(self.query_input)
+
+        async def on_submit(self, interaction: Any) -> None:
+            self.picker.search = str(self.query_input.value or "").strip()
+            self.picker.page_index = 0
+            self.picker.refresh_page()
+            self.picker.rebuild()
+            await interaction.response.edit_message(
+                embed=self.picker.make_embed(),
+                view=self.picker,
+            )
+
+    class DiscordCatalogPickerView(discord.ui.View):
+        """Public, owner-controlled, searchable picker that is not capped at 25 total rows."""
+
+        def __init__(
+            self,
+            *,
+            source_ctx: Any,
+            command: Any,
+            title: str,
+            description: str,
+            scope_label: str,
+            selection_label: str,
+            action_label: str,
+            search_title: str,
+            search_label: str,
+            search_placeholder: str,
+            loader: Callable[[str, int, int], tuple[list[Any], int]],
+            key_for: Callable[[Any], str],
+            option_for: Callable[[Any], tuple[str, str]],
+            selected_label_for: Callable[[Any], str],
+            runner: Callable[[Any, list[Any]], Any],
+            minimum_selection: int = 1,
+            maximum_selection: int = 1,
+            initial_search: str = "",
+        ) -> None:
+            super().__init__(timeout=600.0)
+            self.source_ctx = source_ctx
+            self.command = command
+            self.title = title
+            self.description = description
+            self.scope_label = scope_label
+            self.selection_label = selection_label
+            self.action_label = action_label
+            self.search_title = search_title
+            self.search_label = search_label
+            self.search_placeholder = search_placeholder
+            self.loader = loader
+            self.key_for = key_for
+            self.option_for = option_for
+            self.selected_label_for = selected_label_for
+            self.runner = runner
+            self.minimum_selection = minimum_selection
+            self.maximum_selection = maximum_selection
+            self.owner_id = int(source_ctx.author.id)
+            self.search = initial_search.strip()
+            self.page_index = 0
+            self.records: list[Any] = []
+            self.total = 0
+            self.selected: dict[str, Any] = {}
+            self.load_error: str | None = None
+            self.refresh_page()
+            self.rebuild()
+
+        @property
+        def page_count(self) -> int:
+            return max(1, (self.total + DISCORD_PLAYER_PICKER_PAGE_SIZE - 1) // DISCORD_PLAYER_PICKER_PAGE_SIZE)
+
+        def refresh_page(self) -> None:
+            self.load_error = None
+            try:
+                self.records, self.total = self.loader(
+                    self.search,
+                    DISCORD_PLAYER_PICKER_PAGE_SIZE,
+                    self.page_index * DISCORD_PLAYER_PICKER_PAGE_SIZE,
+                )
+                maximum_page = max(0, self.page_count - 1)
+                if self.page_index > maximum_page:
+                    self.page_index = maximum_page
+                    self.records, self.total = self.loader(
+                        self.search,
+                        DISCORD_PLAYER_PICKER_PAGE_SIZE,
+                        self.page_index * DISCORD_PLAYER_PICKER_PAGE_SIZE,
+                    )
+            except Exception as exc:
+                print(f"Discord catalog picker load failed for {self.title}: {exc}")
+                self.records = []
+                self.total = 0
+                self.load_error = "목록을 불러오지 못했습니다. 로컬 앱의 DB 상태와 운영 알림을 확인하세요."
+
+        def make_embed(self) -> Any:
+            embed = discord.Embed(
+                title=self.title,
+                description=self.description,
+                colour=0x42D3AA,
+            )
+            if self.selected:
+                selected_text = "\n".join(
+                    f"- {self.selected_label_for(record)}"
+                    for record in self.selected.values()
+                )
+            else:
+                selected_text = "아직 선택하지 않았습니다."
+            embed.add_field(name=self.selection_label, value=selected_text[:1024], inline=False)
+            search_label = f"`{self.search}`" if self.search else "전체"
+            embed.add_field(name="검색 범위", value=f"{self.scope_label} · {search_label}", inline=True)
+            embed.add_field(
+                name="목록 위치",
+                value=f"{self.page_index + 1}/{self.page_count}페이지 · 검색 결과 {self.total:,}개",
+                inline=True,
+            )
+            if self.load_error:
+                embed.add_field(name="불러오기 오류", value=self.load_error, inline=False)
+            elif not self.records:
+                embed.add_field(
+                    name="검색 결과 없음",
+                    value="검색어를 줄이거나 **검색 초기화**를 눌러 전체 목록으로 돌아가세요.",
+                    inline=False,
+                )
+            embed.set_footer(
+                text=(
+                    "화면과 실행 결과는 채널 전체에 공개되며 조작은 실행자만 가능합니다. "
+                    "Discord 제한을 피해 전체 목록을 25개씩 나눠 표시합니다."
+                )
+            )
+            return embed
+
+        def rebuild(self) -> None:
+            self.clear_items()
+            if self.records:
+                maximum_values = min(self.maximum_selection, len(self.records))
+                record_select = discord.ui.Select(
+                    placeholder=self.selection_label[:100],
+                    min_values=1,
+                    max_values=maximum_values,
+                    options=[
+                        discord.SelectOption(
+                            label=self.option_for(record)[0][:100],
+                            value=self.key_for(record)[:100],
+                            description=self.option_for(record)[1][:100],
+                            default=self.key_for(record) in self.selected,
+                        )
+                        for record in self.records
+                    ],
+                    row=0,
+                )
+
+                async def record_callback(interaction: Any) -> None:
+                    current_page_keys = {self.key_for(record) for record in self.records}
+                    preserved = {
+                        key: record
+                        for key, record in self.selected.items()
+                        if key not in current_page_keys
+                    }
+                    current_index = {self.key_for(record): record for record in self.records}
+                    candidate = dict(preserved)
+                    for key in record_select.values:
+                        if key in current_index:
+                            candidate[key] = current_index[key]
+                    if len(candidate) > self.maximum_selection:
+                        await interaction.response.send_message(
+                            f"최대 {self.maximum_selection}개까지 선택할 수 있습니다. 선택 초기화 후 다시 골라 주세요.",
+                            ephemeral=True,
+                        )
+                        return
+                    self.selected = candidate
+                    self.rebuild()
+                    await interaction.response.edit_message(embed=self.make_embed(), view=self)
+
+                record_select.callback = record_callback
+                self.add_item(record_select)
+
+            previous_button = discord.ui.Button(
+                label="이전 25개",
+                style=discord.ButtonStyle.secondary,
+                disabled=self.page_index <= 0,
+                row=1,
+            )
+            page_indicator = discord.ui.Button(
+                label=f"{self.page_index + 1} / {self.page_count}",
+                style=discord.ButtonStyle.secondary,
+                disabled=True,
+                row=1,
+            )
+            next_button = discord.ui.Button(
+                label="다음 25개",
+                style=discord.ButtonStyle.secondary,
+                disabled=self.page_index >= self.page_count - 1,
+                row=1,
+            )
+            search_button = discord.ui.Button(label="검색", style=discord.ButtonStyle.primary, row=1)
+            reset_search_button = discord.ui.Button(
+                label="검색 초기화",
+                style=discord.ButtonStyle.secondary,
+                disabled=not bool(self.search),
+                row=1,
+            )
+
+            async def move_page(interaction: Any, delta: int) -> None:
+                self.page_index = min(max(0, self.page_index + delta), self.page_count - 1)
+                self.refresh_page()
+                self.rebuild()
+                await interaction.response.edit_message(embed=self.make_embed(), view=self)
+
+            async def previous_callback(interaction: Any) -> None:
+                await move_page(interaction, -1)
+
+            async def next_callback(interaction: Any) -> None:
+                await move_page(interaction, 1)
+
+            async def search_callback(interaction: Any) -> None:
+                await interaction.response.send_modal(DiscordCatalogSearchModal(self))
+
+            async def reset_search_callback(interaction: Any) -> None:
+                self.search = ""
+                self.page_index = 0
+                self.refresh_page()
+                self.rebuild()
+                await interaction.response.edit_message(embed=self.make_embed(), view=self)
+
+            previous_button.callback = previous_callback
+            next_button.callback = next_callback
+            search_button.callback = search_callback
+            reset_search_button.callback = reset_search_callback
+            self.add_item(previous_button)
+            self.add_item(page_indicator)
+            self.add_item(next_button)
+            self.add_item(search_button)
+            self.add_item(reset_search_button)
+
+            execute_button = discord.ui.Button(
+                label=self.action_label[:80],
+                style=discord.ButtonStyle.success,
+                disabled=len(self.selected) < self.minimum_selection,
+                row=2,
+            )
+            clear_button = discord.ui.Button(
+                label="선택 초기화",
+                style=discord.ButtonStyle.secondary,
+                disabled=not bool(self.selected),
+                row=2,
+            )
+            close_button = discord.ui.Button(label="닫기", style=discord.ButtonStyle.danger, row=2)
+
+            async def execute_callback(interaction: Any) -> None:
+                if len(self.selected) < self.minimum_selection:
+                    await interaction.response.send_message(
+                        f"{self.minimum_selection}개 이상 선택하세요.",
+                        ephemeral=True,
+                    )
+                    return
+                await interaction.response.defer()
+                picker_ctx = DiscordPickerContext(
+                    source_ctx=self.source_ctx,
+                    interaction=interaction,
+                    command=self.command,
+                )
+                try:
+                    await self.runner(picker_ctx, list(self.selected.values()))
+                    if picker_ctx.published:
+                        await interaction.edit_original_response(
+                            content=f"{self.action_label} 결과를 현재 채널에 공개했습니다.",
+                            embed=None,
+                            view=None,
+                        )
+                except Exception as exc:
+                    print(f"Discord catalog picker failed for {self.title}: {exc}")
+                    await interaction.edit_original_response(
+                        content="처리 중 오류가 발생했습니다. 로컬 앱의 운영 알림과 로그를 확인하세요.",
+                        embed=None,
+                        view=None,
+                    )
+                self.stop()
+
+            async def clear_callback(interaction: Any) -> None:
+                self.selected = {}
+                self.rebuild()
+                await interaction.response.edit_message(embed=self.make_embed(), view=self)
+
+            async def close_callback(interaction: Any) -> None:
+                for item in self.children:
+                    item.disabled = True
+                await interaction.response.edit_message(embed=self.make_embed(), view=self)
+                self.stop()
+
+            execute_button.callback = execute_callback
+            clear_button.callback = clear_callback
+            close_button.callback = close_callback
+            self.add_item(execute_button)
+            self.add_item(clear_button)
+            self.add_item(close_button)
+
+        async def interaction_check(self, interaction: Any) -> bool:
+            if int(interaction.user.id) == self.owner_id:
+                return True
+            await interaction.response.send_message(
+                "이 선택 화면은 명령을 실행한 사용자만 조작할 수 있습니다.",
+                ephemeral=True,
+            )
+            return False
+
+    async def open_player_comparison_picker(
+        ctx: Any,
+        *,
+        command: Any,
+        shard: str,
+        runner: Callable[[Any, list[RegisteredPlayer]], Any],
+    ) -> bool:
+        guild_id = guild_id_for(ctx)
+        if guild_id is None:
+            await ctx.reply("유저 비교는 Discord 서버 채널에서 사용해 주세요.", mention_author=False)
+            return True
+
+        def load_players(search: str, limit: int, offset: int) -> tuple[list[Any], int]:
+            connection = connect_mysql(config.database)
+            try:
+                return PlayerRegistry(connection).list_players_page(
+                    shard=shard,
+                    registered_guild_id=guild_id,
+                    search=search or None,
+                    active_only=False,
+                    limit=limit,
+                    offset=offset,
+                )
+            finally:
+                connection.close()
+
+        await defer_public_response(ctx)
+        view = DiscordCatalogPickerView(
+            source_ctx=ctx,
+            command=command,
+            title="PUBG AI · 비교할 등록 유저 선택",
+            description=(
+                "현재 Discord 서버에 등록된 유저 중 **2~4명**을 선택하세요. "
+                "페이지를 이동하거나 검색해도 앞서 고른 유저는 유지됩니다."
+            ),
+            scope_label=f"현재 Discord 서버 · {translate_code(shard, 'shard')}",
+            selection_label="비교 대상",
+            action_label="선택 유저 비교",
+            search_title="비교 유저 검색",
+            search_label="닉네임 또는 Account ID",
+            search_placeholder="닉네임 일부만 입력해도 됩니다.",
+            loader=load_players,
+            key_for=lambda player: player.account_id,
+            option_for=lambda player: (
+                player.current_name,
+                f"{translate_code(player.shard, 'shard')} · ID …{player.account_id[-6:]}",
+            ),
+            selected_label_for=lambda player: (
+                f"**{player.current_name}** · {translate_code(player.shard, 'shard')}"
+            ),
+            runner=runner,
+            minimum_selection=2,
+            maximum_selection=4,
+        )
+        await ctx.reply(embed=view.make_embed(), view=view, mention_author=False)
+        return True
+
+    async def open_stored_match_picker(
+        ctx: Any,
+        *,
+        command: Any,
+        shard: str,
+        search: str | None,
+        telemetry_only: bool,
+        runner: Callable[[Any, list[dict[str, Any]]], Any],
+    ) -> bool:
+        def load_matches(query: str, limit: int, offset: int) -> tuple[list[Any], int]:
+            connection = connect_mysql(config.database)
+            try:
+                report = MatchExplorerService(
+                    connection,
+                    RawPayloadStore(
+                        config.app.raw_data_dir,
+                        compression=config.app.raw_compression,  # type: ignore[arg-type]
+                    ),
+                ).list_matches(
+                    shard=shard,
+                    search=query or None,
+                    telemetry_only=telemetry_only,
+                    limit=limit,
+                    offset=offset,
+                )
+                return list(report["matches"]), int(report["total"])
+            finally:
+                connection.close()
+
+        def match_option(record: dict[str, Any]) -> tuple[str, str]:
+            created = str(record.get("created_at_kst") or "시각 미상").replace("T", " ")[:16]
+            map_label = str(record.get("map_label") or translate_code(record.get("map_name"), "map"))
+            mode_label = str(
+                record.get("game_mode_label")
+                or translate_code(record.get("game_mode"), "game_mode")
+            )
+            participants = int(record.get("participant_count") or 0)
+            registered = int(record.get("registered_participant_count") or 0)
+            return (
+                f"{created} · {map_label}",
+                f"{mode_label} · {participants:,}명 · 등록 유저 {registered:,}명",
+            )
+
+        await defer_public_response(ctx)
+        view = DiscordCatalogPickerView(
+            source_ctx=ctx,
+            command=command,
+            title="PUBG AI · 저장 매치 선택",
+            description=(
+                "매치 ID를 외울 필요가 없습니다. 날짜·맵·모드·참가자 닉네임 일부로 검색한 뒤 "
+                "경기를 선택하세요. 상세 결과에는 저장된 모든 참가자와 팀 요약이 포함됩니다."
+            ),
+            scope_label=(
+                f"{translate_code(shard, 'shard')} · "
+                f"{'원본 텔레메트리 저장 완료 경기' if telemetry_only else '저장된 전체 경기'}"
+            ),
+            selection_label="상세 조회할 매치",
+            action_label="전체 매치 상세 조회",
+            search_title="저장 매치 검색",
+            search_label="날짜·맵·모드·참가자",
+            search_placeholder="예: 태이고, 2026-08, Yuuki",
+            loader=load_matches,
+            key_for=lambda record: str(record["match_id"]),
+            option_for=match_option,
+            selected_label_for=lambda record: (
+                f"**{match_option(record)[0]}** · {match_option(record)[1]}"
+            ),
+            runner=runner,
+            minimum_selection=1,
+            maximum_selection=1,
+            initial_search=search or "",
+        )
+        await ctx.reply(embed=view.make_embed(), view=view, mention_author=False)
+        return True
+
+    async def open_player_weapon_picker(
+        ctx: Any,
+        *,
+        command: Any,
+        shard: str,
+        target: str,
+        guild_id: str | None,
+        global_scope: bool,
+        runner: Callable[[Any, list[Any]], Any],
+    ) -> bool:
+        await defer_public_response(ctx)
+        connection = connect_mysql(config.database)
+        try:
+            catalog = PlayerStatsService(connection).get_lookup_catalog(
+                shard=shard,
+                account_id=target if target.startswith("account.") else None,
+                name=None if target.startswith("account.") else target,
+                guild_id=None if global_scope else guild_id,
+                global_scope=global_scope,
+                match_limit=1,
+            )
+        finally:
+            connection.close()
+
+        if catalog is None or not catalog.weapons:
+            await ctx.reply(
+                "선택한 등록 유저에게 분석 가능한 무기 기록이 없습니다.",
+                mention_author=False,
+            )
+            return True
+
+        weapons = list(catalog.weapons)
+
+        def load_weapons(search: str, limit: int, offset: int) -> tuple[list[Any], int]:
+            query = search.strip().casefold()
+            filtered = [
+                item
+                for item in weapons
+                if not query
+                or query in item.weapon_name.casefold()
+                or query in item.weapon_code.casefold()
+                or query in item.weapon_family.casefold()
+            ]
+            return filtered[offset : offset + limit], len(filtered)
+
+        view = DiscordCatalogPickerView(
+            source_ctx=ctx,
+            command=command,
+            title=f"PUBG AI · {catalog.player.current_name} 무기 선택",
+            description=(
+                "이 유저가 실제로 사용한 무기만 표시합니다. 한글 무기명·코드·무기 종류로 "
+                "검색한 뒤 분석할 무기 한 개를 선택하세요."
+            ),
+            scope_label=f"{catalog.player.current_name} · {translate_code(shard, 'shard')}",
+            selection_label="분석할 무기",
+            action_label="선택 무기 분석",
+            search_title="사용 무기 검색",
+            search_label="무기명·코드·종류",
+            search_placeholder="예: M416, DMR, 7.62",
+            loader=load_weapons,
+            key_for=lambda item: item.weapon_code,
+            option_for=lambda item: (
+                f"{item.weapon_name} · {item.weapon_family}",
+                f"사용 {_number(item.match_count, 0)}경기",
+            ),
+            selected_label_for=lambda item: (
+                f"**{item.weapon_name}** · {item.weapon_family} · "
+                f"사용 {_number(item.match_count, 0)}경기"
+            ),
+            runner=runner,
+            minimum_selection=1,
+            maximum_selection=1,
+        )
+        await ctx.reply(embed=view.make_embed(), view=view, mention_author=False)
         return True
 
     class DiscordHelpView(discord.ui.View):
@@ -2659,11 +3763,16 @@ def create_discord_bot(
                     f"- `{command_prefix}유저등록 steam 닉네임`",
                     f"- `{command_prefix}유저조회 [닉네임] [shard]`",
                     f"- `{command_prefix}전적 닉네임 [shard]`",
+                    f"- `{command_prefix}종합분석 [닉네임] [shard]`",
                     f"- `{command_prefix}교전 닉네임 [shard]`",
                     f"- `{command_prefix}추세 닉네임 [집계] [shard] [팀] [시점] [맵] [게임모드] [매치유형] [시작일] [종료일] [구간]`",
+                    f"- `{command_prefix}시간대 [닉네임] [shard]`",
                     f"- `{command_prefix}무기 닉네임 무기명 [shard]`",
                     f"- `{command_prefix}추천 닉네임 [shard] [최소표본] [결과수]`",
+                    f"- `{command_prefix}비교 [player|map|weapon|game_mode|team_mode] [닉네임]`",
+                    f"- `{command_prefix}낙하 [닉네임] [shard] [최소착지] [표시수]`",
                     f"- `{command_prefix}매치 닉네임 [match_id] [shard]` (match_id를 비우면 최신 경기)",
+                    f"- `{command_prefix}매치상세 [검색어] [shard]` (목록에서 경기 선택)",
                     f"- `{command_prefix}랭킹 [지표] [shard] [인원] [configured|guild|global] [최소경기]`",
                     f"- `{command_prefix}최근스냅샷 닉네임 [match_id] [shard]`",
                     f"- `{command_prefix}pubg-alerts`",
@@ -2721,6 +3830,7 @@ def create_discord_bot(
             ):
                 return
 
+        await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
             registry = PlayerRegistry(connection)
@@ -2777,6 +3887,7 @@ def create_discord_bot(
             await ctx.reply(f"사용법: `{command_prefix}전적 닉네임 [shard]`", mention_author=False)
             return
 
+        await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
             profile = PlayerStatsService(connection).get_profile(
@@ -2805,6 +3916,115 @@ def create_discord_bot(
         await reply_report(
             ctx,
             format_player_profile_stats(profile, detail_base_url=config.app.local_web_base_url),
+        )
+
+    @bot.hybrid_command(name="종합분석", aliases=["pubg-analysis", "pubg-intelligence"])
+    @app_commands.rename(
+        name="닉네임",
+        shard="플랫폼",
+        team_mode="팀_모드",
+        perspective="시점",
+        map_name="맵",
+        game_mode="게임_모드",
+        match_type="매치_유형",
+        from_date="시작일_kst",
+        to_date="종료일_kst",
+    )
+    @app_commands.describe(
+        name=DISCORD_REGISTERED_PLAYER_OPTION_DESCRIPTION,
+        shard="PUBG 계정 플랫폼을 선택합니다.",
+        team_mode="솔로·듀오·스쿼드 중 하나만 분석합니다. 비우면 전체입니다.",
+        perspective="1인칭 또는 3인칭 경기만 분석합니다. 비우면 전체입니다.",
+        map_name="특정 맵만 분석합니다. 맵 이름 일부를 입력해 검색할 수 있습니다.",
+        game_mode="특정 게임 모드만 분석합니다. 모드 일부를 입력해 검색할 수 있습니다.",
+        match_type="일반·경쟁전·아케이드 등 매치 유형으로 제한합니다.",
+        from_date="이 날짜부터 분석합니다. 형식: YYYY-MM-DD (KST)",
+        to_date="이 날짜까지 분석합니다. 형식: YYYY-MM-DD (KST)",
+    )
+    @app_commands.choices(
+        shard=shard_choices,
+        team_mode=team_mode_choices,
+        perspective=perspective_choices,
+        match_type=match_type_choices,
+    )
+    async def player_intelligence_command(
+        ctx: Any,
+        name: str | None = None,
+        shard: str = "steam",
+        team_mode: str | None = None,
+        perspective: str | None = None,
+        map_name: str | None = None,
+        game_mode: str | None = None,
+        match_type: str | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ) -> None:
+        if not await require_permission(ctx, "profile_read"):
+            return
+        try:
+            normalized_shard = _normalize_discord_shard(shard)
+            filters = PlayerTrendFilters(
+                team_mode=team_mode,
+                perspective=perspective,
+                map_name=map_name,
+                game_mode=game_mode,
+                match_type=match_type,
+                from_date_kst=parse_trend_date(from_date, "시작일"),
+                to_date_kst=parse_trend_date(to_date, "종료일"),
+            ).normalized()
+        except ValueError as exc:
+            await reply_report(ctx, f"종합 분석 조건 오류\n- 확인할 내용: {exc}", colour=0xE2A84A)
+            return
+
+        guild_id = await require_scoped_guild(ctx)
+        if guild_id is None and not has_global_scope(ctx):
+            return
+        global_scope = has_global_scope(ctx)
+        if not name:
+            async def run_selected(selected_ctx: Any, player: RegisteredPlayer) -> None:
+                await player_intelligence_command.callback(
+                    selected_ctx,
+                    player.account_id,
+                    player.shard,
+                    team_mode,
+                    perspective,
+                    map_name,
+                    game_mode,
+                    match_type,
+                    from_date,
+                    to_date,
+                )
+
+            await open_registered_player_picker(
+                ctx,
+                command=player_intelligence_command,
+                command_label="종합 분석",
+                action_label="종합 분석",
+                shard=normalized_shard,
+                runner=run_selected,
+            )
+            return
+
+        await defer_public_response(ctx)
+        connection = connect_mysql(config.database)
+        try:
+            report = PlayerIntelligenceService(connection).get_report(
+                shard=normalized_shard,
+                account_id=name if name.startswith("account.") else None,
+                name=None if name.startswith("account.") else name,
+                guild_id=None if global_scope else guild_id,
+                global_scope=global_scope,
+                filters=filters,
+                trend_limit=365,
+            )
+        finally:
+            connection.close()
+        if report is None:
+            await ctx.reply("조회 가능한 등록 유저의 종합 분석 데이터를 찾지 못했습니다.", mention_author=False)
+            return
+        await reply_report(
+            ctx,
+            format_player_intelligence(report, detail_base_url=config.app.local_web_base_url),
         )
 
     @bot.hybrid_command(name="교전", aliases=["pubg-fights", "pubg-fight"])
@@ -2847,6 +4067,7 @@ def create_discord_bot(
             await ctx.reply(f"사용법: `{command_prefix}교전 닉네임 [shard]`", mention_author=False)
             return
 
+        await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
             report = FightOutcomeStatsService(connection).get_report(
@@ -2987,6 +4208,7 @@ def create_discord_bot(
         if guild_id is None and not has_global_scope(ctx):
             return
         global_scope = has_global_scope(ctx)
+        await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
             report = PlayerTrendService(connection).get_report(
@@ -3010,24 +4232,193 @@ def create_discord_bot(
             format_player_trends(report, detail_base_url=config.app.local_web_base_url),
         )
 
+    @bot.hybrid_command(name="시간대", aliases=["pubg-time"])
+    @app_commands.rename(
+        name="닉네임",
+        shard="플랫폼",
+        team_mode="팀_모드",
+        perspective="시점",
+        map_name="맵",
+        game_mode="게임_모드",
+        match_type="매치_유형",
+        from_date="시작일_kst",
+        to_date="종료일_kst",
+    )
+    @app_commands.describe(
+        name=DISCORD_REGISTERED_PLAYER_OPTION_DESCRIPTION,
+        shard="PUBG 계정 플랫폼을 선택합니다.",
+        team_mode="솔로·듀오·스쿼드 중 하나만 분석합니다. 비우면 전체입니다.",
+        perspective="1인칭 또는 3인칭 경기만 분석합니다. 비우면 전체입니다.",
+        map_name="특정 맵만 분석합니다. 맵 이름 일부를 입력해 검색할 수 있습니다.",
+        game_mode="특정 게임 모드만 분석합니다. 모드 일부를 입력해 검색할 수 있습니다.",
+        match_type="일반·경쟁전·아케이드 등 매치 유형으로 제한합니다.",
+        from_date="이 날짜부터 분석합니다. 형식: YYYY-MM-DD (KST)",
+        to_date="이 날짜까지 분석합니다. 형식: YYYY-MM-DD (KST)",
+    )
+    @app_commands.choices(
+        shard=shard_choices,
+        team_mode=team_mode_choices,
+        perspective=perspective_choices,
+        match_type=match_type_choices,
+    )
+    async def player_time_command(
+        ctx: Any,
+        name: str | None = None,
+        shard: str = "steam",
+        team_mode: str | None = None,
+        perspective: str | None = None,
+        map_name: str | None = None,
+        game_mode: str | None = None,
+        match_type: str | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ) -> None:
+        if not await require_permission(ctx, "profile_read"):
+            return
+        try:
+            normalized_shard = _normalize_discord_shard(shard)
+            filters = PlayerTrendFilters(
+                team_mode=team_mode,
+                perspective=perspective,
+                map_name=map_name,
+                game_mode=game_mode,
+                match_type=match_type,
+                from_date_kst=parse_trend_date(from_date, "시작일"),
+                to_date_kst=parse_trend_date(to_date, "종료일"),
+            ).normalized()
+        except ValueError as exc:
+            await reply_report(ctx, f"시간대 분석 조건 오류\n- 확인할 내용: {exc}", colour=0xE2A84A)
+            return
+
+        guild_id = await require_scoped_guild(ctx)
+        if guild_id is None and not has_global_scope(ctx):
+            return
+        global_scope = has_global_scope(ctx)
+        if not name:
+            async def run_selected(selected_ctx: Any, player: RegisteredPlayer) -> None:
+                await player_time_command.callback(
+                    selected_ctx,
+                    player.account_id,
+                    player.shard,
+                    team_mode,
+                    perspective,
+                    map_name,
+                    game_mode,
+                    match_type,
+                    from_date,
+                    to_date,
+                )
+
+            await open_registered_player_picker(
+                ctx,
+                command=player_time_command,
+                command_label="KST 시간대 분석",
+                action_label="시간대 분석",
+                shard=normalized_shard,
+                runner=run_selected,
+            )
+            return
+
+        await defer_public_response(ctx)
+        connection = connect_mysql(config.database)
+        try:
+            report = PlayerTrendService(connection).get_report(
+                shard=normalized_shard,
+                account_id=name if name.startswith("account.") else None,
+                name=None if name.startswith("account.") else name,
+                guild_id=None if global_scope else guild_id,
+                global_scope=global_scope,
+                granularity="hour",
+                filters=filters,
+                bucket_limit=24,
+            )
+        finally:
+            connection.close()
+        if report is None:
+            await ctx.reply("조회 가능한 등록 유저의 시간대 데이터를 찾지 못했습니다.", mention_author=False)
+            return
+        await reply_report(
+            ctx,
+            format_player_time_insights(report, detail_base_url=config.app.local_web_base_url),
+        )
+
     @bot.hybrid_command(name="무기", aliases=["pubg-weapon"])
-    @app_commands.rename(name="닉네임", weapon="무기", shard="플랫폼")
+    @app_commands.rename(
+        name="닉네임",
+        weapon="무기",
+        shard="플랫폼",
+        team_mode="팀_모드",
+        perspective="시점",
+        map_name="맵",
+        game_mode="게임_모드",
+        match_type="매치_유형",
+        from_date="시작일_kst",
+        to_date="종료일_kst",
+        individual_min_matches="개별_파츠_최소_경기",
+        combination_min_matches="파츠_조합_최소_경기",
+        attachment_limit="파츠_표시_수",
+    )
     @app_commands.describe(
         name=DISCORD_REGISTERED_PLAYER_OPTION_DESCRIPTION,
         weapon="분석할 무기입니다. 한글 또는 코드 일부를 입력해 검색합니다.",
         shard="PUBG 계정 플랫폼을 선택합니다.",
+        team_mode="솔로·듀오·스쿼드 중 하나만 분석합니다. 비우면 전체입니다.",
+        perspective="1인칭 또는 3인칭 경기만 분석합니다. 비우면 전체입니다.",
+        map_name="특정 맵에서 사용한 성과로 제한합니다.",
+        game_mode="특정 게임 모드에서 사용한 성과로 제한합니다.",
+        match_type="일반·경쟁전·아케이드 등 매치 유형으로 제한합니다.",
+        from_date="이 날짜부터 분석합니다. 형식: YYYY-MM-DD (KST)",
+        to_date="이 날짜까지 분석합니다. 형식: YYYY-MM-DD (KST)",
+        individual_min_matches="노파츠와 개별 파츠 결과에 필요한 최소 사용 경기 수입니다. 1~100000",
+        combination_min_matches="함께 장착한 파츠 조합 결과에 필요한 최소 사용 경기 수입니다. 1~100000",
+        attachment_limit="개별 파츠와 파츠 조합에서 각각 표시할 최대 결과 수입니다. 1~25",
     )
-    @app_commands.choices(shard=shard_choices)
+    @app_commands.choices(
+        shard=shard_choices,
+        team_mode=team_mode_choices,
+        perspective=perspective_choices,
+        match_type=match_type_choices,
+    )
     async def player_weapon_command(
         ctx: Any,
         name: str | None = None,
         weapon: str | None = None,
         shard: str = "steam",
+        team_mode: str | None = None,
+        perspective: str | None = None,
+        map_name: str | None = None,
+        game_mode: str | None = None,
+        match_type: str | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+        individual_min_matches: int = 1,
+        combination_min_matches: int = 1,
+        attachment_limit: int = 10,
     ) -> None:
         if not await require_permission(ctx, "profile_read"):
             return
-        if not weapon:
-            await ctx.reply(f"사용법: `{command_prefix}무기 닉네임 무기명 [shard]`", mention_author=False)
+        try:
+            normalized_shard = _normalize_discord_shard(shard)
+            filters = PlayerTrendFilters(
+                team_mode=team_mode,
+                perspective=perspective,
+                map_name=map_name,
+                game_mode=game_mode,
+                match_type=match_type,
+                from_date_kst=parse_trend_date(from_date, "시작일"),
+                to_date_kst=parse_trend_date(to_date, "종료일"),
+            ).normalized()
+            normalized_individual_min = int(individual_min_matches)
+            normalized_combination_min = int(combination_min_matches)
+            normalized_attachment_limit = int(attachment_limit)
+            if not 1 <= normalized_individual_min <= 100_000:
+                raise ValueError("개별 파츠 최소 경기는 1~100000 사이여야 합니다.")
+            if not 1 <= normalized_combination_min <= 100_000:
+                raise ValueError("파츠 조합 최소 경기는 1~100000 사이여야 합니다.")
+            if not 1 <= normalized_attachment_limit <= 25:
+                raise ValueError("파츠 표시 수는 1~25 사이여야 합니다.")
+        except ValueError as exc:
+            await reply_report(ctx, f"무기 분석 조건 오류\n- 확인할 내용: {exc}", colour=0xE2A84A)
             return
         if not name:
             async def run_selected(selected_ctx: Any, player: RegisteredPlayer) -> None:
@@ -3036,6 +4427,16 @@ def create_discord_bot(
                     player.account_id,
                     weapon,
                     player.shard,
+                    team_mode,
+                    perspective,
+                    map_name,
+                    game_mode,
+                    match_type,
+                    from_date,
+                    to_date,
+                    normalized_individual_min,
+                    normalized_combination_min,
+                    normalized_attachment_limit,
                 )
 
             if await open_registered_player_picker(
@@ -3043,7 +4444,7 @@ def create_discord_bot(
                 command=player_weapon_command,
                 command_label="무기 분석",
                 action_label="무기 분석",
-                shard=shard,
+                shard=normalized_shard,
                 runner=run_selected,
             ):
                 return
@@ -3055,15 +4456,47 @@ def create_discord_bot(
             return
         global_scope = has_global_scope(ctx)
 
+        if not weapon:
+            async def run_selected_weapon(selected_ctx: Any, items: list[Any]) -> None:
+                await player_weapon_command.callback(
+                    selected_ctx,
+                    name,
+                    items[0].weapon_code,
+                    normalized_shard,
+                    team_mode,
+                    perspective,
+                    map_name,
+                    game_mode,
+                    match_type,
+                    from_date,
+                    to_date,
+                    normalized_individual_min,
+                    normalized_combination_min,
+                    normalized_attachment_limit,
+                )
+
+            await open_player_weapon_picker(
+                ctx,
+                command=player_weapon_command,
+                shard=normalized_shard,
+                target=name,
+                guild_id=guild_id,
+                global_scope=global_scope,
+                runner=run_selected_weapon,
+            )
+            return
+
+        await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
             detail = PlayerStatsService(connection).get_weapon_detail(
-                shard=shard,
+                shard=normalized_shard,
                 account_id=name if name.startswith("account.") else None,
                 name=None if name.startswith("account.") else name,
                 weapon=weapon,
                 guild_id=None if global_scope else guild_id,
                 global_scope=global_scope,
+                filters=filters,
             )
         finally:
             connection.close()
@@ -3075,7 +4508,7 @@ def create_discord_bot(
                     "weapon_lookup",
                     "weapon-lookup",
                     detail_base_url=config.app.local_web_base_url,
-                    query_params={"shard": shard, "target": name, "weapon": weapon},
+                    query_params={"shard": normalized_shard, "target": name, "weapon": weapon},
                 ),
                 mention_author=False,
             )
@@ -3083,7 +4516,13 @@ def create_discord_bot(
 
         await reply_report(
             ctx,
-            format_player_weapon_detail(detail, detail_base_url=config.app.local_web_base_url),
+            format_player_weapon_detail(
+                detail,
+                detail_base_url=config.app.local_web_base_url,
+                individual_min_matches=normalized_individual_min,
+                combination_min_matches=normalized_combination_min,
+                attachment_limit=normalized_attachment_limit,
+            ),
         )
 
     @bot.hybrid_command(name="추천", aliases=["pubg-recommend"])
@@ -3092,20 +4531,46 @@ def create_discord_bot(
         shard="플랫폼",
         min_matches="최소_표본_경기",
         result_limit="결과_수",
+        team_mode="팀_모드",
+        perspective="시점",
+        map_name="맵",
+        game_mode="게임_모드",
+        match_type="매치_유형",
+        from_date="시작일_kst",
+        to_date="종료일_kst",
     )
     @app_commands.describe(
         name=DISCORD_REGISTERED_PLAYER_OPTION_DESCRIPTION,
         shard="PUBG 계정 플랫폼을 선택합니다.",
         min_matches="추천 후보가 포함되기 위해 필요한 최소 경기 수입니다. 1~100000",
         result_limit="각 추천 항목에서 계산할 상위 후보 수입니다. 1~20",
+        team_mode="솔로·듀오·스쿼드 중 하나의 데이터만 추천 근거로 사용합니다.",
+        perspective="1인칭 또는 3인칭 경기만 추천 근거로 사용합니다.",
+        map_name="특정 맵의 플레이만 추천 근거로 사용합니다.",
+        game_mode="특정 게임 모드의 플레이만 추천 근거로 사용합니다.",
+        match_type="일반·경쟁전·아케이드 등 매치 유형으로 제한합니다.",
+        from_date="이 날짜부터의 데이터로 추천합니다. 형식: YYYY-MM-DD (KST)",
+        to_date="이 날짜까지의 데이터로 추천합니다. 형식: YYYY-MM-DD (KST)",
     )
-    @app_commands.choices(shard=shard_choices)
+    @app_commands.choices(
+        shard=shard_choices,
+        team_mode=team_mode_choices,
+        perspective=perspective_choices,
+        match_type=match_type_choices,
+    )
     async def player_recommendations_command(
         ctx: Any,
         name: str | None = None,
         shard: str = "steam",
         min_matches: int = 1,
         result_limit: int = 5,
+        team_mode: str | None = None,
+        perspective: str | None = None,
+        map_name: str | None = None,
+        game_mode: str | None = None,
+        match_type: str | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
     ) -> None:
         if not await require_permission(ctx, "profile_read"):
             return
@@ -3117,6 +4582,15 @@ def create_discord_bot(
                 raise ValueError("최소 표본 경기는 1~100000 사이여야 합니다.")
             if not 1 <= normalized_result_limit <= 20:
                 raise ValueError("결과 수는 1~20 사이여야 합니다.")
+            filters = PlayerTrendFilters(
+                team_mode=team_mode,
+                perspective=perspective,
+                map_name=map_name,
+                game_mode=game_mode,
+                match_type=match_type,
+                from_date_kst=parse_trend_date(from_date, "시작일"),
+                to_date_kst=parse_trend_date(to_date, "종료일"),
+            ).normalized()
         except ValueError as exc:
             await reply_report(ctx, f"추천 조회 조건 오류\n- 확인할 내용: {exc}", colour=0xE2A84A)
             return
@@ -3134,6 +4608,13 @@ def create_discord_bot(
                     player.shard,
                     normalized_min_matches,
                     normalized_result_limit,
+                    team_mode,
+                    perspective,
+                    map_name,
+                    game_mode,
+                    match_type,
+                    from_date,
+                    to_date,
                 )
 
             if await open_registered_player_picker(
@@ -3154,6 +4635,7 @@ def create_discord_bot(
             )
             return
 
+        await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
             recommendations = PlayerRecommendationService(connection).get_recommendations(
@@ -3164,6 +4646,7 @@ def create_discord_bot(
                 global_scope=global_scope,
                 limit=normalized_result_limit,
                 min_matches=normalized_min_matches,
+                filters=filters,
             )
         finally:
             connection.close()
@@ -3190,6 +4673,302 @@ def create_discord_bot(
             format_player_recommendations(
                 recommendations,
                 evidence_base_url=config.app.local_web_base_url,
+                detail_base_url=config.app.local_web_base_url,
+            ),
+        )
+
+    @bot.hybrid_command(name="낙하", aliases=["pubg-drop", "pubg-landing"])
+    @app_commands.rename(
+        name="닉네임",
+        shard="플랫폼",
+        min_matches="최소_착지_횟수",
+        result_limit="표시_지역_수",
+    )
+    @app_commands.describe(
+        name=DISCORD_REGISTERED_PLAYER_OPTION_DESCRIPTION,
+        shard="PUBG 계정 플랫폼을 선택합니다.",
+        min_matches="지역 결과에 포함되기 위해 필요한 최소 착지 횟수입니다. 1~100000",
+        result_limit="성과를 표시할 상위 지역 수입니다. 1~100",
+    )
+    @app_commands.choices(shard=shard_choices)
+    async def player_drop_command(
+        ctx: Any,
+        name: str | None = None,
+        shard: str = "steam",
+        min_matches: int = 1,
+        result_limit: int = 20,
+    ) -> None:
+        if not await require_permission(ctx, "profile_read"):
+            return
+        try:
+            normalized_shard = _normalize_discord_shard(shard)
+            normalized_min_matches = int(min_matches)
+            normalized_limit = int(result_limit)
+            if not 1 <= normalized_min_matches <= 100_000:
+                raise ValueError("최소 착지 횟수는 1~100000 사이여야 합니다.")
+            if not 1 <= normalized_limit <= 100:
+                raise ValueError("표시 지역 수는 1~100 사이여야 합니다.")
+        except ValueError as exc:
+            await reply_report(ctx, f"낙하 분석 조건 오류\n- 확인할 내용: {exc}", colour=0xE2A84A)
+            return
+
+        guild_id = await require_scoped_guild(ctx)
+        if guild_id is None and not has_global_scope(ctx):
+            return
+        global_scope = has_global_scope(ctx)
+        if not name:
+            async def run_selected(selected_ctx: Any, player: RegisteredPlayer) -> None:
+                await player_drop_command.callback(
+                    selected_ctx,
+                    player.account_id,
+                    player.shard,
+                    normalized_min_matches,
+                    normalized_limit,
+                )
+
+            await open_registered_player_picker(
+                ctx,
+                command=player_drop_command,
+                command_label="낙하 지역 분석",
+                action_label="낙하 분석",
+                shard=normalized_shard,
+                runner=run_selected,
+            )
+            return
+
+        await defer_public_response(ctx)
+        connection = connect_mysql(config.database)
+        try:
+            report = PlayerRecommendationService(connection).get_drop_zone_analysis(
+                shard=normalized_shard,
+                account_id=name if name.startswith("account.") else None,
+                name=None if name.startswith("account.") else name,
+                guild_id=None if global_scope else guild_id,
+                global_scope=global_scope,
+                min_matches=normalized_min_matches,
+                limit=normalized_limit,
+            )
+        finally:
+            connection.close()
+        if report is None:
+            await ctx.reply("조회 가능한 등록 유저의 낙하 데이터를 찾지 못했습니다.", mention_author=False)
+            return
+        await reply_report(
+            ctx,
+            format_player_drop_zones(report, detail_base_url=config.app.local_web_base_url),
+        )
+
+    @bot.hybrid_command(name="비교", aliases=["pubg-compare"])
+    @app_commands.rename(
+        comparison_type="비교_유형",
+        names="대상_닉네임",
+        metric="대표_지표",
+        shard="플랫폼",
+        team_mode="팀_모드",
+        perspective="시점",
+        map_name="맵",
+        game_mode="게임_모드",
+        match_type="매치_유형",
+        from_date="시작일_kst",
+        to_date="종료일_kst",
+        limit="표시_항목",
+    )
+    @app_commands.describe(
+        comparison_type="유저끼리 또는 한 유저의 맵·무기·모드별 성과를 비교합니다.",
+        names=(
+            "비우면 현재 서버 등록 유저 선택 화면이 열립니다. 유저 비교를 직접 입력할 때는 "
+            "닉네임 2~4개를 쉼표로 구분합니다."
+        ),
+        metric="비교 순위를 정할 대표 지표입니다. 모든 행에는 주요 보조 지표도 함께 표시됩니다.",
+        shard="PUBG 계정 플랫폼을 선택합니다.",
+        team_mode="솔로·듀오·스쿼드 중 하나만 비교합니다. 비우면 전체입니다.",
+        perspective="1인칭 또는 3인칭 경기만 비교합니다. 비우면 전체입니다.",
+        map_name="특정 맵 데이터로 제한합니다. 맵별 비교에서는 비워 두는 것이 좋습니다.",
+        game_mode="특정 게임 모드 데이터로 제한합니다. 게임 모드별 비교에서는 비워 둡니다.",
+        match_type="일반·경쟁전·아케이드 등 매치 유형으로 제한합니다.",
+        from_date="이 날짜부터 비교합니다. 형식: YYYY-MM-DD (KST)",
+        to_date="이 날짜까지 비교합니다. 형식: YYYY-MM-DD (KST)",
+        limit="맵·무기·모드 비교에서 표시할 최대 항목 수입니다. 1~50",
+    )
+    @app_commands.choices(
+        comparison_type=comparison_type_choices,
+        metric=comparison_metric_choices,
+        shard=shard_choices,
+        team_mode=team_mode_choices,
+        perspective=perspective_choices,
+        match_type=match_type_choices,
+    )
+    async def player_comparison_command(
+        ctx: Any,
+        comparison_type: str = "player",
+        names: str | None = None,
+        metric: str = "kda",
+        shard: str = "steam",
+        team_mode: str | None = None,
+        perspective: str | None = None,
+        map_name: str | None = None,
+        game_mode: str | None = None,
+        match_type: str | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+        limit: int = 20,
+    ) -> None:
+        if not await require_permission(ctx, "profile_read"):
+            return
+        try:
+            normalized_type = str(comparison_type or "player").strip().lower()
+            if normalized_type not in {choice.value for choice in comparison_type_choices}:
+                raise ValueError("지원하지 않는 비교 유형입니다.")
+            normalized_metric = str(metric or "kda").strip().lower()
+            if normalized_metric not in DISCORD_COMPARISON_METRICS:
+                raise ValueError("지원하지 않는 비교 지표입니다.")
+            normalized_shard = _normalize_discord_shard(shard)
+            normalized_limit = int(limit)
+            if not 1 <= normalized_limit <= 50:
+                raise ValueError("표시 항목은 1~50 사이여야 합니다.")
+            filters = PlayerTrendFilters(
+                team_mode=team_mode,
+                perspective=perspective,
+                map_name=map_name,
+                game_mode=game_mode,
+                match_type=match_type,
+                from_date_kst=parse_trend_date(from_date, "시작일"),
+                to_date_kst=parse_trend_date(to_date, "종료일"),
+            ).normalized()
+        except ValueError as exc:
+            await reply_report(ctx, f"비교 조건 오류\n- 확인할 내용: {exc}", colour=0xE2A84A)
+            return
+
+        guild_id = await require_scoped_guild(ctx)
+        if guild_id is None and not has_global_scope(ctx):
+            return
+        global_scope = has_global_scope(ctx)
+        if not names:
+            if normalized_type == "player":
+                async def run_players(selected_ctx: Any, players: list[RegisteredPlayer]) -> None:
+                    await player_comparison_command.callback(
+                        selected_ctx,
+                        normalized_type,
+                        ",".join(player.account_id for player in players),
+                        normalized_metric,
+                        normalized_shard,
+                        team_mode,
+                        perspective,
+                        map_name,
+                        game_mode,
+                        match_type,
+                        from_date,
+                        to_date,
+                        normalized_limit,
+                    )
+
+                await open_player_comparison_picker(
+                    ctx,
+                    command=player_comparison_command,
+                    shard=normalized_shard,
+                    runner=run_players,
+                )
+                return
+
+            async def run_selected(selected_ctx: Any, player: RegisteredPlayer) -> None:
+                await player_comparison_command.callback(
+                    selected_ctx,
+                    normalized_type,
+                    player.account_id,
+                    normalized_metric,
+                    player.shard,
+                    team_mode,
+                    perspective,
+                    map_name,
+                    game_mode,
+                    match_type,
+                    from_date,
+                    to_date,
+                    normalized_limit,
+                )
+
+            await open_registered_player_picker(
+                ctx,
+                command=player_comparison_command,
+                command_label="상세 비교",
+                action_label="비교 실행",
+                shard=normalized_shard,
+                runner=run_selected,
+            )
+            return
+
+        targets = [item.strip() for item in names.split(",") if item.strip()]
+        if normalized_type == "player" and not 2 <= len(targets) <= 4:
+            await reply_report(
+                ctx,
+                "유저 비교 조건 오류\n- 등록 유저 2~4명을 선택하거나 닉네임을 쉼표로 구분해 입력하세요.",
+                colour=0xE2A84A,
+            )
+            return
+        if normalized_type != "player" and len(targets) != 1:
+            await reply_report(
+                ctx,
+                "상세 비교 조건 오류\n- 맵·무기·모드별 비교는 등록 유저 한 명을 선택하세요.",
+                colour=0xE2A84A,
+            )
+            return
+
+        await defer_public_response(ctx)
+        connection = connect_mysql(config.database)
+        try:
+            service = PlayerTrendService(connection)
+            if normalized_type == "player":
+                reports = [
+                    service.get_report(
+                        shard=normalized_shard,
+                        account_id=target if target.startswith("account.") else None,
+                        name=None if target.startswith("account.") else target,
+                        guild_id=None if global_scope else guild_id,
+                        global_scope=global_scope,
+                        granularity="month",
+                        filters=filters,
+                        bucket_limit=1,
+                    )
+                    for target in targets
+                ]
+                rows = [
+                    (report.player.current_name, report.totals)
+                    for report in reports
+                    if report is not None
+                ]
+                title = "등록 유저 성과 비교"
+            else:
+                report = service.get_report(
+                    shard=normalized_shard,
+                    account_id=targets[0] if targets[0].startswith("account.") else None,
+                    name=None if targets[0].startswith("account.") else targets[0],
+                    guild_id=None if global_scope else guild_id,
+                    global_scope=global_scope,
+                    granularity=normalized_type,
+                    filters=filters,
+                    bucket_limit=normalized_limit,
+                )
+                rows = [
+                    (bucket.period_label, bucket.metrics)
+                    for bucket in (report.buckets if report is not None else [])
+                ]
+                type_label = next(
+                    choice.name for choice in comparison_type_choices if choice.value == normalized_type
+                )
+                title = f"{report.player.current_name if report else targets[0]} · {type_label} 성과 비교"
+        finally:
+            connection.close()
+
+        if not rows:
+            await ctx.reply("조건에 맞는 비교 데이터를 찾지 못했습니다.", mention_author=False)
+            return
+        await reply_report(
+            ctx,
+            format_player_comparison(
+                rows,
+                title=title,
+                metric=normalized_metric,
+                filters=filters,
                 detail_base_url=config.app.local_web_base_url,
             ),
         )
@@ -3247,6 +5026,7 @@ def create_discord_bot(
             )
             return
 
+        await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
             if not selected_match_id and selected_name:
@@ -3303,6 +5083,58 @@ def create_discord_bot(
         await reply_report(
             ctx,
             format_player_match_detail(detail, detail_base_url=config.app.local_web_base_url),
+        )
+
+    @bot.hybrid_command(name="매치상세", aliases=["pubg-match-detail"])
+    @app_commands.rename(search="검색어", shard="플랫폼", telemetry_only="원본_저장_완료만")
+    @app_commands.describe(
+        search="선택 화면의 초기 검색어입니다. 날짜·맵·모드·참가자 닉네임 일부를 입력할 수 있습니다.",
+        shard="저장 경기를 조회할 PUBG 플랫폼입니다.",
+        telemetry_only="켜면 원본 텔레메트리가 저장되어 모든 이벤트를 확인할 수 있는 경기만 표시합니다.",
+    )
+    @app_commands.choices(shard=shard_choices)
+    async def match_explorer_command(
+        ctx: Any,
+        search: str | None = None,
+        shard: str = "steam",
+        telemetry_only: bool = True,
+    ) -> None:
+        if not await require_permission(ctx, "profile_read"):
+            return
+        guild_id = await require_scoped_guild(ctx)
+        if guild_id is None and not has_global_scope(ctx):
+            return
+        normalized_shard = _normalize_discord_shard(shard)
+
+        async def run_selected(selected_ctx: Any, records: list[dict[str, Any]]) -> None:
+            selected = records[0]
+            await defer_public_response(selected_ctx)
+            connection = connect_mysql(config.database)
+            try:
+                detail = MatchExplorerService(
+                    connection,
+                    RawPayloadStore(
+                        config.app.raw_data_dir,
+                        compression=config.app.raw_compression,  # type: ignore[arg-type]
+                    ),
+                ).get_match_detail(str(selected["match_id"]))
+            finally:
+                connection.close()
+            if detail is None:
+                await selected_ctx.reply("선택한 저장 매치를 찾지 못했습니다.", mention_author=False)
+                return
+            await reply_report(
+                selected_ctx,
+                format_match_explorer_detail(detail, detail_base_url=config.app.local_web_base_url),
+            )
+
+        await open_stored_match_picker(
+            ctx,
+            command=match_explorer_command,
+            shard=normalized_shard,
+            search=search,
+            telemetry_only=bool(telemetry_only),
+            runner=run_selected,
         )
 
     @bot.hybrid_command(name="랭킹", aliases=["pubg-ranking"])
@@ -3366,6 +5198,7 @@ def create_discord_bot(
         else:
             ranking_guild_ids = [guild_id] if guild_id else []
 
+        await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
             ranking = PlayerRankingService(connection).get_player_ranking(
@@ -3403,6 +5236,7 @@ def create_discord_bot(
             await ctx.reply("PUBG_API_KEY가 설정되어 있지 않습니다.", mention_author=False)
             return
 
+        await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
             try:
@@ -3476,6 +5310,7 @@ def create_discord_bot(
             )
             return
 
+        await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
             registry = PlayerRegistry(connection)
@@ -3573,6 +5408,7 @@ def create_discord_bot(
             )
             return
 
+        await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
             catalog = PlayerStatsService(connection).get_lookup_catalog(
@@ -3955,6 +5791,7 @@ def create_discord_bot(
             )
             return
 
+        await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
             registry = PlayerRegistry(connection)
@@ -4034,6 +5871,7 @@ def create_discord_bot(
         if guild_id is None and not has_global_scope(ctx):
             return
 
+        await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
             service = DataDeletionRequestService(connection)
@@ -4593,6 +6431,7 @@ def create_discord_bot(
             )
             return
 
+        await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
             report = collect_system_alerts(
@@ -4634,6 +6473,7 @@ def create_discord_bot(
             )
             return
 
+        await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
             try:
@@ -4686,6 +6526,7 @@ def create_discord_bot(
             )
             return
 
+        await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
             try:
@@ -4738,6 +6579,7 @@ def create_discord_bot(
             )
             return
 
+        await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
             try:
@@ -4792,6 +6634,7 @@ def create_discord_bot(
             )
             return
 
+        await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
             try:
@@ -4846,6 +6689,7 @@ def create_discord_bot(
             )
             return
 
+        await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
             try:
@@ -4899,6 +6743,7 @@ def create_discord_bot(
             )
             return
 
+        await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
             try:
@@ -4973,6 +6818,7 @@ def create_discord_bot(
         )
         created_to_kst = str(parsed["created_to_kst"]) if parsed["created_to_kst"] is not None else None
 
+        await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
             try:
@@ -5030,6 +6876,7 @@ def create_discord_bot(
             )
             return
 
+        await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
             try:
@@ -5227,8 +7074,16 @@ def create_discord_bot(
         ]
 
     player_weapon_command.autocomplete("weapon")(weapon_autocomplete)
-    player_trends_command.autocomplete("map_name")(map_autocomplete)
-    player_trends_command.autocomplete("game_mode")(game_mode_autocomplete)
+    for filtered_command in (
+        player_intelligence_command,
+        player_trends_command,
+        player_time_command,
+        player_weapon_command,
+        player_recommendations_command,
+        player_comparison_command,
+    ):
+        filtered_command.autocomplete("map_name")(map_autocomplete)
+        filtered_command.autocomplete("game_mode")(game_mode_autocomplete)
     player_match_command.autocomplete("match_id")(recent_match_autocomplete)
     latest_snapshot_command.autocomplete("match_id")(recent_match_autocomplete)
     ranking_command.autocomplete("metric")(ranking_metric_autocomplete)
@@ -5706,7 +7561,7 @@ def _percent(value: float) -> str:
 
 
 def _number(value: float, digits: int) -> str:
-    return f"{value:.{digits}f}"
+    return f"{value:,.{digits}f}"
 
 
 def _minutes(seconds: float) -> str:
@@ -5730,7 +7585,7 @@ def _optional_distance_m(meters: float | None) -> str:
 
 
 def _optional_number(value: int | None) -> str:
-    return str(value) if value is not None else "-"
+    return f"{value:,}" if value is not None else "-"
 
 
 def _ranking_score(metric: str, score: float) -> str:

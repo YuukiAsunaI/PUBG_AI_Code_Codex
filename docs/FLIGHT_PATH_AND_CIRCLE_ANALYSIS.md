@@ -1,6 +1,6 @@
 # Flight Path and Circle Analysis
 
-Last verified: 2026-09-02 KST
+Last verified: 2026-09-03 KST
 
 ## Purpose
 
@@ -114,3 +114,14 @@ On 2026-09-02 KST:
 
 The browser QA is implemented in `scripts/verify_local_ui.js`, and service-level coverage is in
 `tests/test_circle_stats.py`, `tests/test_flight_path_stats.py`, and `tests/test_web_flight_path_stats.py`.
+
+The 2026-09-03 browser regression no longer names one Sanhok fixture. It obtains every map that has stored phase-7
+circle data and validates each map in turn. The current MySQL corpus covered Deston, Rondo, Miramar, Vikendi, Sanhok,
+remastered Erangel, Karakin, Taego, and Paramo. Every map loaded its image, rendered the same number of ranked rows and
+markers, produced a non-empty Korean location context, and focused the selected small circle into a 150 x 150 viewport.
+
+The same regression was rerun against packaged release `2026.09.03.1`, not only the source server. All nine maps
+passed again, while the combined view retained one selected flight route and eight phase-filtered circle rows. The
+desktop and 390px mobile passes had no console errors, request failures, HTTP errors, or horizontal overflow. The
+52,142,035-byte executable has SHA-256
+`AEB8847FF452F1FEABDC15739A4F6DCC00243DB44A681CEA4EBA5440D1AD7A45`.

@@ -8,16 +8,32 @@ from typing import Any
 import requests
 
 from pubg_ai.config import RuntimeConfig
+from pubg_ai.discord_command_catalog import DISCORD_COMMAND_SPECS
 
 
-FOCUS_COMMANDS = ("추세", "추천", "매치", "랭킹", "최근스냅샷")
+FOCUS_COMMANDS = (
+    "종합분석",
+    "추세",
+    "시간대",
+    "무기",
+    "추천",
+    "비교",
+    "낙하",
+    "매치",
+    "매치상세",
+    "랭킹",
+    "최근스냅샷",
+)
 PLAYER_PICKER_COMMANDS = (
     "유저조회",
     "전적",
+    "종합분석",
     "교전",
     "추세",
+    "시간대",
     "무기",
     "추천",
+    "낙하",
     "매치",
     "유저삭제",
     "최근스냅샷",
@@ -59,7 +75,14 @@ def main() -> int:
 
     headers = {"Authorization": f"Bot {token}"}
     catalogs: dict[str, list[dict[str, Any]]] = {}
+    expected_by_guild: dict[str, set[str]] = {}
     for guild_id in guild_ids:
+        local_exposure = _get_json(
+            f"{args.base_url.rstrip('/')}/discord/bot/guild-commands/{guild_id}"
+        )
+        expected_by_guild[guild_id] = {
+            str(value) for value in local_exposure.get("expected_commands", [])
+        }
         catalogs[guild_id] = _get_json(
             (
                 "https://discord.com/api/v10/applications/"
@@ -68,7 +91,8 @@ def main() -> int:
             headers=headers,
         )
 
-    sample = {str(item["name"]): item for item in catalogs[guild_ids[0]]}
+    sample_guild_id = max(guild_ids, key=lambda value: len(catalogs[value]))
+    sample = {str(item["name"]): item for item in catalogs[sample_guild_id]}
     missing_focus_commands = [name for name in FOCUS_COMMANDS if name not in sample]
     if missing_focus_commands:
         raise RuntimeError(
@@ -99,7 +123,12 @@ def main() -> int:
         for command_name in PLAYER_PICKER_COMMANDS
     }
     checks = {
-        "all_26_commands_present": all(len(value) == 26 for value in catalogs.values()),
+        "catalog_count_matches_source": len(sample) == len(DISCORD_COMMAND_SPECS),
+        "all_configured_commands_present": all(
+            {str(item.get("name")) for item in catalogs[guild_id]}
+            == expected_by_guild[guild_id]
+            for guild_id in guild_ids
+        ),
         "no_blank_or_placeholder_option_descriptions": all(
             _valid_description(option.get("description")) for option in all_options
         ),
@@ -124,6 +153,34 @@ def main() -> int:
             option.get("name") == "최소_표본_경기"
             for option in sample["추천"].get("options", [])
         ),
+        "weapon_attachment_samples_are_configurable": {
+            "개별_파츠_최소_경기",
+            "파츠_조합_최소_경기",
+            "파츠_표시_수",
+        }.issubset(
+            {
+                str(option.get("name"))
+                for option in sample["무기"].get("options", [])
+            }
+        ),
+        "comparison_map_and_mode_filters_are_searchable": all(
+            any(
+                option.get("name") == option_name
+                and option.get("autocomplete", False)
+                for option in sample["비교"].get("options", [])
+            )
+            for option_name in ("맵", "게임_모드")
+        ),
+        "full_match_uses_search_picker_without_match_id": (
+            any(
+                option.get("name") == "검색어" and not option.get("required", False)
+                for option in sample["매치상세"].get("options", [])
+            )
+            and all(
+                option.get("name") not in {"매치_ID", "match_id"}
+                for option in sample["매치상세"].get("options", [])
+            )
+        ),
         "registered_players_use_paged_search_picker": all(
             option
             and not option.get("required", False)
@@ -136,6 +193,9 @@ def main() -> int:
         "application_id": application_id,
         "guild_command_counts": {
             guild_id: len(commands) for guild_id, commands in catalogs.items()
+        },
+        "guild_expected_counts": {
+            guild_id: len(commands) for guild_id, commands in expected_by_guild.items()
         },
         "selected_commands": {
             name: _command_summary(sample[name]) for name in FOCUS_COMMANDS
