@@ -85,6 +85,41 @@ class FlightPathStatsTests(unittest.TestCase):
         self.assertEqual(report.available_cluster_count, 2)
         self.assertEqual([item.route_count for item in report.clusters], [1, 1])
 
+    def test_frequency_defaults_to_one_and_can_filter_without_a_top_limit(self) -> None:
+        rows = [
+            self._row(
+                "match-1",
+                start_x=100000.0,
+                start_y=200000.0,
+                end_x=700000.0,
+                end_y=200000.0,
+            ),
+            self._row(
+                "match-2",
+                start_x=100000.0,
+                start_y=200000.0,
+                end_x=700000.0,
+                end_y=200000.0,
+            ),
+            self._row(
+                "match-3",
+                start_x=100000.0,
+                start_y=400000.0,
+                end_x=700000.0,
+                end_y=400000.0,
+            ),
+        ]
+
+        unfiltered = summarize_flight_paths(rows)
+        filtered = summarize_flight_paths(rows, min_route_count=2, top_per_map=0)
+
+        self.assertEqual(unfiltered.minimum_route_count, 1)
+        self.assertIsNone(unfiltered.max_clusters_per_map)
+        self.assertEqual(sorted(item.route_count for item in unfiltered.clusters), [1, 2])
+        self.assertEqual(filtered.minimum_route_count, 2)
+        self.assertIsNone(filtered.max_clusters_per_map)
+        self.assertEqual([item.route_count for item in filtered.clusters], [2])
+
     def test_near_horizontal_routes_share_cluster_across_angle_wrap(self) -> None:
         rows = [
             self._row(

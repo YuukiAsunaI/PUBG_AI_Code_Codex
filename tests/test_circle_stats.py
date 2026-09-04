@@ -49,6 +49,27 @@ class CircleStatsTests(unittest.TestCase):
         self.assertEqual(report.route_match_count, 1)
         self.assertAlmostEqual(report.clusters[0].center_x_pct, 500000 / 816000)
 
+    def test_frequency_defaults_to_one_and_can_filter_without_a_top_limit(self) -> None:
+        rows = [
+            self._row("match-1", phase=1, x=300000, y=300000, radius=192000),
+            self._row("match-2", phase=1, x=301000, y=299500, radius=191500),
+            self._row("match-3", phase=1, x=500000, y=500000, radius=192000),
+        ]
+
+        unfiltered = summarize_circle_patterns(rows)
+        filtered = summarize_circle_patterns(
+            rows,
+            min_circle_count=2,
+            top_per_phase=0,
+        )
+
+        self.assertEqual(unfiltered.minimum_circle_count, 1)
+        self.assertIsNone(unfiltered.max_clusters_per_phase)
+        self.assertEqual(sorted(item.circle_count for item in unfiltered.clusters), [1, 2])
+        self.assertEqual(filtered.minimum_circle_count, 2)
+        self.assertIsNone(filtered.max_clusters_per_phase)
+        self.assertEqual([item.circle_count for item in filtered.clusters], [2])
+
     def test_service_uses_first_integer_phase_sample_and_kst_filters(self) -> None:
         connection = _Connection([])
         report = CircleStatsService(connection).get_report(

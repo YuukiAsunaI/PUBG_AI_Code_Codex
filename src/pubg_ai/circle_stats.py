@@ -92,6 +92,8 @@ class CircleReport:
     route_match_count: int | None
     center_bin_m: float
     radius_bin_m: float
+    minimum_circle_count: int
+    max_clusters_per_phase: int | None
     total_circle_count: int
     analyzed_circle_count: int
     analyzed_match_count: int
@@ -119,6 +121,8 @@ class CircleReport:
             "route_match_count": self.route_match_count,
             "center_bin_m": self.center_bin_m,
             "radius_bin_m": self.radius_bin_m,
+            "minimum_circle_count": self.minimum_circle_count,
+            "max_clusters_per_phase": self.max_clusters_per_phase,
             "total_circle_count": self.total_circle_count,
             "analyzed_circle_count": self.analyzed_circle_count,
             "analyzed_match_count": self.analyzed_match_count,
@@ -150,7 +154,8 @@ class CircleStatsService:
         offset_bin_m: float = 500.0,
         center_bin_m: float = 500.0,
         radius_bin_m: float = 250.0,
-        top_per_phase: int = 8,
+        min_circle_count: int = 1,
+        top_per_phase: int = 0,
         circle_limit: int = 100000,
         route_limit: int = 50000,
     ) -> CircleReport:
@@ -166,7 +171,10 @@ class CircleStatsService:
         normalized_radius_bin = _bounded_float(
             radius_bin_m, "radius_bin_m", 10.0, 2000.0
         )
-        normalized_top = _bounded_int(top_per_phase, "top_per_phase", 1, 25)
+        normalized_minimum = _bounded_int(
+            min_circle_count, "min_circle_count", 1, 200000
+        )
+        normalized_top = _bounded_int(top_per_phase, "top_per_phase", 0, 10000)
         normalized_circle_limit = _bounded_int(
             circle_limit, "circle_limit", 100, 200000
         )
@@ -204,6 +212,7 @@ class CircleStatsService:
             route_match_ids=route_match_ids,
             center_bin_m=normalized_center_bin,
             radius_bin_m=normalized_radius_bin,
+            min_circle_count=normalized_minimum,
             top_per_phase=normalized_top,
         )
 
@@ -344,7 +353,8 @@ def summarize_circle_patterns(
     route_match_ids: set[str] | None = None,
     center_bin_m: float = 500.0,
     radius_bin_m: float = 250.0,
-    top_per_phase: int = 8,
+    min_circle_count: int = 1,
+    top_per_phase: int = 0,
 ) -> CircleReport:
     normalized_filters = (filters or PlayerTrendFilters()).normalized()
     prepared: list[CircleSample] = []
@@ -408,11 +418,15 @@ def summarize_circle_patterns(
             (
                 cluster
                 for cluster in all_clusters
-                if cluster.map_name == map_name and cluster.phase_number == phase
+                if cluster.map_name == map_name
+                and cluster.phase_number == phase
+                and cluster.circle_count >= min_circle_count
             ),
             key=lambda item: (-item.circle_count, item.cluster_id),
         )
-        selected_clusters.extend(candidates[:top_per_phase])
+        selected_clusters.extend(
+            candidates if top_per_phase == 0 else candidates[:top_per_phase]
+        )
 
     map_names = sorted(
         {circle.map_name for circle in prepared},
@@ -457,6 +471,8 @@ def summarize_circle_patterns(
         route_match_count=(len(route_match_ids) if route_match_ids is not None else None),
         center_bin_m=center_bin_m,
         radius_bin_m=radius_bin_m,
+        minimum_circle_count=min_circle_count,
+        max_clusters_per_phase=(top_per_phase or None),
         total_circle_count=total,
         analyzed_circle_count=len(prepared),
         analyzed_match_count=len({item.match_id for item in prepared}),

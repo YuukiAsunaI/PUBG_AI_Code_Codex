@@ -45,6 +45,8 @@ class WebFlightPathStatsTests(unittest.TestCase):
                     "map_name": "Tiger_Main",
                     "angle_bin_degrees": 10,
                     "offset_bin_m": 500,
+                    "min_route_count": 2,
+                    "top_per_map": 0,
                 },
             )
 
@@ -52,6 +54,8 @@ class WebFlightPathStatsTests(unittest.TestCase):
         report = response.json()["flight_paths"]
         self.assertEqual(report["analyzed_route_count"], 2)
         self.assertEqual(report["available_cluster_count"], 1)
+        self.assertEqual(report["minimum_route_count"], 2)
+        self.assertIsNone(report["max_clusters_per_map"])
         self.assertEqual(report["clusters"][0]["route_count"], 2)
         self.assertEqual(report["clusters"][0]["forward_count"], 1)
         self.assertEqual(report["clusters"][0]["reverse_count"], 1)
@@ -75,6 +79,12 @@ class WebFlightPathStatsTests(unittest.TestCase):
         self.assertIn('id="circleMapPhaseSelect"', body)
         self.assertIn('id="flightPathShowAllRoutes"', body)
         self.assertIn('id="flightMapResetViewport"', body)
+        self.assertIn('id="flightCircleShowOverview"', body)
+        self.assertIn("function showFlightMapOverview()", body)
+        self.assertIn('name="min_route_count" type="number" min="1"', body)
+        self.assertIn('name="min_circle_count" type="number" min="1"', body)
+        self.assertIn('name="top_per_map" type="number" min="0"', body)
+        self.assertIn('name="top_per_phase" type="number" min="0"', body)
         self.assertIn('class="circle-location-label"', body)
         self.assertIn("다른 항로 겹쳐보기", body)
         self.assertIn("전체 단계 겹쳐보기", body)
@@ -100,7 +110,12 @@ class WebFlightPathStatsTests(unittest.TestCase):
         with patch("pubg_ai.web.app.connect_mysql", return_value=connection):
             response = TestClient(create_app()).get(
                 "/analytics/circles",
-                params={"shard": "steam", "map_name": "Baltic_Main"},
+                params={
+                    "shard": "steam",
+                    "map_name": "Baltic_Main",
+                    "min_circle_count": 1,
+                    "top_per_phase": 0,
+                },
             )
 
         self.assertEqual(response.status_code, 200)
@@ -108,6 +123,8 @@ class WebFlightPathStatsTests(unittest.TestCase):
         self.assertEqual(report["analyzed_circle_count"], 1)
         self.assertEqual(report["clusters"][0]["phase_number"], 1)
         self.assertEqual(report["clusters"][0]["circle_count"], 1)
+        self.assertEqual(report["minimum_circle_count"], 1)
+        self.assertIsNone(report["max_clusters_per_phase"])
         self.assertTrue(connection.closed)
 
 

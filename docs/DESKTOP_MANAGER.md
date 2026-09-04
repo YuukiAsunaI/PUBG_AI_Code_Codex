@@ -181,13 +181,14 @@ entrypoint searches upward from the executable and current directory for the pro
 Set `PUBG_AI_BASE_DIR` when the executable is stored elsewhere. Secrets and local settings are not embedded into the
 executable.
 
-The verified `2026.09.04.1` artifact is 52,173,424 bytes with SHA-256
-`7A7FD710BB05B5377E25DBAA5B36145C84075A9B1FDD9FF21901F46528D4B785`. Its localhost-only health endpoint returned
+The verified `2026.09.05.1` artifact is 52,174,596 bytes with SHA-256
+`2CD4A29479A759FE4FA6388E8F766149AFCC26B8160D556D809FAFAAF35E20C5`. Its localhost-only health endpoint returned
 the same release, and the app-managed Discord bot reached ready state in all four configured guilds. The packaged
-Playwright audit reached all 33 workspaces and exercised point/radius, dragged-rectangle, and free-polygon map-region
-editing, official-label overlays, zoom, and pan. All 12 maps exposed by the editor loaded their bundled map assets.
-The all-target 99-player replay retained 10,088 events, virtualized
-240 visible event rows, and refreshed in 181 ms. The data-quality audit passed all 30 checks. Desktop and 390px mobile
-layouts had no blank view, overlay, overflow, console error, failed request, or HTTP error. A native close request
-removed the window and port-8000 listener without an error dialog, both one-file package processes completed cleanup,
-and a clean restart returned the same release after 22.63 seconds.
+Playwright audit reached all 33 workspaces. Aircraft routes and safe-zone circles both defaulted to a minimum
+frequency of one and an unlimited display cap. Every map with stored phase-7 data preserved its ranked rows while a
+focused circle was returned to the full map with `전체 보기`; selection and dimmed context state were cleared without
+rerunning the query. The same pass exercised all 12 map-editor assets and the all-participant replay event window.
+The data-quality audit passed all 30 checks. Desktop and 390px mobile layouts had no blank view, overlay, overflow,
+console error, failed request, or HTTP error. A native close request removed the window and port-8000 listener without
+an error dialog, both one-file package processes completed cleanup, and a clean restart returned the same release in
+4.37 seconds.

@@ -2882,7 +2882,8 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
         to_date_kst: str | None = None,
         angle_bin_degrees: float = Query(default=10.0, ge=1.0, le=45.0),
         offset_bin_m: float = Query(default=500.0, ge=50.0, le=4000.0),
-        top_per_map: int = Query(default=20, ge=1, le=50),
+        min_route_count: int = Query(default=1, ge=1, le=100000),
+        top_per_map: int = Query(default=0, ge=0, le=10000),
         recent_limit: int = Query(default=50, ge=1, le=200),
         route_limit: int = Query(default=50000, ge=100, le=100000),
     ) -> dict[str, Any]:
@@ -2911,6 +2912,7 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
                     filters=filters,
                     angle_bin_degrees=angle_bin_degrees,
                     offset_bin_m=offset_bin_m,
+                    min_route_count=min_route_count,
                     top_per_map=top_per_map,
                     recent_limit=recent_limit,
                     route_limit=route_limit,
@@ -2945,7 +2947,8 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
         offset_bin_m: float = Query(default=500.0, ge=50.0, le=4000.0),
         center_bin_m: float = Query(default=500.0, ge=100.0, le=4000.0),
         radius_bin_m: float = Query(default=250.0, ge=10.0, le=2000.0),
-        top_per_phase: int = Query(default=8, ge=1, le=25),
+        min_circle_count: int = Query(default=1, ge=1, le=200000),
+        top_per_phase: int = Query(default=0, ge=0, le=10000),
         circle_limit: int = Query(default=100000, ge=100, le=200000),
         route_limit: int = Query(default=50000, ge=100, le=100000),
     ) -> dict[str, Any]:
@@ -2978,6 +2981,7 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
                     offset_bin_m=offset_bin_m,
                     center_bin_m=center_bin_m,
                     radius_bin_m=radius_bin_m,
+                    min_circle_count=min_circle_count,
                     top_per_phase=top_per_phase,
                     circle_limit=circle_limit,
                     route_limit=route_limit,
@@ -5299,6 +5303,21 @@ _INDEX_HTML = """<!doctype html>
     [data-circle-line].active .circle-zone-label { fill: #080b0d !important; stroke: #ffffff; }
     .flight-analysis-side { min-width: 0; }
     .flight-analysis-side > h3 { margin-top: 0; }
+    .flight-analysis-heading {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .flight-analysis-heading h3 { margin: 0; }
+    .flight-circle-overview-button {
+      min-height: 30px;
+      padding: 5px 9px;
+      white-space: nowrap;
+      font-size: 10px;
+    }
     .flight-analysis-scope {
       margin: 0 0 6px;
       border-left: 2px solid var(--accent);
@@ -8941,12 +8960,14 @@ _INDEX_HTML = """<!doctype html>
             <label>항로 간격 묶음
               <select name="offset_bin_m"><option value="250">250m</option><option value="500" selected>500m</option><option value="1000">1km</option><option value="2000">2km</option></select>
             </label>
-            <label>맵별 상위 항로<input name="top_per_map" type="number" min="1" max="50" value="20" inputmode="numeric"></label>
+            <label>비행기 동선 최소 빈도<input name="min_route_count" type="number" min="1" max="100000" value="1" inputmode="numeric"></label>
+            <label>맵별 표시 상한 (0=전체)<input name="top_per_map" type="number" min="0" max="10000" value="0" inputmode="numeric"></label>
             <label>최근 원본 항로<input name="recent_limit" type="number" min="1" max="200" value="50" inputmode="numeric"></label>
             <label>분석 최대 항로<input name="route_limit" type="number" min="100" max="100000" value="50000" inputmode="numeric"></label>
             <label>서클 중심 묶음<select name="center_bin_m"><option value="250">250m</option><option value="500" selected>500m</option><option value="1000">1km</option><option value="2000">2km</option></select></label>
             <label>서클 반경 묶음<select name="radius_bin_m"><option value="100">100m</option><option value="250" selected>250m</option><option value="500">500m</option><option value="1000">1km</option></select></label>
-            <label>단계별 상위 서클<input name="top_per_phase" type="number" min="1" max="25" value="8" inputmode="numeric"></label>
+            <label>자기장 최소 빈도<input name="min_circle_count" type="number" min="1" max="200000" value="1" inputmode="numeric"></label>
+            <label>단계별 표시 상한 (0=전체)<input name="top_per_phase" type="number" min="0" max="10000" value="0" inputmode="numeric"></label>
             <label>분석 최대 서클<input name="circle_limit" type="number" min="100" max="200000" value="100000" inputmode="numeric"></label>
           </div>
         </details>
@@ -18203,12 +18224,36 @@ _INDEX_HTML = """<!doctype html>
         item.setAttribute("font-size", String(17 * scale));
         item.setAttribute("stroke-width", String(3.5 * scale));
       });
-      const reset = flightPathResult.querySelector("#flightMapResetViewport");
-      if (reset) reset.disabled = nextSize >= 999.5;
+      syncFlightMapOverviewControls();
+    }
+
+    function syncFlightMapOverviewControls() {
+      const isOverview = activeFlightMapViewport.size >= 999.5 && !activeCircleClusterId;
+      ["#flightMapResetViewport", "#flightCircleShowOverview"].forEach((selector) => {
+        const button = flightPathResult.querySelector(selector);
+        if (button) button.disabled = isOverview;
+      });
     }
 
     function resetFlightMapViewport() {
       applyFlightMapViewport(0, 0, 1000);
+    }
+
+    function showFlightMapOverview() {
+      const hadCircleSelection = Boolean(activeCircleClusterId);
+      activeCircleClusterId = "";
+      flightPathResult.querySelectorAll("[data-circle-line]").forEach((item) => {
+        item.classList.remove("active", "context-circle");
+      });
+      flightPathResult.querySelectorAll("[data-circle-row]").forEach((item) => item.classList.remove("active"));
+      resetFlightMapViewport();
+      updateFlightMapContext(null);
+      if (hadCircleSelection && activeFlightAnalysisView !== "flight") {
+        const detail = flightPathResult.querySelector("#flightPathDetail");
+        const scope = activeCircleReport?.flight_cluster_id ? "선택 항로의" : "현재 조건의";
+        if (detail) detail.textContent = `${scope} 자기장 빈도를 전체 지도에 표시 중입니다. 순위를 누르면 해당 위치를 다시 확대합니다.`;
+      }
+      syncFlightMapOverviewControls();
     }
 
     function zoomFlightMap(multiplier) {
@@ -18267,6 +18312,7 @@ _INDEX_HTML = """<!doctype html>
       if (detail) detail.innerHTML = circleClusterDetail(cluster, activeCircleReport);
       updateFlightMapContext(cluster);
       if (focusMap && cluster) focusCircleOnMap(cluster);
+      else syncFlightMapOverviewControls();
       if (focusMap) {
         flightPathResult.querySelector('[data-circle-row="' + CSS.escape(clusterId) + '"]')?.scrollIntoView({ block: "nearest" });
       }
@@ -18446,7 +18492,7 @@ _INDEX_HTML = """<!doctype html>
         const routeText = circleReport?.flight_cluster_id
           ? `선택 항로 ${formatInteger(circleReport.route_match_count || 0)}경기`
           : `현재 조건 ${formatInteger(circleReport?.analyzed_match_count || 0)}경기`;
-        circleScope.textContent = `${routeText} · 지도 표시 ${phaseText} · 원과 번호를 누르면 주변 지역 확대`;
+        circleScope.textContent = `${routeText} · 최소 ${formatInteger(circleReport?.minimum_circle_count || 1)}회 · 지도 표시 ${phaseText} · 원과 번호를 누르면 주변 지역 확대`;
       }
       resetFlightMapViewport();
       updateFlightMapContext(null);
@@ -18504,7 +18550,9 @@ _INDEX_HTML = """<!doctype html>
           ["분석 서클", showCircles ? `${formatInteger(circleReport?.analyzed_circle_count || 0)}개` : "표시 안 함"],
           ["서클 경기", showCircles ? `${formatInteger(circleReport?.analyzed_match_count || 0)}경기` : "-"],
           ["맵", `${formatInteger(maps.length)}개`],
-          ["항로 / 서클 군집", `${formatInteger(report.available_cluster_count)} / ${formatInteger(circleReport?.available_cluster_count || 0)}`],
+          ["표시 항로 / 전체", `${formatInteger(report.clusters?.length || 0)} / ${formatInteger(report.available_cluster_count)}`],
+          ["표시 서클 / 전체", showCircles ? `${formatInteger(circleReport?.clusters?.length || 0)} / ${formatInteger(circleReport?.available_cluster_count || 0)}` : "-"],
+          ["최소 빈도 (항로 / 서클)", `${formatInteger(report.minimum_route_count || 1)}회 / ${showCircles ? `${formatInteger(circleReport?.minimum_circle_count || 1)}회` : "-"}`],
           ["서클 기준", showCircles ? `중심 ${formatNumber(circleReport?.center_bin_m || 0, 0)}m · 반경 ${formatNumber(circleReport?.radius_bin_m || 0, 0)}m` : "-"],
         ])}
         <div class="flight-path-layout">
@@ -18534,11 +18582,14 @@ _INDEX_HTML = """<!doctype html>
           </div>
           <div class="flight-analysis-side${activeFlightAnalysisView === "combined" ? " combined" : ""}">
             <div${showFlight ? "" : " hidden"}>
-              <h3>선택 맵 항로 순위</h3>
+              <h3>선택 맵 항로 순위 · ${formatInteger(report.minimum_route_count || 1)}회 이상</h3>
               <div class="flight-path-list flight-route-list" id="flightPathList"></div>
             </div>
             <div${showCircles ? "" : " hidden"} style="margin-top:${showFlight ? "16px" : "0"}">
-              <h3>${circleReport?.flight_cluster_id ? "선택 항로의 자기장 빈도" : "자기장 빈도"}</h3>
+              <div class="flight-analysis-heading">
+                <h3>${circleReport?.flight_cluster_id ? "선택 항로의 자기장 빈도" : "자기장 빈도"} · ${formatInteger(circleReport?.minimum_circle_count || 1)}회 이상</h3>
+                <button class="secondary flight-circle-overview-button" type="button" id="flightCircleShowOverview" title="선택을 해제하고 전체 자기장 보기" disabled>전체 보기</button>
+              </div>
               <div class="flight-analysis-scope" id="flightCircleScope">표시 범위를 준비하는 중입니다.</div>
               <div class="flight-path-list circle-result-list" id="circlePathList"></div>
             </div>
@@ -18576,7 +18627,8 @@ _INDEX_HTML = """<!doctype html>
       });
       flightPathResult.querySelector("#flightMapZoomIn")?.addEventListener("click", () => zoomFlightMap(0.72));
       flightPathResult.querySelector("#flightMapZoomOut")?.addEventListener("click", () => zoomFlightMap(1.38));
-      flightPathResult.querySelector("#flightMapResetViewport")?.addEventListener("click", resetFlightMapViewport);
+      flightPathResult.querySelector("#flightMapResetViewport")?.addEventListener("click", showFlightMapOverview);
+      flightPathResult.querySelector("#flightCircleShowOverview")?.addEventListener("click", showFlightMapOverview);
       renderFlightPathMap(report, circleReport, initialMap);
     }
 
@@ -18593,8 +18645,8 @@ _INDEX_HTML = """<!doctype html>
         "from_date_kst", "to_date_kst", "angle_bin_degrees", "offset_bin_m", "route_limit",
       ]);
       const targetKeys = target === "circle"
-        ? new Set(["phase_number", "center_bin_m", "radius_bin_m", "top_per_phase", "circle_limit"])
-        : new Set(["top_per_map", "recent_limit"]);
+        ? new Set(["phase_number", "center_bin_m", "radius_bin_m", "min_circle_count", "top_per_phase", "circle_limit"])
+        : new Set(["min_route_count", "top_per_map", "recent_limit"]);
       const params = new URLSearchParams();
       for (const [key, value] of form.entries()) {
         const text = String(value || "").trim();

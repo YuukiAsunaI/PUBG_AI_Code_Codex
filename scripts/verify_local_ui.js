@@ -247,10 +247,11 @@ async function runWholeMatchReplay(page) {
   const filteredEventTypes = await page.locator("#timelineEventList [data-timeline-event-item]").evaluateAll((items) => (
     [...new Set(items.flatMap((item) => (item.dataset.timelineEventType || "").split(/\s+/).filter(Boolean)))].sort()
   ));
+  const hasCombatEvent = multiTypeEventCount > 0
+    && filteredEventTypes.some((eventType) => ["dbno", "kill"].includes(eventType));
   await page.locator('[data-timeline-type-action="all"]').click();
   await page.waitForTimeout(200);
   const eventCount = await page.locator("#timelineEventList [data-timeline-event-item]").count();
-  const eventText = await page.locator("#timelineEventList").innerText();
   const canvas = await page.locator("#replayCanvas").evaluate((element) => {
     const context = element.getContext("2d");
     const pixels = context.getImageData(0, 0, element.width, element.height).data;
@@ -365,7 +366,7 @@ async function runWholeMatchReplay(page) {
     hasFocus: participantText.includes("기준 유저"),
     checkedLayers,
     eventCount,
-    hasCombatEvent: ["교전", "명중", "피격", "기절", "킬", "사망"].some((label) => eventText.includes(label)),
+    hasCombatEvent,
     canvas,
     playbackAdvanced: after > before,
     actorPriorityFixture,
@@ -934,6 +935,10 @@ async function runExpandedFeatureChecks(page) {
   if ((await flightDetails.getAttribute("open")) === null) {
     await flightDetails.locator("summary").click();
   }
+  const routeMinimumDefault = await page.locator('#flightPathForm input[name="min_route_count"]').inputValue();
+  const circleMinimumDefault = await page.locator('#flightPathForm input[name="min_circle_count"]').inputValue();
+  const routeDisplayLimitDefault = await page.locator('#flightPathForm input[name="top_per_map"]').inputValue();
+  const circleDisplayLimitDefault = await page.locator('#flightPathForm input[name="top_per_phase"]').inputValue();
   await page.locator('#flightPathForm input[name="top_per_map"]').fill("5");
   await page.locator('#flightPathForm input[name="recent_limit"]').fill("5");
   await page.locator('#flightPathForm input[name="route_limit"]').fill("1000");
@@ -952,6 +957,12 @@ async function runExpandedFeatureChecks(page) {
   const combinedCircleHeading = await page.locator("#circlePathList").evaluate(
     (element) => element.previousElementSibling?.textContent?.trim() || "",
   );
+  const routeFrequencyHeading = await page.locator("#flightPathList").evaluate(
+    (element) => element.previousElementSibling?.textContent?.trim() || "",
+  );
+  const circleFrequencyHeading = await page.locator("#flightCircleShowOverview").evaluate(
+    (element) => element.previousElementSibling?.textContent?.trim() || "",
+  );
   const combinedCircleDisplayPhase = await page.locator("#circleMapPhaseSelect").inputValue();
   const combinedVisibleCirclePhases = await page.locator("#flightPathOverlay [data-circle-phase]").evaluateAll(
     (markers) => [...new Set(markers.map((marker) => marker.dataset.circlePhase))],
@@ -961,13 +972,26 @@ async function runExpandedFeatureChecks(page) {
   const combinedInitialViewBox = await page.locator("#flightPathOverlay").getAttribute("viewBox");
   let focusedCircleViewBox = combinedInitialViewBox;
   let focusedCircleContext = "";
+  const circleOverviewButtonVisible = await page.locator("#flightCircleShowOverview").isVisible();
+  let circleOverviewEnabledAfterFocus = false;
+  let circleOverviewViewBox = combinedInitialViewBox;
+  let circleOverviewActiveRows = 0;
+  let circleOverviewContextMarkers = 0;
+  let circleOverviewRows = combinedCircleRows;
+  let circleOverviewContext = "";
+  let circleOverviewDisabledAfterReset = true;
   if (combinedCircleRows > 1) {
     await page.locator("#circlePathList [data-circle-row]").nth(1).click();
     focusedCircleViewBox = await page.locator("#flightPathOverlay").getAttribute("viewBox");
     focusedCircleContext = await page.locator("#flightMapContext").innerText();
-    if (!(await page.locator("#flightMapResetViewport").isDisabled())) {
-      await page.locator("#flightMapResetViewport").click();
-    }
+    circleOverviewEnabledAfterFocus = !(await page.locator("#flightCircleShowOverview").isDisabled());
+    await page.locator("#flightCircleShowOverview").click();
+    circleOverviewViewBox = await page.locator("#flightPathOverlay").getAttribute("viewBox");
+    circleOverviewActiveRows = await page.locator("#circlePathList [data-circle-row].active").count();
+    circleOverviewContextMarkers = await page.locator("#flightPathOverlay [data-circle-line].context-circle").count();
+    circleOverviewRows = await page.locator("#circlePathList [data-circle-row]").count();
+    circleOverviewContext = await page.locator("#flightMapContext").innerText();
+    circleOverviewDisabledAfterReset = await page.locator("#flightCircleShowOverview").isDisabled();
   }
   let combinedExpandedFlightLines = combinedFlightLines;
   if (combinedFlightRows > 1) {
@@ -1110,6 +1134,15 @@ async function runExpandedFeatureChecks(page) {
     const focusedViewBox = await page.locator("#flightPathOverlay").getAttribute("viewBox");
     const focusedContext = await page.locator("#flightMapContext").innerText();
     const focusedWidth = Number(String(focusedViewBox || "").split(/\s+/)[2]);
+    const overviewButtonEnabled = rows > 0 && !(await page.locator("#flightCircleShowOverview").isDisabled());
+    if (overviewButtonEnabled) {
+      await page.locator("#flightCircleShowOverview").click();
+    }
+    const overviewViewBox = await page.locator("#flightPathOverlay").getAttribute("viewBox");
+    const overviewRows = await page.locator("#circlePathList [data-circle-row]").count();
+    const overviewActiveRows = await page.locator("#circlePathList [data-circle-row].active").count();
+    const overviewContextMarkers = await page.locator("#flightPathOverlay [data-circle-line].context-circle").count();
+    const overviewButtonDisabled = await page.locator("#flightCircleShowOverview").isDisabled();
     const mapAsset = await page.locator("#flightPathMapImage").evaluate((image) => ({
       loaded: image.complete && image.naturalWidth > 0 && image.naturalHeight > 0,
       width: image.naturalWidth,
@@ -1126,11 +1159,14 @@ async function runExpandedFeatureChecks(page) {
       focusedViewBox,
       focusedContext,
       zoomed: Number.isFinite(focusedWidth) && focusedWidth < 1000,
+      overviewButtonEnabled,
+      overviewViewBox,
+      overviewRows,
+      overviewActiveRows,
+      overviewContextMarkers,
+      overviewButtonDisabled,
       mapAsset,
     });
-    if (!(await page.locator("#flightMapResetViewport").isDisabled())) {
-      await page.locator("#flightMapResetViewport").click();
-    }
   }
   const allMapsCircleScreenshot = path.join(outputDir, "circle-all-maps-phase7-desktop.png");
   await page.locator("#flightPathResult").scrollIntoViewIfNeeded();
@@ -1147,6 +1183,10 @@ async function runExpandedFeatureChecks(page) {
   const discordScreenshot = path.join(outputDir, "discord-bot-desktop.png");
   await page.locator("#discord-bot-manager").screenshot({ path: discordScreenshot });
 
+  await page.waitForFunction(() => {
+    const image = document.querySelector(".brand-mark");
+    return Boolean(image?.complete && image.naturalWidth > 0 && image.naturalHeight > 0);
+  }, null, { timeout: 10000 });
   const iconLoaded = await page.locator(".brand-mark").evaluate(
     (image) => image.complete && image.naturalWidth > 0 && image.naturalHeight > 0,
   );
@@ -1227,6 +1267,12 @@ async function runExpandedFeatureChecks(page) {
       combinedCircleLines,
       combinedCircleRows,
       combinedCircleHeading,
+      routeMinimumDefault,
+      circleMinimumDefault,
+      routeDisplayLimitDefault,
+      circleDisplayLimitDefault,
+      routeFrequencyHeading,
+      circleFrequencyHeading,
       combinedCircleDisplayPhase,
       combinedVisibleCirclePhases,
       combinedCircleLocationLabels,
@@ -1234,6 +1280,14 @@ async function runExpandedFeatureChecks(page) {
       combinedInitialViewBox,
       focusedCircleViewBox,
       focusedCircleContext,
+      circleOverviewButtonVisible,
+      circleOverviewEnabledAfterFocus,
+      circleOverviewViewBox,
+      circleOverviewActiveRows,
+      circleOverviewContextMarkers,
+      circleOverviewRows,
+      circleOverviewContext,
+      circleOverviewDisabledAfterReset,
       combinedExpandedFlightLines,
       erangelAsset,
       phaseOneCircleLines,
@@ -1425,6 +1479,12 @@ async function layoutDiagnostics(page) {
       result.desktop.features.flightPaths.combinedCircleLines < 1,
       result.desktop.features.flightPaths.combinedCircleRows < 1,
       !result.desktop.features.flightPaths.combinedCircleHeading.includes("선택 항로"),
+      result.desktop.features.flightPaths.routeMinimumDefault !== "1",
+      result.desktop.features.flightPaths.circleMinimumDefault !== "1",
+      result.desktop.features.flightPaths.routeDisplayLimitDefault !== "0",
+      result.desktop.features.flightPaths.circleDisplayLimitDefault !== "0",
+      !result.desktop.features.flightPaths.routeFrequencyHeading.includes("1회 이상"),
+      !result.desktop.features.flightPaths.circleFrequencyHeading.includes("1회 이상"),
       result.desktop.features.flightPaths.combinedCircleDisplayPhase === "all",
       result.desktop.features.flightPaths.combinedVisibleCirclePhases.length !== 1,
       result.desktop.features.flightPaths.combinedCircleLocationLabels.length
@@ -1435,6 +1495,18 @@ async function layoutDiagnostics(page) {
       result.desktop.features.flightPaths.combinedCircleRankLabels.some((label) => !label.trim().startsWith("#")),
       result.desktop.features.flightPaths.combinedCircleRows > 1
         && !result.desktop.features.flightPaths.focusedCircleContext.trim(),
+      !result.desktop.features.flightPaths.circleOverviewButtonVisible,
+      result.desktop.features.flightPaths.combinedCircleRows > 1
+        && !result.desktop.features.flightPaths.circleOverviewEnabledAfterFocus,
+      result.desktop.features.flightPaths.combinedCircleRows > 1
+        && result.desktop.features.flightPaths.circleOverviewViewBox !== result.desktop.features.flightPaths.combinedInitialViewBox,
+      result.desktop.features.flightPaths.circleOverviewActiveRows !== 0,
+      result.desktop.features.flightPaths.circleOverviewContextMarkers !== 0,
+      result.desktop.features.flightPaths.circleOverviewRows !== result.desktop.features.flightPaths.combinedCircleRows,
+      result.desktop.features.flightPaths.combinedCircleRows > 1
+        && !result.desktop.features.flightPaths.circleOverviewContext.includes("누르면 주변 지역을 확대"),
+      result.desktop.features.flightPaths.combinedCircleRows > 1
+        && !result.desktop.features.flightPaths.circleOverviewDisabledAfterReset,
       result.desktop.features.flightPaths.combinedFlightRows > 1
         && result.desktop.features.flightPaths.combinedExpandedFlightLines <= 1,
       !result.desktop.features.flightPaths.erangelAsset.available,
@@ -1463,6 +1535,12 @@ async function layoutDiagnostics(page) {
       ),
       result.desktop.features.flightPaths.allMapCircleChecks.some((item) => !item.zoomed),
       result.desktop.features.flightPaths.allMapCircleChecks.some((item) => !item.focusedContext.trim()),
+      result.desktop.features.flightPaths.allMapCircleChecks.some((item) => !item.overviewButtonEnabled),
+      result.desktop.features.flightPaths.allMapCircleChecks.some((item) => item.overviewViewBox !== item.fullViewBox),
+      result.desktop.features.flightPaths.allMapCircleChecks.some((item) => item.overviewRows !== item.rows),
+      result.desktop.features.flightPaths.allMapCircleChecks.some((item) => item.overviewActiveRows !== 0),
+      result.desktop.features.flightPaths.allMapCircleChecks.some((item) => item.overviewContextMarkers !== 0),
+      result.desktop.features.flightPaths.allMapCircleChecks.some((item) => !item.overviewButtonDisabled),
       result.desktop.features.flightPaths.allMapCircleChecks.some((item) => !item.mapAsset.loaded),
       result.desktop.features.flightPaths.overflow,
       !result.desktop.features.discordBot.secretInputsEmpty,
@@ -1583,6 +1661,7 @@ async function layoutDiagnostics(page) {
       landingAnalysis: result.desktop.features.landing,
       ranking: result.desktop.features.ranking,
       comparison: result.desktop.features.comparison,
+      iconLoaded: result.desktop.features.iconLoaded,
       flightPaths: result.desktop.features.flightPaths,
       discordBot: result.desktop.features.discordBot,
       registryDimensions: result.desktop.registryDimensions,

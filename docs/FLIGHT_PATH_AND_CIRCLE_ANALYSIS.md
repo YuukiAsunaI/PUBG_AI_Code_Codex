@@ -59,8 +59,9 @@ the relationship from nearby coordinates.
 - Every visible cluster has the same rank on the map and in the side list. A single-phase map uses `#1` through
   `#N`; an all-phase map uses `phase.rank` labels.
 - Clicking a late-circle marker or rank row focuses a square viewport around that circle. The minimum viewport shows
-  15% of the map width, preserving nearby roads and place labels while making small circles legible. Operators can
-  zoom further, zoom out, or return to `전체 지도`.
+  15% of the map width, preserving nearby roads and place labels while making small circles legible. `전체 보기` is
+  available beside the frequency heading as well as on the map. It restores the full viewport, clears the selected
+  rank and dimmed context markers, and keeps the existing query result in memory.
 - Combined mode draws only the selected aircraft route by default. `다른 항로 겹쳐보기` adds the remaining ranked
   routes as low-emphasis context.
 - Circle centers inside a maintained map-label radius use that Korean place name. Centers outside every radius are
@@ -75,9 +76,11 @@ the relationship from nearby coordinates.
 Both analyses support shard, registered player, map, game mode, team mode, perspective, match type, season state,
 custom-match state, year, quarter, month, exact KST date, KST hour, and KST date range.
 
-The default UI renders at most eight circle clusters per phase. Operators can choose 1-25 clusters per phase and
-100-200,000 source circle rows. Bounding the rendered SVG nodes keeps the combined map responsive even when the
-retained telemetry corpus grows.
+Every observed aircraft-route and circle cluster is eligible by default, including clusters seen exactly once.
+Operators can set independent `비행기 동선 최소 빈도` and `자기장 최소 빈도` values, both defaulting to one.
+The optional per-map/per-phase display limits use zero for all eligible clusters; a positive value applies a final
+ranked display cap without changing the frequency denominator. Source-row limits remain available for expensive
+queries.
 
 ## Current Erangel Asset
 
@@ -125,3 +128,11 @@ passed again, while the combined view retained one selected flight route and eig
 desktop and 390px mobile passes had no console errors, request failures, HTTP errors, or horizontal overflow. The
 52,142,035-byte executable has SHA-256
 `AEB8847FF452F1FEABDC15739A4F6DCC00243DB44A681CEA4EBA5440D1AD7A45`.
+
+On 2026-09-05 KST, packaged release `2026.09.05.1` passed the full browser regression across all 33 workspaces on
+desktop and mobile. Both minimum-frequency controls rendered with a default value of one, both display caps rendered
+as zero for unlimited, and all nine maps with phase-7 data passed focus-to-overview restoration without losing any
+ranked rows. The current Sanhok corpus returned 63 route clusters at minimum one and 56 at minimum two; it returned
+40 phase-7 circle clusters at minimum one and 37 at minimum two. Neither filtered response contained a cluster below
+the requested threshold. The packaged pass reported no console errors, failed requests, HTTP errors, or horizontal
+overflow.

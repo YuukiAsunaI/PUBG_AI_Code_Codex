@@ -92,6 +92,8 @@ class FlightPathReport:
     account_id: str | None
     angle_bin_degrees: float
     offset_bin_m: float
+    minimum_route_count: int
+    max_clusters_per_map: int | None
     total_route_count: int
     analyzed_route_count: int
     rejected_route_count: int
@@ -113,6 +115,8 @@ class FlightPathReport:
             "account_id": self.account_id,
             "angle_bin_degrees": self.angle_bin_degrees,
             "offset_bin_m": self.offset_bin_m,
+            "minimum_route_count": self.minimum_route_count,
+            "max_clusters_per_map": self.max_clusters_per_map,
             "total_route_count": self.total_route_count,
             "analyzed_route_count": self.analyzed_route_count,
             "rejected_route_count": self.rejected_route_count,
@@ -148,7 +152,8 @@ class FlightPathStatsService:
         filters: PlayerTrendFilters | None = None,
         angle_bin_degrees: float = 10.0,
         offset_bin_m: float = 500.0,
-        top_per_map: int = 20,
+        min_route_count: int = 1,
+        top_per_map: int = 0,
         recent_limit: int = 50,
         route_limit: int = 50000,
     ) -> FlightPathReport:
@@ -159,7 +164,10 @@ class FlightPathStatsService:
         normalized_offset_bin = _bounded_float(
             offset_bin_m, "offset_bin_m", 50.0, 4000.0
         )
-        normalized_top = _bounded_int(top_per_map, "top_per_map", 1, 50)
+        normalized_minimum = _bounded_int(
+            min_route_count, "min_route_count", 1, 100000
+        )
+        normalized_top = _bounded_int(top_per_map, "top_per_map", 0, 10000)
         normalized_recent = _bounded_int(recent_limit, "recent_limit", 1, 200)
         normalized_route_limit = _bounded_int(route_limit, "route_limit", 100, 100000)
         normalized_shard = _optional_text(shard)
@@ -177,6 +185,7 @@ class FlightPathStatsService:
             account_id=normalized_account_id,
             angle_bin_degrees=normalized_angle_bin,
             offset_bin_m=normalized_offset_bin,
+            min_route_count=normalized_minimum,
             top_per_map=normalized_top,
             recent_limit=normalized_recent,
         )
@@ -315,7 +324,8 @@ def summarize_flight_paths(
     account_id: str | None = None,
     angle_bin_degrees: float = 10.0,
     offset_bin_m: float = 500.0,
-    top_per_map: int = 20,
+    min_route_count: int = 1,
+    top_per_map: int = 0,
     recent_limit: int = 50,
 ) -> FlightPathReport:
     normalized_filters = (filters or PlayerTrendFilters()).normalized()
@@ -352,7 +362,11 @@ def summarize_flight_paths(
         key=lambda key: (-map_route_counts[key], translate_code(key, "map")),
     ):
         map_clusters = sorted(
-            (item for item in all_clusters if item.map_name == map_name),
+            (
+                item
+                for item in all_clusters
+                if item.map_name == map_name and item.route_count >= min_route_count
+            ),
             key=lambda item: (
                 -item.route_count,
                 -item.dominant_direction_share,
@@ -360,7 +374,9 @@ def summarize_flight_paths(
                 item.cluster_id,
             ),
         )
-        selected_clusters.extend(map_clusters[:top_per_map])
+        selected_clusters.extend(
+            map_clusters if top_per_map == 0 else map_clusters[:top_per_map]
+        )
 
     maps = [
         FlightPathMapSummary(
@@ -394,6 +410,8 @@ def summarize_flight_paths(
         account_id=account_id,
         angle_bin_degrees=actual_angle_bin,
         offset_bin_m=offset_bin_m,
+        minimum_route_count=min_route_count,
+        max_clusters_per_map=(top_per_map or None),
         total_route_count=total,
         analyzed_route_count=len(prepared),
         rejected_route_count=total - len(prepared),
