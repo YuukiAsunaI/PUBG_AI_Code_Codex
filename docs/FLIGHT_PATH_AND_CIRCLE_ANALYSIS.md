@@ -78,6 +78,7 @@ custom-match state, year, quarter, month, exact KST date, KST hour, and KST date
 
 Every observed aircraft-route and circle cluster is eligible by default, including clusters seen exactly once.
 Operators can set independent `비행기 동선 최소 빈도` and `자기장 최소 빈도` values, both defaulting to one.
+Both inputs are in the always-visible primary query area; opening the advanced-filter disclosure is not required.
 The optional per-map/per-phase display limits use zero for all eligible clusters; a positive value applies a final
 ranked display cap without changing the frequency denominator. Source-row limits remain available for expensive
 queries.
@@ -129,10 +130,12 @@ desktop and 390px mobile passes had no console errors, request failures, HTTP er
 52,142,035-byte executable has SHA-256
 `AEB8847FF452F1FEABDC15739A4F6DCC00243DB44A681CEA4EBA5440D1AD7A45`.
 
-On 2026-09-05 KST, packaged release `2026.09.05.1` passed the full browser regression across all 33 workspaces on
-desktop and mobile. Both minimum-frequency controls rendered with a default value of one, both display caps rendered
-as zero for unlimited, and all nine maps with phase-7 data passed focus-to-overview restoration without losing any
-ranked rows. The current Sanhok corpus returned 63 route clusters at minimum one and 56 at minimum two; it returned
+On 2026-09-05 KST, packaged release `2026.09.05.2` passed the full browser regression across all 33 workspaces on
+desktop and mobile. Both minimum-frequency controls rendered in the primary query area while advanced filters were
+closed, both defaulted to one, and both display caps rendered as zero for unlimited. The route-only and circle-only
+tabs each retained the relevant minimum input and hid the unrelated one. All nine maps with phase-7 data passed
+focus-to-overview restoration without losing any ranked rows. The current Sanhok corpus returned 63 route clusters
+at minimum one and 56 at minimum two; it returned
 40 phase-7 circle clusters at minimum one and 37 at minimum two. Neither filtered response contained a cluster below
 the requested threshold. The packaged pass reported no console errors, failed requests, HTTP errors, or horizontal
 overflow.

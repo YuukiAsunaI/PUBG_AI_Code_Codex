@@ -88,6 +88,11 @@ class WebFlightPathStatsTests(unittest.TestCase):
         self.assertIn('class="circle-location-label"', body)
         self.assertIn("다른 항로 겹쳐보기", body)
         self.assertIn("전체 단계 겹쳐보기", body)
+        form_start = body.index('<form id="flightPathForm"')
+        details_start = body.index('<details class="advanced-filters">', form_start)
+        primary_controls = body[form_start:details_start]
+        self.assertIn('name="min_route_count"', primary_controls)
+        self.assertIn('name="min_circle_count"', primary_controls)
         self.assertIn("가장 가까운 지도 지명 기준", body)
         self.assertIn("marker-end=\"url(#flightArrow)\"", body)
         self.assertIn("방향이 반대여도 같은 물리 항로", body)

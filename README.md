@@ -764,9 +764,10 @@ Loadout score details expose their performance components and the heuristic PUBG
 shared ammo pools, and LMG reserve ammunition.
 
 The aircraft-route and safe-zone analysis includes every observed frequency cluster by default, including one-off
-routes and circles. Separate minimum-frequency inputs filter aircraft routes and circles when desired, while a zero
-display limit means all matching clusters. Selecting a circle zooms to its neighborhood; `전체 보기` restores the
-whole map and clears the selected/dimmed state without rerunning the database query.
+routes and circles. Separate minimum-frequency inputs are always visible in the primary query area and filter
+aircraft routes and circles when desired, while a zero display limit means all matching clusters. Selecting a circle
+zooms to its neighborhood; `전체 보기` restores the whole map and clears the selected/dimmed state without rerunning
+the database query.
 
 Run the Windows desktop manager (recommended):
 

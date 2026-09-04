@@ -181,14 +181,16 @@ entrypoint searches upward from the executable and current directory for the pro
 Set `PUBG_AI_BASE_DIR` when the executable is stored elsewhere. Secrets and local settings are not embedded into the
 executable.
 
-The verified `2026.09.05.1` artifact is 52,174,596 bytes with SHA-256
-`2CD4A29479A759FE4FA6388E8F766149AFCC26B8160D556D809FAFAAF35E20C5`. Its localhost-only health endpoint returned
+The verified `2026.09.05.2` artifact is 52,174,700 bytes with SHA-256
+`CA65F523405C05DC9D67918A69066A5E137C10EF803E117373CD94666F664958`. Its localhost-only health endpoint returned
 the same release, and the app-managed Discord bot reached ready state in all four configured guilds. The packaged
 Playwright audit reached all 33 workspaces. Aircraft routes and safe-zone circles both defaulted to a minimum
-frequency of one and an unlimited display cap. Every map with stored phase-7 data preserved its ranked rows while a
-focused circle was returned to the full map with `전체 보기`; selection and dimmed context state were cleared without
+frequency of one and an unlimited display cap. Both minimum-frequency inputs were visible before the advanced-filter
+disclosure was opened, and each single-analysis tab showed only its relevant input. Every map with stored phase-7
+data preserved its ranked rows while a focused circle was returned to the full map with `전체 보기`; selection and
+dimmed context state were cleared without
 rerunning the query. The same pass exercised all 12 map-editor assets and the all-participant replay event window.
 The data-quality audit passed all 30 checks. Desktop and 390px mobile layouts had no blank view, overlay, overflow,
 console error, failed request, or HTTP error. A native close request removed the window and port-8000 listener without
 an error dialog, both one-file package processes completed cleanup, and a clean restart returned the same release in
-4.37 seconds.
+3.24 seconds.

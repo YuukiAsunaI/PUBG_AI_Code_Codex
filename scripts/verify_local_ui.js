@@ -932,11 +932,26 @@ async function runExpandedFeatureChecks(page) {
 
   await openWorkspaceSection(page, "replay", "flight-paths");
   const flightDetails = page.locator("#flightPathForm details");
-  if ((await flightDetails.getAttribute("open")) === null) {
-    await flightDetails.locator("summary").click();
-  }
+  const advancedFiltersInitiallyClosed = (await flightDetails.getAttribute("open")) === null;
   const routeMinimumDefault = await page.locator('#flightPathForm input[name="min_route_count"]').inputValue();
   const circleMinimumDefault = await page.locator('#flightPathForm input[name="min_circle_count"]').inputValue();
+  const routeMinimumVisible = await page.locator('#flightPathForm input[name="min_route_count"]').isVisible();
+  const circleMinimumVisible = await page.locator('#flightPathForm input[name="min_circle_count"]').isVisible();
+  await page.locator('[data-flight-analysis-view="flight"]').click();
+  const flightViewRouteMinimumVisible = await page.locator('#flightPathForm input[name="min_route_count"]').isVisible();
+  const flightViewCircleMinimumHidden = !(await page.locator('#flightPathForm input[name="min_circle_count"]').isVisible());
+  await page.locator('[data-flight-analysis-view="circle"]').click();
+  const circleViewRouteMinimumHidden = !(await page.locator('#flightPathForm input[name="min_route_count"]').isVisible());
+  const circleViewCircleMinimumVisible = await page.locator('#flightPathForm input[name="min_circle_count"]').isVisible();
+  await page.locator('[data-flight-analysis-view="combined"]').click();
+  const combinedMinimumsVisible = await page.locator(
+    '#flightPathForm input[name="min_route_count"], #flightPathForm input[name="min_circle_count"]',
+  ).evaluateAll((inputs) => inputs.length === 2 && inputs.every((input) => input.getClientRects().length > 0));
+  const frequencyControlsScreenshot = path.join(outputDir, "flight-frequency-controls-desktop.png");
+  await page.locator("#flightPathForm .query-primary").screenshot({ path: frequencyControlsScreenshot });
+  if (advancedFiltersInitiallyClosed) {
+    await flightDetails.locator("summary").click();
+  }
   const routeDisplayLimitDefault = await page.locator('#flightPathForm input[name="top_per_map"]').inputValue();
   const circleDisplayLimitDefault = await page.locator('#flightPathForm input[name="top_per_phase"]').inputValue();
   await page.locator('#flightPathForm input[name="top_per_map"]').fill("5");
@@ -1269,6 +1284,15 @@ async function runExpandedFeatureChecks(page) {
       combinedCircleHeading,
       routeMinimumDefault,
       circleMinimumDefault,
+      routeMinimumVisible,
+      circleMinimumVisible,
+      advancedFiltersInitiallyClosed,
+      flightViewRouteMinimumVisible,
+      flightViewCircleMinimumHidden,
+      circleViewRouteMinimumHidden,
+      circleViewCircleMinimumVisible,
+      combinedMinimumsVisible,
+      frequencyControlsScreenshot,
       routeDisplayLimitDefault,
       circleDisplayLimitDefault,
       routeFrequencyHeading,
@@ -1481,6 +1505,14 @@ async function layoutDiagnostics(page) {
       !result.desktop.features.flightPaths.combinedCircleHeading.includes("선택 항로"),
       result.desktop.features.flightPaths.routeMinimumDefault !== "1",
       result.desktop.features.flightPaths.circleMinimumDefault !== "1",
+      !result.desktop.features.flightPaths.routeMinimumVisible,
+      !result.desktop.features.flightPaths.circleMinimumVisible,
+      !result.desktop.features.flightPaths.advancedFiltersInitiallyClosed,
+      !result.desktop.features.flightPaths.flightViewRouteMinimumVisible,
+      !result.desktop.features.flightPaths.flightViewCircleMinimumHidden,
+      !result.desktop.features.flightPaths.circleViewRouteMinimumHidden,
+      !result.desktop.features.flightPaths.circleViewCircleMinimumVisible,
+      !result.desktop.features.flightPaths.combinedMinimumsVisible,
       result.desktop.features.flightPaths.routeDisplayLimitDefault !== "0",
       result.desktop.features.flightPaths.circleDisplayLimitDefault !== "0",
       !result.desktop.features.flightPaths.routeFrequencyHeading.includes("1회 이상"),

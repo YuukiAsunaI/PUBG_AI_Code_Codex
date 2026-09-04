@@ -5192,6 +5192,7 @@ _INDEX_HTML = """<!doctype html>
       white-space: nowrap;
     }
     .flight-analysis-view-controls { margin: 4px 0 12px; }
+    .flight-frequency-field[hidden] { display: none !important; }
     .flight-path-map-stage {
       position: relative;
       width: 100%;
@@ -8935,6 +8936,12 @@ _INDEX_HTML = """<!doctype html>
               <option value="7">7서클</option><option value="8">8서클</option><option value="9">9서클</option>
             </select>
           </label>
+          <label class="flight-frequency-field" data-flight-frequency-scope="flight">비행기 동선 최소 빈도 (회)
+            <input name="min_route_count" type="number" min="1" max="100000" value="1" inputmode="numeric">
+          </label>
+          <label class="flight-frequency-field" data-flight-frequency-scope="circle">자기장 최소 빈도 (회)
+            <input name="min_circle_count" type="number" min="1" max="200000" value="1" inputmode="numeric">
+          </label>
           <button type="submit">분석</button>
           <button class="secondary" type="button" id="flightPathReset">초기화</button>
         </div>
@@ -8960,13 +8967,11 @@ _INDEX_HTML = """<!doctype html>
             <label>항로 간격 묶음
               <select name="offset_bin_m"><option value="250">250m</option><option value="500" selected>500m</option><option value="1000">1km</option><option value="2000">2km</option></select>
             </label>
-            <label>비행기 동선 최소 빈도<input name="min_route_count" type="number" min="1" max="100000" value="1" inputmode="numeric"></label>
             <label>맵별 표시 상한 (0=전체)<input name="top_per_map" type="number" min="0" max="10000" value="0" inputmode="numeric"></label>
             <label>최근 원본 항로<input name="recent_limit" type="number" min="1" max="200" value="50" inputmode="numeric"></label>
             <label>분석 최대 항로<input name="route_limit" type="number" min="100" max="100000" value="50000" inputmode="numeric"></label>
             <label>서클 중심 묶음<select name="center_bin_m"><option value="250">250m</option><option value="500" selected>500m</option><option value="1000">1km</option><option value="2000">2km</option></select></label>
             <label>서클 반경 묶음<select name="radius_bin_m"><option value="100">100m</option><option value="250" selected>250m</option><option value="500">500m</option><option value="1000">1km</option></select></label>
-            <label>자기장 최소 빈도<input name="min_circle_count" type="number" min="1" max="200000" value="1" inputmode="numeric"></label>
             <label>단계별 표시 상한 (0=전체)<input name="top_per_phase" type="number" min="0" max="10000" value="0" inputmode="numeric"></label>
             <label>분석 최대 서클<input name="circle_limit" type="number" min="100" max="200000" value="100000" inputmode="numeric"></label>
           </div>
@@ -17967,6 +17972,10 @@ _INDEX_HTML = """<!doctype html>
       activeFlightAnalysisView = ["flight", "circle", "combined"].includes(view) ? view : "combined";
       flightPathViewControls.querySelectorAll("[data-flight-analysis-view]").forEach((button) => {
         button.classList.toggle("active", button.dataset.flightAnalysisView === activeFlightAnalysisView);
+      });
+      flightPathForm.querySelectorAll("[data-flight-frequency-scope]").forEach((field) => {
+        const scope = field.dataset.flightFrequencyScope;
+        field.hidden = activeFlightAnalysisView !== "combined" && scope !== activeFlightAnalysisView;
       });
       flightPathPhaseSelect.disabled = activeFlightAnalysisView === "flight";
     }
