@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from math import hypot, isfinite
-from typing import Any, Literal
+from typing import Any, Iterable, Literal
 
 from pubg_ai.code_translator import translate_code
+from pubg_ai.custom_map_regions import CustomMapRegionDefinition, select_custom_map_region
 from pubg_ai.map_snapshot_renderer import MAP_WORLD_SIZE_CM
 
 
@@ -38,6 +39,7 @@ class MapRegionDefinition:
 
     def to_record(self) -> dict[str, Any]:
         record = asdict(self)
+        record["source"] = "official"
         review = _REGION_REVIEW_EVIDENCE.get(self.region_id)
         if review is not None:
             record["review"] = review
@@ -65,6 +67,8 @@ class MapRegionResolution:
     geometry_type: str | None = None
     distance_to_center_m: float | None = None
     radius_m: float | None = None
+    region_source: str | None = None
+    region_priority: int | None = None
 
     @property
     def region_display_name_ko(self) -> str | None:
@@ -440,7 +444,13 @@ _REGIONS_BY_CANONICAL_MAP = {
 }
 
 
-def resolve_map_region(map_name: str, x_cm: float, y_cm: float) -> MapRegionResolution:
+def resolve_map_region(
+    map_name: str,
+    x_cm: float,
+    y_cm: float,
+    *,
+    custom_regions: Iterable[CustomMapRegionDefinition] | None = None,
+) -> MapRegionResolution:
     normalized_map_name = str(map_name or "").strip()
     map_name_ko = translate_code(normalized_map_name, "map") if normalized_map_name else "unknown"
     canonical_map_name = _CANONICAL_MAPS.get(normalized_map_name)
@@ -483,6 +493,51 @@ def resolve_map_region(map_name: str, x_cm: float, y_cm: float) -> MapRegionReso
             y_cm=y_value,
             x_pct=x_pct,
             y_pct=y_pct,
+        )
+
+    custom_region = select_custom_map_region(
+        custom_regions or (),
+        map_name=normalized_map_name,
+        x_pct=x_pct,
+        y_pct=y_pct,
+    )
+    if custom_region is not None:
+        distance_pct = hypot(
+            x_pct - custom_region.center_x_pct,
+            y_pct - custom_region.center_y_pct,
+        )
+        polygon_radius_pct = max(
+            (
+                hypot(
+                    point_x - custom_region.center_x_pct,
+                    point_y - custom_region.center_y_pct,
+                )
+                for point_x, point_y in custom_region.points_pct
+            ),
+            default=0.0,
+        )
+        return MapRegionResolution(
+            status="matched",
+            map_name=normalized_map_name,
+            map_name_ko=map_name_ko,
+            canonical_map_name=canonical_map_name,
+            catalog_version=f"{MAP_REGION_CATALOG_VERSION}+local-v1",
+            source_commit=MAP_REGION_SOURCE_COMMIT,
+            source_asset=source_asset,
+            source_url=source_url,
+            source_sha256=_SOURCE_SHA256.get(source_asset or ""),
+            x_cm=x_value,
+            y_cm=y_value,
+            x_pct=x_pct,
+            y_pct=y_pct,
+            region_id=custom_region.region_id,
+            region_name=custom_region.name_ko,
+            region_name_ko=custom_region.name_ko,
+            geometry_type=custom_region.geometry_type,
+            distance_to_center_m=distance_pct * world_size_cm / 100.0,
+            radius_m=(custom_region.radius_pct or polygon_radius_pct) * world_size_cm / 100.0,
+            region_source="custom",
+            region_priority=custom_region.priority,
         )
 
     if canonical_map_name in _DYNAMIC_MAPS:
@@ -543,9 +598,14 @@ def resolve_map_region(map_name: str, x_cm: float, y_cm: float) -> MapRegionReso
     )
 
 
-def map_region_catalog_record(map_name: str | None = None) -> dict[str, Any]:
+def map_region_catalog_record(
+    map_name: str | None = None,
+    *,
+    custom_regions: Iterable[CustomMapRegionDefinition] | None = None,
+) -> dict[str, Any]:
     requested = str(map_name or "").strip()
     map_names = [requested] if requested else sorted(_CANONICAL_MAPS)
+    enabled_custom_regions = tuple(region for region in (custom_regions or ()) if region.enabled)
     records = []
     for api_map_name in map_names:
         canonical_map_name = _CANONICAL_MAPS.get(api_map_name)
@@ -568,6 +628,9 @@ def map_region_catalog_record(map_name: str | None = None) -> dict[str, Any]:
         source_asset = _SOURCE_ASSETS[canonical_map_name]
         policy: MapRegionPolicy = "dynamic" if canonical_map_name in _DYNAMIC_MAPS else "static"
         regions = _REGIONS_BY_CANONICAL_MAP.get(canonical_map_name, ())
+        local_regions = tuple(
+            region for region in enabled_custom_regions if region.map_name == api_map_name
+        )
         records.append(
             {
                 "map_name": api_map_name,
@@ -578,8 +641,13 @@ def map_region_catalog_record(map_name: str | None = None) -> dict[str, Any]:
                 "source_asset": source_asset,
                 "source_url": f"{MAP_REGION_SOURCE_BASE_URL}/{source_asset}",
                 "source_sha256": _SOURCE_SHA256[source_asset],
-                "region_count": len(regions),
-                "regions": [region.to_record() for region in regions],
+                "region_count": len(regions) + len(local_regions),
+                "official_region_count": len(regions),
+                "custom_region_count": len(local_regions),
+                "regions": [
+                    *[region.to_record() for region in local_regions],
+                    *[region.to_record() for region in regions],
+                ],
             }
         )
     return {
@@ -630,6 +698,8 @@ def _resolution(
         geometry_type=region.geometry_type if region else None,
         distance_to_center_m=distance_to_center_m,
         radius_m=radius_m,
+        region_source="official" if region else None,
+        region_priority=None,
     )
 
 

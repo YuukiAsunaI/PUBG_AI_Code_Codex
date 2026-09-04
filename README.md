@@ -88,8 +88,8 @@ The first executable slice is now available:
 - read-only data-quality audit in both CLI and local manager for analysis-policy scope, current parser coverage,
   combat/item/movement/fight reconciliation, 2D artifact coverage, translation coverage, and ingestion freshness
 - combat loadout snapshot generator for weapon + attachment state at kill/DBNO/finish moments
-- versioned official-asset-backed map-region catalog for Korean named drop-zone recommendations with
-  raw-coordinate fallback
+- versioned official-asset-backed map-region catalog plus local point/radius, rectangle, and polygon overrides for
+  Korean named drop-zone recommendations with raw-coordinate fallback
 - completed-match flight-path frequency analysis with per-map overlays, physical-route clustering, dominant travel
   direction, detailed KST/match filters, and registered-player scope
 - localhost-only FastAPI management app
@@ -222,6 +222,14 @@ python -m pubg_ai.cli map-region-catalog --map-name Baltic_Main
 ```
 
 See `docs/MAP_REGION_CATALOG.md` for aliases, source commit and hashes, geometry policy, and update procedure.
+
+The local manager's **2D 리플레이 > 지역 편집** view lets the operator draw a point with a meter radius, drag a
+rectangle, or place polygon vertices directly on every supported map. The editor supports cursor-centered zoom,
+drag-to-pan, official-label reference outlines, overlap priority, edit, enable/disable, and delete. Definitions are
+atomically stored only in ignored **config/map_regions.local.json**; raw coordinates remain unchanged. Enabled local
+regions take precedence over the approximate official-label circles and are used by landing analysis,
+recommendations, Discord landing/recommendation replies, circle location labels, and the 2D replay overlay/current
+location display.
 
 Show the supporting combat snapshots behind one weapon+attachment recommendation:
 

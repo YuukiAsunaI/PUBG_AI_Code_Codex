@@ -31,6 +31,12 @@ from pubg_ai.alert_history import (
 from pubg_ai.collector_worker import CollectorWorkerController, CollectorWorkerError, CollectorWorkerOptions
 from pubg_ai.circle_stats import CircleStatsService
 from pubg_ai.config import RuntimeConfig, load_dotenv_values
+from pubg_ai.custom_map_regions import (
+    CUSTOM_MAP_REGION_FILE,
+    CUSTOM_MAP_REGION_STORE_VERSION,
+    CustomMapRegionError,
+    CustomMapRegionStore,
+)
 from pubg_ai.data_quality import audit_player_intelligence
 from pubg_ai.data_deletion_backup import (
     DataDeletionBackupError,
@@ -317,6 +323,24 @@ class DisplaySettingsRequest(BaseModel):
     number_format: str = Field(pattern=r"^(grouped|korean_units|plain)$")
 
 
+class CustomMapRegionPointRequest(BaseModel):
+    x_pct: float = Field(ge=0.0, le=1.0)
+    y_pct: float = Field(ge=0.0, le=1.0)
+
+
+class CustomMapRegionUpsertRequest(BaseModel):
+    map_name: str = Field(min_length=1, max_length=64)
+    name_ko: str = Field(min_length=1, max_length=80)
+    geometry_type: str = Field(pattern=r"^(point_radius|polygon)$")
+    center_x_pct: float | None = Field(default=None, ge=0.0, le=1.0)
+    center_y_pct: float | None = Field(default=None, ge=0.0, le=1.0)
+    radius_pct: float | None = Field(default=None, gt=0.0, le=0.5)
+    points_pct: list[CustomMapRegionPointRequest] = Field(default_factory=list, max_length=64)
+    priority: int = Field(default=100, ge=0, le=1000)
+    enabled: bool = True
+    note: str | None = Field(default=None, max_length=300)
+
+
 class DiscordBotSettingsRequest(BaseModel):
     auto_start: bool = False
     command_prefix: str = Field(default="!", min_length=1, max_length=5)
@@ -541,6 +565,7 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
     config = RuntimeConfig.from_sources(base_dir=base_dir, env_file=env_file)
     _ensure_configured_storage_directories(config)
     settings_store = _local_settings_store(base_dir, env_file=env_file)
+    custom_region_store = CustomMapRegionStore(CUSTOM_MAP_REGION_FILE, base_dir=base_dir)
     permission_manager = DiscordPermissionManager(settings_store)
     env_path = Path(env_file).expanduser()
     if not env_path.is_absolute():
@@ -549,6 +574,23 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
 
     def current_config() -> RuntimeConfig:
         return RuntimeConfig.from_sources(base_dir=base_dir, env_file=env_file)
+
+    def resolve_local_map_region(map_name: str, x_cm: float, y_cm: float) -> Any:
+        return resolve_map_region(
+            map_name,
+            x_cm,
+            y_cm,
+            custom_regions=custom_region_store.list_regions(
+                map_name=map_name,
+                include_disabled=False,
+            ),
+        )
+
+    def recommendation_service(connection: Any) -> PlayerRecommendationService:
+        return PlayerRecommendationService(
+            connection,
+            map_region_resolver=resolve_local_map_region,
+        )
 
     def build_data_deletion_confirmation_service(
         connection: Any,
@@ -884,6 +926,7 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
         permission_checker=DiscordPermissionChecker(
             settings_store.load_discord_permission_settings()
         ),
+        map_region_resolver=resolve_local_map_region,
     )
 
     @asynccontextmanager
@@ -3182,11 +3225,71 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
 
     @app.get("/map-regions")
     def map_regions(map_name: str | None = None) -> dict[str, Any]:
-        return {"map_region_catalog": map_region_catalog_record(map_name)}
+        try:
+            custom_regions = custom_region_store.list_regions(
+                map_name=map_name,
+                include_disabled=False,
+            )
+        except CustomMapRegionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "map_region_catalog": map_region_catalog_record(
+                map_name,
+                custom_regions=custom_regions,
+            )
+        }
 
     @app.get("/map-regions/resolve")
     def map_region_resolution(map_name: str, x_cm: float, y_cm: float) -> dict[str, Any]:
-        return {"map_region": resolve_map_region(map_name, x_cm, y_cm).to_record()}
+        try:
+            region = resolve_local_map_region(map_name, x_cm, y_cm)
+        except CustomMapRegionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"map_region": region.to_record()}
+
+    @app.get("/map-regions/custom")
+    def list_custom_map_regions(map_name: str | None = None) -> dict[str, Any]:
+        try:
+            regions = custom_region_store.list_regions(
+                map_name=map_name,
+                include_disabled=True,
+            )
+        except CustomMapRegionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "store_version": CUSTOM_MAP_REGION_STORE_VERSION,
+            "storage_path": str(custom_region_store.path),
+            "regions": [region.to_record() for region in regions],
+        }
+
+    @app.post("/map-regions/custom")
+    def create_custom_map_region(request: CustomMapRegionUpsertRequest) -> dict[str, Any]:
+        try:
+            region = custom_region_store.create_region(request.model_dump())
+        except CustomMapRegionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"map_region": region.to_record()}
+
+    @app.put("/map-regions/custom/{region_id}")
+    def update_custom_map_region(
+        region_id: str,
+        request: CustomMapRegionUpsertRequest,
+    ) -> dict[str, Any]:
+        try:
+            region = custom_region_store.update_region(region_id, request.model_dump())
+        except CustomMapRegionError as exc:
+            status_code = 404 if "찾지 못했습니다" in str(exc) else 400
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        return {"map_region": region.to_record()}
+
+    @app.delete("/map-regions/custom/{region_id}")
+    def delete_custom_map_region(region_id: str) -> dict[str, Any]:
+        try:
+            region = custom_region_store.delete_region(region_id)
+        except CustomMapRegionError as exc:
+            status_code = 404 if "찾지 못했습니다" in str(exc) else 400
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        return {"deleted": True, "map_region": region.to_record()}
 
     @app.get("/players/recommendations")
     def player_recommendations(
@@ -3234,7 +3337,7 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         connection = connect_mysql(config.database)
         try:
-            recommendations = PlayerRecommendationService(connection).get_recommendations(
+            recommendations = recommendation_service(connection).get_recommendations(
                 shard=shard,
                 account_id=account_id,
                 name=name,
@@ -3261,7 +3364,7 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
             raise HTTPException(status_code=400, detail="name or account_id is required.")
         connection = connect_mysql(config.database)
         try:
-            report = PlayerRecommendationService(connection).get_drop_zone_analysis(
+            report = recommendation_service(connection).get_drop_zone_analysis(
                 shard=shard,
                 name=name,
                 account_id=account_id,
@@ -3289,7 +3392,7 @@ def create_app(*, base_dir: Path | None = None, env_file: str = ".env") -> Any:
 
         connection = connect_mysql(config.database)
         try:
-            evidence = PlayerRecommendationService(connection).get_weapon_attachment_evidence(
+            evidence = recommendation_service(connection).get_weapon_attachment_evidence(
                 shard=shard,
                 account_id=account_id,
                 name=name,
@@ -4889,6 +4992,175 @@ _INDEX_HTML = """<!doctype html>
     .drop-view-panel { min-width: 0; }
     .drop-view-panel[hidden] { display: none !important; }
     .drop-view-panel .drop-map-panel { width: min(760px, 100%); }
+    .map-region-editor-layout {
+      display: grid;
+      grid-template-columns: minmax(290px, 0.72fr) minmax(420px, 1.28fr);
+      gap: 18px;
+      align-items: start;
+      min-width: 0;
+    }
+    form.map-region-editor-layout { grid-template-columns: minmax(290px, 0.72fr) minmax(420px, 1.28fr); }
+    .map-region-editor-controls {
+      display: grid;
+      gap: 12px;
+      min-width: 0;
+    }
+    .map-region-editor-controls .filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .map-region-editor-controls .map-region-name-field,
+    .map-region-editor-controls .map-region-note-field { grid-column: 1 / -1; }
+    .map-region-editor-controls textarea { min-height: 70px; resize: vertical; }
+    .map-region-drawing-modes { width: 100%; }
+    .map-region-drawing-modes button { flex: 1 1 0; min-width: 0; }
+    .map-region-editor-stage {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 1;
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 5px;
+      background: #060708;
+      cursor: crosshair;
+      touch-action: none;
+      user-select: none;
+    }
+    .map-region-editor-stage img,
+    .map-region-editor-stage svg {
+      position: absolute;
+      inset: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    .map-region-editor-stage img {
+      object-fit: contain;
+      pointer-events: none;
+      right: auto;
+      bottom: auto;
+    }
+    .map-region-editor-stage svg { overflow: hidden; }
+    .map-region-editor-stage.panning { cursor: grabbing !important; }
+    .map-region-editor-stage .flight-map-controls button.active {
+      border-color: var(--accent);
+      background: #17362d;
+      color: #8af0d1;
+    }
+    .map-region-official-shape {
+      fill: rgb(112 183 255 / 4%);
+      stroke: rgb(112 183 255 / 42%);
+      stroke-width: 1.3;
+      stroke-dasharray: 6 5;
+      vector-effect: non-scaling-stroke;
+    }
+    .map-region-custom-shape {
+      fill: rgb(70 210 170 / 15%);
+      stroke: #46d2aa;
+      stroke-width: 2.2;
+      vector-effect: non-scaling-stroke;
+    }
+    .map-region-custom-shape.disabled {
+      fill: rgb(153 163 172 / 8%);
+      stroke: #7f8991;
+      stroke-dasharray: 8 6;
+    }
+    .map-region-custom-shape.selected {
+      fill: rgb(240 212 121 / 18%);
+      stroke: #f0d479;
+      stroke-width: 3.5;
+    }
+    .map-region-draft-shape {
+      fill: rgb(240 212 121 / 16%);
+      stroke: #f0d479;
+      stroke-width: 3;
+      stroke-dasharray: 9 6;
+      vector-effect: non-scaling-stroke;
+    }
+    .map-region-vertex {
+      fill: #f0d479;
+      stroke: #08100d;
+      stroke-width: 2;
+      vector-effect: non-scaling-stroke;
+    }
+    .map-region-label {
+      fill: #f4f7f8;
+      font-size: 15px;
+      font-weight: 800;
+      text-anchor: middle;
+      dominant-baseline: central;
+      paint-order: stroke;
+      stroke: rgb(6 7 8 / 92%);
+      stroke-width: 4px;
+      stroke-linejoin: round;
+      pointer-events: none;
+    }
+    .map-region-label.official { fill: #c9d9e7; font-size: 12px; font-weight: 650; }
+    .map-region-map-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .map-region-map-toolbar h3 { margin: 0; }
+    .map-region-map-toolbar .checkbox-line { flex: 0 0 auto; }
+    .map-region-editor-readout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      min-height: 42px;
+      margin-top: 8px;
+      border-left: 3px solid var(--accent);
+      padding: 7px 9px;
+      background: var(--panel-soft);
+      color: #cbd2d8;
+      font-size: 10px;
+      line-height: 1.5;
+    }
+    .map-region-editor-readout strong { color: var(--text); }
+    .map-region-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 10px;
+    }
+    .map-region-legend span { display: inline-flex; align-items: center; gap: 5px; }
+    .map-region-legend i {
+      width: 18px;
+      height: 9px;
+      border: 2px solid #46d2aa;
+      background: rgb(70 210 170 / 15%);
+    }
+    .map-region-legend i.draft { border-color: #f0d479; border-style: dashed; background: rgb(240 212 121 / 15%); }
+    .map-region-legend i.official { border-color: #70b7ff; border-style: dashed; background: transparent; }
+    .map-region-list-wrap {
+      margin-top: 18px;
+      padding-top: 16px;
+      border-top: 1px solid var(--line);
+    }
+    .map-region-list-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .map-region-list-toolbar h3 { margin: 0; }
+    .map-region-table { min-width: 720px; table-layout: auto; }
+    .map-region-table tr.selected td { background: #252315; }
+    .map-region-table .actions { white-space: nowrap; }
+    @media (max-width: 1050px) {
+      .map-region-editor-layout,
+      form.map-region-editor-layout { grid-template-columns: 1fr; }
+      .map-region-editor-map { grid-row: 1; }
+    }
+    @media (max-width: 620px) {
+      .map-region-editor-controls .filter-grid { grid-template-columns: 1fr; }
+      .map-region-editor-controls .map-region-name-field,
+      .map-region-editor-controls .map-region-note-field { grid-column: auto; }
+      .map-region-drawing-modes { display: grid; grid-template-columns: 1fr; }
+      .map-region-editor-readout { grid-template-columns: 1fr; }
+    }
     .flight-path-layout {
       display: grid;
       grid-template-columns: minmax(420px, 1.35fr) minmax(280px, 0.65fr);
@@ -5739,7 +6011,8 @@ _INDEX_HTML = """<!doctype html>
     .timeline-event-badge.event-tone-activity { color: #69b8e8; border-style: dotted; }
     .timeline-event-badge.event-tone-plane { color: #69b8e8; border-radius: 3px; }
     .timeline-event-badge.event-tone-care { color: #ef9a9a; border-radius: 3px; }
-    .timeline-range { display: grid; grid-template-columns: minmax(0, 1fr) minmax(210px, auto); gap: 12px; align-items: center; margin: 12px 0; }
+    .timeline-range { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, auto) minmax(210px, auto); gap: 12px; align-items: center; margin: 12px 0; }
+    #timelineLocationStatus { color: #8fdac4; text-align: right; white-space: nowrap; }
     #timelineClock { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
     #timelineScrubber { width: 100%; margin: 0; padding: 0; }
     .replay-detail-layout {
@@ -7903,29 +8176,102 @@ _INDEX_HTML = """<!doctype html>
       <div class="status" id="dropZoneBody" style="margin-top: 12px;">조회 대기 중</div>
     </section>
     <section id="map-region-lookup" data-view="replay">
-      <h2>맵 좌표 지역 확인</h2>
-      <form id="mapRegionForm">
-        <label>맵
-          <select name="map_name">
-            <option value="Baltic_Main">에란겔 리마스터</option>
-            <option value="Erangel_Main">에란겔</option>
-            <option value="Desert_Main">미라마</option>
-            <option value="DihorOtok_Main">비켄디</option>
-            <option value="Savage_Main">사녹</option>
-            <option value="Summerland_Main">카라킨</option>
-            <option value="Tiger_Main">태이고</option>
-            <option value="Chimera_Main">파라모</option>
-            <option value="Neon_Main">론도</option>
-            <option value="Range_Main">캠프 자칼</option>
-            <option value="Kiki_Main">데스턴</option>
-            <option value="Heaven_Main">헤이븐</option>
-          </select>
-        </label>
-        <label>X (cm)<input name="x_cm" type="number" min="0" step="0.01" required></label>
-        <label>Y (cm)<input name="y_cm" type="number" min="0" step="0.01" required></label>
-        <button type="submit">확인</button>
+      <h2>사용자 지역 편집</h2>
+      <form id="mapRegionForm" class="map-region-editor-layout">
+        <div class="map-region-editor-controls">
+          <div class="filter-grid">
+            <label>맵
+              <select name="map_name" id="mapRegionMapSelect">
+                <option value="Baltic_Main">에란겔 리마스터</option>
+                <option value="Erangel_Main">에란겔</option>
+                <option value="Desert_Main">미라마</option>
+                <option value="DihorOtok_Main">비켄디</option>
+                <option value="Savage_Main">사녹</option>
+                <option value="Summerland_Main">카라킨</option>
+                <option value="Tiger_Main">태이고</option>
+                <option value="Chimera_Main">파라모</option>
+                <option value="Neon_Main">론도</option>
+                <option value="Range_Main">캠프 자칼</option>
+                <option value="Kiki_Main">데스턴</option>
+                <option value="Heaven_Main">헤이븐</option>
+              </select>
+            </label>
+            <label>우선순위
+              <input name="priority" type="number" min="0" max="1000" step="1" value="100" required>
+            </label>
+            <label class="map-region-name-field">지역 이름
+              <input name="name_ko" maxlength="80" autocomplete="off" placeholder="예: 부트캠프 좌창" required>
+            </label>
+          </div>
+          <input name="region_id" type="hidden">
+          <input name="geometry_type" type="hidden" value="point_radius">
+          <div>
+            <label>영역 방식</label>
+            <div class="segmented-control map-region-drawing-modes" role="group" aria-label="사용자 지역 영역 방식">
+              <button type="button" class="active" data-map-region-mode="point_radius">지점·반경</button>
+              <button type="button" data-map-region-mode="rectangle">사각 범위</button>
+              <button type="button" data-map-region-mode="polygon">다각 범위</button>
+            </div>
+          </div>
+          <label id="mapRegionRadiusField">반경
+            <input name="radius_m" type="number" min="5" step="5" value="100" required>
+          </label>
+          <label class="checkbox-line">
+            <input name="enabled" type="checkbox" checked>
+            분석에 사용
+          </label>
+          <label class="map-region-note-field">메모
+            <textarea name="note" maxlength="300" placeholder="구분 근거나 통칭을 기록"></textarea>
+          </label>
+          <div class="actions" style="justify-content:flex-start">
+            <button type="submit" id="mapRegionSave">저장</button>
+            <button class="secondary" type="button" id="mapRegionNew">새 지역</button>
+            <button class="secondary" type="button" id="mapRegionUndo">점 되돌리기</button>
+            <button class="secondary" type="button" id="mapRegionClear">영역 지우기</button>
+          </div>
+        </div>
+        <div class="map-region-editor-map">
+          <div class="map-region-map-toolbar">
+            <h3 id="mapRegionMapTitle">지도 영역</h3>
+            <label class="checkbox-line">
+              <input type="checkbox" id="mapRegionShowOfficial">
+              공식 지명 참고선
+            </label>
+          </div>
+          <div class="map-region-editor-stage" id="mapRegionEditorStage" tabindex="0" aria-label="사용자 지역 영역 편집 지도">
+            <img id="mapRegionEditorImage" alt="사용자 지역 편집 지도">
+            <svg id="mapRegionEditorOverlay" viewBox="0 0 1000 1000" aria-label="사용자 지역 도형"></svg>
+            <div class="flight-map-controls" aria-label="지역 편집 지도 도구">
+              <button class="secondary" type="button" id="mapRegionZoomOut" title="지도 축소" aria-label="지도 축소">−</button>
+              <button class="secondary" type="button" id="mapRegionZoomIn" title="지도 확대" aria-label="지도 확대">+</button>
+              <button class="secondary flight-map-fit-button" type="button" id="mapRegionResetViewport" title="전체 지도 보기">전체 지도</button>
+              <button class="secondary flight-map-fit-button" type="button" id="mapRegionPanToggle" title="지도를 끌어서 이동">지도 이동</button>
+            </div>
+          </div>
+          <div class="map-region-editor-readout">
+            <span id="mapRegionPointerStatus"><strong>선택 없음</strong><br>지도 위치를 선택하세요.</span>
+            <span id="mapRegionGeometryStatus">영역 없음</span>
+          </div>
+          <div class="map-region-legend" aria-label="지도 영역 범례">
+            <span><i></i>저장 영역</span>
+            <span><i class="draft"></i>편집 영역</span>
+            <span><i class="official"></i>공식 참고선</span>
+          </div>
+        </div>
       </form>
-      <div class="status" id="mapRegionBody" style="margin-top: 12px;">조회 대기 중</div>
+      <div class="status" id="mapRegionBody" style="margin-top: 12px;">사용자 지역을 불러오는 중</div>
+      <div class="map-region-list-wrap">
+        <div class="map-region-list-toolbar">
+          <h3>이 맵의 사용자 지역</h3>
+          <span class="status" id="mapRegionCount">0개</span>
+        </div>
+        <div class="table-scroll">
+          <table class="map-region-table">
+            <thead><tr><th>이름</th><th>영역</th><th>우선순위</th><th>상태</th><th>최근 수정</th><th>작업</th></tr></thead>
+            <tbody id="mapRegionList"><tr><td colspan="6">불러오는 중</td></tr></tbody>
+          </table>
+        </div>
+      </div>
     </section>
     <section id="match-lookup" data-view="players">
       <h2>매치 조회</h2>
@@ -8415,6 +8761,7 @@ _INDEX_HTML = """<!doctype html>
         <label><input type="checkbox" id="timelineShowCare" checked>보급</label>
         <label><input type="checkbox" id="timelineShowPlane" checked>비행기</label>
         <label><input type="checkbox" id="timelineShowPhase" checked>자기장</label>
+        <label><input type="checkbox" id="timelineShowRegions" checked>사용자 지역</label>
         <label><input type="checkbox" id="timelineShowAllies" checked>아군</label>
         <label><input type="checkbox" id="timelineShowEnemies" checked>적군</label>
         <label><input type="checkbox" id="timelineShowBots" checked>봇</label>
@@ -8515,6 +8862,7 @@ _INDEX_HTML = """<!doctype html>
       </div>
       <div class="timeline-range">
         <input id="timelineScrubber" type="range" min="0" max="0" value="0" step="0.1" aria-label="리플레이 재생 위치">
+        <div class="status" id="timelineLocationStatus">현재 지역 없음</div>
         <div class="status" id="timelineClock">0.0초</div>
       </div>
       <div class="timeline-now-event" id="timelineNowEvent" aria-live="polite" aria-atomic="true">
@@ -8777,7 +9125,25 @@ _INDEX_HTML = """<!doctype html>
     const weaponBody = document.querySelector("#weaponBody");
     const recommendationBody = document.querySelector("#recommendationBody");
     const dropZoneBody = document.querySelector("#dropZoneBody");
+    const mapRegionForm = document.querySelector("#mapRegionForm");
     const mapRegionBody = document.querySelector("#mapRegionBody");
+    const mapRegionMapSelect = document.querySelector("#mapRegionMapSelect");
+    const mapRegionEditorStage = document.querySelector("#mapRegionEditorStage");
+    const mapRegionEditorImage = document.querySelector("#mapRegionEditorImage");
+    const mapRegionEditorOverlay = document.querySelector("#mapRegionEditorOverlay");
+    const mapRegionShowOfficial = document.querySelector("#mapRegionShowOfficial");
+    const mapRegionPointerStatus = document.querySelector("#mapRegionPointerStatus");
+    const mapRegionGeometryStatus = document.querySelector("#mapRegionGeometryStatus");
+    const mapRegionRadiusField = document.querySelector("#mapRegionRadiusField");
+    const mapRegionList = document.querySelector("#mapRegionList");
+    const mapRegionCount = document.querySelector("#mapRegionCount");
+    const mapRegionNew = document.querySelector("#mapRegionNew");
+    const mapRegionUndo = document.querySelector("#mapRegionUndo");
+    const mapRegionClear = document.querySelector("#mapRegionClear");
+    const mapRegionZoomOut = document.querySelector("#mapRegionZoomOut");
+    const mapRegionZoomIn = document.querySelector("#mapRegionZoomIn");
+    const mapRegionResetViewport = document.querySelector("#mapRegionResetViewport");
+    const mapRegionPanToggle = document.querySelector("#mapRegionPanToggle");
     const matchBody = document.querySelector("#matchBody");
     const rankingBody = document.querySelector("#rankingBody");
     const jobsBody = document.querySelector("#jobsBody");
@@ -8990,6 +9356,7 @@ _INDEX_HTML = """<!doctype html>
     const timelineEventCount = document.querySelector("#timelineEventCount");
     const timelineQuickEvents = document.querySelector("#timelineQuickEvents");
     const timelineNowEvent = document.querySelector("#timelineNowEvent");
+    const timelineLocationStatus = document.querySelector("#timelineLocationStatus");
     const replayCanvas = document.querySelector("#replayCanvas");
     const replayPlayerStatus = document.querySelector("#replayPlayerStatus");
     const timelineShowPath = document.querySelector("#timelineShowPath");
@@ -9003,6 +9370,7 @@ _INDEX_HTML = """<!doctype html>
     const timelineShowCare = document.querySelector("#timelineShowCare");
     const timelineShowPlane = document.querySelector("#timelineShowPlane");
     const timelineShowPhase = document.querySelector("#timelineShowPhase");
+    const timelineShowRegions = document.querySelector("#timelineShowRegions");
     const timelineShowAllies = document.querySelector("#timelineShowAllies");
     const timelineShowEnemies = document.querySelector("#timelineShowEnemies");
     const timelineShowBots = document.querySelector("#timelineShowBots");
@@ -9045,6 +9413,19 @@ _INDEX_HTML = """<!doctype html>
     let activeTimelineDetailKey = "";
     let activeTimelineDuration = 0;
     let activeTimelineTime = 0;
+    let mapRegionCatalog = null;
+    let customMapRegions = [];
+    let editingMapRegionId = "";
+    let mapRegionDrawingMode = "point_radius";
+    let mapRegionDraft = { center: null, points: [] };
+    let mapRegionRectangleStart = null;
+    let mapRegionRectangleCurrent = null;
+    let mapRegionPointerId = null;
+    let mapRegionViewport = { x: 0, y: 0, size: 1 };
+    let mapRegionPanMode = false;
+    let mapRegionPanStart = null;
+    let mapRegionLastPoint = null;
+    let mapRegionSuppressClick = false;
     let replayMapImage = null;
     let replayMapImageName = "";
     let replayAnimationId = null;
@@ -9228,7 +9609,7 @@ _INDEX_HTML = """<!doctype html>
         { key: "player", label: "2D 재생", ids: ["replay-player"] },
         { key: "flight-paths", label: "동선·자기장", ids: ["flight-path-analysis"] },
         { key: "artifacts", label: "저장 목록", ids: ["replay-artifacts"] },
-        { key: "regions", label: "지역 확인", ids: ["map-region-lookup"] },
+        { key: "regions", label: "지역 편집", ids: ["map-region-lookup"] },
       ],
       collection: [
         { key: "collector", label: "자동 수집", ids: ["collector-settings"] },
@@ -15277,39 +15658,437 @@ _INDEX_HTML = """<!doctype html>
       renderMap(initialMap);
     }
 
-    async function loadMapRegion(formElement) {
-      const form = new FormData(formElement);
-      const params = new URLSearchParams({
-        map_name: String(form.get("map_name") || "Baltic_Main"),
-        x_cm: String(form.get("x_cm") || "0"),
-        y_cm: String(form.get("y_cm") || "0"),
-      });
-      const response = await fetch(`/map-regions/resolve?${params.toString()}`);
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ detail: response.statusText }));
-        throw new Error(error.detail || response.statusText);
+    let mapRegionResolveSequence = 0;
+
+    async function mapRegionRequest(url, options = {}) {
+      const response = await fetch(url, options);
+      const payload = await response.json().catch(() => ({ detail: response.statusText }));
+      if (!response.ok) throw new Error(payload.detail || response.statusText);
+      return payload;
+    }
+
+    function currentMapRegionRecord() {
+      return mapRegionCatalog?.maps?.[0] || null;
+    }
+
+    function mapRegionWorldSizeCm() {
+      return Number(currentMapRegionRecord()?.world_size_cm || 0);
+    }
+
+    function normalizedMapRegionPoints(region) {
+      return (region?.points_pct || []).map((point) => ({
+        x: Number(Array.isArray(point) ? point[0] : point.x_pct),
+        y: Number(Array.isArray(point) ? point[1] : point.y_pct),
+      })).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+    }
+
+    function mapRegionRectanglePoints(start, end) {
+      if (!start || !end) return [];
+      const left = Math.min(start.x, end.x);
+      const right = Math.max(start.x, end.x);
+      const top = Math.min(start.y, end.y);
+      const bottom = Math.max(start.y, end.y);
+      return [
+        { x: left, y: top },
+        { x: right, y: top },
+        { x: right, y: bottom },
+        { x: left, y: bottom },
+      ];
+    }
+
+    function mapRegionDraftPoints() {
+      if (mapRegionDrawingMode === "rectangle" && mapRegionRectangleStart && mapRegionRectangleCurrent) {
+        return mapRegionRectanglePoints(mapRegionRectangleStart, mapRegionRectangleCurrent);
       }
-      const region = (await response.json()).map_region;
-      const fallbackLabels = {
-        unmatched: "등록 지명 밖",
-        dynamic_map: "동적 지형",
-        unsupported_map: "미지원 맵",
-        invalid_coordinate: "좌표 범위 밖",
+      return mapRegionDraft.points || [];
+    }
+
+    function mapRegionLabelPoint(region, points) {
+      const centerX = Number(region?.center_x_pct);
+      const centerY = Number(region?.center_y_pct);
+      if (Number.isFinite(centerX) && Number.isFinite(centerY)) return { x: centerX, y: centerY };
+      if (!points.length) return null;
+      return {
+        x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
+        y: points.reduce((sum, point) => sum + point.y, 0) / points.length,
       };
-      const statusLabel = fallbackLabels[region.status] || "확인됨";
-      const location = region.region_display_name_ko || statusLabel;
-      const normalized = region.x_pct === null || region.y_pct === null
-        ? "-"
-        : `${percent(region.x_pct)} / ${percent(region.y_pct)}`;
-      const distance = region.distance_to_center_m === null
-        ? "-"
-        : `${formatNumber(region.distance_to_center_m, 1)}m`;
-      mapRegionBody.innerHTML = [
-        `<strong>${escapeHtml(region.map_name_ko)} · ${escapeHtml(location)}</strong>`,
-        `원본 좌표: ${formatNumber(region.x_cm, 1)}, ${formatNumber(region.y_cm, 1)}cm · 정규화: ${normalized}`,
-        `상태: ${escapeHtml(statusLabel)} · 지역 ID: ${escapeHtml(region.region_id || "-")} · 중심 거리: ${distance}`,
-        `사전: ${escapeHtml(region.catalog_version)} · 출처: ${escapeHtml(String(region.source_commit || "-").slice(0, 7))}`,
-      ].join("<br>");
+    }
+
+    function mapRegionShapeMarkup(region, className, showLabel) {
+      const points = normalizedMapRegionPoints(region);
+      const labelPoint = mapRegionLabelPoint(region, points);
+      const name = region?.name_ko || region?.name || "지역";
+      const radius = Number(region?.radius_pct || 0);
+      let shape = "";
+      if ((region?.geometry_type === "point_radius" || region?.geometry_type === "circle") && labelPoint && radius > 0) {
+        shape = `<circle class="${className}" cx="${(labelPoint.x * 1000).toFixed(3)}" cy="${(labelPoint.y * 1000).toFixed(3)}" r="${(radius * 1000).toFixed(3)}"><title>${escapeHtml(name)}</title></circle>`;
+      } else if (points.length >= 3) {
+        shape = `<polygon class="${className}" points="${points.map((point) => `${(point.x * 1000).toFixed(3)},${(point.y * 1000).toFixed(3)}`).join(" ")}"><title>${escapeHtml(name)}</title></polygon>`;
+      }
+      if (!shape || !showLabel || !labelPoint) return shape;
+      const labelClass = className.includes("official") ? "map-region-label official" : "map-region-label";
+      const labelSize = (className.includes("official") ? 12 : 15) * mapRegionViewport.size;
+      return shape + `<text class="${labelClass}" x="${(labelPoint.x * 1000).toFixed(3)}" y="${(labelPoint.y * 1000).toFixed(3)}" style="font-size:${labelSize.toFixed(2)}px">${escapeHtml(name)}</text>`;
+    }
+
+    function mapRegionDraftMarkup() {
+      const pointRadius = mapRegionDrawingMode === "point_radius";
+      const center = mapRegionDraft.center;
+      const radiusM = Math.max(0, Number(mapRegionForm.elements.radius_m.value || 0));
+      const worldSizeCm = mapRegionWorldSizeCm();
+      const vertexRadius = 6 * mapRegionViewport.size;
+      if (pointRadius && center && worldSizeCm > 0) {
+        const radiusPct = radiusM * 100 / worldSizeCm;
+        return `<circle class="map-region-draft-shape" cx="${(center.x * 1000).toFixed(3)}" cy="${(center.y * 1000).toFixed(3)}" r="${(radiusPct * 1000).toFixed(3)}"></circle><circle class="map-region-vertex" cx="${(center.x * 1000).toFixed(3)}" cy="${(center.y * 1000).toFixed(3)}" r="${vertexRadius.toFixed(2)}"></circle>`;
+      }
+      const points = mapRegionDraftPoints();
+      if (!points.length) return "";
+      const coordinates = points.map((point) => `${(point.x * 1000).toFixed(3)},${(point.y * 1000).toFixed(3)}`).join(" ");
+      const shape = points.length >= 3
+        ? `<polygon class="map-region-draft-shape" points="${coordinates}"></polygon>`
+        : `<polyline class="map-region-draft-shape" points="${coordinates}" fill="none"></polyline>`;
+      return shape + points.map((point) => `<circle class="map-region-vertex" cx="${(point.x * 1000).toFixed(3)}" cy="${(point.y * 1000).toFixed(3)}" r="${vertexRadius.toFixed(2)}"></circle>`).join("");
+    }
+
+    function clampMapRegionViewport(viewport) {
+      const size = Math.max(0.06, Math.min(1, Number(viewport.size || 1)));
+      return {
+        x: Math.max(0, Math.min(1 - size, Number(viewport.x || 0))),
+        y: Math.max(0, Math.min(1 - size, Number(viewport.y || 0))),
+        size,
+      };
+    }
+
+    function applyMapRegionViewport() {
+      mapRegionViewport = clampMapRegionViewport(mapRegionViewport);
+      const { x, y, size } = mapRegionViewport;
+      mapRegionEditorOverlay.setAttribute("viewBox", `${x * 1000} ${y * 1000} ${size * 1000} ${size * 1000}`);
+      mapRegionEditorImage.style.width = `${100 / size}%`;
+      mapRegionEditorImage.style.height = `${100 / size}%`;
+      mapRegionEditorImage.style.left = `${-x * 100 / size}%`;
+      mapRegionEditorImage.style.top = `${-y * 100 / size}%`;
+    }
+
+    function zoomMapRegionEditor(factor, anchor = null) {
+      const previous = mapRegionViewport;
+      const target = anchor || mapRegionLastPoint || {
+        x: previous.x + previous.size / 2,
+        y: previous.y + previous.size / 2,
+      };
+      const nextSize = Math.max(0.06, Math.min(1, previous.size * factor));
+      const relativeX = previous.size ? (target.x - previous.x) / previous.size : 0.5;
+      const relativeY = previous.size ? (target.y - previous.y) / previous.size : 0.5;
+      mapRegionViewport = clampMapRegionViewport({
+        x: target.x - relativeX * nextSize,
+        y: target.y - relativeY * nextSize,
+        size: nextSize,
+      });
+      renderMapRegionEditor();
+    }
+
+    function focusMapRegionEditor(region) {
+      const points = normalizedMapRegionPoints(region);
+      const center = mapRegionLabelPoint(region, points);
+      if (!center) return;
+      const radius = Number(region?.radius_pct || 0);
+      let span = radius > 0 ? radius * 4.5 : 0;
+      if (points.length) {
+        span = Math.max(
+          span,
+          Math.max(...points.map((point) => point.x)) - Math.min(...points.map((point) => point.x)),
+          Math.max(...points.map((point) => point.y)) - Math.min(...points.map((point) => point.y)),
+        ) * 1.8;
+      }
+      const size = Math.max(0.08, Math.min(1, span || 0.25));
+      mapRegionViewport = clampMapRegionViewport({
+        x: center.x - size / 2,
+        y: center.y - size / 2,
+        size,
+      });
+    }
+
+    function mapRegionGeometryLabel(region) {
+      const worldSizeCm = mapRegionWorldSizeCm();
+      if (region?.geometry_type === "point_radius") {
+        return `반경 ${formatNumber(Number(region.radius_pct || 0) * worldSizeCm / 100, 0)}m`;
+      }
+      const points = normalizedMapRegionPoints(region);
+      if (!points.length || !worldSizeCm) return "다각 범위";
+      const widthM = (Math.max(...points.map((point) => point.x)) - Math.min(...points.map((point) => point.x))) * worldSizeCm / 100;
+      const heightM = (Math.max(...points.map((point) => point.y)) - Math.min(...points.map((point) => point.y))) * worldSizeCm / 100;
+      return `다각 범위 · ${formatInteger(points.length)}점 · 약 ${formatNumber(widthM, 0)}×${formatNumber(heightM, 0)}m`;
+    }
+
+    function renderMapRegionList() {
+      mapRegionCount.textContent = `${formatInteger(customMapRegions.length)}개`;
+      mapRegionList.innerHTML = customMapRegions.length
+        ? customMapRegions.map((region) => `
+          <tr class="${region.region_id === editingMapRegionId ? "selected" : ""}" data-map-region-row="${attr(region.region_id)}">
+            <td><strong>${escapeHtml(region.name_ko)}</strong>${region.note ? `<br><span class="status">${escapeHtml(region.note)}</span>` : ""}</td>
+            <td>${escapeHtml(mapRegionGeometryLabel(region))}</td>
+            <td>${formatInteger(region.priority)}</td>
+            <td><span class="status-badge ${region.enabled ? "success" : "warning"}">${region.enabled ? "분석 사용" : "사용 중지"}</span></td>
+            <td>${escapeHtml(formatKstShort(region.updated_at_kst))}</td>
+            <td><div class="actions">
+              <button class="secondary compact-button" type="button" data-map-region-edit="${attr(region.region_id)}">편집</button>
+              <button class="secondary compact-button" type="button" data-map-region-toggle="${attr(region.region_id)}">${region.enabled ? "중지" : "사용"}</button>
+              <button class="danger compact-button" type="button" data-map-region-delete="${attr(region.region_id)}">삭제</button>
+            </div></td>
+          </tr>
+        `).join("")
+        : '<tr><td colspan="6">이 맵에 저장한 사용자 지역이 없습니다.</td></tr>';
+    }
+
+    function renderMapRegionEditor() {
+      applyMapRegionViewport();
+      const mapRecord = currentMapRegionRecord();
+      const officialRegions = (mapRecord?.regions || []).filter((region) => region.source !== "custom");
+      const officialMarkup = mapRegionShowOfficial.checked
+        ? officialRegions.map((region) => mapRegionShapeMarkup(region, "map-region-official-shape", true)).join("")
+        : "";
+      const customMarkup = customMapRegions.map((region) => {
+        const classes = [
+          "map-region-custom-shape",
+          region.enabled ? "" : "disabled",
+          region.region_id === editingMapRegionId ? "selected" : "",
+        ].filter(Boolean).join(" ");
+        return mapRegionShapeMarkup(region, classes, true);
+      }).join("");
+      mapRegionEditorOverlay.innerHTML = officialMarkup + customMarkup + mapRegionDraftMarkup();
+
+      const points = mapRegionDraftPoints();
+      const radiusM = Number(mapRegionForm.elements.radius_m.value || 0);
+      if (mapRegionDrawingMode === "point_radius") {
+        mapRegionGeometryStatus.textContent = mapRegionDraft.center
+          ? `지점·반경 ${formatNumber(radiusM, 0)}m`
+          : "지점 선택 전";
+      } else {
+        mapRegionGeometryStatus.textContent = points.length
+          ? `${mapRegionDrawingMode === "rectangle" ? "사각 범위" : "다각 범위"} · ${formatInteger(points.length)}점`
+          : "영역 선택 전";
+      }
+      renderMapRegionList();
+    }
+
+    function mapRegionPointFromPointer(event) {
+      const bounds = mapRegionEditorStage.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return null;
+      return {
+        x: Math.max(0, Math.min(1, mapRegionViewport.x + (event.clientX - bounds.left) / bounds.width * mapRegionViewport.size)),
+        y: Math.max(0, Math.min(1, mapRegionViewport.y + (event.clientY - bounds.top) / bounds.height * mapRegionViewport.size)),
+      };
+    }
+
+    async function resolveMapRegionEditorPoint(point) {
+      if (!point) return;
+      const sequence = ++mapRegionResolveSequence;
+      const worldSizeCm = mapRegionWorldSizeCm();
+      mapRegionPointerStatus.innerHTML = `<strong>위치 확인 중</strong><br>X ${formatNumber(point.x * 100, 2)}% · Y ${formatNumber(point.y * 100, 2)}%`;
+      if (!worldSizeCm) return;
+      try {
+        const params = new URLSearchParams({
+          map_name: mapRegionMapSelect.value,
+          x_cm: String(point.x * worldSizeCm),
+          y_cm: String(point.y * worldSizeCm),
+        });
+        const region = (await mapRegionRequest(`/map-regions/resolve?${params.toString()}`)).map_region;
+        if (sequence !== mapRegionResolveSequence) return;
+        const fallbackLabels = {
+          unmatched: "등록 지명 밖",
+          dynamic_map: "동적 지형",
+          unsupported_map: "미지원 맵",
+          invalid_coordinate: "좌표 범위 밖",
+        };
+        const location = region.region_display_name_ko || fallbackLabels[region.status] || "위치 확인됨";
+        const source = region.region_source === "custom" ? "사용자 지역" : (region.region_source === "official" ? "공식 참고 지명" : "지도 구역");
+        mapRegionPointerStatus.innerHTML = `<strong>${escapeHtml(location)}</strong><br>${escapeHtml(source)} · X ${formatNumber(point.x * 100, 2)}% · Y ${formatNumber(point.y * 100, 2)}%`;
+      } catch (error) {
+        if (sequence === mapRegionResolveSequence) {
+          mapRegionPointerStatus.textContent = `위치 확인 오류: ${error.message}`;
+        }
+      }
+    }
+
+    function setMapRegionDrawingMode(mode, { clear = true } = {}) {
+      mapRegionDrawingMode = ["point_radius", "rectangle", "polygon"].includes(mode) ? mode : "point_radius";
+      mapRegionForm.elements.geometry_type.value = mapRegionDrawingMode === "point_radius" ? "point_radius" : "polygon";
+      mapRegionRadiusField.hidden = mapRegionDrawingMode !== "point_radius";
+      mapRegionForm.elements.radius_m.required = mapRegionDrawingMode === "point_radius";
+      mapRegionForm.querySelectorAll("[data-map-region-mode]").forEach((button) => {
+        button.classList.toggle("active", button.dataset.mapRegionMode === mapRegionDrawingMode);
+      });
+      mapRegionPanMode = false;
+      mapRegionPanToggle.classList.remove("active");
+      mapRegionEditorStage.style.cursor = "crosshair";
+      if (clear) {
+        mapRegionDraft = { center: null, points: [] };
+        mapRegionRectangleStart = null;
+        mapRegionRectangleCurrent = null;
+      }
+      renderMapRegionEditor();
+    }
+
+    function resetMapRegionForm({ preserveMap = true, preserveViewport = true } = {}) {
+      const mapName = mapRegionMapSelect.value;
+      const viewport = { ...mapRegionViewport };
+      mapRegionForm.reset();
+      if (preserveMap) mapRegionMapSelect.value = mapName;
+      editingMapRegionId = "";
+      mapRegionDraft = { center: null, points: [] };
+      mapRegionRectangleStart = null;
+      mapRegionRectangleCurrent = null;
+      mapRegionViewport = preserveViewport ? viewport : { x: 0, y: 0, size: 1 };
+      setMapRegionDrawingMode("point_radius", { clear: false });
+      mapRegionBody.textContent = "새 사용자 지역";
+    }
+
+    function regionLooksLikeRectangle(region) {
+      const points = normalizedMapRegionPoints(region);
+      if (points.length !== 4) return false;
+      const xs = new Set(points.map((point) => point.x.toFixed(8)));
+      const ys = new Set(points.map((point) => point.y.toFixed(8)));
+      return xs.size === 2 && ys.size === 2;
+    }
+
+    function editCustomMapRegion(regionId) {
+      const region = customMapRegions.find((item) => item.region_id === regionId);
+      if (!region) return;
+      editingMapRegionId = region.region_id;
+      mapRegionForm.elements.region_id.value = region.region_id;
+      mapRegionForm.elements.name_ko.value = region.name_ko || "";
+      mapRegionForm.elements.priority.value = String(region.priority ?? 100);
+      mapRegionForm.elements.enabled.checked = Boolean(region.enabled);
+      mapRegionForm.elements.note.value = region.note || "";
+      const mode = region.geometry_type === "point_radius"
+        ? "point_radius"
+        : (regionLooksLikeRectangle(region) ? "rectangle" : "polygon");
+      setMapRegionDrawingMode(mode, { clear: false });
+      if (mode === "point_radius") {
+        mapRegionDraft = {
+          center: { x: Number(region.center_x_pct), y: Number(region.center_y_pct) },
+          points: [],
+        };
+        mapRegionForm.elements.radius_m.value = String(Math.max(1, Math.round(Number(region.radius_pct || 0) * mapRegionWorldSizeCm() / 100)));
+      } else {
+        mapRegionDraft = { center: null, points: normalizedMapRegionPoints(region) };
+      }
+      focusMapRegionEditor(region);
+      renderMapRegionEditor();
+      resolveMapRegionEditorPoint(mapRegionLabelPoint(region, normalizedMapRegionPoints(region)));
+      mapRegionBody.textContent = `${region.name_ko} 편집 중`;
+    }
+
+    function customMapRegionPayload() {
+      const form = new FormData(mapRegionForm);
+      const geometryType = mapRegionDrawingMode === "point_radius" ? "point_radius" : "polygon";
+      const worldSizeCm = mapRegionWorldSizeCm();
+      if (!worldSizeCm) throw new Error("맵 크기 정보를 찾지 못했습니다.");
+      const payload = {
+        map_name: String(form.get("map_name") || ""),
+        name_ko: String(form.get("name_ko") || "").trim(),
+        geometry_type: geometryType,
+        center_x_pct: null,
+        center_y_pct: null,
+        radius_pct: null,
+        points_pct: [],
+        priority: Number(form.get("priority") || 100),
+        enabled: Boolean(mapRegionForm.elements.enabled.checked),
+        note: String(form.get("note") || "").trim() || null,
+      };
+      if (geometryType === "point_radius") {
+        if (!mapRegionDraft.center) throw new Error("지도에서 지역 중심을 선택해 주세요.");
+        const radiusM = Number(form.get("radius_m") || 0);
+        if (!Number.isFinite(radiusM) || radiusM <= 0) throw new Error("반경을 0보다 크게 입력해 주세요.");
+        payload.center_x_pct = mapRegionDraft.center.x;
+        payload.center_y_pct = mapRegionDraft.center.y;
+        payload.radius_pct = radiusM * 100 / worldSizeCm;
+      } else {
+        const points = mapRegionDraftPoints();
+        if (points.length < 3) throw new Error("지도에서 영역 꼭짓점을 3개 이상 선택해 주세요.");
+        payload.points_pct = points.map((point) => ({ x_pct: point.x, y_pct: point.y }));
+      }
+      return payload;
+    }
+
+    function customMapRegionRecordPayload(region, changes = {}) {
+      return {
+        map_name: region.map_name,
+        name_ko: region.name_ko,
+        geometry_type: region.geometry_type,
+        center_x_pct: region.center_x_pct,
+        center_y_pct: region.center_y_pct,
+        radius_pct: region.radius_pct,
+        points_pct: (region.points_pct || []).map((point) => ({
+          x_pct: Number(Array.isArray(point) ? point[0] : point.x_pct),
+          y_pct: Number(Array.isArray(point) ? point[1] : point.y_pct),
+        })),
+        priority: region.priority,
+        enabled: region.enabled,
+        note: region.note,
+        ...changes,
+      };
+    }
+
+    async function loadMapRegionEditor({ keepEditing = false } = {}) {
+      const mapName = mapRegionMapSelect.value || "Baltic_Main";
+      mapRegionBody.textContent = "사용자 지역을 불러오는 중";
+      const [catalogPayload, customPayload] = await Promise.all([
+        mapRegionRequest(`/map-regions?map_name=${encodeURIComponent(mapName)}`),
+        mapRegionRequest(`/map-regions/custom?map_name=${encodeURIComponent(mapName)}`),
+      ]);
+      mapRegionCatalog = catalogPayload.map_region_catalog || null;
+      customMapRegions = customPayload.regions || [];
+      mapRegionEditorImage.src = `/replay/map-assets/${encodeURIComponent(mapName)}`;
+      mapRegionEditorImage.alt = `${mapRegionMapSelect.selectedOptions[0]?.textContent || "맵"} 사용자 지역 편집 지도`;
+      const maximumRadiusM = Math.max(5, Math.floor(mapRegionWorldSizeCm() * 0.5 / 100));
+      mapRegionForm.elements.radius_m.max = String(maximumRadiusM);
+      if (!keepEditing || !customMapRegions.some((region) => region.region_id === editingMapRegionId)) {
+        editingMapRegionId = "";
+      }
+      renderMapRegionEditor();
+      mapRegionBody.textContent = `사용자 지역 ${formatInteger(customMapRegions.length)}개 · 분석과 Discord 조회에 적용`;
+    }
+
+    async function saveCustomMapRegion() {
+      const payload = customMapRegionPayload();
+      const regionId = editingMapRegionId;
+      const result = await mapRegionRequest(
+        regionId ? `/map-regions/custom/${encodeURIComponent(regionId)}` : "/map-regions/custom",
+        {
+          method: regionId ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+      );
+      editingMapRegionId = result.map_region.region_id;
+      await loadMapRegionEditor({ keepEditing: true });
+      editCustomMapRegion(editingMapRegionId);
+      await loadFlightPathMapCatalog();
+      mapRegionBody.textContent = `${result.map_region.name_ko} 저장 완료 · 다음 분석부터 적용`;
+      return result.map_region;
+    }
+
+    async function toggleCustomMapRegion(regionId) {
+      const region = customMapRegions.find((item) => item.region_id === regionId);
+      if (!region) return;
+      await mapRegionRequest(`/map-regions/custom/${encodeURIComponent(regionId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(customMapRegionRecordPayload(region, { enabled: !region.enabled })),
+      });
+      await loadMapRegionEditor({ keepEditing: true });
+      await loadFlightPathMapCatalog();
+      mapRegionBody.textContent = `${region.name_ko} · ${region.enabled ? "분석 사용 중지" : "분석 사용"}`;
+    }
+
+    async function deleteCustomMapRegion(regionId) {
+      const region = customMapRegions.find((item) => item.region_id === regionId);
+      if (!region || !window.confirm(`${region.name_ko} 지역을 삭제하시겠습니까?`)) return;
+      await mapRegionRequest(`/map-regions/custom/${encodeURIComponent(regionId)}`, { method: "DELETE" });
+      if (editingMapRegionId === regionId) resetMapRegionForm();
+      await loadMapRegionEditor();
+      await loadFlightPathMapCatalog();
+      mapRegionBody.textContent = `${region.name_ko} 삭제 완료`;
     }
     function recommendationConditionLabel(filters) {
       const values = [];
@@ -17220,6 +17999,79 @@ _INDEX_HTML = """<!doctype html>
       return directions[Math.round(degrees / 45) % directions.length];
     }
 
+    function clientPointOnSegment(point, start, end) {
+      const cross = (point.y - start.y) * (end.x - start.x) - (point.x - start.x) * (end.y - start.y);
+      if (Math.abs(cross) > 1e-9) return false;
+      return point.x >= Math.min(start.x, end.x) - 1e-9
+        && point.x <= Math.max(start.x, end.x) + 1e-9
+        && point.y >= Math.min(start.y, end.y) - 1e-9
+        && point.y <= Math.max(start.y, end.y) + 1e-9;
+    }
+
+    function clientPointInPolygon(point, points) {
+      if (!point || points.length < 3) return false;
+      let inside = false;
+      let previous = points[points.length - 1];
+      for (const current of points) {
+        if (clientPointOnSegment(point, previous, current)) return true;
+        if ((previous.y > point.y) !== (current.y > point.y)) {
+          const boundaryX = (current.x - previous.x) * (point.y - previous.y) / (current.y - previous.y) + previous.x;
+          if (point.x < boundaryX) inside = !inside;
+        }
+        previous = current;
+      }
+      return inside;
+    }
+
+    function clientMapRegionContains(region, xPct, yPct) {
+      if (region?.enabled === false) return false;
+      if (region?.geometry_type === "polygon") {
+        return clientPointInPolygon({ x: xPct, y: yPct }, normalizedMapRegionPoints(region));
+      }
+      const radius = Number(region?.radius_pct || 0);
+      const centerX = Number(region?.center_x_pct);
+      const centerY = Number(region?.center_y_pct);
+      return radius > 0
+        && Number.isFinite(centerX)
+        && Number.isFinite(centerY)
+        && Math.hypot(xPct - centerX, yPct - centerY) <= radius + 1e-12;
+    }
+
+    function clientMapRegionArea(region) {
+      const supplied = Number(region?.estimated_area_pct2);
+      if (Number.isFinite(supplied) && supplied >= 0) return supplied;
+      const radius = Number(region?.radius_pct || 0);
+      if (radius > 0) return Math.PI * radius * radius;
+      const points = normalizedMapRegionPoints(region);
+      if (points.length < 3) return Number.POSITIVE_INFINITY;
+      let area = 0;
+      for (let index = 0; index < points.length; index += 1) {
+        const following = points[(index + 1) % points.length];
+        area += points[index].x * following.y - following.x * points[index].y;
+      }
+      return Math.abs(area) / 2;
+    }
+
+    function clientMapRegionResolution(mapRecord, xPct, yPct) {
+      const regions = mapRecord?.regions || [];
+      const customMatch = regions
+        .filter((region) => region.source === "custom" && clientMapRegionContains(region, xPct, yPct))
+        .sort((left, right) => (
+          Number(right.priority || 0) - Number(left.priority || 0)
+          || clientMapRegionArea(left) - clientMapRegionArea(right)
+          || String(left.region_id || "").localeCompare(String(right.region_id || ""))
+        ))[0];
+      if (customMatch) return { region: customMatch, source: "custom" };
+      const officialMatch = regions
+        .filter((region) => region.source !== "custom" && clientMapRegionContains(region, xPct, yPct))
+        .map((region) => {
+          const distance = Math.hypot(xPct - Number(region.center_x_pct), yPct - Number(region.center_y_pct));
+          return { region, distance, normalized: distance / Number(region.radius_pct || 1) };
+        })
+        .sort((left, right) => left.normalized - right.normalized || left.distance - right.distance)[0];
+      return officialMatch ? { ...officialMatch, source: "official" } : null;
+    }
+
     function circleLocationContext(cluster) {
       const xPct = Number(cluster?.center_x_pct);
       const yPct = Number(cluster?.center_y_pct);
@@ -17227,36 +18079,47 @@ _INDEX_HTML = """<!doctype html>
       const sector = hasPoint ? mapSectorLabel(xPct, yPct) : "위치 확인 불가";
       const mapRecord = flightMapCatalogByName.get(cluster?.map_name || "");
       const worldSizeCm = Number(mapRecord?.world_size_cm || 0);
-      const regions = (mapRecord?.regions || []).filter((region) => (
-        Number.isFinite(Number(region.center_x_pct))
+      const officialRegions = (mapRecord?.regions || []).filter((region) => (
+        region.source !== "custom"
+        && Number.isFinite(Number(region.center_x_pct))
         && Number.isFinite(Number(region.center_y_pct))
         && Number(region.radius_pct) > 0
       ));
-      if (!hasPoint || !worldSizeCm || !regions.length) {
+      if (!hasPoint || !worldSizeCm) {
         return {
           primary: sector,
           secondary: "지도 구역 기준",
           title: `중심 X ${formatNumber(xPct * 100, 1)}% · Y ${formatNumber(yPct * 100, 1)}%`,
         };
       }
-      const measured = regions.map((region) => {
+      const match = clientMapRegionResolution(mapRecord, xPct, yPct);
+      if (match) {
+        const name = match.region.name_ko || match.region.name;
+        const distancePct = Math.hypot(
+          xPct - Number(match.region.center_x_pct),
+          yPct - Number(match.region.center_y_pct),
+        );
+        const distanceM = distancePct * worldSizeCm / 100;
+        const sourceLabel = match.source === "custom" ? "사용자 지역" : "공식 지명 범위";
+        return {
+          primary: name,
+          secondary: `${sector} · ${sourceLabel} · 중심에서 ${formatNumber(distanceM, 0)}m`,
+          title: `${name} ${sourceLabel} 안 · 중심 X ${formatNumber(xPct * 100, 1)}% · Y ${formatNumber(yPct * 100, 1)}%`,
+        };
+      }
+      const measured = officialRegions.map((region) => {
         const distancePct = Math.hypot(xPct - Number(region.center_x_pct), yPct - Number(region.center_y_pct));
         return {
           region,
           distancePct,
           distanceM: distancePct * worldSizeCm / 100,
-          normalizedDistance: distancePct / Number(region.radius_pct),
         };
       }).sort((left, right) => left.distancePct - right.distancePct);
-      const matched = measured
-        .filter((item) => item.distancePct <= Number(item.region.radius_pct))
-        .sort((left, right) => left.normalizedDistance - right.normalizedDistance)[0];
-      if (matched) {
-        const name = matched.region.name_ko || matched.region.name;
+      if (!measured.length) {
         return {
-          primary: name,
-          secondary: `${sector} · 지명 범위 중심에서 ${formatNumber(matched.distanceM, 0)}m`,
-          title: `${name} 지명 범위 안 · 중심 X ${formatNumber(xPct * 100, 1)}% · Y ${formatNumber(yPct * 100, 1)}%`,
+          primary: sector,
+          secondary: "지도 구역 기준",
+          title: `중심 X ${formatNumber(xPct * 100, 1)}% · Y ${formatNumber(yPct * 100, 1)}%`,
         };
       }
       const nearest = measured[0];
@@ -17270,6 +18133,21 @@ _INDEX_HTML = """<!doctype html>
         secondary: `${sector} · 가장 가까운 지도 지명 기준`,
         title: `${name} 중심에서 ${direction} ${formatNumber(nearest.distanceM, 0)}m · 중심 X ${formatNumber(xPct * 100, 1)}% · Y ${formatNumber(yPct * 100, 1)}%`,
       };
+    }
+
+    function replayLocationContext(mapPoint) {
+      const xPct = Number(mapPoint?.x_pct);
+      const yPct = Number(mapPoint?.y_pct);
+      const mapRecord = flightMapCatalogByName.get(activeTimeline?.match?.map_name || activeTimeline?.map_name || "");
+      if (!Number.isFinite(xPct) || !Number.isFinite(yPct)) return null;
+      const resolution = clientMapRegionResolution(mapRecord, xPct, yPct);
+      if (resolution) {
+        return {
+          name: resolution.region.name_ko || resolution.region.name,
+          source: resolution.source === "custom" ? "사용자 지역" : "공식 지명",
+        };
+      }
+      return { name: mapSectorLabel(xPct, yPct), source: "지도 구역" };
     }
 
     function availableCirclePhases(report, mapName) {
@@ -17823,6 +18701,7 @@ _INDEX_HTML = """<!doctype html>
       timelineScrubber.max = "0";
       timelineScrubber.value = "0";
       timelineClock.textContent = "0.0초";
+      timelineLocationStatus.textContent = "현재 지역 없음";
       replayPlayerStatus.textContent = message;
       renderTimelineActorFilter();
       renderTimelineEventTypeFilter();
@@ -19236,6 +20115,7 @@ _INDEX_HTML = """<!doctype html>
       replayCtx.clearRect(0, 0, width, height);
       drawReplayBackground(width, height);
 
+      if (timelineShowRegions.checked) drawReplayCustomRegions();
       if (timelineShowPhase.checked) drawReplayPhaseRings(activeTimeline.phase_events || []);
       if (timelineShowPlane.checked) drawReplayPlaneRoute(activeTimeline.plane_route);
       if (timelineShowCare.checked) drawReplayCarePackages(activeTimeline.care_packages || []);
@@ -19257,6 +20137,14 @@ _INDEX_HTML = """<!doctype html>
       drawReplayCurrentEventCallout();
       drawReplayOverlay();
       renderTimelineEventDetail(null);
+      const currentPosition = replayTrackPosition(
+        timelineTrackByAccount(activeTimeline?.player?.account_id),
+        activeTimelineTime,
+      );
+      const currentLocation = replayLocationContext(currentPosition);
+      timelineLocationStatus.textContent = currentLocation
+        ? `${currentLocation.name} · ${currentLocation.source}`
+        : "현재 지역 없음";
       timelineClock.textContent = `${formatReplayTime(activeTimelineTime)} · ${formatReplayKst(activeTimelineTime)} KST`;
       timelineScrubber.value = String(activeTimelineTime);
     }
@@ -19478,6 +20366,54 @@ _INDEX_HTML = """<!doctype html>
         replayCtx.fill();
         replayCtx.stroke();
       }
+    }
+
+    function drawReplayCustomRegions() {
+      const mapName = activeTimeline?.match?.map_name || activeTimeline?.map_name || "";
+      const regions = (flightMapCatalogByName.get(mapName)?.regions || []).filter((region) => region.source === "custom");
+      if (!regions.length) return;
+      replayCtx.save();
+      for (const region of regions) {
+        const points = normalizedMapRegionPoints(region);
+        const center = mapRegionLabelPoint(region, points);
+        replayCtx.beginPath();
+        if (region.geometry_type === "point_radius" && center) {
+          const point = canvasPoint({ x_pct: center.x, y_pct: center.y });
+          const radius = Number(region.radius_pct || 0) / replayViewport().size * replayCanvas.width;
+          if (!Number.isFinite(radius) || radius <= 0) continue;
+          replayCtx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+        } else if (points.length >= 3) {
+          points.forEach((point, index) => {
+            const canvas = canvasPoint({ x_pct: point.x, y_pct: point.y });
+            if (index === 0) replayCtx.moveTo(canvas.x, canvas.y);
+            else replayCtx.lineTo(canvas.x, canvas.y);
+          });
+          replayCtx.closePath();
+        } else {
+          continue;
+        }
+        replayCtx.fillStyle = "rgba(70,210,170,0.10)";
+        replayCtx.strokeStyle = "rgba(70,210,170,0.82)";
+        replayCtx.lineWidth = 2;
+        replayCtx.setLineDash([8, 5]);
+        replayCtx.fill();
+        replayCtx.stroke();
+        if (center) {
+          const labelPoint = canvasPoint({ x_pct: center.x, y_pct: center.y });
+          if (canvasPointVisible(labelPoint, 20)) {
+            const name = String(region.name_ko || region.name || "사용자 지역");
+            replayCtx.font = "bold 12px Arial";
+            replayCtx.textAlign = "center";
+            replayCtx.textBaseline = "middle";
+            replayCtx.lineWidth = 4;
+            replayCtx.strokeStyle = "rgba(6,7,8,0.9)";
+            replayCtx.strokeText(name, labelPoint.x, labelPoint.y);
+            replayCtx.fillStyle = "#8af0d1";
+            replayCtx.fillText(name, labelPoint.x, labelPoint.y);
+          }
+        }
+      }
+      replayCtx.restore();
     }
 
     function drawReplayLandings(events, actorColor = "#4bd0a0") {
@@ -21018,11 +21954,197 @@ _INDEX_HTML = """<!doctype html>
       renderWeaponTrendChart();
     });
 
-    document.querySelector("#mapRegionForm").addEventListener("submit", async (event) => {
+    mapRegionForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       try {
-        await loadMapRegion(event.currentTarget);
-        banner.textContent = "맵 지역 확인 완료";
+        const region = await saveCustomMapRegion();
+        banner.textContent = `${region.name_ko} 사용자 지역 저장 완료`;
+      } catch (error) {
+        mapRegionBody.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+    mapRegionForm.querySelectorAll("[data-map-region-mode]").forEach((button) => {
+      button.addEventListener("click", () => setMapRegionDrawingMode(button.dataset.mapRegionMode || "point_radius"));
+    });
+    mapRegionNew.addEventListener("click", () => {
+      resetMapRegionForm();
+      banner.textContent = "새 사용자 지역";
+    });
+    mapRegionUndo.addEventListener("click", () => {
+      if (mapRegionDrawingMode === "point_radius") {
+        mapRegionDraft.center = null;
+      } else if (mapRegionDrawingMode === "rectangle") {
+        mapRegionDraft.points = [];
+        mapRegionRectangleStart = null;
+        mapRegionRectangleCurrent = null;
+      } else {
+        mapRegionDraft.points.pop();
+      }
+      renderMapRegionEditor();
+    });
+    mapRegionClear.addEventListener("click", () => {
+      mapRegionDraft = { center: null, points: [] };
+      mapRegionRectangleStart = null;
+      mapRegionRectangleCurrent = null;
+      mapRegionPointerStatus.innerHTML = "<strong>선택 없음</strong><br>지도 위치를 선택하세요.";
+      renderMapRegionEditor();
+    });
+    mapRegionShowOfficial.addEventListener("change", renderMapRegionEditor);
+    mapRegionForm.elements.radius_m.addEventListener("input", renderMapRegionEditor);
+    mapRegionMapSelect.addEventListener("change", async () => {
+      try {
+        resetMapRegionForm({ preserveMap: true, preserveViewport: false });
+        await loadMapRegionEditor();
+        banner.textContent = `${mapRegionMapSelect.selectedOptions[0]?.textContent || "맵"} 사용자 지역`;
+      } catch (error) {
+        mapRegionBody.textContent = `오류: ${error.message}`;
+        banner.textContent = `오류: ${error.message}`;
+      }
+    });
+    mapRegionZoomIn.addEventListener("click", () => zoomMapRegionEditor(0.72));
+    mapRegionZoomOut.addEventListener("click", () => zoomMapRegionEditor(1 / 0.72));
+    mapRegionResetViewport.addEventListener("click", () => {
+      mapRegionViewport = { x: 0, y: 0, size: 1 };
+      renderMapRegionEditor();
+    });
+    mapRegionPanToggle.addEventListener("click", () => {
+      mapRegionPanMode = !mapRegionPanMode;
+      mapRegionPanToggle.classList.toggle("active", mapRegionPanMode);
+      mapRegionEditorStage.style.cursor = mapRegionPanMode ? "grab" : "crosshair";
+      mapRegionEditorStage.classList.remove("panning");
+      mapRegionPanStart = null;
+    });
+    mapRegionEditorStage.addEventListener("wheel", (event) => {
+      if (event.target instanceof Element && event.target.closest(".flight-map-controls")) return;
+      event.preventDefault();
+      const anchor = mapRegionPointFromPointer(event);
+      zoomMapRegionEditor(event.deltaY < 0 ? 0.8 : 1.25, anchor);
+    }, { passive: false });
+    mapRegionEditorStage.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || (event.target instanceof Element && event.target.closest(".flight-map-controls"))) return;
+      const point = mapRegionPointFromPointer(event);
+      if (!point) return;
+      mapRegionLastPoint = point;
+      mapRegionPointerId = event.pointerId;
+      mapRegionEditorStage.setPointerCapture(event.pointerId);
+      if (mapRegionPanMode) {
+        mapRegionPanStart = {
+          clientX: event.clientX,
+          clientY: event.clientY,
+          viewport: { ...mapRegionViewport },
+        };
+        mapRegionSuppressClick = false;
+        mapRegionEditorStage.classList.add("panning");
+        return;
+      }
+      if (mapRegionDrawingMode === "rectangle") {
+        mapRegionRectangleStart = point;
+        mapRegionRectangleCurrent = point;
+        mapRegionDraft.points = [];
+        renderMapRegionEditor();
+      }
+    });
+    mapRegionEditorStage.addEventListener("pointermove", (event) => {
+      const point = mapRegionPointFromPointer(event);
+      if (point) mapRegionLastPoint = point;
+      if (mapRegionPointerId !== event.pointerId) return;
+      if (mapRegionPanStart) {
+        const bounds = mapRegionEditorStage.getBoundingClientRect();
+        const deltaX = (event.clientX - mapRegionPanStart.clientX) / Math.max(1, bounds.width) * mapRegionPanStart.viewport.size;
+        const deltaY = (event.clientY - mapRegionPanStart.clientY) / Math.max(1, bounds.height) * mapRegionPanStart.viewport.size;
+        mapRegionViewport = clampMapRegionViewport({
+          x: mapRegionPanStart.viewport.x - deltaX,
+          y: mapRegionPanStart.viewport.y - deltaY,
+          size: mapRegionPanStart.viewport.size,
+        });
+        mapRegionSuppressClick = mapRegionSuppressClick || Math.abs(event.clientX - mapRegionPanStart.clientX) > 3 || Math.abs(event.clientY - mapRegionPanStart.clientY) > 3;
+        renderMapRegionEditor();
+      } else if (mapRegionDrawingMode === "rectangle" && mapRegionRectangleStart && point) {
+        mapRegionRectangleCurrent = point;
+        renderMapRegionEditor();
+      }
+    });
+    mapRegionEditorStage.addEventListener("pointerup", (event) => {
+      if (mapRegionPointerId !== event.pointerId) return;
+      const point = mapRegionPointFromPointer(event);
+      if (mapRegionPanStart) {
+        mapRegionPanStart = null;
+        mapRegionEditorStage.classList.remove("panning");
+      } else if (mapRegionDrawingMode === "rectangle" && mapRegionRectangleStart && point) {
+        mapRegionRectangleCurrent = point;
+        mapRegionDraft.points = mapRegionRectanglePoints(mapRegionRectangleStart, mapRegionRectangleCurrent);
+        mapRegionRectangleStart = null;
+        mapRegionRectangleCurrent = null;
+        const center = mapRegionDraft.points.length
+          ? {
+              x: mapRegionDraft.points.reduce((sum, item) => sum + item.x, 0) / mapRegionDraft.points.length,
+              y: mapRegionDraft.points.reduce((sum, item) => sum + item.y, 0) / mapRegionDraft.points.length,
+            }
+          : point;
+        renderMapRegionEditor();
+        resolveMapRegionEditorPoint(center);
+      }
+      if (mapRegionEditorStage.hasPointerCapture(event.pointerId)) {
+        mapRegionEditorStage.releasePointerCapture(event.pointerId);
+      }
+      mapRegionPointerId = null;
+    });
+    mapRegionEditorStage.addEventListener("pointercancel", (event) => {
+      if (mapRegionPointerId !== event.pointerId) return;
+      mapRegionPanStart = null;
+      mapRegionRectangleStart = null;
+      mapRegionRectangleCurrent = null;
+      mapRegionPointerId = null;
+      mapRegionEditorStage.classList.remove("panning");
+      renderMapRegionEditor();
+    });
+    mapRegionEditorStage.addEventListener("click", (event) => {
+      if (event.target instanceof Element && event.target.closest(".flight-map-controls")) return;
+      if (mapRegionSuppressClick) {
+        mapRegionSuppressClick = false;
+        return;
+      }
+      if (mapRegionPanMode || mapRegionDrawingMode === "rectangle") return;
+      const point = mapRegionPointFromPointer(event);
+      if (!point) return;
+      mapRegionLastPoint = point;
+      if (mapRegionDrawingMode === "point_radius") {
+        mapRegionDraft.center = point;
+      } else if (mapRegionDraft.points.length < 64) {
+        mapRegionDraft.points.push(point);
+      }
+      renderMapRegionEditor();
+      resolveMapRegionEditorPoint(point);
+    });
+    mapRegionEditorStage.addEventListener("keydown", (event) => {
+      if (!["Backspace", "Delete", "Escape"].includes(event.key)) return;
+      event.preventDefault();
+      if (event.key === "Escape") {
+        mapRegionDraft = { center: null, points: [] };
+      } else if (mapRegionDrawingMode === "point_radius") {
+        mapRegionDraft.center = null;
+      } else {
+        mapRegionDraft.points.pop();
+      }
+      renderMapRegionEditor();
+    });
+    mapRegionList.addEventListener("click", async (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target) return;
+      const editButton = target.closest("[data-map-region-edit]");
+      const toggleButton = target.closest("[data-map-region-toggle]");
+      const deleteButton = target.closest("[data-map-region-delete]");
+      try {
+        if (editButton) {
+          editCustomMapRegion(editButton.dataset.mapRegionEdit || "");
+        } else if (toggleButton) {
+          await toggleCustomMapRegion(toggleButton.dataset.mapRegionToggle || "");
+        } else if (deleteButton) {
+          await deleteCustomMapRegion(deleteButton.dataset.mapRegionDelete || "");
+        } else {
+          return;
+        }
       } catch (error) {
         mapRegionBody.textContent = `오류: ${error.message}`;
         banner.textContent = `오류: ${error.message}`;
@@ -22692,6 +23814,7 @@ _INDEX_HTML = """<!doctype html>
       timelineShowCare,
       timelineShowPlane,
       timelineShowPhase,
+      timelineShowRegions,
       timelineShowAllies,
       timelineShowEnemies,
       timelineShowBots,
@@ -22706,7 +23829,7 @@ _INDEX_HTML = """<!doctype html>
           renderReplayFrame();
           return;
         }
-        if (toggle === timelineShowPhase) {
+        if (toggle === timelineShowPhase || toggle === timelineShowRegions) {
           renderReplayFrame();
           return;
         }
@@ -22798,7 +23921,7 @@ _INDEX_HTML = """<!doctype html>
     const initialAlertHistoryFilterFromUrl = loadInitialAlertHistoryFiltersFromUrl();
     loadInitialWorkerRunFiltersFromUrl();
 
-    Promise.all([loadStatus(), loadAlerts(), loadDiscordBot(), loadDiscordPermissions(), loadDiscordScopes(), loadDiscordGuilds(), loadCollectorWorkerStatus(), loadPostProcessingWorkerStatus(), loadOperationalDrills(), loadWorkerRuns(), loadPlayers(), loadWatchlistPlayers(), loadWatchlistEncounters(), loadDataDeletionRequests(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts(), loadFlightPathMapCatalog()])
+    Promise.all([loadStatus(), loadAlerts(), loadDiscordBot(), loadDiscordPermissions(), loadDiscordScopes(), loadDiscordGuilds(), loadCollectorWorkerStatus(), loadPostProcessingWorkerStatus(), loadOperationalDrills(), loadWorkerRuns(), loadPlayers(), loadWatchlistPlayers(), loadWatchlistEncounters(), loadDataDeletionRequests(), loadJobs(), loadTelemetryJobs(), loadReplayArtifacts(), loadFlightPathMapCatalog(), loadMapRegionEditor()])
       .then(() => initialAlertHistoryFilterFromUrl ? loadAlertHistory(alertHistoryPage) : null)
       .then(() => loadInitialAlertDetailFromUrl())
       .then(() => loadInitialWorkerRunDetailFromUrl())

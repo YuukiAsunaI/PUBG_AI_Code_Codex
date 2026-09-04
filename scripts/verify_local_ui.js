@@ -398,6 +398,117 @@ async function openWorkspaceSection(page, view, section) {
   await page.locator(`[data-workspace-section="${section}"]`).click();
 }
 
+async function runMapRegionEditorCheck(page) {
+  await openWorkspaceSection(page, "replay", "regions");
+  await page.locator("#mapRegionMapSelect").selectOption("Savage_Main");
+  await page.waitForFunction(() => (
+    document.querySelector("#mapRegionEditorImage")?.naturalWidth > 0
+    && !document.querySelector("#mapRegionBody")?.textContent?.includes("불러오는 중")
+  ));
+  const stage = page.locator("#mapRegionEditorStage");
+  const box = await stage.boundingBox();
+  if (!box) throw new Error("Map region editor stage is not visible.");
+  const clickAt = async (xPct, yPct) => {
+    await page.mouse.click(box.x + box.width * xPct, box.y + box.height * yPct);
+  };
+
+  await page.locator('[data-map-region-mode="polygon"]').click();
+  await clickAt(0.35, 0.35);
+  await clickAt(0.58, 0.38);
+  await clickAt(0.52, 0.62);
+  const polygonVertices = await page.locator("#mapRegionEditorOverlay .map-region-vertex").count();
+  const polygonDrafts = await page.locator("#mapRegionEditorOverlay polygon.map-region-draft-shape").count();
+
+  await page.locator("#mapRegionClear").click();
+  await page.locator('[data-map-region-mode="rectangle"]').click();
+  await page.mouse.move(box.x + box.width * 0.28, box.y + box.height * 0.30);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.58, box.y + box.height * 0.60, { steps: 5 });
+  await page.mouse.up();
+  const rectangleVertices = await page.locator("#mapRegionEditorOverlay .map-region-vertex").count();
+  const rectangleDrafts = await page.locator("#mapRegionEditorOverlay polygon.map-region-draft-shape").count();
+
+  await page.locator("#mapRegionClear").click();
+  await page.locator('[data-map-region-mode="point_radius"]').click();
+  await clickAt(0.5, 0.5);
+  const pointDrafts = await page.locator("#mapRegionEditorOverlay circle.map-region-draft-shape").count();
+  await page.locator("#mapRegionShowOfficial").check();
+  const officialShapes = await page.locator("#mapRegionEditorOverlay .map-region-official-shape").count();
+
+  const fullViewBox = await page.locator("#mapRegionEditorOverlay").getAttribute("viewBox");
+  await page.locator("#mapRegionZoomIn").click();
+  const zoomedViewBox = await page.locator("#mapRegionEditorOverlay").getAttribute("viewBox");
+  await page.locator("#mapRegionPanToggle").click();
+  const zoomedBox = await stage.boundingBox();
+  if (!zoomedBox) throw new Error("Map region editor stage disappeared.");
+  await page.mouse.move(zoomedBox.x + zoomedBox.width * 0.5, zoomedBox.y + zoomedBox.height * 0.5);
+  await page.mouse.down();
+  await page.mouse.move(zoomedBox.x + zoomedBox.width * 0.58, zoomedBox.y + zoomedBox.height * 0.56, { steps: 4 });
+  await page.mouse.up();
+  const pannedViewBox = await page.locator("#mapRegionEditorOverlay").getAttribute("viewBox");
+  const geometry = await page.evaluate(() => {
+    const stageElement = document.querySelector("#mapRegionEditorStage");
+    const controls = document.querySelector("#mapRegionEditorStage .flight-map-controls");
+    const stageRect = stageElement?.getBoundingClientRect();
+    const controlsRect = controls?.getBoundingClientRect();
+    return {
+      width: Math.round(stageRect?.width || 0),
+      height: Math.round(stageRect?.height || 0),
+      controlsInsideStage: Boolean(
+        stageRect
+        && controlsRect
+        && controlsRect.right <= stageRect.right + 1
+        && controlsRect.top >= stageRect.top - 1
+      ),
+    };
+  });
+  const screenshot = path.join(outputDir, "map-region-editor-desktop.png");
+  await page.screenshot({ path: screenshot, fullPage: false });
+  const mapNames = await page.locator("#mapRegionMapSelect option").evaluateAll((options) => (
+    options.map((option) => option.value).filter(Boolean)
+  ));
+  const allMapChecks = [];
+  for (const mapName of mapNames) {
+    await page.locator("#mapRegionMapSelect").selectOption(mapName);
+    await page.waitForFunction((expectedMapName) => {
+      const image = document.querySelector("#mapRegionEditorImage");
+      const body = document.querySelector("#mapRegionBody");
+      if (!image?.src) return false;
+      const sourcePath = decodeURIComponent(new URL(image.src).pathname);
+      return sourcePath.endsWith(`/${expectedMapName}`)
+        && image.complete
+        && image.naturalWidth > 0
+        && !body?.textContent?.includes("불러오는 중");
+    }, mapName);
+    allMapChecks.push(await page.evaluate((expectedMapName) => {
+      const image = document.querySelector("#mapRegionEditorImage");
+      return {
+        mapName: expectedMapName,
+        loaded: Boolean(image?.complete && image.naturalWidth > 0),
+        width: Number(image?.naturalWidth || 0),
+        height: Number(image?.naturalHeight || 0),
+      };
+    }, mapName));
+  }
+  return {
+    polygonVertices,
+    polygonDrafts,
+    rectangleVertices,
+    rectangleDrafts,
+    pointDrafts,
+    officialShapes,
+    fullViewBox,
+    zoomedViewBox,
+    pannedViewBox,
+    zoomed: fullViewBox !== zoomedViewBox,
+    panned: zoomedViewBox !== pannedViewBox,
+    geometry,
+    mapOptions: mapNames.length,
+    allMapChecks,
+    screenshot,
+  };
+}
+
 async function runWorkspaceContentCheck(page) {
   const views = await page.locator("[data-view-target]").evaluateAll((items) => (
     [...new Set(items.map((item) => item.dataset.viewTarget).filter(Boolean))]
@@ -525,7 +636,7 @@ async function runMobileFlightPathCheck(page) {
   ), null, { timeout: 60000 });
   const geometry = await page.evaluate(() => {
     const stage = document.querySelector(".flight-path-map-stage")?.getBoundingClientRect();
-    const controls = document.querySelector(".flight-map-controls")?.getBoundingClientRect();
+    const controls = document.querySelector(".flight-path-map-stage .flight-map-controls")?.getBoundingClientRect();
     const toolbar = document.querySelector(".flight-map-toolbar-controls")?.getBoundingClientRect();
     return {
       stageWidth: Math.round(stage?.width || 0),
@@ -1195,6 +1306,7 @@ async function layoutDiagnostics(page) {
     const features = await runExpandedFeatureChecks(desktopPage);
     const registryDimensions = await runRegistryAndDimensionChecks(desktopPage);
     const wholeMatchReplay = await runWholeMatchReplay(desktopPage);
+    const mapRegionEditor = await runMapRegionEditorCheck(desktopPage);
     const audit = await runDataQualityAudit(desktopPage);
     const workspaceNavigation = await runWorkspaceNavigationCheck(desktopPage);
     const auditScreenshot = path.join(outputDir, "data-quality-desktop.png");
@@ -1229,6 +1341,7 @@ async function layoutDiagnostics(page) {
         features,
         registryDimensions,
         wholeMatchReplay,
+        mapRegionEditor,
         audit,
         workspaceNavigation,
         layout: desktopLayout,
@@ -1250,6 +1363,7 @@ async function layoutDiagnostics(page) {
         ...features.screenshots,
         ...registryDimensions.screenshots,
         wholeMatchReplay: wholeMatchReplay.screenshot,
+        mapRegionEditor: mapRegionEditor.screenshot,
         mobileRegistry: mobileRegistry.screenshot,
         mobileFlightPaths: mobileFlightPaths.screenshot,
       },
@@ -1403,6 +1517,22 @@ async function layoutDiagnostics(page) {
       result.desktop.wholeMatchReplay.canvas.opaque < 10,
       result.desktop.wholeMatchReplay.canvas.sampledColors < 4,
       !result.desktop.wholeMatchReplay.playbackAdvanced,
+      result.desktop.mapRegionEditor.polygonVertices !== 3,
+      result.desktop.mapRegionEditor.polygonDrafts !== 1,
+      result.desktop.mapRegionEditor.rectangleVertices !== 4,
+      result.desktop.mapRegionEditor.rectangleDrafts !== 1,
+      result.desktop.mapRegionEditor.pointDrafts !== 1,
+      result.desktop.mapRegionEditor.officialShapes < 1,
+      !result.desktop.mapRegionEditor.zoomed,
+      !result.desktop.mapRegionEditor.panned,
+      result.desktop.mapRegionEditor.geometry.width < 400,
+      result.desktop.mapRegionEditor.geometry.width !== result.desktop.mapRegionEditor.geometry.height,
+      !result.desktop.mapRegionEditor.geometry.controlsInsideStage,
+      result.desktop.mapRegionEditor.mapOptions < 1,
+      result.desktop.mapRegionEditor.allMapChecks.length !== result.desktop.mapRegionEditor.mapOptions,
+      result.desktop.mapRegionEditor.allMapChecks.some(
+        (item) => !item.loaded || item.width < 1 || item.height < 1,
+      ),
       result.mobile.registry.rows < 1,
       result.mobile.registry.editors < result.mobile.registry.rows,
       result.mobile.flightPaths.flightLines !== 1,
@@ -1457,6 +1587,7 @@ async function layoutDiagnostics(page) {
       discordBot: result.desktop.features.discordBot,
       registryDimensions: result.desktop.registryDimensions,
       wholeMatchReplay: result.desktop.wholeMatchReplay,
+      mapRegionEditor: result.desktop.mapRegionEditor,
       audit: result.desktop.audit,
       workspaceContent: {
         checked: result.desktop.workspaceContent.checked,
@@ -1464,6 +1595,10 @@ async function layoutDiagnostics(page) {
         failures: result.desktop.workspaceContent.failures.length,
       },
       workspaceNavigation: result.desktop.workspaceNavigation,
+      mobileChecks: {
+        registry: result.mobile.registry,
+        flightPaths: result.mobile.flightPaths,
+      },
       errors: {
         desktopConsole: result.desktop.consoleErrors.length,
         mobileConsole: result.mobile.consoleErrors.length,

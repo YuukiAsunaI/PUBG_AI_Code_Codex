@@ -50,11 +50,13 @@ class DiscordBotController:
         settings_store: LocalSettingsStore,
         permission_checker: DiscordPermissionChecker,
         bot_factory: BotFactory = create_discord_bot,
+        map_region_resolver: Callable[[str, float, float], Any] | None = None,
     ) -> None:
         self._config_loader = config_loader
         self._settings_store = settings_store
         self._permission_checker = permission_checker
         self._bot_factory = bot_factory
+        self._map_region_resolver = map_region_resolver
         self._lock = Lock()
         self._thread: Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -97,6 +99,7 @@ class DiscordBotController:
                     scope_settings_store=self._settings_store,
                     command_prefix=settings.command_prefix,
                     status_callback=self._handle_bot_event,
+                    map_region_resolver=self._map_region_resolver,
                 )
             except Exception as exc:
                 raise DiscordBotControllerError(_safe_error(exc, token)) from exc

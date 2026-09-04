@@ -1908,6 +1908,7 @@ def create_discord_bot(
     scope_settings_store: LocalSettingsStore | None = None,
     command_prefix: str = DEFAULT_DISCORD_PREFIX,
     status_callback: Callable[[str, dict[str, Any]], None] | None = None,
+    map_region_resolver: Callable[[str, float, float], Any] | None = None,
 ) -> Any:
     import discord
     from discord import app_commands
@@ -4638,7 +4639,10 @@ def create_discord_bot(
         await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
-            recommendations = PlayerRecommendationService(connection).get_recommendations(
+            recommendations = PlayerRecommendationService(
+                connection,
+                map_region_resolver=map_region_resolver,
+            ).get_recommendations(
                 shard=normalized_shard,
                 account_id=name if name.startswith("account.") else None,
                 name=None if name.startswith("account.") else name,
@@ -4739,7 +4743,10 @@ def create_discord_bot(
         await defer_public_response(ctx)
         connection = connect_mysql(config.database)
         try:
-            report = PlayerRecommendationService(connection).get_drop_zone_analysis(
+            report = PlayerRecommendationService(
+                connection,
+                map_region_resolver=map_region_resolver,
+            ).get_drop_zone_analysis(
                 shard=normalized_shard,
                 account_id=name if name.startswith("account.") else None,
                 name=None if name.startswith("account.") else name,

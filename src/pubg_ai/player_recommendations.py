@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, time, timedelta
 from math import ceil, sqrt
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 import json
 
 from pubg_ai.code_translator import translate_code
@@ -522,8 +522,14 @@ class PlayerRecommendationReport:
 
 
 class PlayerRecommendationService:
-    def __init__(self, connection: Any) -> None:
+    def __init__(
+        self,
+        connection: Any,
+        *,
+        map_region_resolver: Callable[[str, float, float], Any] | None = None,
+    ) -> None:
         self.connection = connection
+        self._map_region_resolver = map_region_resolver or resolve_map_region
 
     def get_recommendations(
         self,
@@ -1790,7 +1796,7 @@ class PlayerRecommendationService:
             map_name = str(bucket["map_name"])
             centroid_x_cm = _safe_divide(bucket["x_cm_sum"], match_count)
             centroid_y_cm = _safe_divide(bucket["y_cm_sum"], match_count)
-            region = resolve_map_region(map_name, centroid_x_cm, centroid_y_cm)
+            region = self._map_region_resolver(map_name, centroid_x_cm, centroid_y_cm)
             cluster_id = (
                 f"{map_name}:grid{DROP_ZONE_GRID_SIZE}:"
                 f"{bucket['grid_x']}:{bucket['grid_y']}"

@@ -143,6 +143,18 @@ analysis follows with a second paged picker containing only weapons that player 
 time-of-day, landing, comparison, and whole-match participant analysis use the same readable flow. Permission-management
 inputs and personal validation errors remain caller-only.
 
+## User-Defined Map Regions
+
+**2D 리플레이 > 지역 편집** is the local map-name correction workspace. It supports point/radius, dragged rectangle,
+and free polygon definitions on every bundled PUBG map, with map zoom/pan for building-level placement. Existing
+official labels can be shown as reference outlines. An enabled custom region overrides the maintained official-label
+circle at query time; overlapping custom regions use priority first and smaller area second.
+
+Definitions are saved atomically to ignored **config/map_regions.local.json**. They are consumed by the same running
+manager and its app-owned Discord bot without a restart. The landing/recommendation services, circle labels, and 2D
+replay current-location/overlay views all use the same resolver. Disabling preserves a definition without applying it;
+deletion removes only the local definition and never alters raw telemetry.
+
 ## Launch
 
 ```powershell
@@ -169,14 +181,13 @@ entrypoint searches upward from the executable and current directory for the pro
 Set `PUBG_AI_BASE_DIR` when the executable is stored elsewhere. Secrets and local settings are not embedded into the
 executable.
 
-The verified `2026.09.03.1` artifact is 52,142,035 bytes with SHA-256
-`AEB8847FF452F1FEABDC15739A4F6DCC00243DB44A681CEA4EBA5440D1AD7A45`. Its localhost-only health endpoint returned
-the same release and the one app-managed Discord bot reached ready state in all four configured guilds. The packaged
-Playwright audit reached all 33 workspaces, rendered all seven advanced decision-analysis sections, applied a real map
-condition to the confidence-adjusted recommendation report, and verified the uncapped weapon-attachment sample
-controls and reset paths. The all-target 99-player replay retained 10,088 events, virtualized 240 visible event rows,
-and refreshed in 171 ms. The map audit dynamically discovered every map with stored phase-7 data and passed Deston,
-Rondo, Miramar, Vikendi, Sanhok, remastered Erangel, Karakin, Taego, and Paramo; every selected small circle focused to
-a 150 x 150 SVG viewport with a non-empty location context. Desktop and 390px mobile layouts had no blank view,
-overlay, overflow, console error, failed request, or HTTP error. Closing the native window removed both one-file
-package processes and the port-8000 listener without an error dialog.
+The verified `2026.09.04.1` artifact is 52,173,424 bytes with SHA-256
+`7A7FD710BB05B5377E25DBAA5B36145C84075A9B1FDD9FF21901F46528D4B785`. Its localhost-only health endpoint returned
+the same release, and the app-managed Discord bot reached ready state in all four configured guilds. The packaged
+Playwright audit reached all 33 workspaces and exercised point/radius, dragged-rectangle, and free-polygon map-region
+editing, official-label overlays, zoom, and pan. All 12 maps exposed by the editor loaded their bundled map assets.
+The all-target 99-player replay retained 10,088 events, virtualized
+240 visible event rows, and refreshed in 181 ms. The data-quality audit passed all 30 checks. Desktop and 390px mobile
+layouts had no blank view, overlay, overflow, console error, failed request, or HTTP error. A native close request
+removed the window and port-8000 listener without an error dialog, both one-file package processes completed cleanup,
+and a clean restart returned the same release after 22.63 seconds.

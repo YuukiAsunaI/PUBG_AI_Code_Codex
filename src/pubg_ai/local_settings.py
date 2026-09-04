@@ -186,6 +186,18 @@ class DisplaySettings:
 
 
 @dataclass(frozen=True)
+class MapRegionOverrideSettings:
+    regions: list[dict[str, Any]] = field(default_factory=list)
+    updated_at: str | None = None
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "regions": [dict(region) for region in self.regions],
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass(frozen=True)
 class AlertSettings:
     minimum_free_bytes: int = DEFAULT_MINIMUM_FREE_BYTES
     discord_channel_ids: list[str] | None = None
@@ -322,6 +334,20 @@ class LocalSettingsStore:
         if not isinstance(display, dict):
             return DisplaySettings()
         return _display_settings_from_record(display)
+
+    def load_map_region_override_settings(self) -> MapRegionOverrideSettings:
+        payload = self._read_settings() or {}
+        section = payload.get("map_region_overrides")
+        if not isinstance(section, dict):
+            return MapRegionOverrideSettings()
+        records = section.get("regions", [])
+        if not isinstance(records, list) or any(not isinstance(item, dict) for item in records):
+            raise LocalSettingsError("map region overrides must be a list of objects.")
+        updated_at = section.get("updated_at")
+        return MapRegionOverrideSettings(
+            regions=[dict(item) for item in records],
+            updated_at=updated_at if isinstance(updated_at, str) else None,
+        )
 
     def load_alert_settings(self) -> AlertSettings:
         payload = self._read_settings() or {}
@@ -726,6 +752,29 @@ class LocalSettingsStore:
         )
         self._update_settings_section("display", settings.to_record())
         return settings
+
+    def update_map_region_override_settings(
+        self,
+        update: Callable[[list[dict[str, Any]]], list[dict[str, Any]]],
+    ) -> MapRegionOverrideSettings:
+        def mutate(payload: dict[str, Any]) -> MapRegionOverrideSettings:
+            section = payload.get("map_region_overrides")
+            records = section.get("regions", []) if isinstance(section, dict) else []
+            if not isinstance(records, list) or any(not isinstance(item, dict) for item in records):
+                raise LocalSettingsError("map region overrides must be a list of objects.")
+            next_records = update([dict(item) for item in records])
+            if not isinstance(next_records, list) or any(
+                not isinstance(item, dict) for item in next_records
+            ):
+                raise LocalSettingsError("map region override update returned invalid records.")
+            settings = MapRegionOverrideSettings(
+                regions=[dict(item) for item in next_records],
+                updated_at=isoformat_kst(),
+            )
+            payload["map_region_overrides"] = settings.to_record()
+            return settings
+
+        return self._mutate_settings(mutate)
 
     def save_alert_settings(
         self,
